@@ -1,0 +1,164 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+# The updater only accepts a bundle signed with the private half of the key
+# compiled into the app. That key is a repository secret and never appears in
+# this file or anywhere else in the repo:
+#
+#   npm run tauri signer generate -- -w ~/.tauri/stackvo.key
+#
+# Put the PUBLIC key in src-tauri/tauri.conf.json under plugins.updater.pubkey,
+# and the private key plus its password in the repository secrets below. Without
+# both halves the build produces unsigned artifacts that the updater will refuse
+# — which is the correct failure, not a bug to work around.
+jobs:
+  # Refuse to publish a release the updater could never accept. Without this the
+  # pipeline succeeds, artifacts appear on the releases page, and the failure
+  # surfaces months later on a user's machine as an unexplained signature error.
+  # Cheaper to fail here, in ten seconds, than there.
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The updater public key must be present
+        run: |
+          pubkey=$(node -p "require('./src-tauri/tauri.conf.json').plugins?.updater?.pubkey ?? ''")
+          if [ -z "$pubkey" ]; then
+            echo "::error file=src-tauri/tauri.conf.json::plugins.updater.pubkey is empty."
+            echo "Generate a key pair with: npm run tauri signer generate -- -w ~/.tauri/stackvo.key"
+            echo "Put the public half in tauri.conf.json and the private half in TAURI_SIGNING_PRIVATE_KEY."
+            exit 1
+          fi
+
+      - name: The signing secrets must be set
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set on this repository."
+            exit 1
+          fi
+
+  build:
+    needs: preflight
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    runs-on: ${{ matrix.os }}
+
+    # Exposed at job level so the `if:` on the signing step can test it; a
+    # secret is not readable from `env.` context otherwise.
+    env:
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libssl-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      - run: npm ci
+
+      # The contract is compiled into the binary, so a release must not ship
+      # one that disagrees with the code.
+      - name: Verify the contract surface
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      # Windows Authenticode. Tauri reads the certificate thumbprint from
+      # tauri.conf.json, so the .pfx has to be imported into the runner's store
+      # first and the thumbprint written in — neither can be a plain env var.
+      #
+      # Skipped when the secret is absent, deliberately: an unsigned Windows
+      # build is installable, it just shows a SmartScreen warning. Failing the
+      # release instead would block every other platform over one missing
+      # certificate.
+      - name: Import the Windows signing certificate
+        id: winsign
+        if: matrix.os == 'windows-latest' && env.WINDOWS_CERTIFICATE != ''
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        shell: pwsh
+        run: |
+          $bytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+          $pfx = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, $bytes)
+
+          $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Remove-Item $pfx -Force
+
+          # Written into the config rather than passed as a flag: this is where
+          # tauri-action looks for it.
+          $conf = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          if (-not $conf.bundle.windows) {
+            $conf.bundle | Add-Member -Name windows -Value ([PSCustomObject]@{}) -MemberType NoteProperty
+          }
+          $conf.bundle.windows | Add-Member -Name certificateThumbprint -Value $cert.Thumbprint -MemberType NoteProperty -Force
+          $conf.bundle.windows | Add-Member -Name digestAlgorithm -Value 'sha256' -MemberType NoteProperty -Force
+          $conf.bundle.windows | Add-Member -Name timestampUrl -Value 'http://timestamp.digicert.com' -MemberType NoteProperty -Force
+          $conf | ConvertTo-Json -Depth 32 | Set-Content src-tauri/tauri.conf.json
+
+          Write-Host "signing with thumbprint $($cert.Thumbprint)"
+
+      - name: Note that Windows artifacts are unsigned
+        if: matrix.os == 'windows-latest' && steps.winsign.outcome == 'skipped'
+        run: echo "::warning::WINDOWS_CERTIFICATE is not set — Windows users will see a SmartScreen warning."
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS notarisation. Without these the app still builds, but Gatekeeper
+          # shows the "unidentified developer" warning on first launch.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          args: --target ${{ matrix.target }}
+          tagName: ${{ github.ref_name }}
+          releaseName: StackVo ${{ github.ref_name }}
+          releaseDraft: true
+          prerelease: false
+          # tauri-action writes latest.json alongside the artifacts; the
+          # endpoint in tauri.conf.json has to point at wherever it is served.
+          includeUpdaterJson: true

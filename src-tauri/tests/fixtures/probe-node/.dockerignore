@@ -1,0 +1,10 @@
+node_modules
+.output
+.nuxt
+dist
+.git
+.gitignore
+*.log
+npm-debug.log*
+Dockerfile
+.dockerignore

@@ -1,0 +1,65 @@
+http:
+  routers:
+    traefik:
+      rule: "Host(`traefik.stackvo.loc`)"
+      entryPoints:
+        - websecure
+      service: api@internal
+      tls: {}
+    rabbitmq:
+      rule: "Host(`rabbitmq.stackvo.loc`)"
+      entryPoints:
+        - websecure
+      service: rabbitmq
+      tls: {}
+    mailhog:
+      rule: "Host(`mailhog.stackvo.loc`)"
+      entryPoints:
+        - websecure
+      service: mailhog
+      tls: {}
+    kibana:
+      rule: "Host(`kibana.stackvo.loc`)"
+      entryPoints:
+        - websecure
+      service: kibana
+      tls: {}
+    grafana:
+      rule: "Host(`grafana.stackvo.loc`)"
+      entryPoints:
+        - websecure
+      service: grafana
+      tls: {}
+
+  services:
+    rabbitmq:
+      loadBalancer:
+        servers:
+          - url: "http://stackvo-rabbitmq:15672"
+    mailhog:
+      loadBalancer:
+        servers:
+          - url: "http://stackvo-mailhog:8025"
+    kibana:
+      loadBalancer:
+        servers:
+          - url: "http://stackvo-kibana:5601"
+    grafana:
+      loadBalancer:
+        servers:
+          - url: "http://stackvo-grafana:3000"
+
+# TLS Configuration - Force use of core/certs certificates
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/stackvo-wildcard.crt
+        keyFile: /certs/stackvo-wildcard.key
+  certificates:
+    - certFile: /certs/stackvo-wildcard.crt
+      keyFile: /certs/stackvo-wildcard.key
+  options:
+    default:
+      minVersion: VersionTLS12
+      sniStrict: false

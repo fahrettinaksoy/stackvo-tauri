@@ -1,0 +1,12 @@
+{
+  "name": "probe-node",
+  "domain": "probe-node.loc",
+  "runtime": "node",
+  "node": {
+    "version": "22",
+    "install": "npm install",
+    "build": "npm run build",
+    "start": "node .output/server/index.mjs",
+    "port": 3000
+  }
+}

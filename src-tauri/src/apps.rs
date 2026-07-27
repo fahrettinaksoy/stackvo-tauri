@@ -1,0 +1,316 @@
+//! The terminal and editor the user actually uses.
+//!
+//! Both surfaces were half-built. The editor had a preference and a fallback
+//! chain but no way to see what was installed, so choosing meant typing a
+//! command and hoping. The external terminal was worse: hardcoded to
+//! Terminal.app and gated behind `#[cfg(target_os = "macos")]`, so on Windows
+//! and Linux the button existed and returned `Unsupported`.
+//!
+//! Detection rather than a free-text box. A list of what is actually on the
+//! machine is the difference between a setting someone can use and one they
+//! have to research.
+
+use crate::error::{Code, Error, Result};
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct App {
+    /// Stable key stored in preferences. Never the display name — those are
+    /// localised and change between versions.
+    pub id: String,
+    pub name: String,
+    /// What the UI shows beside it.
+    pub icon: String,
+    /// Present on this machine.
+    pub available: bool,
+}
+
+/// Terminals worth offering, in the order a user is likely to prefer them.
+#[cfg(target_os = "macos")]
+const TERMINALS: &[(&str, &str, &str, &str)] = &[
+    // (id, display name, icon, probe)
+    (
+        "terminal",
+        "Terminal",
+        "mdi-apple",
+        "/System/Applications/Utilities/Terminal.app",
+    ),
+    ("iterm2", "iTerm2", "mdi-console", "/Applications/iTerm.app"),
+    ("warp", "Warp", "mdi-console-line", "/Applications/Warp.app"),
+    (
+        "ghostty",
+        "Ghostty",
+        "mdi-ghost",
+        "/Applications/Ghostty.app",
+    ),
+    (
+        "alacritty",
+        "Alacritty",
+        "mdi-console",
+        "/Applications/Alacritty.app",
+    ),
+    ("kitty", "kitty", "mdi-cat", "/Applications/kitty.app"),
+];
+
+#[cfg(target_os = "windows")]
+const TERMINALS: &[(&str, &str, &str, &str)] = &[
+    ("wt", "Windows Terminal", "mdi-microsoft-windows", "wt.exe"),
+    ("pwsh", "PowerShell", "mdi-powershell", "pwsh.exe"),
+    (
+        "powershell",
+        "Windows PowerShell",
+        "mdi-powershell",
+        "powershell.exe",
+    ),
+    ("cmd", "Command Prompt", "mdi-console", "cmd.exe"),
+];
+
+#[cfg(all(unix, not(target_os = "macos")))]
+const TERMINALS: &[(&str, &str, &str, &str)] = &[
+    (
+        "gnome-terminal",
+        "GNOME Terminal",
+        "mdi-console",
+        "gnome-terminal",
+    ),
+    ("konsole", "Konsole", "mdi-console", "konsole"),
+    ("alacritty", "Alacritty", "mdi-console", "alacritty"),
+    ("kitty", "kitty", "mdi-cat", "kitty"),
+    ("wezterm", "WezTerm", "mdi-console-line", "wezterm"),
+    (
+        "xfce4-terminal",
+        "Xfce Terminal",
+        "mdi-console",
+        "xfce4-terminal",
+    ),
+    ("xterm", "xterm", "mdi-console", "xterm"),
+];
+
+/// Editors: the `PATH` launcher, and on macOS the application bundle too.
+///
+/// Probing only the launcher was wrong, and measurably so — on this machine VS
+/// Code is installed at `/Applications/Visual Studio Code.app` while `code` is
+/// not on `PATH`, because its "Install 'code' command in PATH" step is opt-in
+/// and most people never run it. Detection said "not installed" about an editor
+/// the user was looking at.
+///
+/// The bundle is launchable without the helper: `open -a <bundle> <path>` is
+/// what Finder does. So a missing launcher is a reason to use a different
+/// launch mechanism, not a reason to hide the editor.
+const EDITORS: &[(&str, &str, &str, &str)] = &[
+    // (id / PATH launcher, display name, icon, macOS bundle — "" when none)
+    (
+        "code",
+        "VS Code",
+        "mdi-microsoft-visual-studio-code",
+        "/Applications/Visual Studio Code.app",
+    ),
+    (
+        "cursor",
+        "Cursor",
+        "mdi-cursor-default",
+        "/Applications/Cursor.app",
+    ),
+    (
+        "subl",
+        "Sublime Text",
+        "mdi-file-code",
+        "/Applications/Sublime Text.app",
+    ),
+    ("zed", "Zed", "mdi-lightning-bolt", "/Applications/Zed.app"),
+    (
+        "webstorm",
+        "WebStorm",
+        "mdi-alpha-w-box",
+        "/Applications/WebStorm.app",
+    ),
+    (
+        "phpstorm",
+        "PhpStorm",
+        "mdi-alpha-p-box",
+        "/Applications/PhpStorm.app",
+    ),
+    // Terminal editors have no bundle to fall back to.
+    ("nvim", "Neovim", "mdi-vim", ""),
+    ("vim", "Vim", "mdi-vim", ""),
+];
+
+/// How an editor can be started, if at all.
+pub enum Launch {
+    /// A launcher on `PATH`; the path is passed as an argument.
+    Command(&'static str),
+    /// macOS only: `open -a <bundle> <path>`.
+    Bundle(&'static str),
+}
+
+/// Resolve `id` to a way of starting it, preferring the `PATH` launcher because
+/// it is the one that accepts editor flags and behaves the same everywhere.
+pub fn resolve_editor(id: &str) -> Option<Launch> {
+    let entry = EDITORS.iter().find(|(i, ..)| *i == id)?;
+    if is_available(entry.0) {
+        return Some(Launch::Command(entry.0));
+    }
+    if cfg!(target_os = "macos") && !entry.3.is_empty() && std::path::Path::new(entry.3).exists() {
+        return Some(Launch::Bundle(entry.3));
+    }
+    None
+}
+
+/// Is this program reachable? An absolute path is checked directly; a bare name
+/// is looked up on `PATH`, which is what spawning it would do.
+pub fn is_available(probe: &str) -> bool {
+    if probe.contains(std::path::MAIN_SEPARATOR) || probe.starts_with('/') {
+        return std::path::Path::new(probe).exists();
+    }
+
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| {
+        let candidate = dir.join(probe);
+        candidate.is_file() || {
+            // Windows omits the extension in PATHEXT lookups.
+            cfg!(windows)
+                && ["exe", "cmd", "bat"]
+                    .iter()
+                    .any(|e| candidate.with_extension(e).is_file())
+        }
+    })
+}
+
+pub fn terminals() -> Vec<App> {
+    TERMINALS
+        .iter()
+        .map(|(id, name, icon, probe)| App {
+            id: (*id).to_string(),
+            name: (*name).to_string(),
+            icon: (*icon).to_string(),
+            available: is_available(probe),
+        })
+        .collect()
+}
+
+pub fn editors() -> Vec<App> {
+    EDITORS
+        .iter()
+        .map(|(id, name, icon, bundle)| App {
+            id: (*id).to_string(),
+            name: (*name).to_string(),
+            icon: (*icon).to_string(),
+            available: is_available(id)
+                || (cfg!(target_os = "macos")
+                    && !bundle.is_empty()
+                    && std::path::Path::new(bundle).exists()),
+        })
+        .collect()
+}
+
+/// The chosen terminal, or the first one that is actually installed.
+///
+/// Falling back rather than failing: a preference can outlive the app it names
+/// — someone uninstalls iTerm2 — and refusing to open a terminal because of a
+/// stale setting would be unhelpful when another one is right there.
+pub fn resolve_terminal(
+    preferred: Option<&str>,
+) -> Result<&'static (&'static str, &'static str, &'static str, &'static str)> {
+    if let Some(id) = preferred {
+        if let Some(entry) = TERMINALS.iter().find(|(i, ..)| *i == id) {
+            if is_available(entry.3) {
+                return Ok(entry);
+            }
+        }
+    }
+
+    TERMINALS
+        .iter()
+        .find(|(.., probe)| is_available(probe))
+        .ok_or_else(|| {
+            Error::new(Code::NotFound, "No terminal application was found.")
+                .with_hint("Install one, or use the built-in terminal instead.")
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ids_are_unique_and_stable_looking() {
+        // The id is what lands in preferences.json; a duplicate would make one
+        // of the two unselectable.
+        for list in [
+            TERMINALS.iter().map(|(id, ..)| *id).collect::<Vec<_>>(),
+            EDITORS.iter().map(|(id, ..)| *id).collect::<Vec<_>>(),
+        ] {
+            let mut seen = std::collections::HashSet::new();
+            for id in &list {
+                assert!(seen.insert(*id), "duplicate id {id}");
+                assert!(
+                    id.chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+                    "{id} is not a stable-looking key"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_program_that_cannot_exist_is_not_available() {
+        assert!(!is_available("stackvo-no-such-program-9f3a"));
+        assert!(!is_available("/nonexistent/path/to/nothing"));
+    }
+
+    /// Every machine running these tests has a shell somewhere on PATH, so this
+    /// exercises the positive branch rather than only the negative one.
+    #[cfg(unix)]
+    #[test]
+    fn a_program_that_does_exist_is_found() {
+        assert!(is_available("sh"), "sh should be on PATH");
+        assert!(
+            is_available("/bin/sh"),
+            "an absolute path is checked directly"
+        );
+    }
+
+    /// The bug this guards: probing only the `PATH` launcher reported VS Code
+    /// as missing on a machine that had it, because the `code` helper is opt-in
+    /// on macOS and most people never enable it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_installed_bundle_counts_even_without_its_path_launcher() {
+        let bundle = "/Applications/Visual Studio Code.app";
+        if !std::path::Path::new(bundle).exists() {
+            return; // nothing to assert about on a machine without it
+        }
+
+        let code = editors().into_iter().find(|a| a.id == "code").unwrap();
+        assert!(
+            code.available,
+            "an installed bundle must count as available"
+        );
+        assert!(
+            resolve_editor("code").is_some(),
+            "and must resolve to something launchable"
+        );
+    }
+
+    #[test]
+    fn detection_reports_every_candidate_not_only_the_installed_ones() {
+        // The UI greys out what is missing rather than hiding it; a list that
+        // silently omits entries reads as "this app does not support iTerm".
+        assert_eq!(terminals().len(), TERMINALS.len());
+        assert_eq!(editors().len(), EDITORS.len());
+    }
+
+    #[test]
+    fn an_unknown_or_uninstalled_preference_falls_back() {
+        // Resolution must not depend on what happens to be installed here, so
+        // only the shape is asserted: either something was found, or the error
+        // says none was.
+        match resolve_terminal(Some("definitely-not-a-terminal")) {
+            Ok(entry) => assert!(is_available(entry.3)),
+            Err(e) => assert_eq!(e.code, Code::NotFound),
+        }
+    }
+}

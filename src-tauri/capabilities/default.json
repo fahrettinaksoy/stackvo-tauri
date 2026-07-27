@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capabilities granted to the main window. Deliberately narrow: the app reaches Docker, the filesystem and the hosts file through typed Rust commands, not through blanket plugin permissions. This is the inverse of the web UI's `chmod 666 /var/run/docker.sock`.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "opener:allow-open-url",
+    "opener:allow-open-path",
+    "dialog:allow-open",
+    "notification:default",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled",
+    "updater:default",
+    "process:allow-restart"
+  ]
+}

@@ -1,0 +1,59 @@
+# Supply-chain gate for the Rust half. Run with `cargo deny check`.
+#
+# The app reaches the Docker socket, writes /etc/hosts under elevation and
+# executes the StackVo CLI. A dependency with a known advisory is not an
+# abstract risk here.
+
+[advisories]
+# Vulnerabilities and yanked crates fail the build — those are the ones that
+# mean something and that we can act on.
+yanked = "deny"
+
+# Unmaintained crates are only an error when we chose them ourselves.
+#
+# Measured, not assumed: every unmaintained advisory in this graph today (16 of
+# them, and zero vulnerabilities) comes from Tauri's Linux stack — the gtk-rs
+# GTK3 bindings under tauri-runtime-wry — plus proc-macro-error and the unic-*
+# crates, all transitive. None is ours to fix, and failing the build on them
+# would train everyone to pass --allow and stop reading the output. A direct
+# dependency of ours going unmaintained is a different matter and still fails.
+unmaintained = "workspace"
+
+# Deliberately empty. An advisory should be dealt with, not waved through by a
+# list nobody revisits. Add an id here only with a comment saying why it does
+# not apply.
+ignore = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[licenses]
+# Permissive licences, plus MPL-2.0, which is weak copyleft and binds only the
+# crate's own files — which is how it arrives here, unmodified.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "MPL-2.0",
+  "CC0-1.0",
+  "BSL-1.0",
+  # systemstat. A public-domain dedication — strictly more permissive than MIT,
+  # it just is not on the usual list.
+  "Unlicense",
+  # webpki-root-certs, via the TLS stack. The Community Data License Agreement
+  # is a data licence covering the Mozilla root certificate set; permissive, and
+  # the certificates are redistributed unmodified.
+  "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

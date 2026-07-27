@@ -1,0 +1,22 @@
+{
+  "name": "probe-frankenphp",
+  "domain": "probe-frankenphp.loc",
+  "runtime": "php",
+  "server": "frankenphp",
+  "document_root": "public",
+  "php": {
+    "version": "8.4",
+    "extensions": [
+      "mbstring",
+      "pdo",
+      "pdo_mysql",
+      "curl",
+      "zip",
+      "gd",
+      "redis",
+      "xdebug",
+      "intl",
+      "bcmath"
+    ]
+  }
+}

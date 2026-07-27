@@ -1,0 +1,146 @@
+name: stackvo
+
+services:
+
+  probe-apache:
+    profiles: ["projects", "project-probe-apache"]  # --projects for all, --profile project-{name} for this project only
+    build:
+      context: ./projects/probe-apache
+      dockerfile: Dockerfile
+    image: stackvo-probe-apache:8.4
+    container_name: "stackvo-probe-apache"
+    restart: unless-stopped
+    
+    volumes:
+      - __ROOT__/projects/probe-apache:/var/www/html
+      - __ROOT__/logs/projects/probe-apache:/var/log/apache2
+    
+    networks:
+      - stackvo-net
+    
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.probe-apache.rule=Host(`probe-apache.loc`)"
+      - "traefik.http.routers.probe-apache.entrypoints=websecure"
+      - "traefik.http.routers.probe-apache.tls=true"
+      - "traefik.http.services.probe-apache.loadbalancer.server.port=80"
+
+  probe-caddy:
+    profiles: ["projects", "project-probe-caddy"]  # --projects for all, --profile project-{name} for this project only
+    build:
+      context: ./projects/probe-caddy
+      dockerfile: Dockerfile
+    image: stackvo-probe-caddy:latest
+    container_name: "stackvo-probe-caddy"
+    restart: unless-stopped
+    
+    volumes:
+      - __ROOT__/projects/probe-caddy:/var/www/html
+      - __ROOT__/logs/projects/probe-caddy:/var/log
+    
+    networks:
+      - stackvo-net
+    
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.probe-caddy.rule=Host(`probe-caddy.loc`)"
+      - "traefik.http.routers.probe-caddy.entrypoints=websecure"
+      - "traefik.http.routers.probe-caddy.tls=true"
+      - "traefik.http.services.probe-caddy.loadbalancer.server.port=80"
+
+  probe-frankenphp:
+    profiles: ["projects", "project-probe-frankenphp"]  # --projects for all, --profile project-{name} for this project only
+    build:
+      context: ./projects/probe-frankenphp
+      dockerfile: Dockerfile
+    image: stackvo-probe-frankenphp:latest
+    container_name: "stackvo-probe-frankenphp"
+    restart: unless-stopped
+
+    volumes:
+      - __ROOT__/projects/probe-frankenphp:/var/www/html
+      - __ROOT__/logs/projects/probe-frankenphp:/var/log
+
+    networks:
+      - stackvo-net
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.probe-frankenphp.rule=Host(`probe-frankenphp.loc`)"
+      - "traefik.http.routers.probe-frankenphp.entrypoints=websecure"
+      - "traefik.http.routers.probe-frankenphp.tls=true"
+      - "traefik.http.services.probe-frankenphp.loadbalancer.server.port=80"
+
+  probe-nginx:
+    profiles: ["projects", "project-probe-nginx"]  # --projects for all, --profile project-{name} for this project only
+    build:
+      context: ./projects/probe-nginx
+      dockerfile: Dockerfile
+    image: stackvo-probe-nginx:latest
+    container_name: "stackvo-probe-nginx"
+    restart: unless-stopped
+    
+    volumes:
+      - __ROOT__/projects/probe-nginx:/var/www/html
+      - __ROOT__/logs/projects/probe-nginx:/var/log
+    
+    networks:
+      - stackvo-net
+    
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.probe-nginx.rule=Host(`probe-nginx.loc`)"
+      - "traefik.http.routers.probe-nginx.entrypoints=websecure"
+      - "traefik.http.routers.probe-nginx.tls=true"
+      - "traefik.http.services.probe-nginx.loadbalancer.server.port=80"
+
+  probe-node:
+    profiles: ["projects", "project-probe-node"]  # --projects for all, --profile project-{name} for this project only
+    build:
+      context: ../projects/probe-node
+      dockerfile: Dockerfile
+    image: stackvo-probe-node:latest
+    container_name: "stackvo-probe-node"
+    restart: unless-stopped
+
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3000
+
+    networks:
+      - stackvo-net
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.probe-node.rule=Host(`probe-node.loc`)"
+      - "traefik.http.routers.probe-node.entrypoints=websecure"
+      - "traefik.http.routers.probe-node.tls=true"
+      - "traefik.http.services.probe-node.loadbalancer.server.port=3000"
+
+  probe-swoole:
+    profiles: ["projects", "project-probe-swoole"]  # --projects for all, --profile project-{name} for this project only
+    build:
+      context: ./projects/probe-swoole
+      dockerfile: Dockerfile
+    image: stackvo-probe-swoole:latest
+    container_name: "stackvo-probe-swoole"
+    restart: unless-stopped
+
+    volumes:
+      - __ROOT__/projects/probe-swoole:/var/www/html
+      - __ROOT__/logs/projects/probe-swoole:/var/log
+
+    networks:
+      - stackvo-net
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.probe-swoole.rule=Host(`probe-swoole.loc`)"
+      - "traefik.http.routers.probe-swoole.entrypoints=websecure"
+      - "traefik.http.routers.probe-swoole.tls=true"
+      - "traefik.http.services.probe-swoole.loadbalancer.server.port=8000"
+
+
+networks:
+  stackvo-net:
+    external: true

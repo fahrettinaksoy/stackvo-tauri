@@ -1,0 +1,30 @@
+http:
+  routers:
+    traefik:
+      rule: "Host(`traefik.stackvo.loc`)"
+      entryPoints:
+        - websecure
+      service: api@internal
+      tls: {}
+    rabbitmq:
+      rule: "Host(`rabbitmq.stackvo.loc`)"
+      entryPoints:
+        - websecure
+      service: rabbitmq
+      tls: {}
+    mailhog:
+      rule: "Host(`mailhog.stackvo.loc`)"
+      entryPoints:
+        - websecure
+      service: mailhog
+      tls: {}
+
+  services:
+    rabbitmq:
+      loadBalancer:
+        servers:
+          - url: "http://stackvo-rabbitmq:15672"
+    mailhog:
+      loadBalancer:
+        servers:
+          - url: "http://stackvo-mailhog:8025"

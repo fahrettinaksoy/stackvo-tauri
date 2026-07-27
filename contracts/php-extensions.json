@@ -1,0 +1,209 @@
+{
+  "$schema": "https://stackvo.dev/contracts/v1/php-extensions.meta.json",
+  "contractVersion": "1.0.0",
+  "description": "PHP extension installation matrix — the data half of core/cli/lib/generators/php-extensions.sh (696 lines of Bash case statements), extracted so the Bash CLI and the Rust generator can share one source of truth.",
+  "source": {
+    "file": "core/cli/lib/php-extensions.sh",
+    "functions": [
+      "get_extension_packages",
+      "get_extension_configure",
+      "is_pecl_extension",
+      "is_composer_package",
+      "requires_special_setup",
+      "is_builtin_extension",
+      "is_deprecated_extension",
+      "get_pecl_extension_version",
+      "get_pecl_extension_dependencies",
+      "is_pecl_extension_compatible"
+    ]
+  },
+
+  "installMethods": {
+    "builtin": "Always compiled into the base image; MUST be skipped entirely (no install line emitted).",
+    "core": "docker-php-ext-install <ext>, after any `configure` command and apt packages.",
+    "pecl": "pecl install <ext>[-<version>] && docker-php-ext-enable <ext>.",
+    "composer": "NOT a PHP extension — a Composer package. `composer require <ext>` in the project, not in the Dockerfile.",
+    "special": "Requires a bespoke install sequence (e.g. Oracle Instant Client). NOT IMPLEMENTED in v1 — readers MUST reject with a clear error rather than silently skipping."
+  },
+
+  "builtinGroups": {
+    "always": {
+      "extensions": ["core", "date", "pcre", "reflection", "spl", "standard", "random", "zlib"],
+      "note": "Present in every PHP build regardless of version."
+    },
+    "sincePhp80": {
+      "extensions": [
+        "tokenizer", "json", "filter", "hash", "session", "ctype", "iconv",
+        "fileinfo", "phar", "posix", "openssl", "dom", "xml", "simplexml",
+        "xmlreader", "xmlwriter", "libxml"
+      ],
+      "note": "Enabled by default since PHP 8.0. StackVo targets 8.0+ only, so these are treated as unconditionally builtin."
+    }
+  },
+
+  "defaultSets": {
+    "generatorFallback": {
+      "extensions": ["pdo", "pdo_mysql", "mysqli", "gd", "curl", "zip", "mbstring"],
+      "appliesWhen": "php.extensions is absent from stackvo.json",
+      "source": "config-parser.sh — get_default_extensions"
+    },
+    "uiDefault": {
+      "envKey": "SUPPORTED_LANGUAGES_PHP_EXTENSIONS_DEFAULT",
+      "appliesWhen": "The UI pre-selects checkboxes in the new-project form",
+      "note": "Differs from generatorFallback — see CONFLICTS.md C-05."
+    }
+  },
+
+  "extensions": {
+    "apcu":        { "install": "pecl", "packages": [] },
+    "bcmath":      { "install": "core", "packages": [] },
+    "bz2":         { "install": "core", "packages": ["libbz2-dev"] },
+    "calendar":    { "install": "core", "packages": [] },
+    "ctype":       { "install": "builtin", "packages": [] },
+    "curl":        { "install": "core", "packages": ["libcurl4-openssl-dev"] },
+    "dba":         { "install": "core", "packages": [] },
+    "dom":         { "install": "builtin", "packages": ["libxml2-dev"] },
+    "enchant":     { "install": "core", "packages": ["libenchant-2-dev"] },
+    "ev":          { "install": "pecl", "packages": [], "peclVersions": { "default": "latest" } },
+    "event":       { "install": "pecl", "packages": ["libevent-dev"], "peclVersions": { "default": "3.1.4" } },
+    "exif":        { "install": "core", "packages": [] },
+    "ffi":         { "install": "core", "packages": ["libffi-dev"] },
+    "fileinfo":    { "install": "builtin", "packages": [] },
+    "filter":      { "install": "builtin", "packages": [] },
+    "ftp":         { "install": "core", "packages": ["libssl-dev"] },
+    "gd": {
+      "install": "core",
+      "packages": ["libpng-dev", "libjpeg-dev", "libfreetype6-dev"],
+      "configure": "docker-php-ext-configure gd --with-freetype --with-jpeg"
+    },
+    "gettext":     { "install": "core", "packages": ["gettext"] },
+    "gmp":         { "install": "core", "packages": ["libgmp-dev"] },
+    "hash":        { "install": "builtin", "packages": [] },
+    "iconv":       { "install": "builtin", "packages": [] },
+    "igbinary":    { "install": "pecl", "packages": [], "peclVersions": { "default": "3.2.16" } },
+    "imagick": {
+      "install": "pecl",
+      "packages": ["libmagickwand-dev"],
+      "peclVersions": { "8.0": "3.7.0", "8.1": "3.7.0", "8.2": "3.7.0", "8.3": "3.7.0", "8.4": "3.8.1", "8.5": "3.8.1", "9.0": "3.8.1", "default": "latest" }
+    },
+    "imap": {
+      "install": "core",
+      "packages": ["libc-client-dev", "libkrb5-dev"],
+      "removedIn": "8.2",
+      "note": "Removed from PHP core in 8.2. Requesting it on PHP >= 8.2 MUST fail the build with a clear message, not be silently dropped — it is still in the .env default extension set (CONFLICTS.md C-06)."
+    },
+    "intl":        { "install": "core", "packages": ["libicu-dev"] },
+    "json":        { "install": "builtin", "packages": [] },
+    "ldap": {
+      "install": "core",
+      "packages": ["libldap2-dev"],
+      "configure": "docker-php-ext-configure ldap --with-libdir=lib/x86_64-linux-gnu",
+      "note": "The configure line hardcodes the x86_64 multiarch triplet; it breaks on arm64 base images (CONFLICTS.md C-07)."
+    },
+    "lz4":         { "install": "pecl", "packages": ["liblz4-dev"] },
+    "mbstring":    { "install": "core", "packages": ["libonig-dev"] },
+    "mcrypt":      { "install": "pecl", "packages": ["libmcrypt-dev"] },
+    "memcache":    { "install": "pecl", "packages": ["zlib1g-dev"] },
+    "memcached":   { "install": "pecl", "packages": ["libmemcached-dev", "zlib1g-dev"], "peclVersions": { "default": "3.3.0" } },
+    "mongodb": {
+      "install": "pecl",
+      "packages": ["libssl-dev", "libcurl4-openssl-dev"],
+      "peclVersions": { "8.0": "1.19.4", "8.1": "1.19.4", "8.2": "1.19.4", "8.3": "1.20.1", "8.4": "1.20.1", "8.5": "1.20.1", "9.0": "1.20.1", "default": "latest" }
+    },
+    "monolog": {
+      "install": "composer",
+      "packages": [],
+      "note": "Listed in SUPPORTED_LANGUAGES_PHP_EXTENSIONS but it is a Composer library, not an extension."
+    },
+    "msgpack":     { "install": "pecl", "packages": [], "peclVersions": { "default": "3.0.0" }, "inCatalog": false },
+    "mysqli":      { "install": "core", "packages": [] },
+    "mysqlnd":     { "install": "core", "packages": [] },
+    "odbc":        { "install": "core", "packages": ["unixodbc-dev"] },
+    "opcache":     { "install": "core", "packages": [] },
+    "openssl":     { "install": "builtin", "packages": ["libssl-dev"] },
+    "openswoole": {
+      "install": "pecl",
+      "packages": ["libssl-dev", "libcurl4-openssl-dev"],
+      "minPhp": "8.0",
+      "peclVersions": { "8.0": "22.1.2", "8.1": "22.1.2", "8.2": "22.1.2", "8.3": "22.1.2", "8.4": "25.2.0", "8.5": "25.2.0", "9.0": "25.2.0", "default": "latest" }
+    },
+    "pcntl":       { "install": "core", "packages": [] },
+    "pdo":         { "install": "core", "packages": [] },
+    "pdo_dblib":   { "install": "core", "packages": ["freetds-dev"] },
+    "pdo_mysql":   { "install": "core", "packages": [] },
+    "pdo_oci": {
+      "install": "special",
+      "packages": [],
+      "note": "Requires Oracle Instant Client. requires_special_setup() flags it but no generator implements it — v1 MUST reject."
+    },
+    "pdo_odbc":    { "install": "core", "packages": ["unixodbc-dev"] },
+    "pdo_pgsql":   { "install": "core", "packages": ["libpq-dev"] },
+    "pdo_sqlite":  { "install": "core", "packages": ["libsqlite3-dev"] },
+    "pdo_sqlsrv":  { "install": "pecl", "packages": ["unixodbc-dev"] },
+    "pgsql":       { "install": "core", "packages": ["libpq-dev"] },
+    "phalcon":     { "install": "pecl", "packages": [] },
+    "phar":        { "install": "builtin", "packages": [] },
+    "posix":       { "install": "builtin", "packages": [] },
+    "pspell":      { "install": "core", "packages": ["libpspell-dev"] },
+    "readline":    { "install": "core", "packages": ["libreadline-dev"] },
+    "redis":       { "install": "pecl", "packages": [], "peclDependencies": ["igbinary"], "peclVersions": { "8.0": "6.0.2", "8.1": "6.0.2", "8.2": "6.0.2", "8.3": "6.0.2", "8.4": "6.3.0", "8.5": "6.3.0", "9.0": "6.3.0", "default": "latest" } },
+    "session":     { "install": "builtin", "packages": [] },
+    "shmop":       { "install": "core", "packages": [] },
+    "simplexml":   { "install": "builtin", "packages": ["libxml2-dev"] },
+    "snmp":        { "install": "core", "packages": ["libsnmp-dev"], "inCatalog": false },
+    "soap":        { "install": "core", "packages": ["libxml2-dev"] },
+    "sockets":     { "install": "core", "packages": [] },
+    "sodium":      { "install": "core", "packages": ["libsodium-dev"] },
+    "sqlite3":     { "install": "core", "packages": ["libsqlite3-dev"] },
+    "sqlsrv":      { "install": "pecl", "packages": ["unixodbc-dev"] },
+    "swoole": {
+      "install": "pecl",
+      "packages": ["libssl-dev", "libcurl4-openssl-dev"],
+      "minPhp": "8.0",
+      "peclVersions": { "8.0": "5.1.5", "8.1": "5.1.5", "8.2": "5.1.5", "8.3": "5.1.5", "8.4": "6.1.6", "8.5": "6.1.6", "9.0": "6.1.6", "default": "latest" }
+    },
+    "sysvmsg":     { "install": "core", "packages": [] },
+    "sysvsem":     { "install": "core", "packages": [] },
+    "sysvshm":     { "install": "core", "packages": [] },
+    "tidy":        { "install": "core", "packages": ["libtidy-dev"], "inCatalog": false },
+    "tokenizer":   { "install": "builtin", "packages": [] },
+    "uv":          { "install": "pecl", "packages": ["libuv1-dev"], "minPhp": "7.0", "peclVersions": { "default": "0.3.0" } },
+    "xdebug":      { "install": "pecl", "packages": [], "peclVersions": { "8.0": "3.3.2", "8.1": "3.3.2", "8.2": "3.3.2", "8.3": "3.3.2", "8.4": "3.4.0", "8.5": "3.4.0", "9.0": "3.4.0", "default": "latest" } },
+    "xml":         { "install": "builtin", "packages": ["libxml2-dev"] },
+    "xmlreader":   { "install": "builtin", "packages": ["libxml2-dev"] },
+    "xmlrpc": {
+      "install": "pecl",
+      "packages": ["libxml2-dev"],
+      "removedIn": "8.0",
+      "note": "Unreachable in v1: StackVo's minimum PHP is 8.0 and is_deprecated_extension() rejects xmlrpc on every version, yet it is still offered in the .env catalog (CONFLICTS.md C-08)."
+    },
+    "xmlwriter":   { "install": "builtin", "packages": ["libxml2-dev"] },
+    "xsl":         { "install": "core", "packages": ["libxslt1-dev"] },
+    "zip":         { "install": "core", "packages": ["libzip-dev"] },
+    "zlib": {
+      "install": "builtin",
+      "packages": ["zlib1g-dev"],
+      "note": "Listed as always-builtin AND given an apt package by the source. Treated as builtin (no install line); the package is still emitted because other extensions link against it."
+    }
+  },
+
+  "resolution": {
+    "description": "Deterministic algorithm every generator MUST follow, given (phpVersion, requestedExtensions).",
+    "steps": [
+      "1. Normalise: lowercase, trim, de-duplicate, preserve first-seen order.",
+      "2. Reject unknown names (not a key of `extensions`) with an error naming the extension.",
+      "3. Reject install=special with 'not supported in v1'.",
+      "4. Move install=composer entries to a separate composerPackages list; they never enter the Dockerfile.",
+      "5. Reject any extension whose `removedIn` is <= phpVersion (semver-ish major.minor compare).",
+      "6. Reject any extension whose `minPhp` is > phpVersion.",
+      "7. Drop install=builtin entries ENTIRELY — no install line AND no apt packages. Verified against the Bash generator: `project.sh` hits `continue` before it reaches `get_extension_packages`, so a project requesting `dom` gets no libxml2-dev. Adding the packages anyway would be defensible but would change every generated image, so v1 matches the existing behaviour and leaves the question to v2.",
+      "8. Expand peclDependencies transitively and prepend them (redis pulls igbinary before itself).",
+      "9. aptPackages = union of `packages` over all surviving extensions, sorted, de-duplicated.",
+      "10. For pecl entries resolve the version: peclVersions[phpVersion] ?? peclVersions.default ?? 'latest'. 'latest' means emit a bare `pecl install <ext>` with no version pin.",
+      "11. aptPackages are sorted and de-duplicated (`sort -u`); every other list keeps manifest order.",
+      "12. docker-php-ext-install is emitted as up to FOUR batched RUN lines, in this order: `pdo` alone; then pdo_mysql/pdo_pgsql/pdo_sqlite/mysqli/pgsql; then dom/xml/simplexml/xmlreader/xmlwriter/xmlrpc; then everything else. The grouping is not cosmetic — xmlreader and xmlwriter need dom's headers present in the same layer, and pdo must exist before the pdo_* drivers compile.",
+      "13. Emit in order: apt install block -> configure commands -> docker-php-ext-install batches -> pecl install + docker-php-ext-enable (one RUN per extension, dependencies first)."
+    ],
+    "errorPolicy": "v1 changes behaviour from the Bash original: unknown/incompatible extensions are HARD ERRORS surfaced to the user, not silent no-ops. The Bash `*)` catch-all returning an empty package list is what makes typos produce a container that builds but lacks the extension."
+  }
+}

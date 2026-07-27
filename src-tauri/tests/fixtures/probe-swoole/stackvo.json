@@ -1,0 +1,22 @@
+{
+  "name": "probe-swoole",
+  "domain": "probe-swoole.loc",
+  "runtime": "php",
+  "server": "swoole",
+  "document_root": "public",
+  "php": {
+    "version": "8.4",
+    "extensions": [
+      "mbstring",
+      "pdo",
+      "pdo_mysql",
+      "curl",
+      "zip",
+      "gd",
+      "redis",
+      "xdebug",
+      "intl",
+      "bcmath"
+    ]
+  }
+}

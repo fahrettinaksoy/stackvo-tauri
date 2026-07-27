@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stackvo.dev/contracts/v1/project.schema.json",
+  "title": "stackvo.json (project manifest) — contract v1",
+  "description": "Per-project manifest living at projects/<name>/stackvo.json. Frozen contract shared by the Bash CLI generator and the StackVo Desktop (Tauri) app. Derived from core/cli/lib/generators/project/config-parser.sh and core/ui/server/services/ProjectService.js.",
+
+  "type": "object",
+  "required": ["name", "domain"],
+  "additionalProperties": false,
+
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$",
+      "description": "Project identifier. Must match the containing directory name. Pattern is the SAFE_NAME regex enforced by core/ui/server/utils/exec.js (no shell metacharacters, no path traversal). Dots are allowed but are replaced with dashes for Traefik router names (sanitize_project_name_for_traefik)."
+    },
+
+    "domain": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 253,
+      "pattern": "^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$",
+      "description": "REQUIRED. The generator aborts the project with log_error when this is missing — there is no fallback. Convention is <name>.loc. Must have a matching /etc/hosts entry pointing at 127.0.0.1."
+    },
+
+    "runtime": {
+      "enum": ["php", "node"],
+      "default": "php",
+      "description": "Canonical runtime id. ABSENT MEANS 'php' — readers MUST apply that default, because all pre-v1 PHP projects on disk omit this key. Writers MUST emit it explicitly. Only 'php' and 'node' have generators (core/cli/lib/generators/project/{compose,dockerfile}/); see runtimeAliases in CONFLICTS.md for the accepted-on-read legacy spellings."
+    },
+
+    "server": {
+      "enum": ["nginx", "apache", "caddy", "frankenphp", "swoole"],
+      "default": "nginx",
+      "description": "Web server for runtime=php. CANONICAL FIELD NAME. Ignored when runtime=node (Traefik proxies straight to node.port). Unknown values fall back to nginx with a warning (validate_project_config)."
+    },
+
+    "webserver": {
+      "enum": ["nginx", "apache", "caddy", "frankenphp", "swoole"],
+      "deprecated": true,
+      "description": "LEGACY alias for 'server'. Accepted on read; 'server' wins when both are present. Writers MUST NOT emit this. All five pre-v1 PHP projects on disk use this spelling — do not remove read support before they are migrated."
+    },
+
+    "document_root": {
+      "type": "string",
+      "default": "public",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^[a-zA-Z0-9._-]+(/[a-zA-Z0-9._-]+)*$",
+      "description": "Document root relative to the project directory, for runtime=php. No leading slash, no '..' segments. Ignored when runtime=node."
+    },
+
+    "php": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version"],
+      "description": "PHP runtime block. MUST be present when runtime is 'php' (or absent). MUST NOT coexist with a 'node' block — the Bash parser reads the first \"version\" key it finds without disambiguating, so two runtime blocks silently corrupt the generated Dockerfile.",
+      "properties": {
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$",
+          "default": "8.4",
+          "description": "PHP major.minor. Must be a member of SUPPORTED_LANGUAGES_PHP_VERSIONS in .env."
+        },
+        "extensions": {
+          "type": "array",
+          "maxItems": 50,
+          "uniqueItems": true,
+          "description": "PHP extensions to compile in. See php-extensions.json for install method and system dependencies. HARD LIMIT 50: the Bash parser extracts these with `grep -A 50 '\"extensions\"'`, so entry 51 onward is silently dropped. Omitting this key yields the built-in default set: pdo pdo_mysql mysqli gd curl zip mbstring (get_default_extensions) — which is NOT the same as SUPPORTED_LANGUAGES_PHP_EXTENSIONS_DEFAULT in .env.",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]+$",
+            "description": "Lowercase, digits and underscore only. The Bash extractor greps `\"[a-z_0-9]*\"`, so any uppercase letter or dash makes the extension vanish silently."
+          }
+        }
+      }
+    },
+
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version"],
+      "description": "Node runtime block. MUST be present when runtime is 'node'. The key is 'node', NOT 'nodejs' (see CONFLICTS.md C-01).",
+      "properties": {
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+$",
+          "default": "22",
+          "description": "Node major version only. Must be a member of SUPPORTED_LANGUAGES_NODEJS_VERSIONS in .env."
+        },
+        "install": {
+          "type": "string",
+          "default": "npm install",
+          "maxLength": 512,
+          "description": "Dependency install command, run at image build time."
+        },
+        "build": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Optional build command, run at image build time after install. Omit for projects served straight from source."
+        },
+        "start": {
+          "type": "string",
+          "default": "npm start",
+          "maxLength": 512,
+          "description": "Container entrypoint command. MUST bind 0.0.0.0 (not localhost) on `port`, or Traefik cannot reach it."
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 3000,
+          "description": "Container-internal port Traefik proxies to. Not published on the host."
+        }
+      }
+    }
+  },
+
+  "allOf": [
+    {
+      "$comment": "runtime=php (explicit or defaulted) requires the php block and forbids node.",
+      "if": {
+        "anyOf": [
+          { "properties": { "runtime": { "const": "php" } }, "required": ["runtime"] },
+          { "not": { "required": ["runtime"] } }
+        ]
+      },
+      "then": {
+        "required": ["php"],
+        "not": { "required": ["node"] }
+      }
+    },
+    {
+      "$comment": "runtime=node requires the node block and forbids php/server/document_root.",
+      "if": {
+        "properties": { "runtime": { "const": "node" } },
+        "required": ["runtime"]
+      },
+      "then": {
+        "required": ["node"],
+        "allOf": [
+          { "not": { "required": ["php"] } },
+          { "not": { "required": ["server"] } },
+          { "not": { "required": ["webserver"] } },
+          { "not": { "required": ["document_root"] } }
+        ]
+      }
+    },
+    {
+      "$comment": "'server' and 'webserver' are the same field under two names; emitting both invites drift.",
+      "not": { "required": ["server", "webserver"] }
+    }
+  ],
+
+  "x-stackvo-write-rules": {
+    "description": "Constraints that JSON Schema cannot express but every writer (Bash CLI, Tauri app, humans) MUST honour while the Bash generator remains in the pipeline.",
+    "rules": [
+      {
+        "id": "W-01",
+        "rule": "php.extensions MUST be the last key in the document.",
+        "why": "The Bash extractor greps 50 lines past the \"extensions\" marker and treats every quoted lowercase token it finds as an extension name. Any key emitted after the array (e.g. \"document_root\": \"public\") is swallowed into the extension list and reaches docker-php-ext-install as a bogus name.",
+        "source": "core/cli/lib/generators/project/config-parser.sh — parse_project_config"
+      },
+      {
+        "id": "W-02",
+        "rule": "Exactly one runtime block (php XOR node) per document.",
+        "why": "parse_project_config reads \"version\" with sed and no `head -1`, so a second block produces a multi-line PHP_VERSION and a broken FROM line.",
+        "source": "core/cli/lib/generators/project/config-parser.sh"
+      },
+      {
+        "id": "W-03",
+        "rule": "Pretty-print with one array element per line, 2-space indent.",
+        "why": "Both the extension extractor and the 50-line window are line-oriented. A single-line array is parsed as one token and yields zero extensions."
+      },
+      {
+        "id": "W-04",
+        "rule": "'name' MUST equal the parent directory name.",
+        "why": "listProjects() enumerates directories and keys containers as stackvo-<dirname>; a mismatch makes the project unreachable from the UI.",
+        "source": "core/ui/server/services/DockerService.js — listProjects"
+      }
+    ]
+  },
+
+  "x-stackvo-read-rules": {
+    "description": "Normalisation every reader MUST apply, in order, before using a manifest.",
+    "steps": [
+      "1. runtime: absent -> 'php'. Aliases: 'nodejs'|'nodejs22'|'js' -> 'node'; 'golang' -> unsupported (reject).",
+      "2. server: prefer 'server'; fall back to 'webserver'; then .env SUPPORTED_SERVERS_DEFAULT; then 'nginx'.",
+      "3. document_root: default 'public'.",
+      "4. php.version: default .env SUPPORTED_LANGUAGES_PHP_DEFAULT, then DEFAULT_PHP_VERSION, then '8.2'.",
+      "5. php.extensions: absent -> ['pdo','pdo_mysql','mysqli','gd','curl','zip','mbstring'].",
+      "6. node.{install,start,port}: default 'npm install', 'npm start', 3000.",
+      "7. domain: no default — a manifest without it is INVALID and MUST be skipped with a user-visible error."
+    ]
+  },
+
+  "examples": [
+    {
+      "name": "myshop",
+      "domain": "myshop.loc",
+      "runtime": "php",
+      "server": "nginx",
+      "document_root": "public",
+      "php": {
+        "version": "8.4",
+        "extensions": ["mbstring", "pdo", "pdo_mysql", "curl", "zip", "gd", "redis", "opcache"]
+      }
+    },
+    {
+      "name": "dashboard",
+      "domain": "dashboard.loc",
+      "runtime": "node",
+      "node": {
+        "version": "22",
+        "install": "npm install",
+        "build": "npm run build",
+        "start": "node .output/server/index.mjs",
+        "port": 3000
+      }
+    }
+  ]
+}

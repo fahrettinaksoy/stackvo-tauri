@@ -1,0 +1,16 @@
+# Default owner for everything.
+*                       @fahrettinaksoy
+
+# The contract is the agreement with the Bash CLI. A change here changes what
+# both sides are allowed to assume, so it wants a deliberate look.
+/contracts/             @fahrettinaksoy
+/tools/                 @fahrettinaksoy
+
+# Security-relevant surfaces: path containment, elevation, subprocesses,
+# capability grants and the release signing gate.
+/src-tauri/src/workspace.rs      @fahrettinaksoy
+/src-tauri/src/hosts.rs          @fahrettinaksoy
+/src-tauri/src/runner.rs         @fahrettinaksoy
+/src-tauri/capabilities/         @fahrettinaksoy
+/src-tauri/deny.toml             @fahrettinaksoy
+/.github/workflows/              @fahrettinaksoy

@@ -1,0 +1,74 @@
+[package]
+name = "stackvo-desktop"
+version = "0.1.0"
+description = "Native desktop app for StackVo"
+authors = ["StackVo"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.82"
+
+[lib]
+# Tauri's mobile targets require a cdylib; the bin below is a thin wrapper.
+name = "stackvo_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+
+# Signed auto-updates. The public key lives in tauri.conf.json; the private half
+# is a release secret and is never in this repo.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+
+# Docker engine access. Default features are `http` + `pipe` — `pipe` is what
+# provides unix-socket and named-pipe transports, which is all StackVo needs.
+# `ssl` is not a default, so no TLS stack is pulled in for a local daemon.
+bollard = "0.21"
+
+# Host metrics read on the host itself — the whole point of the port.
+sysinfo = "0.39"
+
+# CPU time breakdown (user/nice/system/idle). sysinfo only exposes an aggregate
+# percentage, and the dashboard shows the split — so this fills the one gap that
+# would otherwise force the UI to display a number nobody measured.
+systemstat = "0.2"
+
+# Stream combinators for bollard's log and stats streams.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "io-util"] }
+thiserror = "2"
+dirs = "6"
+
+# Filesystem watching for projects/*/stackvo.json.
+notify = "8"
+
+# Real PTYs on the host. node-pty could only reach containers because it ran
+# inside one; this can open a host shell in a project directory too.
+portable-pty = "0.9"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tracing-appender = "0.2.5"
+
+# Desktop-only plugins: single-instance and autostart are meaningless on mobile.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
+
+[features]
+default = []
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

@@ -1,0 +1,26 @@
+version: 2
+updates:
+  # Weekly rather than daily: this is a two-language repo and a flood of PRs
+  # gets ignored, which is worse than a slower cadence that gets read.
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    groups:
+      tauri:
+        patterns: ['tauri', 'tauri-*']
+
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    groups:
+      vue:
+        patterns: ['vue', 'vue-*', 'vuetify', 'pinia', '@vitejs/*', 'vite*']
+      dev-tooling:
+        patterns: ['eslint*', 'prettier', 'vitest', '@vue/test-utils', 'jsdom']
+
+  # The workflows pin actions by major version; this keeps those current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }

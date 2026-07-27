@@ -1,0 +1,1172 @@
+{
+  "$schema": "https://stackvo.dev/contracts/v1/ipc.meta.json",
+  "contractVersion": "1.0.0",
+  "description": "The Tauri IPC surface for StackVo Desktop — contract v1. Derived 1:1 from the Express routes in core/ui/server/routes/ and the Socket.io events in core/ui/server/, plus the commands the desktop app needs that no HTTP endpoint ever provided. This file is the agreement between the Vue front end and the Rust core; both sides are generated/checked against it.",
+  "conventions": {
+    "naming": "snake_case, <domain>_<verb>. The same string is the Rust #[tauri::command] fn name and the JS invoke() key.",
+    "envelope": {
+      "before": "Express returned { success, data?, message?, meta? } and the axios interceptor unwrapped .data — a 200 with success:false was treated as an error.",
+      "after": "Tauri commands return Result<T, StackvoError>. Ok(T) is the payload directly (no envelope). Err(e) rejects the invoke() promise. The success:false-with-HTTP-200 ambiguity disappears.",
+      "migration": "client/src/lib/api.js is the ONLY file that changes: its interceptor logic becomes a thin invoke() wrapper that re-throws StackvoError as an Error with .code and .hint attached. Pinia stores are untouched."
+    },
+    "argCasing": "Rust params are snake_case; Tauri auto-converts camelCase from JS. Send snake_case explicitly to avoid ambiguity.",
+    "longRunning": "Any operation that can exceed ~2s (build, compose up, image pull) MUST NOT block on its return value. It returns an OperationId immediately and reports progress via events. This replaces the 600s nginx proxy timeout hack.",
+    "idempotency": "start/stop/restart on an already-in-that-state container succeed silently (matches current DockerService behaviour)."
+  },
+  "errors": {
+    "shape": {
+      "code": "string",
+      "message": "string (user-facing, localised key when possible)",
+      "hint": "string?",
+      "details": "object?"
+    },
+    "codes": {
+      "ENGINE_UNREACHABLE": "Docker daemon not running or socket/pipe not accessible. Replaces the ECONNREFUSED stack spam that isDockerUnreachable() papered over. The UI MUST offer engine_start().",
+      "NOT_FOUND": "Container, project or service does not exist.",
+      "ALREADY_EXISTS": "project_create against an existing directory.",
+      "INVALID_INPUT": "Failed schema validation. `details` carries the field path.",
+      "INVALID_MANIFEST": "stackvo.json exists but violates project.schema.json. `details.path` names the offending key.",
+      "UNSUPPORTED": "Requested runtime/extension/server/platform feature has no implementation in v1 (e.g. runtime=python, extension=pdo_oci, external terminal off macOS).",
+      "GENERATE_FAILED": "The generator ran and failed. `details.log` carries stderr.",
+      "BUILD_FAILED": "Docker build returned non-zero. `details.log_path` points at logs/build/<service>.log.",
+      "PERMISSION_DENIED": "Elevation refused or unavailable (hosts_apply).",
+      "IO_ERROR": "Filesystem failure.",
+      "CONFLICT": "Port or domain already claimed by another project.",
+      "NO_WORKSPACE": "No StackVo directory is selected, or the selected one no longer looks like a StackVo checkout. Desktop-only: the web UI could never hit this because it was mounted inside the repo it managed. The UI MUST offer workspace_pick()."
+    },
+    "policy": "No error message may contain a raw shell command line or a value matching the secret redaction regex from env.schema.json."
+  },
+  "commands": {
+    "engine_status": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "EngineStatus",
+      "why": "There was NO endpoint for this. The web UI could not report a stopped Docker daemon because the UI itself was a container that could not start. This is the single most important new command — it is what makes the desktop app usable when Docker is down.",
+      "polling": "Called on startup and on a 5s timer while disconnected; emits engine:status_changed on transition."
+    },
+    "engine_start": {
+      "new": true,
+      "kind": "mutation",
+      "args": {},
+      "returns": "void",
+      "why": "Launch Docker Desktop (macOS/Windows) or `systemctl --user start docker` (Linux). Resolves the chicken-and-egg problem end to end.",
+      "notes": "Best-effort. Returns Ok as soon as the launch is issued; the caller waits on engine:status_changed."
+    },
+    "workspace_get": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "Workspace",
+      "why": "The web UI never needed this — it ran inside the StackVo repo, so its root was `/app` by mount. A desktop app has to be told, or work it out. Returns the resolved root plus how it was resolved, so the UI can show the user which checkout it is driving."
+    },
+    "workspace_set": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "path": "string"
+      },
+      "returns": "Workspace",
+      "notes": "Validates that the path contains core/cli/stackvo.sh and projects/ before accepting it, then persists it. Rejects with NO_WORKSPACE and an explanation rather than silently accepting a wrong folder."
+    },
+    "workspace_pick": {
+      "new": true,
+      "kind": "mutation",
+      "args": {},
+      "returns": "Workspace?",
+      "notes": "Opens the native directory picker, then applies workspace_set. Returns null if the user cancels."
+    },
+    "projects_list": {
+      "replaces": "GET /api/projects",
+      "kind": "query",
+      "args": {},
+      "returns": "Project[]"
+    },
+    "project_get": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "name": "string"
+      },
+      "returns": "Project",
+      "why": "ProjectDetail.vue currently re-fetches the whole list and filters client-side."
+    },
+    "project_validate": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "spec": "ProjectSpec"
+      },
+      "returns": "ValidationReport",
+      "why": "Pre-flight the new-project form against project.schema.json + php-extensions.json before anything touches disk. Today a bad extension name is only discovered when the Docker build fails minutes later."
+    },
+    "project_create": {
+      "replaces": "POST /api/projects/create",
+      "kind": "operation",
+      "args": {
+        "spec": "ProjectSpec"
+      },
+      "returns": "OperationId",
+      "emits": [
+        "project:creating",
+        "project:created",
+        "build:*",
+        "project:error"
+      ],
+      "notes": "Writes the manifest, runs generate, then builds. The build half is what makes it an operation rather than a mutation."
+    },
+    "project_delete": {
+      "replaces": "DELETE /api/projects/:name",
+      "kind": "mutation",
+      "args": {
+        "name": "string",
+        "remove_files": "bool (default false)"
+      },
+      "returns": "void",
+      "notes": "remove_files is NEW and MUST default to false. The current deleteProject() removes the project directory outright with no confirmation contract — a desktop app deleting user source code needs an explicit opt-in."
+    },
+    "project_start": {
+      "replaces": "POST /api/projects/:c/start",
+      "kind": "mutation",
+      "args": {
+        "name": "string"
+      },
+      "returns": "void",
+      "emits": [
+        "project:starting",
+        "project:started"
+      ]
+    },
+    "project_stop": {
+      "replaces": "POST /api/projects/:c/stop",
+      "kind": "mutation",
+      "args": {
+        "name": "string"
+      },
+      "returns": "void",
+      "emits": [
+        "project:stopping",
+        "project:stopped"
+      ]
+    },
+    "project_restart": {
+      "replaces": "POST /api/projects/:c/restart",
+      "kind": "mutation",
+      "args": {
+        "name": "string"
+      },
+      "returns": "void",
+      "emits": [
+        "project:restarting",
+        "project:restarted"
+      ]
+    },
+    "project_build": {
+      "replaces": "POST /api/projects/:p/build",
+      "kind": "operation",
+      "args": {
+        "name": "string",
+        "no_cache": "bool (default false)"
+      },
+      "returns": "OperationId",
+      "emits": [
+        "build:start",
+        "build:progress",
+        "build:success",
+        "build:error"
+      ]
+    },
+    "project_manifest_read": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "name": "string"
+      },
+      "returns": "ProjectManifest"
+    },
+    "project_manifest_write": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string",
+        "manifest": "ProjectManifest"
+      },
+      "returns": "void",
+      "why": "Editing an existing project is impossible today — the UI can only create and delete. MUST honour the write rules in project.schema.json (extensions last, one runtime block)."
+    },
+    "services_list": {
+      "replaces": "GET /api/services",
+      "kind": "query",
+      "args": {},
+      "returns": "Service[]"
+    },
+    "service_start": {
+      "replaces": "POST /api/services/:c/start",
+      "kind": "mutation",
+      "args": {
+        "name": "string"
+      },
+      "returns": "void",
+      "emits": [
+        "service:starting",
+        "service:started"
+      ]
+    },
+    "service_stop": {
+      "replaces": "POST /api/services/:c/stop",
+      "kind": "mutation",
+      "args": {
+        "name": "string"
+      },
+      "returns": "void",
+      "emits": [
+        "service:stopping",
+        "service:stopped"
+      ]
+    },
+    "service_restart": {
+      "replaces": "POST /api/services/:c/restart",
+      "kind": "mutation",
+      "args": {
+        "name": "string"
+      },
+      "returns": "void",
+      "emits": [
+        "service:restarting",
+        "service:restarted"
+      ]
+    },
+    "service_enable": {
+      "replaces": "POST /api/services/:s/enable",
+      "kind": "operation",
+      "args": {
+        "name": "string"
+      },
+      "returns": "OperationId",
+      "emits": [
+        "service:enabling",
+        "service:progress",
+        "service:enabled",
+        "service:error"
+      ],
+      "notes": "Flips SERVICE_<NAME>_ENABLE in .env, regenerates, then brings the profile up."
+    },
+    "service_disable": {
+      "replaces": "POST /api/services/:s/disable",
+      "kind": "operation",
+      "args": {
+        "name": "string"
+      },
+      "returns": "OperationId",
+      "emits": [
+        "service:disabling",
+        "service:disabled",
+        "service:error"
+      ]
+    },
+    "service_dependencies": {
+      "replaces": "GET /api/services/:s/dependencies",
+      "kind": "query",
+      "args": {
+        "name": "string"
+      },
+      "returns": "DependencyReport",
+      "notes": "Kept for completeness; services_list already returns required/optional/unmetDependencies per service, so the front end has no reason to call this separately.",
+      "rustInternal": true
+    },
+    "host_stats": {
+      "replaces": "GET /api/docker/stats",
+      "kind": "query",
+      "args": {},
+      "returns": "HostStats",
+      "v1Change": "Backed by the `sysinfo` crate on the host instead of reading /proc from inside a container. The 293-line HostStatsService with its macOS fallbacks collapses to a direct, correct read — this is the clearest early win of the port."
+    },
+    "docker_system_resources": {
+      "replaces": "GET /api/docker/system",
+      "kind": "query",
+      "args": {},
+      "returns": "SystemResources"
+    },
+    "container_stats": {
+      "replaces": "GET /api/docker/stats/:c",
+      "kind": "query",
+      "args": {
+        "name": "string"
+      },
+      "returns": "ContainerStats"
+    },
+    "container_stats_history": {
+      "replaces": "GET /api/docker/stats/:c/history",
+      "kind": "query",
+      "args": {
+        "name": "string"
+      },
+      "returns": "StatSample[]",
+      "notes": "Sampler runs at 60s (startStatsSampler). v1 MUST persist history across app restarts — today it lives in memory and dies with the container."
+    },
+    "container_inspect": {
+      "replaces": "GET /api/docker/inspect/:c",
+      "kind": "query",
+      "args": {
+        "name": "string"
+      },
+      "returns": "ContainerDetails"
+    },
+    "container_logs_open": {
+      "new": true,
+      "kind": "stream",
+      "args": {
+        "name": "string",
+        "tail": "u32 (default 200)",
+        "follow": "bool (default true)"
+      },
+      "returns": "StreamId",
+      "emits": [
+        "logs:line",
+        "logs:closed"
+      ],
+      "why": "Log following existed only as `stackvo logs` in the CLI. The UI had no way to tail a container."
+    },
+    "container_logs_close": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "stream_id": "string"
+      },
+      "returns": "void"
+    },
+    "containers_start_all": {
+      "replaces": "POST /api/docker/start-all",
+      "kind": "operation",
+      "args": {},
+      "returns": "OperationId"
+    },
+    "containers_stop_all": {
+      "replaces": "POST /api/docker/stop-all",
+      "kind": "operation",
+      "args": {},
+      "returns": "OperationId"
+    },
+    "containers_restart_all": {
+      "replaces": "POST /api/docker/restart-all",
+      "kind": "operation",
+      "args": {},
+      "returns": "OperationId"
+    },
+    "env_get": {
+      "replaces": "GET /api/env",
+      "kind": "query",
+      "args": {},
+      "returns": "map<string,string>",
+      "notes": "MUST redact secret-matching keys unless `reveal: true` is passed and the user has confirmed in-session."
+    },
+    "env_set": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "patch": "map<string,string>"
+      },
+      "returns": "void",
+      "why": "Settings.vue is a 24-line stub because .env was read-only over HTTP. Writing MUST preserve comments, key order and blank lines — a naive rewrite destroys a 159-key hand-annotated file."
+    },
+    "catalog_get": {
+      "replaces": "GET /api/supported-languages",
+      "kind": "query",
+      "args": {},
+      "returns": "Catalog",
+      "v1Change": "Served from the bundled contracts (php-extensions.json + env.schema.json), no longer re-parsed out of .env on every request. Runtimes without generators are marked available:false rather than silently offered."
+    },
+    "generate_run": {
+      "new": true,
+      "kind": "operation",
+      "args": {
+        "scope": "'all' | 'projects' | 'services'"
+      },
+      "returns": "OperationId",
+      "emits": [
+        "generate:start",
+        "generate:progress",
+        "generate:done",
+        "generate:error"
+      ],
+      "why": "`stackvo generate` was only ever invoked as a side effect of project_create / service_enable, via execAsync on a shell string. Making it a first-class command is what lets the fs-watcher regenerate automatically."
+    },
+    "compose_up": {
+      "replaces": "POST /api/start-with-profile",
+      "kind": "operation",
+      "args": {
+        "mode": "'minimal'|'services'|'projects'|'all'|'custom'",
+        "profiles": "string[] (custom only)"
+      },
+      "returns": "OperationId"
+    },
+    "compose_up_service": {
+      "replaces": "POST /api/start-with-profile/service",
+      "kind": "operation",
+      "args": {
+        "name": "string"
+      },
+      "returns": "OperationId"
+    },
+    "compose_up_project": {
+      "replaces": "POST /api/start-with-profile/project",
+      "kind": "operation",
+      "args": {
+        "name": "string"
+      },
+      "returns": "OperationId"
+    },
+    "compose_down": {
+      "new": true,
+      "kind": "operation",
+      "args": {},
+      "returns": "OperationId",
+      "why": "`stackvo down` existed only in the CLI — the web UI could never stop the stack, because doing so would have killed the UI itself."
+    },
+    "compose_restart": {
+      "new": true,
+      "kind": "operation",
+      "args": {},
+      "returns": "OperationId",
+      "why": "Same reason as compose_down."
+    },
+    "pty_open": {
+      "replaces": "socket 'create-terminal'",
+      "kind": "stream",
+      "args": {
+        "target": "PtyTarget",
+        "cols": "u16",
+        "rows": "u16"
+      },
+      "returns": "SessionId",
+      "emits": [
+        "terminal:ready",
+        "terminal:output",
+        "terminal:closed",
+        "terminal:error"
+      ],
+      "v1Change": "PtyTarget is NEW: { kind: 'container', name } or { kind: 'host', cwd }. node-pty could only reach containers because it ran inside one; portable-pty on the host can open a real host shell in the project directory."
+    },
+    "pty_write": {
+      "replaces": "socket 'terminal-input'",
+      "kind": "mutation",
+      "args": {
+        "session_id": "string",
+        "data": "string"
+      },
+      "returns": "void"
+    },
+    "pty_resize": {
+      "replaces": "socket 'terminal-resize'",
+      "kind": "mutation",
+      "args": {
+        "session_id": "string",
+        "cols": "u16",
+        "rows": "u16"
+      },
+      "returns": "void"
+    },
+    "pty_close": {
+      "replaces": "socket 'disconnect'",
+      "kind": "mutation",
+      "args": {
+        "session_id": "string"
+      },
+      "returns": "void"
+    },
+    "terminal_open_external": {
+      "replaces": "POST /api/terminal/:c/open",
+      "kind": "mutation",
+      "args": {
+        "target": "PtyTarget"
+      },
+      "returns": "void",
+      "v1Change": "Always works. The HTTP version returned HTTP 400 with 'Terminal cannot be opened from containerized environment' — it could never succeed in the shipped configuration."
+    },
+    "hosts_status": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "domains": "string[]"
+      },
+      "returns": "HostsEntry[]",
+      "why": "readHostsFile() could only READ a read-only mount and report isDomainConfigured. Same capability, but now it feeds a fix action.",
+      "notes": "Rust-internal: projects_list uses it to fill `domainConfigured`. Deliberately not wrapped for JS — the list payload already carries the answer, and a second round trip is a way for the two to disagree.",
+      "rustInternal": true
+    },
+    "hosts_apply": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "add": "string[]",
+        "remove": "string[]"
+      },
+      "returns": "HostsPlan",
+      "elevation": "required",
+      "why": "Removes the manual `sudo tee -a /etc/hosts` step from the README. MUST show a diff and require explicit confirmation before elevating; MUST back up the file; MUST only touch lines inside a StackVo-managed marker block.",
+      "notes": "Writes the previewed text via the OS elevation prompt (osascript / pkexec / UAC). Only lines inside the `# >>> stackvo >>>` marker block are rewritten; everything else in the file is byte-identical. A cancelled prompt is PERMISSION_DENIED, not a crash."
+    },
+    "open_path": {
+      "new": true,
+      "kind": "frontend-plugin",
+      "args": {
+        "path": "string"
+      },
+      "returns": "void",
+      "notes": "Implemented in the front end via the opener plugin rather than as a Rust command: the plugin already does exactly this, and wrapping it would add a hop with no behaviour of its own. The capability is allow-listed in capabilities/default.json.",
+      "implementedAs": "@tauri-apps/plugin-opener → openPath"
+    },
+    "open_url": {
+      "new": true,
+      "kind": "frontend-plugin",
+      "args": {
+        "url": "string"
+      },
+      "returns": "void",
+      "notes": "Same as open_path. The plugin restricts schemes; the allow-list in capabilities/default.json is the control point.",
+      "implementedAs": "@tauri-apps/plugin-opener → openUrl"
+    },
+    "open_in_editor": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "path": "string"
+      },
+      "returns": "void",
+      "notes": "Editor command from preferences; default: detect VS Code, fall back to the OS handler."
+    },
+    "pick_directory": {
+      "new": true,
+      "kind": "frontend-plugin",
+      "args": {
+        "title": "string?"
+      },
+      "returns": "string?",
+      "why": "Adopting an existing folder as a project is impossible today; paths are typed by hand.",
+      "implementedAs": "@tauri-apps/plugin-dialog → open({directory:true})",
+      "notes": "Used directly by the front end. `workspace_pick` is the Rust command that matters, because it pairs the picker with validation and persistence."
+    },
+    "apps_available": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "{ terminals: App[], editors: App[] }",
+      "notes": "Terminals and editors present on this machine, each with { id, name, icon, available }. Entries that are not installed are returned with available:false rather than omitted, so the picker can grey them out — a list that silently drops them reads as lack of support."
+    },
+    "window_close_action": {
+      "new": true,
+      "kind": "command",
+      "args": { "action": "\"tray\" | \"quit\" | \"stopAndQuit\"", "remember": "boolean" },
+      "returns": "void",
+      "notes": "Carries out the choice the close dialog collected, optionally storing it as closeBehaviour. Four behaviours exist including \"ask\"; the extra \"quit\" (close, leave the stack running) is meaningful here because the containers are Docker's and outlive the app."
+    },
+    "tray_relabel": {
+      "new": true,
+      "kind": "command",
+      "args": {},
+      "returns": "void",
+      "notes": "Re-label the tray menu after the user changes language. The tray is built natively and has six strings of its own; without this it keeps the language it was built with until the next launch."
+    },
+    "logs_info": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "{ directory: string|null, newestFile: string|null, totalBytes: number }",
+      "notes": "Where the diagnostic log lives. New to the desktop app — the container UI wrote to stdout, which docker logs captured and nobody kept. The path differs per platform (~/Library/Logs on macOS, %LOCALAPPDATA% on Windows, ~/.local/share on Linux) and none is somewhere a user would look unprompted."
+    },
+    "updater_status": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "{ configured: boolean, hasPublicKey: boolean, endpoints: number }",
+      "notes": "Whether this build can verify an update. Tauri checks a bundle's signature against the public key compiled into the app; with an empty `pubkey` every check fails inside the plugin with a message about signatures, which reads like a server fault and is a build fault. Read from tauri.conf.json via include_str! so the answer describes the binary, not the working tree."
+    },
+    "prefs_get": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "Preferences",
+      "notes": "Replaces the localStorage-backed usePreferences composable with the Tauri store plugin."
+    },
+    "prefs_set": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "patch": "Preferences"
+      },
+      "returns": "void"
+    },
+    "updates_check": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "UpdateInfo",
+      "status": "deferred",
+      "notes": "Needs tauri-plugin-updater plus a signing key and a release endpoint — i.e. a release pipeline, not just code. Deferred to Phase 4 alongside signed builds. Declared here so the surface is complete and the gap is visible."
+    },
+    "hosts_plan": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "add": "string[]",
+        "remove": "string[]"
+      },
+      "returns": "HostsPlan",
+      "why": "Computes the exact replacement text WITHOUT elevating, so the UI can show a diff and ask first. Elevating and explaining afterwards would be the wrong order for the one operation that touches a system file."
+    },
+    "hosts_missing": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "string[]",
+      "why": "Every project domain with no hosts entry. Drives the one-click fix; the web UI could detect this but had no way to act on it."
+    },
+    "project_dockerfile_preview": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "name": "string",
+        "strict": "bool (default true)"
+      },
+      "returns": "DockerfilePreview",
+      "why": "Runs the Rust generator port alongside the Bash one so its output can be compared before it replaces anything. `matchesBashOutput` is the differential check, live against the user's own projects rather than only against fixtures.",
+      "notes": "Strict mode is the behaviour change made visible: where Bash silently drops an incompatible extension, this refuses and names it. `skipped` always reports what compat mode would have dropped, so the difference is legible either way."
+    },
+    "generator_verify": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "GeneratorReport",
+      "why": "The migration gate. A fixture suite only covers the cases someone thought to write down; this renders every generated file with the Rust port against the user's real projects and real .env, so a divergence surfaces on their machine before anything depends on it.",
+      "notes": "Reads only — it never writes a generated file. `readyToTakeOver` is true when every file matches byte-for-byte."
+    },
+    "generate_with": {
+      "new": true,
+      "kind": "operation",
+      "args": {
+        "scope": "'all'|'projects'|'services'",
+        "engineMode": "'bash'|'verify'|'rust' (default bash)"
+      },
+      "returns": "{ operationId, engine, report?, note? }",
+      "why": "The staged handover. The generator's output is the input to every container the user runs, so 'probably identical' is not a standard worth shipping. Bash runs in every mode; `rust` refuses to write when the two disagree, so the switch cannot silently change anyone's images.",
+      "notes": "`verify` is the mode to leave on during the transition: Bash still writes, and any divergence is reported without being acted on. Replaces generate_run, which is kept for callers that only ever want Bash."
+    }
+  },
+  "events": {
+    "_note": "Names are preserved from Socket.io so the Vue listeners keep working, with ONE deliberate change: the terminal events move from dash to colon separators for consistency. That is a 4-line change in the terminal component.",
+    "app:close_requested": {
+      "new": true,
+      "payload": {},
+      "notes": "The window was asked to close and closeBehaviour is \"ask\". Rust prevents the close and emits this; the front end shows the choice dialog and answers with window_close_action."
+    },
+    "project:creating": {
+      "payload": {
+        "project": "string"
+      }
+    },
+    "project:created": {
+      "payload": {
+        "project": "string"
+      }
+    },
+    "project:deleting": {
+      "payload": {
+        "project": "string"
+      }
+    },
+    "project:deleted": {
+      "payload": {
+        "project": "string"
+      }
+    },
+    "project:starting": {
+      "payload": {
+        "project": "string"
+      },
+      "emittedDynamically": true,
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source."
+    },
+    "project:started": {
+      "payload": {
+        "project": "string",
+        "running": "bool"
+      },
+      "emittedDynamically": true,
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source."
+    },
+    "project:stopping": {
+      "payload": {
+        "project": "string"
+      },
+      "emittedDynamically": true,
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source."
+    },
+    "project:stopped": {
+      "payload": {
+        "project": "string",
+        "running": "bool"
+      },
+      "emittedDynamically": true,
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source."
+    },
+    "project:restarting": {
+      "payload": {
+        "project": "string"
+      },
+      "emittedDynamically": true,
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source."
+    },
+    "project:restarted": {
+      "payload": {
+        "project": "string",
+        "running": "bool"
+      },
+      "emittedDynamically": true,
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source."
+    },
+    "project:error": {
+      "payload": {
+        "project": "string",
+        "error": "string"
+      }
+    },
+    "service:enabling": {
+      "payload": {
+        "service": "string"
+      }
+    },
+    "service:enabled": {
+      "payload": {
+        "service": "string",
+        "configured": "bool",
+        "running": "bool"
+      }
+    },
+    "service:disabling": {
+      "payload": {
+        "service": "string"
+      }
+    },
+    "service:disabled": {
+      "payload": {
+        "service": "string",
+        "configured": "bool",
+        "running": "bool"
+      }
+    },
+    "service:starting": {
+      "payload": {
+        "service": "string"
+      },
+      "emittedDynamically": true,
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source."
+    },
+    "service:started": {
+      "payload": {
+        "service": "string",
+        "running": "bool"
+      },
+      "emittedDynamically": true,
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source."
+    },
+    "service:stopping": {
+      "payload": {
+        "service": "string"
+      },
+      "emittedDynamically": true,
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source."
+    },
+    "service:stopped": {
+      "payload": {
+        "service": "string",
+        "running": "bool"
+      },
+      "emittedDynamically": true,
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source."
+    },
+    "service:restarting": {
+      "payload": {
+        "service": "string"
+      },
+      "emittedDynamically": true,
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source."
+    },
+    "service:restarted": {
+      "payload": {
+        "service": "string",
+        "running": "bool"
+      },
+      "emittedDynamically": true,
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source."
+    },
+    "service:progress": {
+      "payload": {
+        "service": "string",
+        "step": "string",
+        "percent": "u8?"
+      }
+    },
+    "service:error": {
+      "payload": {
+        "service": "string",
+        "error": "string"
+      }
+    },
+    "build:start": {
+      "payload": {
+        "project": "string",
+        "operation_id": "string"
+      }
+    },
+    "build:progress": {
+      "payload": {
+        "project": "string",
+        "operation_id": "string",
+        "line": "string"
+      }
+    },
+    "build:built": {
+      "payload": "FinishedEvent",
+      "note": "The IMAGE finished building. `project_build` has three stages — generate, build image, recreate container — and this marks the end of the second. The UI shows 'starting container…' between this and build:success."
+    },
+    "build:success": {
+      "payload": "FinishedEvent",
+      "note": "The container is up from the fresh image; the whole operation is done."
+    },
+    "build:error": {
+      "payload": {
+        "project": "string",
+        "operation_id": "string",
+        "error": "string",
+        "log_path": "string?"
+      }
+    },
+    "compose:progress": {
+      "new": true,
+      "payload": "ProgressEvent",
+      "why": "`docker compose up/down` writes its progress to stderr line by line. The old UI held the HTTP request open for the whole run (proxy_read_timeout 600s) and showed nothing until it ended."
+    },
+    "compose:done": {
+      "new": true,
+      "payload": "FinishedEvent"
+    },
+    "generate:start": {
+      "new": true,
+      "payload": {
+        "scope": "string",
+        "operation_id": "string"
+      }
+    },
+    "generate:progress": {
+      "new": true,
+      "payload": {
+        "operation_id": "string",
+        "line": "string"
+      }
+    },
+    "generate:done": {
+      "new": true,
+      "payload": {
+        "operation_id": "string",
+        "projects": "u32",
+        "services": "u32"
+      }
+    },
+    "terminal:ready": {
+      "renamedFrom": "terminal-ready",
+      "payload": {
+        "session_id": "string"
+      }
+    },
+    "terminal:output": {
+      "renamedFrom": "terminal-output",
+      "payload": {
+        "session_id": "string",
+        "data": "string"
+      }
+    },
+    "terminal:closed": {
+      "renamedFrom": "terminal-closed",
+      "payload": {
+        "session_id": "string",
+        "exit_code": "i32"
+      }
+    },
+    "logs:line": {
+      "new": true,
+      "payload": {
+        "stream_id": "string",
+        "container": "string",
+        "line": "string",
+        "stream": "'stdout'|'stderr'"
+      }
+    },
+    "logs:closed": {
+      "new": true,
+      "payload": {
+        "stream_id": "string"
+      }
+    },
+    "engine:status_changed": {
+      "new": true,
+      "payload": "EngineStatus",
+      "why": "Drives the whole-app connected/disconnected state and the tray icon."
+    },
+    "container:state_changed": {
+      "new": true,
+      "payload": {
+        "name": "string",
+        "state": "string",
+        "running": "bool"
+      },
+      "why": "Sourced from the Docker events stream. Today the UI polls on a visibility-gated timer (useVisiblePolling); a push stream removes the polling entirely."
+    },
+    "manifest:changed": {
+      "new": true,
+      "payload": {
+        "project": "string",
+        "path": "string"
+      },
+      "why": "fs-watcher on projects/*/stackvo.json. Enables 'config changed — regenerate?' instead of the user remembering to run `stackvo generate`.",
+      "emittedBy": "the fs-watcher on projects/*/stackvo.json",
+      "notes": "Debounced 400ms — editors write a file several times per save. The app does NOT regenerate on its own; it offers the action, because rebuilding a container under someone who is mid-edit is worse than the staleness it fixes."
+    },
+    "hosts:changed": {
+      "new": true,
+      "payload": {
+        "added": "string[]",
+        "removed": "string[]"
+      },
+      "why": "Warn when a project's domain has no hosts entry, with a one-click fix."
+    },
+    "_removed": {
+      "generate:error": "Removed: `generate:done` carries `success` and `error`, and generate_run returns Err as well. A second failure channel is one more thing to keep consistent for no gain.",
+      "terminal:error": "Removed: pty_open returns Err when the shell cannot start, which is the only case this covered."
+    }
+  },
+  "types": {
+    "EngineStatus": {
+      "reachable": "bool",
+      "version": "string?",
+      "api_version": "string?",
+      "context": "string?",
+      "platform": "'docker-desktop'|'colima'|'orbstack'|'engine'|'unknown'",
+      "socket_path": "string?",
+      "error": "string?"
+    },
+    "Workspace": {
+      "root": "string?",
+      "valid": "bool",
+      "source": "'stored'|'env'|'discovered'|'none'",
+      "stackvo_version": "string?",
+      "projects_dir": "string?",
+      "env_file": "string?",
+      "note": "root is null when source is 'none'. `source` exists so the UI can say WHY it is pointing at a given checkout — silently guessing wrong would be worse than asking."
+    },
+    "ProjectSpec": {
+      "$ref": "project.schema.json",
+      "note": "The create form's payload IS a project manifest. The old POST body used a flat shape (runtime, version, extensions at top level) that ProjectService then reassembled — and reassembled wrongly for node. v1 sends the manifest itself, so there is nothing to reassemble."
+    },
+    "ProjectManifest": {
+      "$ref": "project.schema.json"
+    },
+    "Project": {
+      "name": "string",
+      "domain": "string",
+      "runtime": "'php'|'node'",
+      "path": "string",
+      "container_name": "string",
+      "running": "bool",
+      "built": "bool",
+      "manifest": "ProjectManifest",
+      "manifest_valid": "bool",
+      "manifest_errors": "string[]",
+      "domain_configured": "bool",
+      "ports": "Port[]",
+      "note": "manifest_valid/manifest_errors are NEW: an invalid manifest must be visible in the list, not a silently missing project."
+    },
+    "Service": {
+      "id": "string",
+      "name": "string",
+      "enabled": "bool",
+      "running": "bool",
+      "version": "string",
+      "container_name": "string",
+      "url": "string?",
+      "ports": "Port[]",
+      "category": "string"
+    },
+    "Port": {
+      "container": "u16",
+      "host": "u16?",
+      "protocol": "'tcp'|'udp'"
+    },
+    "HostStats": {
+      "cpu": "CpuStats",
+      "memory": "MemoryStats",
+      "storage": "StorageStats",
+      "network": "NetworkStats",
+      "disk": "DiskStats",
+      "timestamp": "u64"
+    },
+    "ContainerStats": {
+      "cpu_percent": "f32",
+      "memory_used": "u64",
+      "memory_limit": "u64",
+      "memory_percent": "f32",
+      "net_rx": "u64",
+      "net_tx": "u64"
+    },
+    "StatSample": {
+      "t": "u64",
+      "cpu": "f32",
+      "memory": "f32"
+    },
+    "SystemResources": {
+      "images": {
+        "total": "u32",
+        "in_use": "u32",
+        "unused": "u32",
+        "size": "u64"
+      },
+      "volumes": {
+        "total": "u32",
+        "in_use": "u32",
+        "unused": "u32",
+        "size": "u64"
+      }
+    },
+    "DependencyReport": {
+      "service": "string",
+      "description": "string",
+      "dependencies": [
+        {
+          "name": "string",
+          "type": "'required'|'optional'",
+          "running": "bool"
+        }
+      ],
+      "has_unmet_dependencies": "bool",
+      "internal": "string[]"
+    },
+    "ValidationReport": {
+      "valid": "bool",
+      "errors": [
+        {
+          "path": "string",
+          "code": "string",
+          "message": "string"
+        }
+      ],
+      "warnings": [
+        {
+          "path": "string",
+          "message": "string"
+        }
+      ]
+    },
+    "HostsEntry": {
+      "ip": "string",
+      "domain": "string",
+      "configured": "bool",
+      "managed_by_stackvo": "bool"
+    },
+    "PtyTarget": {
+      "oneOf": [
+        {
+          "kind": "'container'",
+          "name": "string",
+          "shell": "string?"
+        },
+        {
+          "kind": "'host'",
+          "cwd": "string"
+        }
+      ]
+    },
+    "Catalog": {
+      "runtimes": [
+        {
+          "id": "string",
+          "versions": "string[]",
+          "default": "string",
+          "available": "bool"
+        }
+      ],
+      "servers": "string[]",
+      "default_server": "string",
+      "php_extensions": [
+        {
+          "name": "string",
+          "install": "string",
+          "in_default_set": "bool",
+          "min_php": "string?",
+          "removed_in": "string?"
+        }
+      ]
+    },
+    "OperationId": "string",
+    "ProgressEvent": {
+      "operation_id": "string",
+      "subject": "string",
+      "line": "string",
+      "note": "One line of a running process's merged stdout+stderr. Merged deliberately: docker compose writes progress to stderr and results to stdout, and separating them makes the log read out of order."
+    },
+    "FinishedEvent": {
+      "operation_id": "string",
+      "subject": "string",
+      "success": "bool",
+      "duration_ms": "u64",
+      "error": "string?",
+      "log_path": "string?",
+      "note": "On failure `error` carries the last few output lines rather than a generic exit-code message — that tail is almost always the real cause."
+    },
+    "Preferences": {
+      "locale": "'tr'|'en'",
+      "theme": "'light'|'dark'|'system'",
+      "editor_command": "string?",
+      "start_minimized": "bool",
+      "autostart": "bool",
+      "notify_on_build": "bool"
+    },
+    "UpdateInfo": {
+      "available": "bool",
+      "version": "string?",
+      "notes": "string?"
+    },
+    "HostsPlan": {
+      "add": "string[]",
+      "remove": "string[]",
+      "preview": "string",
+      "changed": "bool",
+      "path": "string",
+      "note": "`preview` is the exact text that will be written — the same value the diff is rendered from, so what the user approves is what lands."
+    },
+    "DockerfilePreview": {
+      "project": "string",
+      "runtime": "string",
+      "server": "string?",
+      "dockerfile": "string",
+      "skipped": "[{extension, reason}] — what the Bash generator drops without telling anyone",
+      "bashOutputPath": "string",
+      "matchesBashOutput": "bool"
+    },
+    "GeneratorReport": {
+      "files": "[{ file, path, status: 'match'|'differ'|'missing'|'error', firstDifferenceLine?, error? }]",
+      "matched": "u32",
+      "differed": "u32",
+      "readyToTakeOver": "bool",
+      "warnings": "string[] — configuration problems the port can see and StackVo does not report, e.g. C-20"
+    }
+  },
+  "coverage": {
+    "httpEndpointsReplaced": 24,
+    "socketEventsReplaced": 4,
+    "newCommands": 30,
+    "unreachableRemoved": [
+      "POST /api/terminal/:c/open returned HTTP 400 unconditionally in the shipped container configuration — replaced by terminal_open_external, which works."
+    ],
+    "phase3": "Tray, notifications, fs-watcher, hosts helper, PTY, autostart and single-instance. The hosts helper replaces the README's manual `sudo tee -a /etc/hosts` step; the PTY replaces a terminal endpoint that returned HTTP 400 unconditionally in the shipped container configuration.",
+    "implementationStatus": "Suite E of tools/validate-contracts.mjs cross-checks this file against the Rust registry in src-tauri/src/lib.rs and the JS wrappers in src/lib/ipc.js. A command declared here but not registered shows up as a NOT_IMPLEMENTED warning, so this list cannot quietly drift ahead of the code."
+  }
+}
