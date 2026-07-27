@@ -1,0 +1,22 @@
+{
+  "name": "probe-apache",
+  "domain": "probe-apache.loc",
+  "runtime": "php",
+  "server": "apache",
+  "document_root": "public",
+  "php": {
+    "version": "8.4",
+    "extensions": [
+      "mbstring",
+      "pdo",
+      "pdo_mysql",
+      "curl",
+      "zip",
+      "gd",
+      "redis",
+      "xdebug",
+      "intl",
+      "bcmath"
+    ]
+  }
+}

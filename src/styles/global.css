@@ -1,0 +1,31 @@
+/* Global app styles (moved out of index.html). Imported from main.js. */
+
+/* Hide scrollbars app-wide while keeping scroll behaviour. */
+html {
+  overflow: hidden;
+  scrollbar-width: none; /* Firefox */
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  height: 100vh;
+}
+
+#app {
+  height: 100vh;
+  overflow: hidden;
+}
+
+* {
+  scrollbar-width: none; /* Firefox */
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+#app::-webkit-scrollbar,
+*::-webkit-scrollbar {
+  display: none; /* Chrome, Safari, Edge */
+}

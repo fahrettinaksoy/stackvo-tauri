@@ -1,0 +1,24 @@
+// =============================================================================
+// Vuetify SASS variables — compile-time design tokens
+// -----------------------------------------------------------------------------
+// Wired through vite-plugin-vuetify via `styles.configFile` (see vite.config.js).
+// Anything overridden here is applied *before* Vuetify's stylesheets compile, so
+// it changes the generated CSS itself (smaller + no runtime cost), unlike the
+// JS `theme`/`defaults` which are applied at runtime.
+//
+// Only override what we intentionally change; every other variable keeps its
+// Vuetify default through the `!default` fallbacks inside `vuetify/settings`.
+// Docs: https://vuetifyjs.com/en/features/sass-variables/
+// =============================================================================
+@use 'vuetify/settings' with (
+  // Use the platform's native UI font instead of falling back to a generic
+  // sans-serif (the project does not bundle the Roboto webfont).
+  $body-font-family: ('Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif),
+
+  // Slightly rounder corners as the base radius for the whole design system
+  // (cards, sheets, inputs… everything that derives from the root radius).
+  $border-radius-root: 6px,
+
+  // A hair snappier than the 0.3s default for global transitions.
+  $transition-duration-root: 0.25s
+);

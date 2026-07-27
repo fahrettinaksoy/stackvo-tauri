@@ -1,0 +1,8 @@
+# Pinned so a new stable release cannot turn CI red without a commit here.
+#
+# Clippy gains lints with every release and this repo runs it with -D warnings,
+# so "stable" means the build depends on the day it runs. Bumping this file is a
+# reviewable change; the toolchain moving underneath it is not.
+[toolchain]
+channel = "1.96.1"
+components = ["rustfmt", "clippy"]

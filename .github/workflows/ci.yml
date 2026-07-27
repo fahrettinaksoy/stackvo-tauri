@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # The reason this job exists: the Windows-specific blocks in engine.rs,
+  # hosts.rs and pty.rs cannot be compiled from macOS — cross-compiling fails in
+  # tauri-build, which needs llvm-rc to embed the app manifest. Until this runs
+  # green on windows-latest, nobody should claim Windows works.
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Tauri's Linux build needs the webkit/gtk headers; the other two ship
+      # their webview with the OS.
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libssl-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      # The front end is 44% of this repo; until now none of it passed through a
+      # gate, while the Rust half had clippy and 100+ tests. Lint and unit tests
+      # run on Ubuntu only — they are platform-independent, and repeating them
+      # three times buys nothing.
+      - name: Lint the front end
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run lint
+
+      - name: Test the front end
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run test:js
+
+      - name: Build the front end
+        run: npm run build
+
+      # Everything below runs on all three platforms, so the cfg-gated code is
+      # actually compiled somewhere rather than only written.
+      - name: Check the Rust core
+        run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets
+
+      - name: Test
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+  # Supply chain. One platform is enough — the dependency graph is the same
+  # everywhere, and installing cargo-deny three times to get one answer is waste.
+  supply-chain:
+    name: supply chain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      # Advisories, licences, banned crates and source registries. The policy,
+      # including why unmaintained transitive crates warn rather than fail, is
+      # in src-tauri/deny.toml.
+      - name: cargo-deny
+        run: cargo deny --manifest-path src-tauri/Cargo.toml check
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Production dependencies only: a dev-only advisory does not ship to a
+      # user, and failing the build on one blocks work for no gain in safety.
+      - name: npm audit
+        run: npm audit --omit=dev --audit-level=moderate
+
+  # The contract checks need a StackVo checkout to compare against, so they run
+  # separately and only where one can be fetched.
+  contracts:
+    name: contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: stackvo/stackvo
+          path: stackvo-checkout
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The validator reads .env; a fresh checkout only has the example.
+      - name: Seed .env
+        run: cp stackvo-checkout/.env.example stackvo-checkout/.env
+
+      - name: Validate contracts
+        run: node tools/validate-contracts.mjs --root stackvo-checkout
+
+      - name: Measure .env usage
+        run: node tools/measure-env-usage.mjs --root stackvo-checkout
