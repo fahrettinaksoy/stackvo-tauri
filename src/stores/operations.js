@@ -56,6 +56,18 @@ export const useOperationsStore = defineStore('operations', () => {
 
   function appendLine(id, kind, subject, line) {
     const op = ensure(id, kind, subject);
+
+    // Output after a finish means the operation was not over: one id can span
+    // several stages, and only the last of them ends it. Enabling a service
+    // generates the compose files (`generate:done`) and then brings the profile
+    // up — so the panel used to sit on "done, 2.3s" while docker was still
+    // pulling an image.
+    if (op.state !== 'running') {
+      op.state = 'running';
+      op.durationMs = null;
+      op.error = null;
+    }
+
     op.lines.push(line);
     // Bounded: a Docker build emits thousands of lines and the panel only ever
     // shows the tail.
@@ -105,24 +117,30 @@ export const useOperationsStore = defineStore('operations', () => {
         markBusy(subject, true);
         return;
       }
-      // built / done / success / error are all terminal for their stage.
-      if (['built', 'done', 'success', 'error'].includes(verb)) {
-        // `built` ends a stage of project_build, not the whole operation, so it
-        // must not clear the busy flag or mark the operation complete.
-        if (verb === 'built') {
-          appendLine(id, domain, subject, '— image built, recreating container —');
-          return;
-        }
-        finish(id, domain, subject, payload);
+      // `built` ends a stage of project_build, not the whole operation, so it
+      // must not clear the busy flag or mark the operation complete.
+      if (verb === 'built') {
+        appendLine(id, domain, subject, '— image built, recreating container —');
+        return;
+      }
 
-        // Only worth interrupting someone about if the window is not in front.
-        if (shouldNotify(name) && document.visibilityState !== 'visible') {
-          const failed = verb === 'error' || payload?.success === false;
-          notify(
-            failed ? `${domain} failed — ${subject}` : `${domain} finished — ${subject}`,
-            payload?.error ?? ''
-          );
-        }
+      // Anything else carrying an operation id finishes it.
+      //
+      // This used to be a list of four verbs — built/done/success/error — which
+      // missed `service:enabled`, the finished event of enabling a service. The
+      // row's spinner is cleared by the finish, so a service could sit
+      // "enabling" forever while its container was already up. The rule is not
+      // which word was chosen: a runner emits exactly one finished event per
+      // operation, whatever it is named.
+      finish(id, domain, subject, payload);
+
+      // Only worth interrupting someone about if the window is not in front.
+      if (shouldNotify(name) && document.visibilityState !== 'visible') {
+        const failed = verb === 'error' || payload?.success === false;
+        notify(
+          failed ? `${domain} failed — ${subject}` : `${domain} finished — ${subject}`,
+          payload?.error ?? ''
+        );
       }
     });
   }

@@ -158,6 +158,7 @@ onMounted(() => {
   <PageLayout
     top-icon="mdi-view-dashboard"
     :top-title="t('dashboard.title')"
+    :top-subtitle="t('dashboard.subtitle')"
     :bar-title="t('dashboard.overview')"
   >
     <template #bar-append>
@@ -300,7 +301,7 @@ onMounted(() => {
                   </div>
                 </template>
                 <template #legend="{ items, toggle, isActive }">
-                  <v-list class="py-0 bg-transparent metric-legend" density="compact">
+                  <v-list class="py-0 bg-transparent metric-legend">
                     <v-list-item
                       v-for="item in items"
                       :key="item.key"
@@ -382,7 +383,7 @@ onMounted(() => {
                 </template>
               </v-pie>
 
-              <v-list class="py-0 bg-transparent metric-legend ml-2" density="compact">
+              <v-list class="py-0 bg-transparent metric-legend ml-2">
                 <v-list-item :title="t('dashboard.used')">
                   <template #prepend
                     ><v-avatar :color="colors.info" :size="10" class="mr-2"
@@ -437,7 +438,7 @@ onMounted(() => {
                 </template>
               </v-pie>
 
-              <v-list class="py-0 bg-transparent metric-legend ml-2" density="compact">
+              <v-list class="py-0 bg-transparent metric-legend ml-2">
                 <v-list-item :title="t('dashboard.used')">
                   <template #prepend
                     ><v-avatar :color="colors.info" :size="10" class="mr-2"

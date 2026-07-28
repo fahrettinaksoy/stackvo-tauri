@@ -9,8 +9,7 @@ import { api } from '@/lib/ipc';
 import { bytes, percent } from '@/lib/format';
 import PageLayout from '@/components/PageLayout.vue';
 import ErrorAlert from '@/components/ErrorAlert.vue';
-import TerminalPanel from '@/components/TerminalPanel.vue';
-import LogPanel from '@/components/LogPanel.vue';
+import LogView from '@/components/LogView.vue';
 import HostsDialog from '@/components/HostsDialog.vue';
 
 const props = defineProps({ name: { type: String, required: true } });
@@ -28,8 +27,6 @@ const cpuSeries = ref([]);
 const error = ref(null);
 const loading = ref(true);
 const copied = ref(null);
-const terminalTarget = ref(null);
-const logTarget = ref(null);
 const showHostsFix = ref(false);
 
 const manifestText = ref('');
@@ -41,6 +38,10 @@ const SECTIONS = [
   { key: 'indicator', icon: 'mdi-chart-line', label: 'projectDetail.indicator' },
   { key: 'configuration', icon: 'mdi-folder-cog', label: 'projectDetail.configuration' },
   { key: 'container', icon: 'mdi-docker', label: 'projectDetail.container' },
+  // A section rather than a dialog over the page: logs are something you read
+  // while looking at the rest, and a modal on top of a detail page hides the
+  // thing it is about.
+  { key: 'logs', icon: 'mdi-text-box-outline', label: 'logs.title' },
   // Below the divider: the editing surfaces the screenshots do not show, kept
   // because retiring the dialog must not retire what it could do.
   { key: 'manifest', icon: 'mdi-code-json', label: 'detail.manifest', divide: true },
@@ -187,16 +188,44 @@ async function bringUp() {
   await act(() => api.composeUpProject(props.name));
 }
 
+/**
+ * Which rendering to show.
+ *
+ * `compat` reproduces what Bash actually writes today, `strict` refuses where
+ * Bash silently drops an extension. Held as state rather than fired by two
+ * unlabelled buttons: which of the two you are looking at changes what the
+ * comparison chip below it means.
+ */
+const previewMode = ref('compat');
+const previewLoading = ref(false);
+
 /** Render the project with the Rust generator and compare against Bash. */
-async function loadPreview(strict) {
+async function loadPreview(mode = previewMode.value) {
+  previewMode.value = mode;
   preview.value = null;
   error.value = null;
+  previewLoading.value = true;
   try {
-    preview.value = await api.projectDockerfilePreview(props.name, strict);
+    preview.value = await api.projectDockerfilePreview(props.name, mode === 'strict');
   } catch (e) {
     error.value = e;
+  } finally {
+    previewLoading.value = false;
   }
 }
+
+/** Numbered, because a Dockerfile is read by line as often as it is read. */
+const dockerfileLines = computed(() => preview.value?.dockerfile?.split('\n') ?? []);
+
+// Rendered as soon as the section is opened. The pane used to start empty with
+// a note asking the user to pick one of two modes named "strict" and "compat" —
+// a question about the generator port, put before anyone had seen the file.
+watch(
+  () => section.value,
+  (value) => {
+    if (value === 'dockerfile' && !preview.value) loadPreview();
+  }
+);
 
 async function act(fn) {
   error.value = null;
@@ -288,7 +317,7 @@ onUnmounted(() => clearInterval(statsTimer));
       </v-btn>
     </template>
 
-    <v-toolbar v-if="project" density="comfortable" class="detail-toolbar">
+    <v-toolbar v-if="project" class="detail-toolbar">
       <v-toolbar-title class="text-h6 font-weight-bold">{{ project.name }}</v-toolbar-title>
 
       <v-chip
@@ -305,63 +334,57 @@ onUnmounted(() => clearInterval(statsTimer));
            page and the user has no idea why. -->
       <v-btn
         v-if="httpsUrl && running && project.domainConfigured"
-        icon="mdi-open-in-new"
+        icon
         variant="text"
         color="primary"
         :aria-label="t('projectsView.colOpen')"
         @click="openUrl(httpsUrl)"
-      />
+      >
+        <v-icon>mdi-open-in-new</v-icon>
+        <v-tooltip activator="parent" location="bottom">{{ t('projectsView.colOpen') }}</v-tooltip>
+      </v-btn>
       <v-btn
         v-if="running"
-        icon="mdi-console"
+        icon
         variant="text"
         color="info"
-        :aria-label="t('projects.terminal')"
-        @click="terminalTarget = { kind: 'container', name: project.containerName }"
-      />
-      <v-btn
-        v-if="running"
-        icon="mdi-application-export"
-        variant="text"
-        color="info"
-        :title="t('detail.externalTerminal')"
         :aria-label="t('detail.externalTerminal')"
         @click="openExternalTerminal"
-      />
-      <v-btn
-        icon="mdi-text-box-outline"
-        variant="text"
-        :disabled="!project.built"
-        :title="t('actions.logs')"
-        :aria-label="t('actions.logs')"
-        @click="logTarget = project.containerName"
-      />
-      <v-btn
-        icon="mdi-folder-open"
-        variant="text"
-        :title="t('detail.openInEditor')"
-        :aria-label="t('detail.openInEditor')"
-        @click="openInEditor"
-      />
+      >
+        <v-icon>mdi-application-export</v-icon>
+        <v-tooltip activator="parent" location="bottom">{{
+          t('detail.externalTerminal')
+        }}</v-tooltip>
+      </v-btn>
+      <v-btn icon variant="text" :aria-label="t('detail.openInEditor')" @click="openInEditor">
+        <v-icon>mdi-folder-open</v-icon>
+        <v-tooltip activator="parent" location="bottom">{{ t('detail.openInEditor') }}</v-tooltip>
+      </v-btn>
       <v-btn
         v-if="running"
-        icon="mdi-stop"
+        icon
         variant="text"
         color="error"
         :aria-label="t('actions.stop')"
         :loading="ops.isBusy(name)"
         @click="act(api.projectStop)"
-      />
+      >
+        <v-icon>mdi-stop</v-icon>
+        <v-tooltip activator="parent" location="bottom">{{ t('actions.stop') }}</v-tooltip>
+      </v-btn>
       <v-btn
         v-else-if="project.built"
-        icon="mdi-play"
+        icon
         variant="text"
         color="success"
         :aria-label="t('actions.start')"
         :disabled="!app.engineUp"
         :loading="ops.isBusy(name)"
         @click="act(api.projectStart)"
-      />
+      >
+        <v-icon>mdi-play</v-icon>
+        <v-tooltip activator="parent" location="bottom">{{ t('actions.start') }}</v-tooltip>
+      </v-btn>
       <v-btn
         v-else
         icon="mdi-hammer-wrench"
@@ -374,13 +397,16 @@ onUnmounted(() => clearInterval(statsTimer));
       />
       <v-btn
         v-if="running"
-        icon="mdi-restart"
+        icon
         variant="text"
         color="warning"
         :aria-label="t('actions.restart')"
         :loading="ops.isBusy(name)"
         @click="act(api.projectRestart)"
-      />
+      >
+        <v-icon>mdi-restart</v-icon>
+        <v-tooltip activator="parent" location="bottom">{{ t('actions.restart') }}</v-tooltip>
+      </v-btn>
       <v-btn
         icon="mdi-delete"
         variant="text"
@@ -391,19 +417,16 @@ onUnmounted(() => clearInterval(statsTimer));
 
       <v-divider vertical class="mx-2" />
 
-      <v-btn
-        icon="mdi-refresh"
-        variant="text"
-        :aria-label="t('app.refresh')"
-        :loading="loading"
-        @click="load"
-      />
+      <v-btn icon variant="text" :aria-label="t('app.refresh')" :loading="loading" @click="load">
+        <v-icon>mdi-refresh</v-icon>
+        <v-tooltip activator="parent" location="bottom">{{ t('app.refresh') }}</v-tooltip>
+      </v-btn>
     </v-toolbar>
 
     <v-divider />
 
     <div class="detail-body">
-      <div class="detail-content">
+      <div class="detail-content" :class="{ 'detail-content--flush': section === 'logs' }">
         <ErrorAlert :error="error" type="error" closable class="mb-4" @close="error = null" />
 
         <div v-if="loading" class="d-flex justify-center py-16">
@@ -415,7 +438,6 @@ onUnmounted(() => clearInterval(statsTimer));
           <v-alert
             type="success"
             variant="tonal"
-            density="compact"
             class="mb-4"
             :icon="running ? 'mdi-pulse' : 'mdi-pause'"
           >
@@ -640,12 +662,15 @@ onUnmounted(() => clearInterval(statsTimer));
                 <span class="field-key">{{ t('projectDetail.containerPath') }}</span>
                 <code class="field-mono">/var/www/html</code>
                 <v-btn
-                  icon="mdi-content-copy"
+                  icon
                   :aria-label="t('a11y.copy')"
                   size="x-small"
                   variant="text"
                   @click="copy('/var/www/html', 'cpath')"
-                />
+                >
+                  <v-icon>mdi-content-copy</v-icon>
+                  <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
+                </v-btn>
               </div>
               <div class="field">
                 <span class="field-key">{{ t('projectDetail.accessHttp') }}</span>
@@ -675,12 +700,15 @@ onUnmounted(() => clearInterval(statsTimer));
                 <span class="field-key">{{ t('projectDetail.hostPath') }}</span>
                 <code class="field-mono">{{ project.path }}</code>
                 <v-btn
-                  icon="mdi-content-copy"
+                  icon
                   :aria-label="t('a11y.copy')"
                   size="x-small"
                   variant="text"
                   @click="copy(project.path, 'hpath')"
-                />
+                >
+                  <v-icon>mdi-content-copy</v-icon>
+                  <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
+                </v-btn>
               </div>
             </v-col>
 
@@ -695,12 +723,15 @@ onUnmounted(() => clearInterval(statsTimer));
                 <span class="field-key">{{ t('newProject.documentRoot') }}</span>
                 <code class="field-mono">{{ manifest.documentRoot }}</code>
                 <v-btn
-                  icon="mdi-content-copy"
+                  icon
                   :aria-label="t('a11y.copy')"
                   size="x-small"
                   variant="text"
                   @click="copy(manifest.documentRoot, 'droot')"
-                />
+                >
+                  <v-icon>mdi-content-copy</v-icon>
+                  <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
+                </v-btn>
               </div>
               <div class="field">
                 <span class="field-key">{{ t('projectDetail.accessHttps') }}</span>
@@ -722,7 +753,6 @@ onUnmounted(() => clearInterval(statsTimer));
             v-if="project.domain && !project.domainConfigured"
             type="warning"
             variant="tonal"
-            density="compact"
             class="mt-2"
           >
             <div class="d-flex align-center ga-2">
@@ -759,23 +789,12 @@ onUnmounted(() => clearInterval(statsTimer));
             <div class="section-head mt-8 mb-3">
               <v-icon size="18" class="mr-2">mdi-file-alert</v-icon>{{ t('projects.problems') }}
             </div>
-            <v-alert
-              v-if="manifest.errors.length"
-              type="error"
-              variant="tonal"
-              density="compact"
-              class="mb-2"
-            >
+            <v-alert v-if="manifest.errors.length" type="error" variant="tonal" class="mb-2">
               <div v-for="(i, k) in manifest.errors" :key="k" class="text-caption">
                 <strong>{{ i.code }}</strong> {{ i.path }} — {{ i.message }}
               </div>
             </v-alert>
-            <v-alert
-              v-if="manifest.warnings.length"
-              type="warning"
-              variant="tonal"
-              density="compact"
-            >
+            <v-alert v-if="manifest.warnings.length" type="warning" variant="tonal">
               <div v-for="(i, k) in manifest.warnings" :key="k" class="text-caption">
                 <strong>{{ i.code }}</strong> {{ i.path }} — {{ i.message }}
               </div>
@@ -820,40 +839,86 @@ onUnmounted(() => clearInterval(statsTimer));
           />
         </template>
 
+        <!-- LOGS ------------------------------------------------------------ -->
+        <template v-else-if="section === 'logs'">
+          <LogView
+            v-if="project.built"
+            :container="project.containerName"
+            :active="section === 'logs'"
+          />
+          <div v-else class="text-caption text-medium-emphasis py-8 text-center">
+            {{ t('detail.notBuilt') }}
+          </div>
+        </template>
+
         <!-- DOCKERFILE ---------------------------------------------------- -->
         <template v-else-if="section === 'dockerfile'">
-          <div class="d-flex align-center ga-2 mb-3">
-            <div class="section-head">
-              <v-icon size="18" class="mr-2">mdi-file-document-outline</v-icon>
-              {{ t('detail.dockerfile') }}
-            </div>
+          <div class="section-head mb-1">
+            <v-icon size="18" class="mr-2">mdi-file-document-outline</v-icon>
+            {{ t('detail.dockerfile') }}
+          </div>
+          <div class="text-caption text-medium-emphasis mb-3">{{ t('detail.dockerfileDesc') }}</div>
+
+          <div class="d-flex align-center ga-3 flex-wrap mb-2">
+            <v-btn-toggle
+              :model-value="previewMode"
+              mandatory
+              divided
+              color="primary"
+              variant="flat"
+              class="bg-surface-light"
+              @update:model-value="loadPreview"
+            >
+              <v-btn value="compat" size="small">{{ t('detail.compat') }}</v-btn>
+              <v-btn value="strict" size="small">{{ t('detail.strict') }}</v-btn>
+            </v-btn-toggle>
+
+            <!-- What the chip means depends on the mode above it, so they sit
+                 together rather than at opposite ends of a bar. -->
             <v-chip
               v-if="preview"
               size="small"
               :color="preview.matchesBashOutput ? 'success' : 'warning'"
+              :prepend-icon="preview.matchesBashOutput ? 'mdi-check-circle' : 'mdi-alert'"
             >
               {{
                 preview.matchesBashOutput ? t('detail.matchesBash') : t('detail.differsFromBash')
               }}
             </v-chip>
+
             <v-spacer />
-            <v-btn size="small" variant="text" @click="loadPreview(true)">{{
-              t('detail.strict')
-            }}</v-btn>
-            <v-btn size="small" variant="text" @click="loadPreview(false)">{{
-              t('detail.compat')
-            }}</v-btn>
+
+            <v-btn
+              v-if="preview"
+              icon
+              size="small"
+              variant="text"
+              :aria-label="t('a11y.copy')"
+              @click="copy(preview.dockerfile)"
+            >
+              <v-icon>mdi-content-copy</v-icon>
+              <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
+            </v-btn>
+            <v-btn
+              icon
+              size="small"
+              variant="text"
+              :loading="previewLoading"
+              :aria-label="t('app.refresh')"
+              @click="loadPreview()"
+            >
+              <v-icon>mdi-refresh</v-icon>
+              <v-tooltip activator="parent">{{ t('app.refresh') }}</v-tooltip>
+            </v-btn>
+          </div>
+
+          <div class="text-caption text-medium-emphasis mb-3">
+            {{ previewMode === 'strict' ? t('detail.strictHint') : t('detail.compatHint') }}
           </div>
 
           <!-- Bash drops an unbuildable extension without a word; strict mode
                exists so the reason is visible instead. -->
-          <v-alert
-            v-if="preview?.skipped?.length"
-            type="warning"
-            variant="tonal"
-            density="compact"
-            class="mb-3"
-          >
+          <v-alert v-if="preview?.skipped?.length" type="warning" variant="tonal" class="mb-3">
             <div class="text-caption font-weight-medium mb-1">
               {{ t('detail.silentlySkipped') }}
             </div>
@@ -862,9 +927,14 @@ onUnmounted(() => clearInterval(statsTimer));
             </div>
           </v-alert>
 
-          <pre v-if="preview" class="dockerfile">{{ preview.dockerfile }}</pre>
-          <div v-else class="text-caption text-medium-emphasis py-8 text-center">
-            {{ t('detail.previewHint') }}
+          <div v-if="preview" class="dockerfile">
+            <div v-for="(line, i) in dockerfileLines" :key="i" class="df-line">
+              <span class="df-no">{{ i + 1 }}</span>
+              <code class="df-code">{{ line }}</code>
+            </div>
+          </div>
+          <div v-else-if="previewLoading" class="d-flex justify-center py-8">
+            <v-progress-circular indeterminate color="primary" />
           </div>
         </template>
 
@@ -885,12 +955,15 @@ onUnmounted(() => clearInterval(statsTimer));
                   <span class="field-key">{{ t('projectDetail.name') }}</span>
                   <code class="field-mono">{{ details.name }}</code>
                   <v-btn
-                    icon="mdi-content-copy"
+                    icon
                     :aria-label="t('a11y.copy')"
                     size="x-small"
                     variant="text"
                     @click="copy(details.name, 'cname')"
-                  />
+                  >
+                    <v-icon>mdi-content-copy</v-icon>
+                    <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
+                  </v-btn>
                 </div>
                 <div class="field">
                   <span class="field-key">{{ t('projectDetail.uptime') }}</span>
@@ -937,12 +1010,15 @@ onUnmounted(() => clearInterval(statsTimer));
                   <span class="field-key">{{ t('projectDetail.containerId') }}</span>
                   <code class="field-mono">{{ details.id?.slice(0, 12) }}</code>
                   <v-btn
-                    icon="mdi-content-copy"
+                    icon
                     :aria-label="t('a11y.copy')"
                     size="x-small"
                     variant="text"
                     @click="copy(details.id, 'cid')"
-                  />
+                  >
+                    <v-icon>mdi-content-copy</v-icon>
+                    <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
+                  </v-btn>
                 </div>
               </v-col>
 
@@ -951,12 +1027,15 @@ onUnmounted(() => clearInterval(statsTimer));
                   <span class="field-key">{{ t('detail.image') }}</span>
                   <code class="field-mono">{{ details.image }}</code>
                   <v-btn
-                    icon="mdi-content-copy"
+                    icon
                     :aria-label="t('a11y.copy')"
                     size="x-small"
                     variant="text"
                     @click="copy(details.image, 'img')"
-                  />
+                  >
+                    <v-icon>mdi-content-copy</v-icon>
+                    <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
+                  </v-btn>
                 </div>
                 <div class="field">
                   <span class="field-key">{{ t('projectDetail.restartCount') }}</span>
@@ -1008,7 +1087,7 @@ onUnmounted(() => clearInterval(statsTimer));
 
       <!-- Section navigation ---------------------------------------------- -->
       <div class="detail-nav">
-        <v-list nav density="comfortable" class="bg-transparent">
+        <v-list nav class="bg-transparent">
           <template v-for="s in SECTIONS" :key="s.key">
             <v-divider v-if="s.divide" class="my-2" />
             <v-list-item
@@ -1026,20 +1105,6 @@ onUnmounted(() => clearInterval(statsTimer));
     <v-snackbar :model-value="!!copied" timeout="1200" color="success" location="bottom">
       {{ t('projectDetail.copied') }}
     </v-snackbar>
-
-    <LogPanel
-      v-if="logTarget"
-      :container="logTarget"
-      :model-value="!!logTarget"
-      @update:model-value="logTarget = $event ? logTarget : null"
-    />
-
-    <TerminalPanel
-      v-if="terminalTarget"
-      :target="terminalTarget"
-      :model-value="!!terminalTarget"
-      @update:model-value="terminalTarget = $event ? terminalTarget : null"
-    />
 
     <HostsDialog
       v-if="showHostsFix && project?.domain"
@@ -1069,9 +1134,14 @@ onUnmounted(() => clearInterval(statsTimer));
   padding: 16px;
 }
 
+/* The log view fills and scrolls itself; the page must not scroll it too. */
+.detail-content--flush {
+  overflow: hidden;
+  padding: 0;
+}
+
 .detail-nav {
   flex: 0 0 240px;
-  border-left: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   padding: 16px 8px;
   overflow-y: auto;
 }
@@ -1154,14 +1224,36 @@ onUnmounted(() => clearInterval(statsTimer));
 
 .dockerfile {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  word-break: break-all;
-  margin: 0;
-  padding: 12px;
-  border-radius: 6px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  border-radius: var(--app-radius);
   background: rgba(var(--v-border-color), 0.06);
+  padding: 8px 0;
+  overflow-x: auto;
+}
+
+.df-line {
+  display: flex;
+  gap: 12px;
+  padding: 0 12px;
+}
+
+.df-line:hover {
+  background: rgba(var(--v-border-color), 0.06);
+}
+
+/* Right-aligned in a fixed gutter so the numbers form a column rather than a
+   ragged edge, and unselectable so copying the file does not copy them. */
+.df-no {
+  flex: 0 0 32px;
+  text-align: right;
+  opacity: 0.38;
+  user-select: none;
+}
+
+.df-code {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* Heatmap ------------------------------------------------------------------ */
@@ -1204,7 +1296,7 @@ onUnmounted(() => clearInterval(statsTimer));
 
 .heat-cell {
   height: 26px;
-  border-radius: 3px;
+  border-radius: min(var(--app-radius), 6px);
   display: block;
 }
 

@@ -81,13 +81,7 @@ watch(
 
         <ErrorAlert :error="error" type="error" />
 
-        <v-alert
-          v-if="!error && plan && !plan.changed"
-          type="info"
-          density="compact"
-          variant="tonal"
-          class="mb-3"
-        >
+        <v-alert v-if="!error && plan && !plan.changed" type="info" variant="tonal" class="mb-3">
           {{ t('hosts.noChange') }}
         </v-alert>
 
@@ -130,7 +124,7 @@ watch(
   max-height: 40vh;
   overflow: auto;
   padding: 8px;
-  border-radius: 6px;
+  border-radius: var(--app-radius);
   background: rgb(var(--v-theme-surface-bright));
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11.5px;

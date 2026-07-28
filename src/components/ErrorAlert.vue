@@ -38,7 +38,6 @@ const detail = computed(() => props.error?.message ?? '');
     v-if="error"
     :type="type"
     variant="tonal"
-    density="compact"
     :closable="closable"
     @click:close="$emit('close')"
   >

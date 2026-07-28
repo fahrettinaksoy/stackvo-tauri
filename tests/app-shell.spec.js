@@ -114,9 +114,7 @@ describe('the navigation drawer', () => {
     expect(footer, 'quick actions are not in the footer').toContain(
       i18n.global.t('quickActions.startAll')
     );
-    expect(footer, 'the collapse control is not in the footer').toMatch(
-      /mdi-chevron-(left|right)/
-    );
+    expect(footer, 'the collapse control is not in the footer').toMatch(/mdi-chevron-(left|right)/);
   });
 
   it('leaves the destinations in the scroll area', () => {
@@ -146,8 +144,16 @@ describe('the navigation drawer', () => {
 
 describe('the two left drawers', () => {
   it('both start collapsed', () => {
-    const drawers = wrapper.findAll('.v-navigation-drawer');
-    const rails = drawers.filter((d) => d.classes().includes('v-navigation-drawer--rail'));
-    expect(rails.length, 'both drawers should open in rail mode').toBe(drawers.length);
+    // Scoped to the left edge rather than to every drawer in the shell: the
+    // "new project" panel is a drawer too now, and it is neither on the left
+    // nor a rail — counting it made this assert "all drawers are rails" fail
+    // for a reason that has nothing to do with what it is protecting.
+    const left = wrapper
+      .findAll('.v-navigation-drawer')
+      .filter((d) => d.classes().includes('v-navigation-drawer--left'));
+
+    expect(left.length, 'the shell has two left drawers').toBe(2);
+    const rails = left.filter((d) => d.classes().includes('v-navigation-drawer--rail'));
+    expect(rails.length, 'both drawers should open in rail mode').toBe(left.length);
   });
 });

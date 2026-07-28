@@ -10,9 +10,7 @@ import { listenAll, REFRESH_TRIGGERS } from '@/lib/events';
 import { api } from '@/lib/ipc';
 import PageLayout from '@/components/PageLayout.vue';
 import ErrorAlert from '@/components/ErrorAlert.vue';
-import TerminalPanel from '@/components/TerminalPanel.vue';
 import HostsDialog from '@/components/HostsDialog.vue';
-import NewProjectDialog from '@/components/NewProjectDialog.vue';
 
 const { t } = useI18n();
 const router = useRouter();
@@ -23,9 +21,7 @@ const app = useAppStore();
 const search = ref('');
 const actionError = ref(null);
 
-const terminalTarget = ref(null);
 const hostsFixFor = ref(null);
-const showNewProject = ref(false);
 const deleteTarget = ref(null);
 const deleteFiles = ref(false);
 
@@ -81,6 +77,22 @@ const headers = computed(() => [
   },
 ]);
 
+/**
+ * The terminal the user chose in Settings, on this container.
+ *
+ * There used to be a second, in-app terminal in a dialog. Two terminals with
+ * different behaviour for the same button is a coin toss for the reader, and
+ * the external one is the one with scrollback, tabs and a profile.
+ */
+async function openTerminal(project) {
+  actionError.value = null;
+  try {
+    await api.terminalOpenExternal({ kind: 'container', name: project.containerName });
+  } catch (e) {
+    actionError.value = e;
+  }
+}
+
 async function act(project, fn) {
   actionError.value = null;
   ops.markBusy(project.name, true);
@@ -134,6 +146,7 @@ onUnmounted(() => teardown?.());
   <PageLayout
     top-icon="mdi-folder-multiple"
     :top-title="t('projectsView.title')"
+    :top-subtitle="t('projectsView.subtitle')"
     :bar-title="t('projectsView.list')"
   >
     <template #bar-append>
@@ -146,7 +159,7 @@ onUnmounted(() => teardown?.());
           icon
           :aria-label="t('newProject.title')"
           :disabled="!app.hasWorkspace"
-          @click="showNewProject = true"
+          @click="app.newProjectOpen = true"
         >
           <v-icon>mdi-plus</v-icon>
           <v-tooltip activator="parent" location="bottom">{{ t('newProject.title') }}</v-tooltip>
@@ -193,7 +206,6 @@ onUnmounted(() => teardown?.());
         class="elevation-0"
         fixed-header
         hover
-        density="compact"
         item-value="name"
         striped="even"
         hide-default-footer
@@ -332,9 +344,11 @@ onUnmounted(() => teardown?.());
             size="small"
             color="info"
             variant="tonal"
-            @click="terminalTarget = { kind: 'container', name: item.containerName }"
+            :aria-label="t('detail.externalTerminal')"
+            @click="openTerminal(item)"
           >
             <v-icon>mdi-console</v-icon>
+            <v-tooltip activator="parent">{{ t('detail.externalTerminal') }}</v-tooltip>
           </v-btn>
         </template>
 
@@ -407,7 +421,6 @@ onUnmounted(() => teardown?.());
           <v-checkbox
             v-model="deleteFiles"
             :label="t('newProject.deleteFiles')"
-            density="compact"
             hide-details
             color="error"
           />
@@ -421,15 +434,6 @@ onUnmounted(() => teardown?.());
         </v-card-actions>
       </v-card>
     </v-dialog>
-
-    <NewProjectDialog v-model="showNewProject" @created="inventory.loadProjects()" />
-
-    <TerminalPanel
-      v-if="terminalTarget"
-      :target="terminalTarget"
-      :model-value="!!terminalTarget"
-      @update:model-value="terminalTarget = $event ? terminalTarget : null"
-    />
 
     <HostsDialog
       v-if="hostsFixFor"

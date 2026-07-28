@@ -60,6 +60,9 @@ export const api = {
   workspaceSet: (path) => call('workspace_set', { path }),
 
   engineStatus: () => call('engine_status'),
+  /** Everything that must be true before the app can work. See `preflight.rs`. */
+  preflight: () => call('preflight'),
+  preflightFix: (id) => call('preflight_fix', { id }),
   engineStart: () => call('engine_start'),
 
   hostStats: () => call('host_stats'),
@@ -70,6 +73,8 @@ export const api = {
 
   catalogGet: () => call('catalog_get'),
   envGet: () => call('env_get'),
+  /** One secret, unmasked, on explicit request. See `env_reveal` in Rust. */
+  envReveal: (key) => call('env_reveal', { key }),
 
   // --- Phase 2: mutations ---------------------------------------------------
   projectStart: (name) => call('project_start', { name }),
@@ -118,6 +123,8 @@ export const api = {
   projectManifestWrite: (name, manifest) => call('project_manifest_write', { name, manifest }),
 
   updaterStatus: () => call('updater_status'),
+  /** The desktop's own accent colour, so the app can match it. */
+  systemAccent: () => call('system_accent'),
   logsInfo: () => call('logs_info'),
   trayRelabel: () => call('tray_relabel'),
   appsAvailable: () => call('apps_available'),

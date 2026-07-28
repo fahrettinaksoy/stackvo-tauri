@@ -8,7 +8,6 @@ import { fileURLToPath, URL } from 'node:url';
 // to 1421 while tauri.conf.json still points at 1420.
 const host = process.env.TAURI_DEV_HOST;
 
-
 /**
  * Ship one font format instead of four.
  *
@@ -47,9 +46,7 @@ function mdiWoff2Only() {
       if (replaced !== 2) {
         // The stylesheet changed shape upstream. Failing loudly beats silently
         // shipping four formats again while the comment above claims otherwise.
-        this.error(
-          `mdi-woff2-only: expected 2 src declarations to rewrite, found ${replaced}`
-        );
+        this.error(`mdi-woff2-only: expected 2 src declarations to rewrite, found ${replaced}`);
       }
       return { code: trimmed, map: null };
     },
@@ -60,15 +57,53 @@ export default defineConfig({
   plugins: [
     mdiWoff2Only(),
     vue(),
-    vuetify({
-      autoImport: { labs: true },
-      styles: { configFile: 'src/styles/settings.scss' },
-    }),
+    /**
+     * No `styles.configFile`.
+     *
+     * It bought three compile-time tokens — the body font, the root corner
+     * radius and the transition duration — and every one of them is now a
+     * runtime setting under Appearance, written as a custom property that
+     * overrides the compiled value anyway.
+     *
+     * What it cost was the whole style pipeline: with a config file the plugin
+     * rewrites every component's stylesheet to a virtual id
+     * (`virtual:plugin-vuetify:components/VBtn/VBtn.sass`) that only it can
+     * resolve. When that resolution misses — a restarted server, a cached
+     * bundle from another session — the browser gets a 404 for every component
+     * at once and the app renders as unstyled boxes on white.
+     *
+     * Without it, the plugin imports Vuetify's own precompiled CSS: ordinary
+     * files, served by Vite like any other.
+     */
+    vuetify({ autoImport: { labs: true } }),
   ],
 
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },
+
+  /**
+   * Vuetify is never pre-bundled in dev.
+   *
+   * Two failures come from letting the optimiser near it, and both take out a
+   * whole route rather than a corner of one — a lazy chunk that fails to load
+   * aborts the navigation, so the click just does nothing.
+   *
+   * The first: `vite-plugin-vuetify` rewrites each component's style import to
+   * a virtual id (`virtual:plugin-vuetify:…/VTextarea.sass`). Pre-bundling
+   * freezes that id into a cached file, and any session where the plugin does
+   * not resolve it exactly as before answers 404.
+   *
+   * The second: the plugin's auto-import runs during transform, after the
+   * cold-start scan, so components are discovered one view at a time. Each
+   * discovery re-bundles and reloads, and whatever `import()` was in flight
+   * fails — which is how the settings page became unreachable.
+   *
+   * Excluding costs a slower first paint in dev, where the modules are served
+   * one by one. It buys a dependency graph that cannot change under a running
+   * page. `optimizeDeps` is dev-only; the production build is untouched.
+   */
+  optimizeDeps: { exclude: ['vuetify'] },
 
   css: {
     preprocessorOptions: {

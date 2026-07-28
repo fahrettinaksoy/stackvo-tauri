@@ -8,19 +8,21 @@ import { useAppStore } from '@/stores/app';
 import { useMetricsStore } from '@/stores/metrics';
 import { useInventoryStore } from '@/stores/inventory';
 import { useOperationsStore } from '@/stores/operations';
+import { useAppearanceStore } from '@/stores/appearance';
 import { setLocale } from '@/i18n';
 import { api } from '@/lib/ipc';
 import { listenAll, REFRESH_TRIGGERS } from '@/lib/events';
 import OperationConsole from '@/components/OperationConsole.vue';
 import ErrorAlert from '@/components/ErrorAlert.vue';
-import TerminalPanel from '@/components/TerminalPanel.vue';
-import NewProjectDialog from '@/components/NewProjectDialog.vue';
+import RequirementsGate from '@/components/RequirementsGate.vue';
+import NewProjectDrawer from '@/components/NewProjectDrawer.vue';
 import CloseDialog from '@/components/CloseDialog.vue';
 
 const app = useAppStore();
 const metrics = useMetricsStore();
 const inventory = useInventoryStore();
 const ops = useOperationsStore();
+const appearance = useAppearanceStore();
 const theme = useTheme();
 const route = useRoute();
 const router = useRouter();
@@ -48,8 +50,6 @@ const projectSearch = ref('');
 const stackError = ref(null);
 const commandLoading = ref(false);
 
-const terminalTarget = ref(null);
-const showNewProject = ref(false);
 const showCloseDialog = ref(false);
 
 // Opened through the opener plugin rather than <a href>: a webview that
@@ -90,8 +90,11 @@ const containerCount = computed(
   () => inventory.runningProjects.length + inventory.runningServices.length
 );
 
+// Through the store rather than straight at Vuetify: the toolbar button and the
+// settings page are the same setting, and a toggle that only changed the live
+// theme was forgotten on the next launch.
 function toggleTheme() {
-  theme.global.name.value = isDark.value ? 'light' : 'dark';
+  appearance.toggleTheme(isDark.value);
 }
 
 async function stackAction(fn) {
@@ -106,6 +109,16 @@ async function stackAction(fn) {
   }
 }
 
+/** The terminal chosen in Settings, on this project's container. */
+async function openTerminal(project) {
+  stackError.value = null;
+  try {
+    await api.terminalOpenExternal({ kind: 'container', name: project.containerName });
+  } catch (e) {
+    stackError.value = e;
+  }
+}
+
 async function projectAction(name, fn) {
   stackError.value = null;
   ops.markBusy(name, true);
@@ -117,9 +130,8 @@ async function projectAction(name, fn) {
   }
 }
 
-async function chooseWorkspace() {
-  const result = await api.workspacePick();
-  if (result) app.workspace = result;
+function onFocus() {
+  appearance.refreshSystemAccent();
 }
 
 let enginePoll = null;
@@ -127,6 +139,10 @@ let teardown = null;
 let offClose = null;
 
 onMounted(async () => {
+  // Before anything else that paints: the saved theme, colours and type size
+  // are what the first frame should already be wearing.
+  await appearance.load();
+
   await app.boot();
   await ops.bind();
   metrics.start();
@@ -143,9 +159,14 @@ onMounted(async () => {
   enginePoll = setInterval(() => {
     if (document.visibilityState === 'visible') app.refreshEngine();
   }, 5000);
+
+  // The desktop accent can change while the app is open; the moment the window
+  // comes back to the front is when a mismatch would be noticed.
+  window.addEventListener('focus', onFocus);
 });
 
 onUnmounted(() => {
+  window.removeEventListener('focus', onFocus);
   metrics.stop();
   ops.unbind();
   teardown?.();
@@ -205,7 +226,7 @@ onUnmounted(() => {
               <v-icon>mdi-translate</v-icon>
             </v-btn>
           </template>
-          <v-list density="compact">
+          <v-list>
             <v-list-item
               v-for="lang in LANGUAGES"
               :key="lang.value"
@@ -233,7 +254,7 @@ onUnmounted(() => {
       class="nav-drawer border-0 elevation-6"
       @click="toggleDrawer('nav')"
     >
-      <v-list nav density="comfortable" class="nav-list">
+      <v-list nav class="nav-list">
         <v-list-item
           v-for="item in NAV"
           :key="item.key"
@@ -301,7 +322,7 @@ onUnmounted(() => {
 
         <v-divider class="mx-3 mb-1" />
 
-        <v-list nav density="compact" class="pb-1">
+        <v-list nav class="pb-1">
           <v-list-item
             rounded="lg"
             :title="t('quickActions.startAll')"
@@ -336,7 +357,7 @@ onUnmounted(() => {
         </v-list>
 
         <v-divider />
-        <v-list nav density="compact">
+        <v-list nav>
           <v-list-item
             rounded="lg"
             :prepend-icon="rail ? 'mdi-chevron-right' : 'mdi-chevron-left'"
@@ -368,7 +389,6 @@ onUnmounted(() => {
         </div>
         <v-text-field
           v-model="projectSearch"
-          density="compact"
           flat
           variant="plain"
           rounded="0"
@@ -386,7 +406,7 @@ onUnmounted(() => {
 
       <v-divider />
 
-      <v-list nav density="compact" class="projects-scroll">
+      <v-list nav class="projects-scroll">
         <div
           v-if="inventory.loadingProjects && !inventory.projects.length"
           class="pa-6 text-center text-medium-emphasis"
@@ -437,7 +457,7 @@ onUnmounted(() => {
                   @click.stop
                 />
               </template>
-              <v-list density="compact" min-width="240">
+              <v-list min-width="240">
                 <v-list-item
                   prepend-icon="mdi-open-in-app"
                   :title="t('projects.openDetail')"
@@ -479,8 +499,8 @@ onUnmounted(() => {
                 <v-list-item
                   v-if="project.running"
                   prepend-icon="mdi-console"
-                  :title="t('projects.terminal')"
-                  @click.stop="terminalTarget = { kind: 'container', name: project.containerName }"
+                  :title="t('detail.externalTerminal')"
+                  @click.stop="openTerminal(project)"
                 />
                 <!-- Only offered when the domain resolves: opening a browser at
                      a host with no /etc/hosts entry just shows an error page. -->
@@ -499,13 +519,13 @@ onUnmounted(() => {
 
       <template #append>
         <v-divider />
-        <v-list nav density="compact">
+        <v-list nav>
           <v-list-item
             rounded="lg"
             prepend-icon="mdi-plus"
             :title="railProjects ? undefined : t('newProject.title')"
             :disabled="!app.hasWorkspace"
-            @click.stop="showNewProject = true"
+            @click.stop="app.newProjectOpen = true"
           />
           <v-list-item
             rounded="lg"
@@ -523,26 +543,12 @@ onUnmounted(() => {
         <v-progress-circular indeterminate color="primary" />
       </div>
 
-      <!-- The desktop-only state: the web UI was mounted inside the repo it
-           managed, so it could never need to ask where that repo is. -->
-      <v-container v-else-if="!app.hasWorkspace" class="pa-6">
-        <v-card max-width="620" class="mx-auto mt-8">
-          <v-card-item>
-            <template #prepend>
-              <v-icon size="32" color="warning">mdi-folder-search-outline</v-icon>
-            </template>
-            <v-card-title>{{ t('workspace.title') }}</v-card-title>
-            <v-card-subtitle>{{ t('workspace.none') }}</v-card-subtitle>
-          </v-card-item>
-          <v-card-text>
-            <p class="text-body-2 text-medium-emphasis mb-4">{{ t('workspace.prompt') }}</p>
-            <ErrorAlert :error="app.error" type="error" class="mb-4" />
-            <v-btn color="primary" prepend-icon="mdi-folder-open" @click="chooseWorkspace">
-              {{ t('workspace.choose') }}
-            </v-btn>
-          </v-card-text>
-        </v-card>
-      </v-container>
+      <!-- Every prerequisite, not just the desktop-only one.
+           The web UI ran inside the checkout it managed and beside the daemon
+           it drove, so it could assume both; a desktop app can assume neither,
+           nor a compose plugin new enough for profiles, nor the network its own
+           generator declares external. -->
+      <RequirementsGate v-else-if="app.preflight && !app.preflight.ready" />
 
       <router-view v-else />
     </v-main>
@@ -554,16 +560,9 @@ onUnmounted(() => {
 
     <OperationConsole />
 
-    <TerminalPanel
-      v-if="terminalTarget"
-      :target="terminalTarget"
-      :model-value="!!terminalTarget"
-      @update:model-value="terminalTarget = $event ? terminalTarget : null"
-    />
-
     <CloseDialog v-model="showCloseDialog" />
 
-    <NewProjectDialog v-model="showNewProject" @created="inventory.loadProjects()" />
+    <NewProjectDrawer v-model="app.newProjectOpen" @created="inventory.loadProjects()" />
   </v-app>
 </template>
 
@@ -574,7 +573,7 @@ onUnmounted(() => {
 
 .status-panel {
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-  border-radius: 8px;
+  border-radius: var(--app-radius);
   padding: 8px 10px;
 }
 

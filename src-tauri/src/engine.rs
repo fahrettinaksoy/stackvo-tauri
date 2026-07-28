@@ -480,7 +480,50 @@ pub async fn restart_container(id: &str) -> Result<()> {
         .map_err(|e| lifecycle_error("restart", &name, e))
 }
 
+/// Does the shared network exist?
+///
+/// Asked by name rather than listed: the generator writes whatever
+/// `DOCKER_DEFAULT_NETWORK` says into every compose file, and that is the name
+/// that has to be there.
+pub async fn network_exists(name: &str) -> bool {
+    use bollard::query_parameters::InspectNetworkOptions;
+
+    let Ok(docker) = connect() else {
+        return false;
+    };
+
+    docker
+        .inspect_network(name, None::<InspectNetworkOptions>)
+        .await
+        .is_ok()
+}
+
+/// Create it, the way `install.sh` does: a plain user-defined bridge.
+pub async fn network_create(name: &str) -> Result<()> {
+    use bollard::models::NetworkCreateRequest;
+
+    let docker = connect()?;
+
+    docker
+        .create_network(NetworkCreateRequest {
+            name: name.to_string(),
+            ..Default::default()
+        })
+        .await
+        .map(|_| ())
+        .map_err(|e| lifecycle_error("create network", name, e))
+}
+
 // ---------------------------------------------------------------- inspect
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Mount {
+    /// Host path, or a volume name when Docker manages the storage.
+    pub source: Option<String>,
+    pub destination: String,
+    pub kind: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -500,7 +543,9 @@ pub struct ContainerDetails {
     pub networks: Vec<String>,
     /// First non-loopback gateway; the detail page shows one.
     pub gateway: Option<String>,
-    pub mounts: Vec<String>,
+    pub mounts: Vec<Mount>,
+    /// The container's address on the StackVo network.
+    pub ip_address: Option<String>,
     pub env: Vec<String>,
     /// Bytes on disk for the image this container runs.
     pub image_size: Option<u64>,
@@ -565,6 +610,9 @@ pub async fn inspect(id: &str) -> Result<ContainerDetails> {
             .and_then(|h| h.restart_policy.as_ref())
             .and_then(|p| p.name)
             .map(|n| format!("{n:?}").to_lowercase().replace('_', "-")),
+        ip_address: networks
+            .and_then(|n| n.values().find_map(|e| e.ip_address.clone()))
+            .filter(|ip| !ip.is_empty()),
         gateway: networks
             .and_then(|n| n.values().find_map(|e| e.gateway.clone()))
             .filter(|g| !g.is_empty()),
@@ -585,7 +633,13 @@ pub async fn inspect(id: &str) -> Result<ContainerDetails> {
             .mounts
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|m| m.destination)
+            .filter_map(|m| {
+                Some(Mount {
+                    source: m.source.filter(|s| !s.is_empty()),
+                    destination: m.destination?,
+                    kind: m.typ.map(|t| format!("{t:?}").to_lowercase()),
+                })
+            })
             .collect(),
         // Values are redacted: container env routinely carries database
         // passwords, and this crosses the IPC boundary into a webview.

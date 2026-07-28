@@ -13,6 +13,7 @@ pub mod inflight;
 pub mod logging;
 pub mod manifest;
 pub mod paths;
+pub mod preflight;
 pub mod pty;
 pub mod runner;
 pub mod stats;
@@ -194,7 +195,10 @@ pub fn run() {
             commands::projects_list,
             commands::services_list,
             commands::catalog_get,
+            commands::preflight,
+            commands::preflight_fix,
             commands::env_get,
+            commands::env_reveal,
             // Phase 2 — mutations
             commands::project_start,
             commands::project_stop,
@@ -241,6 +245,7 @@ pub fn run() {
             commands::compose_restart,
             commands::open_in_editor,
             commands::updater_status,
+            commands::system_accent,
             commands::logs_info,
             commands::tray_relabel,
             commands::window_close_action,

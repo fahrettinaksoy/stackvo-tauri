@@ -58,6 +58,7 @@ export default {
   },
 
   dashboard: {
+    subtitle: 'Live state of the stack and the machine',
     title: 'Dashboard',
     overview: 'Overview',
     health: 'Health',
@@ -94,6 +95,7 @@ export default {
   },
 
   projectsView: {
+    subtitle: 'The managed projects and their containers',
     title: 'Projects',
     list: 'Projects List',
     running: 'Running',
@@ -105,7 +107,7 @@ export default {
     colStopStart: 'Stop/Start',
     colRestart: 'Restart',
     colTerminal: 'Terminal',
-    colOpen: 'Open',
+    colOpen: 'Open in the browser',
     colDetail: 'Detail',
     colDelete: 'Delete',
     default: 'Default',
@@ -114,6 +116,24 @@ export default {
   },
 
   servicesView: {
+    hide: 'Hide the value',
+    colDetail: 'Detail',
+    serviceInfo: 'Service information',
+    logInfo: 'Logs and mounts',
+    ipAddress: 'IP address',
+    network: 'Network',
+    gateway: 'Gateway',
+    portMappings: 'Port mappings',
+    internal: 'internal only',
+    credentials: 'Credentials',
+    noCredentials: 'This service declares no credentials in .env.',
+    reveal: 'Reveal the value',
+    containerLogs: 'Container log',
+    logPath: 'Log path',
+    mount: 'Mount',
+    noMounts: 'No mounts.',
+    notCreated: 'The container has not been created yet.',
+    subtitle: "The stack's shared infrastructure services",
     title: 'Services',
     list: 'Services List',
     searchPlaceholder: 'Search services...',
@@ -123,7 +143,7 @@ export default {
     colVersion: 'Version',
     colStopStart: 'Stop/Start',
     colRestart: 'Restart',
-    colOpen: 'Open',
+    colOpen: 'Open in the browser',
     colStatus: 'Status',
     enabled: 'ENABLED',
     disabled: 'DISABLED',
@@ -132,7 +152,6 @@ export default {
     noDependencies: 'No dependencies.',
     required: 'Required',
     optional: 'Optional',
-    actions: 'Actions',
   },
 
   projectDetail: {
@@ -176,8 +195,6 @@ export default {
   workspace: {
     title: 'StackVo directory',
     none: 'No StackVo directory selected yet.',
-    prompt: 'Choose the folder containing core/cli/stackvo.sh and projects/.',
-    choose: 'Choose directory',
     change: 'Change',
     source: {
       stored: 'saved choice',
@@ -220,7 +237,6 @@ export default {
   projects: {
     searchPlaceholder: 'Search projects…',
     openDetail: 'Open detail',
-    terminal: 'Terminal',
     openSite: 'Open site',
     title: 'Projects',
     empty: 'No projects yet.',
@@ -240,10 +256,154 @@ export default {
     unmetDependency: 'Unmet dependency',
   },
 
+  preflight: {
+    title: 'StackVo is not ready to run',
+    subtitle: '{count} requirements are not met. The app opens once they are.',
+    recheck: 'Check again',
+    blocked: 'Cannot be checked until a requirement above it is met.',
+
+    workspace: 'StackVo directory',
+    workspaceHint: {
+      macos: 'Choose the folder that contains core/cli/stackvo.sh and projects/.',
+      linux: 'Choose the folder that contains core/cli/stackvo.sh and projects/.',
+      windows: 'Choose the folder that contains core/cli/stackvo.sh and projects/.',
+    },
+    workspaceAction: 'Choose folder',
+
+    engine: 'Docker engine',
+    engineHint: {
+      macos: 'Docker Desktop, OrbStack or Colima is not running. Start opens Docker Desktop.',
+      linux:
+        'The Docker daemon is not running. Start tries systemd; if it needs rights, run `sudo systemctl start docker`.',
+      windows:
+        'Docker Desktop is not running. Start opens it; it needs the WSL2 backend installed.',
+    },
+    engineAction: 'Start',
+
+    compose: 'Docker Compose v2',
+    composeHint: {
+      macos: 'The app drives compose profiles, which arrived in v2. Update Docker Desktop.',
+      linux:
+        'The app drives compose profiles, which arrived in v2. Install the docker-compose-plugin package.',
+      windows: 'The app drives compose profiles, which arrived in v2. Update Docker Desktop.',
+    },
+
+    network: 'Shared Docker network',
+    networkHint: {
+      macos: 'The generated compose files declare it external, so compose will not create it.',
+      linux: 'The generated compose files declare it external, so compose will not create it.',
+      windows: 'The generated compose files declare it external, so compose will not create it.',
+    },
+    networkAction: 'Create network',
+
+    projects: 'projects/ directory',
+    projectsHint: {
+      macos: 'Projects live under this folder; it is not there yet.',
+      linux: 'Projects live under this folder; it is not there yet.',
+      windows: 'Projects live under this folder; it is not there yet.',
+    },
+    projectsAction: 'Create',
+
+    bash: 'Bash',
+    bashHint: {
+      macos:
+        'The generator is the core/cli/stackvo.sh script; without bash nothing can be generated.',
+      linux: 'The generator is the core/cli/stackvo.sh script; install the bash package.',
+      windows:
+        'The generator is the core/cli/stackvo.sh script. Windows needs WSL or Git Bash on the PATH.',
+    },
+  },
   settings: {
+    subtitle: 'Application preferences',
+
+    // Appearance section.
+    appearance: 'Appearance',
+    appearanceSectionDesc: 'Customise the theme, accent, neutral palette and corner radius.',
+    themeColors: 'Theme and colours',
+    themeColorsDesc: 'Personalise how the app looks',
+    primaryColor: 'Accent colour',
+    neutralPalette: 'Neutral palette',
+    radius: 'Corner radius ({px}px)',
+    resetAppearance: 'Defaults',
+    typography: 'Typography and legibility',
+    typographyDesc: 'Typeface, interface scale and contrast',
+    fontFamily: 'Typeface',
+    fontFamilyHint: 'Only faces the system already has are listed.',
+    uiScale: 'Interface scale ({px}px)',
+    highContrast: 'High contrast',
+    highContrastHint: 'Strengthens secondary text and dividers.',
+    reduceMotion: 'Reduce motion',
+    density: 'Interface density',
+    densityCompact: 'Tight',
+    densityComfortable: 'Comfortable',
+    densitySpacious: 'Spacious',
+    systemAccent: 'System colour',
+    reduceMotionHint: 'Turns transitions off; progress indicators keep spinning.',
+    statusColors: 'Status colours',
+    statusColorsDesc: 'Which colours mean running, stopped and failed',
+    statusPalette: 'Palette',
+    statusPalettes: {
+      default: 'Default (green / red)',
+      colorblind: 'Colour-blind safe (Okabe-Ito)',
+      muted: 'Muted',
+    },
+    darkConsoles: 'Keep consoles dark',
+    darkConsolesHint: 'Log and terminal panels stay dark in the light theme too.',
+    presets: 'Presets',
+    presetsDesc: 'Name a look and come back to it in one click',
+    presetName: 'Preset name',
+    savePreset: 'Save',
+    noPresets: 'No presets saved yet.',
+    neutrals: {
+      graphite: 'Graphite',
+      carbon: 'Carbon',
+      midnight: 'Midnight',
+      forest: 'Forest',
+      warm: 'Warm grey',
+    },
+    fonts: {
+      system: 'System',
+      grotesk: 'Grotesk (Helvetica)',
+      serif: 'Serif (Georgia)',
+      mono: 'Monospace',
+    },
+
+    // Localisation section.
+    localisation: 'Localisation',
+    localisationDesc: 'Interface language and writing direction.',
+    languageDesc: 'Language of the interface and the tray menu',
+    consoleLanguage: 'Console language',
+    consoleLanguageDesc: 'Language of the log and terminal panels',
+    consoleLanguageHint: 'Keeps shared output readable regardless of your interface language.',
+    consoleFollowsApp: 'Same as the interface',
+    direction: 'Writing direction',
+    directionDesc: 'Which way the interface flows',
+    rtl: 'Right-to-left layout',
+    rtlHint: 'Mirrors every component; for trying Arabic and Hebrew layouts.',
+
+    // Section descriptions: what each pane is for, said once on entry.
+    workspaceDesc: 'The StackVo checkout being managed, and the Docker engine behind it.',
+    preferencesDesc: 'Appearance, language, external apps and close behaviour.',
+    stackDesc: 'Generation and container management at the compose level.',
+    envFileDesc: 'Edit the .env values the stack reads, in place.',
+    aboutDesc: 'Version, signed updates and diagnostics.',
+
+    // Groups.
+    workspaceGroup: 'Working directory',
+    workspaceGroupDesc: 'The checkout this app drives',
+    engineGroupDesc: 'State of the engine running the containers',
+    externalApps: 'External apps',
+    externalAppsDesc: 'Which app terminals and editors open in',
+    startup: 'Startup and shutdown',
+    startupDesc: 'What happens when the app opens and closes',
+    compose: 'Containers',
+    generatorDesc: "Compares the Rust generator's output against the Bash one",
+    updatesDesc: 'Signed release check and install',
+
     theme: 'Theme',
     language: 'Language',
     envFile: '.env file',
+    envVars: 'Variables',
     preferences: 'Preferences',
     stack: 'Stack control',
     stackSub: 'Compose level: regenerates and recreates containers.',
@@ -292,18 +452,18 @@ export default {
     close: 'Close',
   },
   actions: {
-    start: 'Start',
-    stop: 'Stop',
-    restart: 'Restart',
-    build: 'Build',
-    generate: 'Generate',
-    up: 'Bring up',
-    down: 'Bring down',
-    logs: 'Logs',
-    composeRestart: 'Restart stack',
+    start: 'Start the container',
+    stop: 'Stop the container',
+    restart: 'Restart the container',
+    build: 'Build the project',
+    generate: 'Regenerate the configuration',
+    up: 'Bring the stack up',
+    down: 'Stop the stack',
+    composeRestart: 'Restart the stack',
   },
 
   logs: {
+    title: 'Logs',
     live: 'live',
     waiting: 'Waiting for output…',
   },
@@ -321,6 +481,13 @@ export default {
   },
 
   newProject: {
+    nameHint: 'Starts with a letter or digit; dash, underscore and dot allowed (e.g. api.myapp).',
+    domainHint: 'Generated from the project name when left empty.',
+    documentRootHint: 'Path relative to the project root.',
+    portHint: 'The port the app listens on inside the container.',
+    sectionProject: 'Project',
+    sectionPhp: 'PHP configuration',
+    sectionNode: 'Node configuration',
     title: 'New project',
     name: 'Project name',
     domain: 'Domain',
@@ -346,9 +513,13 @@ export default {
   },
 
   detail: {
+    dockerfileDesc: 'How the Rust generator renders this project — without writing the file.',
+    compatHint:
+      'Reproduces what Bash writes today; extensions that cannot build are dropped silently.',
+    strictHint: 'Refuses to render when an extension cannot build, and says which one.',
+    notBuilt: 'The container has not been built yet; build it to stream logs.',
     openInEditor: 'Open in editor',
     externalTerminal: 'Open in external terminal',
-    previewHint: 'Choose Strict or Compat to render the Dockerfile preview.',
     manifest: 'Manifest',
     manifestHint: 'stackvo.json — saving reorders keys to satisfy the write rules.',
     save: 'Save',
@@ -356,7 +527,6 @@ export default {
     dockerfile: 'Dockerfile',
     image: 'Image',
     state: 'State',
-    ports: 'Ports',
     matchesBash: 'Identical to the Bash output',
     differsFromBash: 'Differs from the Bash output',
     strict: 'Strict',

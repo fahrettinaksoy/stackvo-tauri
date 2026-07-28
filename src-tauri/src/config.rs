@@ -92,6 +92,34 @@ impl Env {
             .and_then(|v| v.parse().ok())
     }
 
+    /// Every `SERVICE_<ID>_*` value a user might need to connect with, with the
+    /// secrets already masked.
+    ///
+    /// `ENABLE`, `VERSION` and `URL` are dropped: they are the service's own
+    /// wiring and are shown elsewhere in the row, so repeating them here would
+    /// pad the list with the three entries nobody came for.
+    ///
+    /// Masked rather than raw for the reason `redacted()` exists — a password
+    /// crossing into the webview by default puts it in every screenshot of this
+    /// page. `env_reveal` hands over a single value when asked for it.
+    pub fn service_credentials(&self, service_id: &str) -> Vec<(String, String, bool)> {
+        let prefix = Self::service_prefix(service_id);
+
+        self.vars
+            .iter()
+            .filter_map(|(key, value)| {
+                let field = key.strip_prefix(&prefix)?;
+                if matches!(field, "ENABLE" | "VERSION" | "URL") || value.is_empty() {
+                    return None;
+                }
+
+                let secret = Self::is_secret(key);
+                let shown = if secret { "••••••••".to_string() } else { value.clone() };
+                Some((field.to_string(), shown, secret))
+            })
+            .collect()
+    }
+
     /// Keys whose values must never reach a log, an event or an error message.
     /// Mirrors `contracts/env.schema.json` → `secrets.policy`.
     pub fn is_secret(key: &str) -> bool {
@@ -132,6 +160,35 @@ SUPPORTED_SERVERS=nginx,apache, caddy
 LOOKS_LIKE_URL=postgres://user:pw@host:5432/db?a=1
 STACKVO_UI_ENABLE=TRUE
 "#;
+
+    #[test]
+    fn credentials_mask_secrets_and_drop_the_wiring() {
+        let env = Env::parse(
+            "SERVICE_MYSQL_ENABLE=true\n\
+             SERVICE_MYSQL_VERSION=8.0\n\
+             SERVICE_MYSQL_URL=db.stackvo.loc\n\
+             SERVICE_MYSQL_ROOT_PASSWORD=hunter2\n\
+             SERVICE_MYSQL_DATABASE=stackvo\n\
+             SERVICE_MYSQL_EMPTY=\n\
+             SERVICE_MONGO_DATABASE=other\n",
+        );
+
+        let creds = env.service_credentials("mysql");
+        let keys: Vec<&str> = creds.iter().map(|(k, _, _)| k.as_str()).collect();
+
+        // ENABLE/VERSION/URL are the service's wiring, shown elsewhere in the
+        // row; an empty value is not a credential; another service's keys are
+        // not this service's.
+        assert_eq!(keys, vec!["DATABASE", "ROOT_PASSWORD"]);
+
+        let password = creds.iter().find(|(k, _, _)| k == "ROOT_PASSWORD").unwrap();
+        assert_eq!(password.1, "••••••••", "the raw secret must not cross");
+        assert!(password.2, "and it must be flagged as one");
+
+        let database = creds.iter().find(|(k, _, _)| k == "DATABASE").unwrap();
+        assert_eq!(database.1, "stackvo", "a non-secret is shown as it is");
+        assert!(!database.2);
+    }
 
     #[test]
     fn splits_on_the_first_equals_only() {

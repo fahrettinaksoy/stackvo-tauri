@@ -50,7 +50,7 @@ async function choose(action) {
         <v-card-subtitle>{{ t('close.subtitle') }}</v-card-subtitle>
       </v-card-item>
 
-      <v-list density="comfortable" class="py-0">
+      <v-list class="py-0">
         <v-list-item
           v-for="choice in CHOICES"
           :key="choice.action"
@@ -73,7 +73,6 @@ async function choose(action) {
         <v-checkbox
           v-model="remember"
           :label="t('close.remember')"
-          density="compact"
           hide-details
           :disabled="!!busy"
         />
