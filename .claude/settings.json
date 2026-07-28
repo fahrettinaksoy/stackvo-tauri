@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx vite *)",
+      "Bash(npx vitest *)",
+      "Bash(node -e ' *)",
+      "Bash(node --input-type=module -e ' *)",
+      "Read(//Users/fahrettinaksoy/Library/Caches/**)",
+      "Bash(npx --no-install playwright --version)",
+      "Bash(\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\" --headless=new --disable-gpu --no-sandbox --user-data-dir=./cprof --virtual-time-budget=8000 --enable-logging=stderr --v=0 --dump-dom \"http://localhost:1420/#/settings\")",
+      "Bash(echo \"EXIT $?\")",
+      "Bash(\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\" --headless=new --disable-gpu --no-sandbox --user-data-dir=./cprof2 --window-size=1400,900 --virtual-time-budget=8000 --screenshot=settings.png \"http://localhost:1420/#/settings\")",
+      "Bash(pkill -f \"Google Chrome.*headless\")",
+      "Bash(timeout 60 \"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\" --headless=old --disable-gpu --no-sandbox --user-data-dir=./cp3 --window-size=1400,900 --virtual-time-budget=9000 --screenshot=settings.png \"http://localhost:1420/#/settings\")",
+      "Bash(grep -n \"pub fn dir\" -A 15 /Users/fahrettinaksoy/Desktop/stackvo-tauri/src-tauri/src/logging.rs | head -25; ls -la ~/Library/Logs/ | grep -i -E \"stackvo|desktop\" )",
+      "Read(//Users/fahrettinaksoy/Library/Logs/**)",
+      "Read(//Users/fahrettinaksoy/Library/Logs/dev.stackvo.desktop/**)",
+      "Bash(grep -rn \"unless defined with\\\\|executed on the main thread\" ~/.cargo/registry/src/*/tauri-2*/src/*.rs 2>/dev/null | head -5)",
+      "Read(//Users/fahrettinaksoy/.cargo/registry/src/**)",
+      "Bash(grep -rn \"async\\\\b\" ~/.cargo/registry/src/*/tauri-macros-2*/src/command/wrapper.rs | head -20)",
+      "Bash(timeout 60 \"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\" --headless=old --disable-gpu --no-sandbox --user-data-dir=/tmp/cp4 --window-size=1400,900 --virtual-time-budget=9000 --screenshot=/private/tmp/claude-501/-Users-fahrettinaksoy-Desktop-stackvo-tauri/ad0ff119-b706-4df2-8a12-55f6f485d729/scratchpad/stub-settings.png \"http://localhost:5199/stub.html#/settings\")",
+      "Bash(timeout 90 \"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\" --headless=old --disable-gpu --no-sandbox --user-data-dir=/tmp/cp5 --window-size=1400,900 --virtual-time-budget=9000 --enable-logging=stderr --v=0 --screenshot=/private/tmp/claude-501/-Users-fahrettinaksoy-Desktop-stackvo-tauri/ad0ff119-b706-4df2-8a12-55f6f485d729/scratchpad/stub-settings.png \"http://localhost:5199/stub.html#/settings\")",
+      "Bash(echo \"exit=$?\")",
+      "Bash(cargo run *)",
+      "Bash(pkill -f \"http.server 5199\")",
+      "Bash(node crawl.mjs /src/views/Settings.vue)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:1420/src/views/Settings.vue)"
+    ]
+  }
+}

@@ -9,8 +9,7 @@ import { listenAll, REFRESH_TRIGGERS } from '@/lib/events';
 import { api } from '@/lib/ipc';
 import PageLayout from '@/components/PageLayout.vue';
 import ErrorAlert from '@/components/ErrorAlert.vue';
-import LogPanel from '@/components/LogPanel.vue';
-import TerminalPanel from '@/components/TerminalPanel.vue';
+import ServiceDetailSheet from '@/components/ServiceDetailSheet.vue';
 
 const { t } = useI18n();
 const inventory = useInventoryStore();
@@ -19,9 +18,8 @@ const app = useAppStore();
 
 const search = ref('');
 const actionError = ref(null);
-const expanded = ref([]);
-const logTarget = ref(null);
-const terminalTarget = ref(null);
+/** The row the detail sheet is showing, or null. */
+const detailTarget = ref(null);
 
 const headers = computed(() => [
   { title: t('servicesView.colService'), key: 'id', sortable: true, align: 'start' },
@@ -54,6 +52,13 @@ const headers = computed(() => [
     sortable: true,
     align: 'center',
     width: 140,
+  },
+  {
+    title: t('servicesView.colDetail'),
+    key: 'detail',
+    sortable: false,
+    align: 'center',
+    width: 80,
   },
 ]);
 
@@ -106,6 +111,7 @@ onUnmounted(() => teardown?.());
   <PageLayout
     top-icon="mdi-server"
     :top-title="t('servicesView.title')"
+    :top-subtitle="t('servicesView.subtitle')"
     :bar-title="t('servicesView.list')"
   >
     <template #bar-append>
@@ -148,17 +154,14 @@ onUnmounted(() => teardown?.());
 
     <div class="table-wrap">
       <v-data-table
-        v-model:expanded="expanded"
         :headers="headers"
         :items="items"
         :search="search"
         :loading="inventory.loadingServices"
         items-per-page="-1"
         class="elevation-0"
-        show-expand
         fixed-header
         hover
-        density="compact"
         item-value="id"
         striped="even"
         hide-default-footer
@@ -236,6 +239,19 @@ onUnmounted(() => teardown?.());
           </v-btn>
         </template>
 
+        <template #item.detail="{ item }">
+          <v-btn
+            icon
+            size="small"
+            variant="text"
+            :aria-label="t('servicesView.colDetail')"
+            @click="detailTarget = item"
+          >
+            <v-icon>mdi-information-outline</v-icon>
+            <v-tooltip activator="parent">{{ t('servicesView.colDetail') }}</v-tooltip>
+          </v-btn>
+        </template>
+
         <template #item.status="{ item }">
           <!-- Enabling writes .env, regenerates and brings the profile up;
                disabling stops the container first, then unconfigures. -->
@@ -261,109 +277,15 @@ onUnmounted(() => teardown?.());
             <v-icon start>mdi-check-circle</v-icon>{{ t('servicesView.enabled') }}
           </v-btn>
         </template>
-
-        <template #expanded-row="{ columns, item }">
-          <tr>
-            <td :colspan="columns.length" class="pa-4">
-              <v-row>
-                <v-col cols="12" md="4">
-                  <div class="text-subtitle-2 mb-2 d-flex align-center">
-                    <v-icon size="small" color="info" class="mr-2">mdi-network</v-icon>
-                    {{ t('servicesView.networkInfo') }}
-                  </div>
-                  <div class="detail-row">
-                    <span class="detail-key">{{ t('servicesView.colContainerName') }}</span>
-                    <v-chip size="small" variant="tonal" color="primary">
-                      <v-icon start size="small">mdi-docker</v-icon>{{ item.containerName }}
-                    </v-chip>
-                  </div>
-                  <div v-if="item.hostPort" class="detail-row">
-                    <span class="detail-key">{{ t('services.hostPort') }}</span>
-                    <span class="detail-val">{{ item.hostPort }}</span>
-                  </div>
-                  <div v-for="port in item.ports" :key="port.container" class="detail-row">
-                    <span class="detail-key">{{ t('detail.ports') }}</span>
-                    <span class="detail-val">
-                      {{ port.host ? `${port.host}→` : '' }}{{ port.container }}/{{ port.protocol }}
-                    </span>
-                  </div>
-                </v-col>
-
-                <v-col cols="12" md="4">
-                  <div class="text-subtitle-2 mb-2 d-flex align-center">
-                    <v-icon size="small" color="info" class="mr-2">mdi-link-variant</v-icon>
-                    {{ t('servicesView.dependencies') }}
-                  </div>
-
-                  <!-- The web UI modelled dependencies for three of twenty
-                       services and referenced one that does not exist, so admin
-                       UIs could be started against nothing. -->
-                  <div
-                    v-if="!item.required.length && !item.optional.length"
-                    class="text-caption text-medium-emphasis"
-                  >
-                    {{ t('servicesView.noDependencies') }}
-                  </div>
-                  <div v-for="dep in item.required" :key="dep" class="detail-row">
-                    <span class="detail-key">{{ t('servicesView.required') }}</span>
-                    <v-chip
-                      size="x-small"
-                      label
-                      :color="item.unmetDependencies.includes(dep) ? 'warning' : 'success'"
-                      >{{ dep }}</v-chip
-                    >
-                  </div>
-                  <div v-for="dep in item.optional" :key="dep" class="detail-row">
-                    <span class="detail-key">{{ t('servicesView.optional') }}</span>
-                    <v-chip size="x-small" label>{{ dep }}</v-chip>
-                  </div>
-                </v-col>
-
-                <v-col cols="12" md="4">
-                  <div class="text-subtitle-2 mb-2 d-flex align-center">
-                    <v-icon size="small" color="info" class="mr-2">mdi-tools</v-icon>
-                    {{ t('servicesView.actions') }}
-                  </div>
-                  <div class="d-flex ga-2 flex-wrap">
-                    <v-btn
-                      size="small"
-                      variant="tonal"
-                      prepend-icon="mdi-text-box-outline"
-                      :disabled="!item.built"
-                      @click="logTarget = item.containerName"
-                      >{{ t('actions.logs') }}</v-btn
-                    >
-                    <v-btn
-                      size="small"
-                      variant="tonal"
-                      prepend-icon="mdi-console"
-                      :disabled="!item.running"
-                      @click="terminalTarget = { kind: 'container', name: item.containerName }"
-                      >{{ t('projects.terminal') }}</v-btn
-                    >
-                  </div>
-                </v-col>
-              </v-row>
-            </td>
-          </tr>
-        </template>
-
-        <template #bottom />
       </v-data-table>
     </div>
 
-    <LogPanel
-      v-if="logTarget"
-      :container="logTarget"
-      :model-value="!!logTarget"
-      @update:model-value="logTarget = $event ? logTarget : null"
-    />
-
-    <TerminalPanel
-      v-if="terminalTarget"
-      :target="terminalTarget"
-      :model-value="!!terminalTarget"
-      @update:model-value="terminalTarget = $event ? terminalTarget : null"
+    <!-- One sheet for whichever row is open; `service` is what it reads. -->
+    <ServiceDetailSheet
+      :service="detailTarget"
+      :tld="tld"
+      :model-value="!!detailTarget"
+      @update:model-value="detailTarget = $event ? detailTarget : null"
     />
   </PageLayout>
 </template>
@@ -380,6 +302,44 @@ onUnmounted(() => teardown?.());
 
 .table-wrap :deep(.v-table) {
   height: 100%;
+}
+
+/* A bind-mount source is an absolute host path; without this it runs out of
+   the column and under the next one. */
+.path-chip {
+  max-width: 100%;
+  height: auto;
+  min-height: 24px;
+}
+
+.path-chip :deep(.v-chip__content) {
+  white-space: normal;
+  word-break: break-all;
+  padding: 2px 0;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+
+/* Key, value, and a reveal button that only some rows have. */
+.credential {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+}
+
+.credential-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  word-break: break-all;
 }
 
 .detail-row {

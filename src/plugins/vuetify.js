@@ -81,8 +81,10 @@ const defaults = {
   VBtnToggle: { variant: 'outlined' },
   VTooltip: { location: 'top' },
 
-  VTextField: { variant: 'outlined', density: 'comfortable', hideDetails: 'auto' },
-  VSelect: { variant: 'outlined', density: 'comfortable', hideDetails: 'auto' },
+  // No `density` here on purpose: a component-level default outranks
+  // `global.density`, which is the one knob the appearance setting turns.
+  VTextField: { variant: 'outlined', hideDetails: 'auto' },
+  VSelect: { variant: 'outlined', hideDetails: 'auto' },
 
   VToolbar: { VBtn: { variant: 'text' } },
 };

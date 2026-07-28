@@ -1,5 +1,175 @@
 /* Global app styles (moved out of index.html). Imported from main.js. */
 
+/* The half of the theme Vuetify cannot change at runtime.
+ *
+ * Colours are generated from `theme.themes` and update the moment that ref
+ * changes. Corner radius and typography are not: they are SASS variables
+ * compiled to fixed pixels, so `.rounded-lg` is literally `border-radius: 12px
+ * !important` in the built stylesheet. Making them adjustable means an override
+ * layer keyed on custom properties, which `lib/appearance.js` writes.
+ *
+ * Everything with a box gets it. The first pass covered cards, fields and
+ * buttons only, which is worse than covering nothing: a window where the panels
+ * are square and the chips inside them are still pills does not read as a
+ * setting that did half its job, it reads as a broken stylesheet. Chips,
+ * badges, menus, tooltips, tables and the `rounded` utility classes are all in.
+ *
+ * What stays out is only what is round by definition rather than by style — a
+ * shape that carries meaning, not decoration:
+ *
+ *   - a switch is a pill with a knob in it, and a squared switch reads as a
+ *     broken switch rather than a square one;
+ *   - a radio button is a circle by definition, and so is the ripple of any
+ *     selection control;
+ *   - a slider's thumb is a handle (its *track* is a bar, and does follow);
+ *   - a pie chart is a circle;
+ *   - a status dot is a dot;
+ *   - `rounded="pill"` and `rounded="circle"` are an author asking for that
+ *     shape, and `rounded="0"` marks a surface that runs to an edge — a radius
+ *     there cuts a notch out of the window rather than rounding a corner.
+ *
+ * Everything else follows, including the thin bars: CSS clamps a radius to half
+ * the box, so a 4px progress bar reads as square at 0 and as a capsule at 24
+ * without either being spelled out. */
+:root {
+  --app-radius: 12px;
+  --app-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --app-font-size: 16px;
+}
+
+/* `:root` rather than `html`: Vuetify's reset pins `html { font-size: 1rem }`
+   and is imported after this file, so a plain `html` rule ties on specificity
+   and loses on order. The pseudo-class outranks the element selector, which is
+   what makes the interface scale take effect at all. */
+:root {
+  font-size: var(--app-font-size);
+}
+
+:root
+  :is(
+    .v-card,
+    .v-sheet,
+    .v-alert,
+    .v-chip,
+    .v-list-item,
+    .v-list--rounded,
+    .v-field,
+    .v-table,
+    .v-btn-group,
+    .v-avatar,
+    .v-img--rounded,
+    .v-progress-linear,
+    .v-slider-track,
+    .v-slider-track__background,
+    .v-slider-track__fill,
+    .v-toolbar--rounded,
+    .v-navigation-drawer--rounded,
+    .v-snackbar__wrapper
+  ),
+:root .v-btn:not(.v-btn--icon),
+:root .v-list-item::after,
+:root :is(.v-menu, .v-tooltip, .v-dialog) > .v-overlay__content,
+:root .v-overlay__content > :is(.v-card, .v-sheet),
+:root .v-badge:not(.v-badge--dot) .v-badge__badge {
+  border-radius: var(--app-radius) !important;
+}
+
+/* An outlined field's border is three elements, not one: two end caps and a
+   notch for the floating label. Only the caps carry radius and they carry it a
+   corner at a time, so a rule on `.v-field` alone leaves the visible border
+   square while the field's own box is rounded — which is exactly the "the left
+   side of the input didn't change" case. */
+:root .v-field--variant-outlined .v-field__outline__start {
+  border-start-start-radius: var(--app-radius) !important;
+  border-end-start-radius: var(--app-radius) !important;
+}
+
+:root .v-field--variant-outlined .v-field__outline__end {
+  border-start-end-radius: var(--app-radius) !important;
+  border-end-end-radius: var(--app-radius) !important;
+}
+
+/* `rounded="lg"` and friends compile to these. Without them, every component
+   that opts into a size becomes the one thing on screen that never moves. */
+:root :is(.rounded-sm, .rounded, .rounded-lg) {
+  border-radius: var(--app-radius) !important;
+}
+
+:root .rounded-xl {
+  border-radius: calc(var(--app-radius) * 1.5) !important;
+}
+
+/* The md3 blueprint gives every button `rounded="xl"`, so an icon button would
+   otherwise sit at one and a half times the setting while the button beside it
+   sits at exactly it. Specific enough to outrank the utility above rather than
+   relying on where it lands in the file. */
+:root .v-btn.v-btn--icon {
+  border-radius: var(--app-radius) !important;
+}
+
+/* An explicit shape outranks the setting.
+ *
+ * `rounded="0"` in this app is not a style preference, it is structural: it
+ * marks a surface that runs to an edge — the page shell against the window, a
+ * search field spanning the full width of its card, a drawer row spanning the
+ * drawer. A radius there does not round the corner, it cuts a notch out of the
+ * window and leaves the background showing through it.
+ *
+ * Pill and circle are here for the same reason in the other direction: an
+ * author who wrote one asked for that shape, not for a number.
+ *
+ * These tie with the rules above on specificity and win on source order, which
+ * is why they have to stay below them. */
+:root .rounded-0 {
+  border-radius: 0 !important;
+}
+
+/* Compound, not descendant: the caps belong to the field that carries the
+   class, and the page shell itself is `rounded="0"` — written with a space this
+   squared the outline of every input inside it while the field's own box kept
+   following the setting. */
+:root .v-field.rounded-0 .v-field__outline__start,
+:root .v-field.rounded-0 .v-field__outline__end {
+  border-radius: 0 !important;
+}
+
+:root .rounded-pill {
+  border-radius: 9999px !important;
+}
+
+:root .rounded-circle {
+  border-radius: 50% !important;
+}
+
+/* Vuetify writes a font-family into every typography class, so setting it on
+   the root alone is overridden by the first `.text-body-2`.
+   `code`, `pre` and `kbd` are exempt: they carry a monospace face on purpose —
+   a container id or a Dockerfile preview that reflows into a proportional font
+   stops being readable as the thing it is. */
+:root {
+  font-family: var(--app-font-family);
+}
+
+:root [class*='text-']:not(code, pre, kbd) {
+  font-family: var(--app-font-family) !important;
+}
+
+/* Reduced motion, as a setting rather than only as an OS preference.
+ *
+ * Progress indicators are exempt on purpose: a spinner that does not spin does
+ * not read as "animation disabled", it reads as "the app has hung" — which is
+ * the exact state it exists to rule out. */
+:root[data-reduce-motion='true'] *:not(.v-progress-circular *):not(.v-progress-linear *),
+:root[data-reduce-motion='true'] *::before,
+:root[data-reduce-motion='true'] *::after {
+  transition-duration: 1ms !important;
+  transition-delay: 0ms !important;
+  animation-duration: 1ms !important;
+  animation-delay: 0ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+}
+
 /* Hide scrollbars app-wide while keeping scroll behaviour. */
 html {
   overflow: hidden;

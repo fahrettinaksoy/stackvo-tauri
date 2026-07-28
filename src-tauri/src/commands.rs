@@ -253,6 +253,20 @@ pub async fn list_projects(root: &std::path::Path) -> Result<Vec<Project>> {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct Credential {
+    /// The key with its `SERVICE_<ID>_` prefix removed — `ROOT_PASSWORD`.
+    pub key: String,
+    /// The full `.env` key, so revealing one does not mean rebuilding the
+    /// prefix transform in the frontend (CONFLICTS.md C-09 is about exactly
+    /// that kind of round trip).
+    pub env_key: String,
+    /// Masked when `secret`; the real value comes from `env_reveal`.
+    pub value: String,
+    pub secret: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Service {
     pub id: String,
     pub category: String,
@@ -264,6 +278,8 @@ pub struct Service {
     pub url: Option<String>,
     pub host_port: Option<u16>,
     pub ports: Vec<Port>,
+    /// `SERVICE_<ID>_*` values, secrets masked. See `Env::service_credentials`.
+    pub credentials: Vec<Credential>,
     pub required: Vec<String>,
     pub optional: Vec<String>,
     /// A required dependency that is not running. The web UI only knew about
@@ -309,6 +325,16 @@ pub async fn list_services(root: &std::path::Path) -> Result<Vec<Service>> {
                 version: env.service_version(&id).map(str::to_string),
                 url: env.service_url(&id).map(str::to_string),
                 host_port: env.service_host_port(&id),
+                credentials: env
+                    .service_credentials(&id)
+                    .into_iter()
+                    .map(|(key, value, secret)| Credential {
+                        env_key: format!("{}{}", Env::service_prefix(&id), key),
+                        key,
+                        value,
+                        secret,
+                    })
+                    .collect(),
                 ports: container.map(|c| c.ports.clone()).unwrap_or_default(),
                 required: deps.required,
                 optional: deps.optional,
@@ -1581,6 +1607,23 @@ pub async fn apply_close(app: AppHandle, action: String) {
     }
 }
 
+// ---------------------------------------------------------------- preflight
+
+/// Everything that has to be true before the app can do its job.
+///
+/// Called before the first screen: the alternative is an app that opens on an
+/// empty dashboard and answers every click with a different error.
+#[tauri::command]
+pub async fn preflight() -> crate::preflight::Preflight {
+    crate::preflight::run().await
+}
+
+/// Do the one thing a fixable requirement needs.
+#[tauri::command]
+pub async fn preflight_fix(id: String) -> Result<()> {
+    crate::preflight::fix(&id).await
+}
+
 // ---------------------------------------------------------------- preferences
 
 /// User preferences, stored beside the workspace pointer.
@@ -1643,6 +1686,84 @@ pub fn logs_info() -> serde_json::Value {
         "newestFile": newest.as_ref().map(|f| f.display().to_string()),
         "totalBytes": dir.as_ref().map(|d| crate::logging::total_bytes(d)).unwrap_or(0),
     })
+}
+
+
+
+/// One `.env` value, unmasked, because the user asked for that one.
+///
+/// `env_get` and the service list hand over secrets as bullets on purpose: a
+/// password that crosses the boundary by default is in every screenshot of the
+/// page that shows it. This is the deliberate exception — a single key, on a
+/// click, so revealing a database password is an act rather than a default.
+#[tauri::command]
+pub fn env_reveal(state: State<'_, AppState>, key: String) -> Result<String> {
+    let env = Env::load(&state.root()?)?;
+
+    env.get(&key)
+        .map(str::to_string)
+        .ok_or_else(|| Error::new(Code::NotFound, format!("{key} is not set in .env")))
+}
+
+// ---------------------------------------------------------------- system accent
+
+/// The accent colour the user picked in System Settings.
+///
+/// Read rather than guessed so the app can match the rest of the desktop. macOS
+/// stores the choice in the global preference domain; the value that names it is
+/// `AppleHighlightColor`, whose last field is the accent's name — the leading
+/// floats are the *selection* tint, a paler variant that would be unreadable as
+/// a primary. The names map to the accent colours themselves.
+///
+/// Absent means "multicolour", which is macOS's default and resolves to blue.
+///
+/// Shelling out to `defaults` rather than linking AppKit: one process for a
+/// value read a few times a session is cheaper than an Objective-C bridge in
+/// the dependency tree, and it cannot panic inside someone else's runtime.
+#[tauri::command]
+pub fn system_accent() -> serde_json::Value {
+    #[cfg(target_os = "macos")]
+    {
+        // The accent colours macOS itself draws with, keyed by the name it
+        // writes into the preference.
+        const ACCENTS: [(&str, &str); 8] = [
+            ("Blue", "#007AFF"),
+            ("Purple", "#A550A7"),
+            ("Pink", "#F74F9E"),
+            ("Red", "#FF5257"),
+            ("Orange", "#F7821B"),
+            ("Yellow", "#FFC600"),
+            ("Green", "#62BA46"),
+            ("Graphite", "#8C8C8C"),
+        ];
+
+        let output = std::process::Command::new("defaults")
+            .args(["read", "-g", "AppleHighlightColor"])
+            .output();
+
+        let name = match &output {
+            Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
+                .split_whitespace()
+                .last()
+                .unwrap_or("Blue")
+                .to_string(),
+            // Unset is not an error: it is the default multicolour accent.
+            _ => "Blue".to_string(),
+        };
+
+        let hex = ACCENTS
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, hex)| *hex)
+            .unwrap_or("#007AFF");
+
+        return serde_json::json!({ "available": true, "name": name, "hex": hex });
+    }
+
+    // Windows has an accent colour too, but it lives in the registry and this
+    // app is not built there yet; saying so beats returning a wrong blue.
+    #[cfg(not(target_os = "macos"))]
+    serde_json::json!({ "available": false, "name": null, "hex": null })
 }
 
 /// Is this build capable of verifying an update?

@@ -59,6 +59,7 @@ export default {
   },
 
   dashboard: {
+    subtitle: 'Yığının ve makinenin anlık durumu',
     title: 'Panel',
     overview: 'Genel Bakış',
     health: 'Sağlık',
@@ -95,6 +96,7 @@ export default {
   },
 
   projectsView: {
+    subtitle: 'Yönetilen projeler ve konteynerleri',
     title: 'Projeler',
     list: 'Proje Listesi',
     running: 'Çalışıyor',
@@ -106,7 +108,7 @@ export default {
     colStopStart: 'Durdur/Başlat',
     colRestart: 'Yeniden Başlat',
     colTerminal: 'Terminal',
-    colOpen: 'Aç',
+    colOpen: 'Tarayıcıda aç',
     colDetail: 'Detay',
     colDelete: 'Sil',
     default: 'Varsayılan',
@@ -115,6 +117,24 @@ export default {
   },
 
   servicesView: {
+    hide: 'Değeri gizle',
+    colDetail: 'Detay',
+    serviceInfo: 'Servis bilgisi',
+    logInfo: 'Log ve bağlamalar',
+    ipAddress: 'IP adresi',
+    network: 'Ağ',
+    gateway: 'Ağ geçidi',
+    portMappings: 'Port eşlemeleri',
+    internal: 'yalnızca iç ağ',
+    credentials: 'Kimlik bilgileri',
+    noCredentials: 'Bu servis .env üzerinden kimlik bilgisi tanımlamıyor.',
+    reveal: 'Değeri göster',
+    containerLogs: 'Konteyner logu',
+    logPath: 'Log yolu',
+    mount: 'Bağlama',
+    noMounts: 'Bağlama yok.',
+    notCreated: 'Konteyner henüz oluşturulmadı.',
+    subtitle: 'Yığının paylaşılan altyapı servisleri',
     title: 'Servisler',
     list: 'Servis Listesi',
     searchPlaceholder: 'Servis ara...',
@@ -124,7 +144,7 @@ export default {
     colVersion: 'Sürüm',
     colStopStart: 'Durdur/Başlat',
     colRestart: 'Yeniden Başlat',
-    colOpen: 'Aç',
+    colOpen: 'Tarayıcıda aç',
     colStatus: 'Durum',
     enabled: 'ETKİN',
     disabled: 'DEVRE DIŞI',
@@ -133,7 +153,6 @@ export default {
     noDependencies: 'Bağımlılığı yok.',
     required: 'Zorunlu',
     optional: 'İsteğe bağlı',
-    actions: 'İşlemler',
   },
 
   projectDetail: {
@@ -177,8 +196,6 @@ export default {
   workspace: {
     title: 'StackVo dizini',
     none: 'Henüz bir StackVo dizini seçilmedi.',
-    prompt: 'core/cli/stackvo.sh ve projects/ klasörlerini içeren dizini seçin.',
-    choose: 'Dizin seç',
     change: 'Değiştir',
     source: {
       stored: 'kayıtlı seçim',
@@ -221,7 +238,6 @@ export default {
   projects: {
     searchPlaceholder: 'Proje ara…',
     openDetail: 'Detayı aç',
-    terminal: 'Terminal',
     openSite: 'Siteyi aç',
     title: 'Projeler',
     empty: 'Henüz proje yok.',
@@ -241,10 +257,159 @@ export default {
     unmetDependency: 'Eksik bağımlılık',
   },
 
+  preflight: {
+    title: 'StackVo çalışmaya hazır değil',
+    subtitle: '{count} gereksinim karşılanmıyor. Uygulama, bunlar tamamlanınca açılacak.',
+    recheck: 'Yeniden denetle',
+    blocked: 'Yukarıdaki bir gereksinim karşılanmadan denetlenemiyor.',
+
+    workspace: 'StackVo dizini',
+    workspaceHint: {
+      macos: 'core/cli/stackvo.sh ve projects/ klasörlerini içeren dizini seçin.',
+      linux: 'core/cli/stackvo.sh ve projects/ klasörlerini içeren dizini seçin.',
+      windows: 'core/cli/stackvo.sh ve projects/ klasörlerini içeren dizini seçin.',
+    },
+    workspaceAction: 'Dizin seç',
+
+    engine: 'Docker motoru',
+    engineHint: {
+      macos:
+        'Docker Desktop, OrbStack veya Colima çalışmıyor. Başlat düğmesi Docker Desktop’ı açar.',
+      linux:
+        'Docker daemon çalışmıyor. Başlat düğmesi systemd üzerinden dener; yetki gerekirse `sudo systemctl start docker`.',
+      windows:
+        'Docker Desktop çalışmıyor. Başlat düğmesi onu açar; WSL2 arka ucunun kurulu olması gerekir.',
+    },
+    engineAction: 'Başlat',
+
+    compose: 'Docker Compose v2',
+    composeHint: {
+      macos:
+        'Uygulama compose profilleri kullanıyor; bunlar v2 ile geldi. Docker Desktop’ı güncelleyin.',
+      linux:
+        'Uygulama compose profilleri kullanıyor; bunlar v2 ile geldi. docker-compose-plugin paketini kurun.',
+      windows:
+        'Uygulama compose profilleri kullanıyor; bunlar v2 ile geldi. Docker Desktop’ı güncelleyin.',
+    },
+
+    network: 'Paylaşılan Docker ağı',
+    networkHint: {
+      macos:
+        'Üretilen compose dosyaları bu ağı “external” olarak bildiriyor, yani compose onu kendisi oluşturmaz.',
+      linux:
+        'Üretilen compose dosyaları bu ağı “external” olarak bildiriyor, yani compose onu kendisi oluşturmaz.',
+      windows:
+        'Üretilen compose dosyaları bu ağı “external” olarak bildiriyor, yani compose onu kendisi oluşturmaz.',
+    },
+    networkAction: 'Ağı oluştur',
+
+    projects: 'projects/ klasörü',
+    projectsHint: {
+      macos: 'Projeler bu klasörün altında yaşar; henüz yok.',
+      linux: 'Projeler bu klasörün altında yaşar; henüz yok.',
+      windows: 'Projeler bu klasörün altında yaşar; henüz yok.',
+    },
+    projectsAction: 'Oluştur',
+
+    bash: 'Bash',
+    bashHint: {
+      macos: 'Üreteç core/cli/stackvo.sh betiği; bash olmadan yapılandırma üretilemez.',
+      linux: 'Üreteç core/cli/stackvo.sh betiği; bash paketini kurun.',
+      windows:
+        'Üreteç core/cli/stackvo.sh betiği. Windows’ta WSL veya Git Bash kurulu olmalı ve PATH’te bulunmalı.',
+    },
+  },
   settings: {
+    subtitle: 'Uygulama tercihleri',
+
+    // Görünüm bölümü.
+    appearance: 'Görünüm',
+    appearanceSectionDesc: 'Tema, ana renk, nötr palet ve köşe yuvarlaklığını özelleştir.',
+    themeColors: 'Tema ve renkler',
+    themeColorsDesc: 'Uygulamanın görünümünü kişiselleştir',
+    primaryColor: 'Ana renk',
+    neutralPalette: 'Nötr palet',
+    radius: 'Köşe yuvarlaklığı ({px}px)',
+    resetAppearance: 'Varsayılanlar',
+    typography: 'Tipografi ve okunabilirlik',
+    typographyDesc: 'Yazı tipi, arayüz ölçeği ve kontrast',
+    fontFamily: 'Yazı tipi',
+    fontFamilyHint: 'Yalnızca sistemde kurulu yazı tipleri listelenir.',
+    uiScale: 'Arayüz ölçeği ({px}px)',
+    highContrast: 'Yüksek kontrast',
+    highContrastHint: 'İkincil metni ve ayraçları belirginleştirir.',
+    reduceMotion: 'Animasyonları azalt',
+    density: 'Arayüz yoğunluğu',
+    densityCompact: 'Sık',
+    densityComfortable: 'Rahat',
+    densitySpacious: 'Geniş',
+    systemAccent: 'Sistem rengi',
+    reduceMotionHint: 'Geçişleri kapatır; ilerleme göstergeleri dönmeye devam eder.',
+    statusColors: 'Durum renkleri',
+    statusColorsDesc: 'Çalışıyor, durdu ve hata hangi renkle anlatılsın',
+    statusPalette: 'Palet',
+    statusPalettes: {
+      default: 'Varsayılan (yeşil / kırmızı)',
+      colorblind: 'Renk körlüğü güvenli (Okabe-Ito)',
+      muted: 'Yumuşak',
+    },
+    darkConsoles: 'Konsolları her zaman koyu tut',
+    darkConsolesHint: 'Log ve terminal panelleri açık temada da koyu kalır.',
+    presets: 'Ön ayarlar',
+    presetsDesc: 'Bir görünümü adlandırıp sonra tek tıkla geri dön',
+    presetName: 'Ön ayar adı',
+    savePreset: 'Kaydet',
+    noPresets: 'Henüz kayıtlı ön ayar yok.',
+    neutrals: {
+      graphite: 'Grafit',
+      carbon: 'Karbon',
+      midnight: 'Gece mavisi',
+      forest: 'Orman',
+      warm: 'Sıcak gri',
+    },
+    fonts: {
+      system: 'Sistem',
+      grotesk: 'Grotesk (Helvetica)',
+      serif: 'Serif (Georgia)',
+      mono: 'Monospace',
+    },
+
+    // Yerelleştirme bölümü.
+    localisation: 'Yerelleştirme',
+    localisationDesc: 'Arayüz dili ve yazım yönü.',
+    languageDesc: 'Arayüz ve tepsi menüsünün dili',
+    consoleLanguage: 'Konsol dili',
+    consoleLanguageDesc: 'Log ve terminal panellerinin dili',
+    consoleLanguageHint: 'Hata çıktısını paylaşırken arayüz dilinden bağımsız tutmak için.',
+    consoleFollowsApp: 'Arayüzle aynı',
+    direction: 'Yazım yönü',
+    directionDesc: 'Arayüzün hangi yönde aktığı',
+    rtl: 'Sağdan sola düzen',
+    rtlHint: 'Tüm bileşenler aynalanır; Arapça ve İbranice yerleşimleri denemek için.',
+
+    // Bölüm açıklamaları: her panelin ne işe yaradığı, panele girerken bir kez.
+    workspaceDesc: 'Yönetilen StackVo dizini ve Docker motorunun durumu.',
+    preferencesDesc: 'Görünüm, dil, dış uygulamalar ve kapatma davranışı.',
+    stackDesc: 'Compose seviyesinde üretim ve konteyner yönetimi.',
+    envFileDesc: 'Yığının okuduğu .env değerlerini yerinde düzenle.',
+    aboutDesc: 'Sürüm, imzalı güncellemeler ve tanılama.',
+
+    // Alt gruplar.
+    workspaceGroup: 'Çalışma dizini',
+    workspaceGroupDesc: 'Bu uygulamanın yönettiği checkout',
+    engineGroupDesc: 'Konteynerleri çalıştıran motorun durumu',
+    externalApps: 'Dış uygulamalar',
+    externalAppsDesc: 'Terminal ve editör hangi uygulamada açılsın',
+    startup: 'Başlangıç ve kapatma',
+    startupDesc: 'Uygulama açılırken ve kapanırken ne olsun',
+    compose: 'Konteynerler',
+    generatorDesc: 'Rust üretecinin çıktısını Bash üreteciyle karşılaştırır',
+    updatesDesc: 'İmzalı sürüm denetimi ve kurulum',
+
     theme: 'Tema',
     language: 'Dil',
     envFile: '.env dosyası',
+    envVars: 'Değişkenler',
     preferences: 'Tercihler',
     stack: 'Stack kontrolü',
     stackSub: 'Compose seviyesinde: yeniden üretir ve konteynerleri yeniden kurar.',
@@ -293,18 +458,18 @@ export default {
     close: 'Kapat',
   },
   actions: {
-    start: 'Başlat',
-    stop: 'Durdur',
-    restart: 'Yeniden başlat',
-    build: 'Derle',
-    generate: 'Üret',
-    up: 'Ayağa kaldır',
-    down: 'Durdur',
-    logs: 'Loglar',
-    composeRestart: 'Stack yeniden başlat',
+    start: 'Konteyneri başlat',
+    stop: 'Konteyneri durdur',
+    restart: 'Konteyneri yeniden başlat',
+    build: 'Projeyi derle',
+    generate: 'Yapılandırmayı üret',
+    up: 'Yığını ayağa kaldır',
+    down: 'Yığını durdur',
+    composeRestart: 'Yığını yeniden başlat',
   },
 
   logs: {
+    title: 'Loglar',
     live: 'canlı',
     waiting: 'Log bekleniyor…',
   },
@@ -321,6 +486,13 @@ export default {
   },
 
   newProject: {
+    nameHint: 'Harf veya rakamla başlar; tire, alt çizgi ve nokta kullanılabilir (ör. api.myapp).',
+    domainHint: 'Boş bırakılırsa proje adından üretilir.',
+    documentRootHint: 'Proje köküne göre yol.',
+    portHint: 'Uygulamanın konteyner içinde dinlediği port.',
+    sectionProject: 'Proje',
+    sectionPhp: 'PHP yapılandırması',
+    sectionNode: 'Node yapılandırması',
     title: 'Yeni proje',
     name: 'Proje adı',
     domain: 'Alan adı',
@@ -346,9 +518,12 @@ export default {
   },
 
   detail: {
+    dockerfileDesc: 'Rust üreteci bu projeyi nasıl render ediyor — dosyaya yazmadan.',
+    compatHint: 'Bash bugün ne yazıyorsa onu üretir; kurulamayan eklentiler sessizce atlanır.',
+    strictHint: 'Kurulamayan bir eklenti varsa üretmeyi reddeder ve hangisi olduğunu söyler.',
+    notBuilt: 'Konteyner henüz derlenmedi; log akışı için önce derleyin.',
     openInEditor: 'Editörde aç',
     externalTerminal: 'Harici terminalde aç',
-    previewHint: 'Dockerfile önizlemesi için Katı veya Uyumlu modu seçin.',
     manifest: 'Manifest',
     manifestHint: 'stackvo.json — kaydedince anahtar sırası sözleşmeye göre düzeltilir.',
     save: 'Kaydet',
@@ -356,7 +531,6 @@ export default {
     dockerfile: 'Dockerfile',
     image: 'İmaj',
     state: 'Durum',
-    ports: 'Portlar',
     matchesBash: 'Bash çıktısıyla birebir aynı',
     differsFromBash: 'Bash çıktısından farklı',
     strict: 'Katı',

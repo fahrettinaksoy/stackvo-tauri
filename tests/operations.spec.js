@@ -147,3 +147,48 @@ describe('operations', () => {
     expect(ops.operations['b'].lines).toEqual(['once']);
   });
 });
+
+describe('enabling a service', () => {
+  /**
+   * The sequence a real `service_enable` emits. It is worth spelling out
+   * because two of its steps look like the end and are not: the operation id
+   * spans a generate stage and a compose stage, and the event that actually
+   * ends it is called `service:enabled` rather than done/success.
+   */
+  it('keeps the row busy until the compose stage finishes', async () => {
+    const ops = useOperationsStore();
+    await ops.bind();
+
+    emit('service:enabling', { service: 'mariadb' });
+    expect(ops.isBusy('mariadb'), 'busy from the moment it is asked for').toBe(true);
+
+    emit('generate:start', { operationId: 'op-1', subject: 'projects_and_services' });
+    emit('generate:progress', {
+      operationId: 'op-1',
+      subject: 'projects_and_services',
+      line: 'writing compose',
+    });
+    emit('generate:done', { operationId: 'op-1', subject: 'projects_and_services', success: true });
+
+    // Generation is one stage of the operation, not the end of it.
+    expect(ops.isBusy('mariadb'), 'still busy after the generate stage').toBe(true);
+
+    emit('service:progress', {
+      operationId: 'op-1',
+      subject: 'mariadb',
+      line: 'Container stackvo-mariadb Started',
+    });
+    expect(ops.operations['op-1'].state, 'output after a finish reopens it').toBe('running');
+
+    emit('service:enabled', {
+      operationId: 'op-1',
+      subject: 'mariadb',
+      success: true,
+      durationMs: 4200,
+    });
+
+    expect(ops.isBusy('mariadb'), 'the finished event clears the spinner').toBe(false);
+    expect(ops.operations['op-1'].state).toBe('done');
+    expect(ops.operations['op-1'].durationMs).toBe(4200);
+  });
+});

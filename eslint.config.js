@@ -26,6 +26,8 @@ export default [
         requestAnimationFrame: 'readonly',
         ResizeObserver: 'readonly',
         localStorage: 'readonly',
+        sessionStorage: 'readonly',
+        location: 'readonly',
         TextDecoder: 'readonly',
         TextEncoder: 'readonly',
       },

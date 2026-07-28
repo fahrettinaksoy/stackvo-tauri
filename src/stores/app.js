@@ -14,8 +14,29 @@ export const useAppStore = defineStore('app', () => {
   const workspace = ref(null);
   const engine = ref(null);
   const booting = ref(true);
+  /**
+   * Is the "new project" panel open?
+   *
+   * Here rather than in either view because there is exactly one panel and two
+   * buttons that open it — the rail's and the project list's. As a drawer it
+   * has to be mounted at the app level (a `v-navigation-drawer` is absolutely
+   * positioned, so one rendered inside a page is clipped by the page's own
+   * `overflow: hidden`), which leaves the flag as the only thing the two
+   * triggers can share.
+   */
+  const newProjectOpen = ref(false);
   const startingEngine = ref(false);
   const error = ref(null);
+
+  /**
+   * The prerequisite report from `preflight`.
+   *
+   * Null until the first check. `ready` there — not `hasWorkspace` — is what
+   * decides whether the app renders: a chosen folder is one of six things that
+   * have to hold, and the other five used to be discovered one failed click at
+   * a time.
+   */
+  const preflight = ref(null);
 
   const hasWorkspace = computed(() => !!workspace.value?.valid);
   const engineUp = computed(() => !!engine.value?.reachable);
@@ -72,15 +93,52 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
+  async function checkRequirements() {
+    try {
+      preflight.value = await api.preflight();
+    } catch (e) {
+      error.value = e;
+    }
+    return preflight.value;
+  }
+
+  /**
+   * Ask the app to do the one thing a requirement needs, then re-check.
+   *
+   * Re-checking rather than assuming: creating the network can succeed and the
+   * daemon still be gone by the time the next thing needs it.
+   */
+  async function fixRequirement(id) {
+    error.value = null;
+    try {
+      if (id === 'workspace') {
+        const picked = await api.workspacePick();
+        if (picked) workspace.value = picked;
+      } else if (id === 'engine') {
+        await startEngine();
+      } else {
+        await api.preflightFix(id);
+      }
+    } catch (e) {
+      error.value = e;
+    }
+    await Promise.all([refreshWorkspace(), refreshEngine()]);
+    return checkRequirements();
+  }
+
   async function boot() {
     booting.value = true;
-    await Promise.all([refreshWorkspace(), refreshEngine()]);
+    await Promise.all([refreshWorkspace(), refreshEngine(), checkRequirements()]);
     booting.value = false;
   }
 
   return {
     workspace,
     engine,
+    preflight,
+    checkRequirements,
+    fixRequirement,
+    newProjectOpen,
     booting,
     startingEngine,
     error,
