@@ -115,6 +115,12 @@ const SECTIONS = [
   },
   { key: 'stack', icon: 'mdi-server', label: 'settings.stack', desc: 'settings.stackDesc' },
   {
+    key: 'certificates',
+    icon: 'mdi-certificate-outline',
+    label: 'settings.certificates',
+    desc: 'settings.certificatesDesc',
+  },
+  {
     key: 'env',
     icon: 'mdi-file-document-edit',
     label: 'settings.envFile',
@@ -284,9 +290,80 @@ async function verifyGenerator() {
   }
 }
 
+/**
+ * Certificate state.
+ *
+ * Read on mount rather than on opening the pane: `certStale` badges the rail
+ * entry, and a badge that only appears once you have already navigated to the
+ * thing it is pointing at is decoration.
+ */
+const certs = ref(null);
+const certPlan = ref(null);
+const certBusy = ref(false);
+const certError = ref(null);
+
+async function loadCerts() {
+  try {
+    certs.value = await api.certStatus();
+    // The plan is what says which names a reissue would *drop* — the status
+    // only computes what is missing. A user who deleted a project and sees its
+    // domain vanish from the certificate should have been told first.
+    certPlan.value = await api.certPlan(certs.value.caTrusted !== true);
+    certError.value = null;
+  } catch (e) {
+    // A missing workspace is reported by the requirements gate already; a
+    // second copy of it here would be noise.
+    certs.value = null;
+    certPlan.value = null;
+    if (!e.needsWorkspace) certError.value = e;
+  }
+}
+
+/**
+ * Reissue for the domains the projects actually have.
+ *
+ * The plan is shown before this runs, so there is no confirmation step here —
+ * the button's label is the plan. `installCa` follows what the status reported:
+ * asking for the trust store when it is already trusted would raise a password
+ * prompt for nothing.
+ */
+/**
+ * True when the certificate was reissued but the running proxy is still
+ * serving the old one — see `reload_proxy` in `certs.rs`. Cleared by the next
+ * reissue, because the state it describes belongs to the last one.
+ */
+const certNotReloaded = ref(false);
+
+async function reissueCerts() {
+  certBusy.value = true;
+  certError.value = null;
+  certNotReloaded.value = false;
+  try {
+    const applied = await api.certApply(certs.value?.caTrusted !== true);
+    // A certificate nothing serves is not a certificate the user has.
+    certNotReloaded.value = applied?.reloaded === false;
+    await loadCerts();
+  } catch (e) {
+    certError.value = e;
+  } finally {
+    certBusy.value = false;
+  }
+}
+
+/** The one fact worth surfacing outside this pane. */
+const certStale = computed(() => certs.value?.sslEnabled && certs.value?.stale);
+
+/** Expiry as a date in the user's locale — the Rust side sends epoch seconds. */
+const certExpiry = computed(() => {
+  const seconds = certs.value?.notAfter;
+  if (!seconds) return null;
+  return new Date(seconds * 1000).toLocaleDateString(locale.value);
+});
+
 onMounted(async () => {
   loadEnv();
   loadPrefs();
+  loadCerts();
   verifyGenerator();
   appVersion.value = await getVersion().catch(() => '');
   updaterReady.value = await updatesConfigured();
@@ -913,6 +990,167 @@ onMounted(async () => {
             </SettingsGroup>
           </template>
 
+          <!-- ---- certificates ---------------------------------------------- -->
+          <!-- HTTPS worked before this pane existed and was invisible: the one
+               question a browser warning raises — "is my domain in the
+               certificate?" — had no answer anywhere in the app. -->
+          <template v-if="tab === 'certificates'">
+            <ErrorAlert v-if="certError" :error="certError" class="mb-4" />
+
+            <SettingsGroup
+              icon="mdi-certificate-outline"
+              :title="t('certs.title')"
+              :description="t('certs.subtitle')"
+            >
+              <template #append>
+                <v-btn
+                  size="x-small"
+                  variant="text"
+                  icon="mdi-refresh"
+                  :aria-label="t('app.refresh')"
+                  :loading="certBusy"
+                  @click="loadCerts"
+                />
+              </template>
+
+              <!-- SSL off is a choice, not a fault: without it the generator
+                   emits no `websecure` entry point and nothing below applies. -->
+              <v-alert v-if="certs && !certs.sslEnabled" type="info" variant="tonal" class="mb-3">
+                <div class="text-caption">{{ t('certs.sslOff') }}</div>
+              </v-alert>
+
+              <template v-else-if="certs">
+                <div class="d-flex align-center ga-2 mb-3 flex-wrap">
+                  <v-chip size="small" :color="certs.stale ? 'warning' : 'success'">
+                    {{ certs.stale ? t('certs.stale') : t('certs.current') }}
+                  </v-chip>
+                  <v-chip
+                    size="small"
+                    :color="
+                      certs.caTrusted === true
+                        ? 'success'
+                        : certs.caTrusted === false
+                          ? 'warning'
+                          : undefined
+                    "
+                  >
+                    {{
+                      certs.caTrusted === true
+                        ? t('certs.caTrusted')
+                        : certs.caTrusted === false
+                          ? t('certs.caUntrusted')
+                          : t('certs.caUnknown')
+                    }}
+                  </v-chip>
+                  <span v-if="certExpiry" class="text-caption text-medium-emphasis">
+                    {{
+                      certs.expired
+                        ? t('certs.expiredOn', { date: certExpiry })
+                        : t('certs.expiresOn', {
+                            date: certExpiry,
+                            days: certs.daysRemaining,
+                          })
+                    }}
+                  </span>
+                </div>
+
+                <!-- mkcert is the whole mechanism; without it nothing here can
+                     be repaired, so it is said plainly rather than left for the
+                     reissue button to fail on. -->
+                <v-alert v-if="!certs.mkcertAvailable" type="warning" variant="tonal" class="mb-3">
+                  <div class="text-caption">{{ t('certs.noMkcert') }}</div>
+                </v-alert>
+
+                <v-alert v-if="certs.error" type="error" variant="tonal" class="mb-3">
+                  <div class="text-caption">{{ certs.error }}</div>
+                </v-alert>
+
+                <!-- The point of the pane: which domains the file on disk does
+                     not vouch for. -->
+                <template v-if="certs.missing.length">
+                  <div class="text-caption text-medium-emphasis mb-1">
+                    {{ t('certs.missing') }}
+                  </div>
+                  <div class="mb-3">
+                    <v-chip
+                      v-for="d in certs.missing"
+                      :key="d"
+                      size="x-small"
+                      color="warning"
+                      class="mr-1 mb-1"
+                    >
+                      {{ d }}
+                    </v-chip>
+                  </div>
+                </template>
+
+                <template v-if="certPlan?.remove?.length">
+                  <div class="text-caption text-medium-emphasis mb-1">
+                    {{ t('certs.dropping') }}
+                  </div>
+                  <div class="mb-3">
+                    <v-chip
+                      v-for="d in certPlan.remove"
+                      :key="d"
+                      size="x-small"
+                      variant="outlined"
+                      class="mr-1 mb-1"
+                    >
+                      {{ d }}
+                    </v-chip>
+                  </div>
+                </template>
+
+                <template v-if="certs.rejected.length">
+                  <div class="text-caption text-error mb-1">{{ t('certs.rejected') }}</div>
+                  <div class="mb-3">
+                    <v-chip
+                      v-for="d in certs.rejected"
+                      :key="d"
+                      size="x-small"
+                      color="error"
+                      class="mr-1 mb-1"
+                    >
+                      {{ d }}
+                    </v-chip>
+                  </div>
+                </template>
+
+                <div class="text-caption text-medium-emphasis mb-1">
+                  {{ t('certs.covered', { n: certs.covered.length }) }}
+                </div>
+                <div class="mb-3">
+                  <v-chip v-for="d in certs.covered" :key="d" size="x-small" class="mr-1 mb-1">
+                    {{ d }}
+                  </v-chip>
+                </div>
+
+                <v-btn
+                  size="small"
+                  variant="tonal"
+                  block
+                  prepend-icon="mdi-autorenew"
+                  :loading="certBusy"
+                  :disabled="!certs.mkcertAvailable"
+                  @click="reissueCerts"
+                >
+                  {{ certs.caTrusted === true ? t('certs.reissue') : t('certs.reissueAndTrust') }}
+                </v-btn>
+
+                <!-- The certificate is on disk and the browser is still getting
+                     the old one. Silence here is what made this bug survive:
+                     the reissue reports success either way. -->
+                <v-alert v-if="certNotReloaded" type="warning" variant="tonal" class="mt-3">
+                  <div class="text-caption">{{ t('certs.notReloaded') }}</div>
+                </v-alert>
+
+                <div v-if="certs.certPath" class="text-caption text-medium-emphasis mt-2">
+                  {{ certs.certPath }}
+                </div>
+              </template>
+            </SettingsGroup>
+          </template>
+
           <!-- ---- .env ------------------------------------------------------ -->
           <template v-if="tab === 'env'">
             <!-- Writes patch lines in place: comments, section banners, trailing
@@ -1082,7 +1320,19 @@ onMounted(async () => {
             :title="t(s.label)"
             :active="tab === s.key"
             @click="tab = s.key"
-          />
+          >
+            <!-- The certificate going stale is silent otherwise: the first
+                 sign is a browser warning on a project that worked yesterday,
+                 and nothing connects that to a settings pane. -->
+            <template v-if="s.key === 'certificates' && certStale" #append>
+              <v-icon
+                size="x-small"
+                color="warning"
+                icon="mdi-alert-circle"
+                :aria-label="t('certs.stale')"
+              />
+            </template>
+          </v-list-item>
         </v-list>
       </nav>
     </div>

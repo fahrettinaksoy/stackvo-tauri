@@ -193,3 +193,148 @@ fn env_loads_and_redacts_real_secrets() {
         }
     }
 }
+
+/// The parser, against a certificate mkcert actually produced.
+///
+/// `certs::parse_pem` is unit-tested against a synthetic PEM, which proves it
+/// reads X.509 — not that it reads *mkcert's* X.509. The SAN list is the whole
+/// output of this feature, so it is worth checking against the real thing on
+/// any machine that has one.
+#[test]
+fn the_real_wildcard_certificate_parses() {
+    use stackvo_desktop_lib::certs;
+
+    let Some(root) = checkout() else {
+        eprintln!("skipping: no StackVo checkout found");
+        return;
+    };
+
+    let path = certs::cert_path(&root);
+    let Ok(pem) = std::fs::read(&path) else {
+        eprintln!("skipping: no certificate at {}", path.display());
+        return;
+    };
+
+    let facts = certs::parse_pem(&pem).expect("mkcert's own output should parse");
+
+    let suffix = Env::load(&root)
+        .ok()
+        .and_then(|e| e.get("DEFAULT_TLD_SUFFIX").map(str::to_string))
+        .unwrap_or_else(|| certs::FALLBACK_SUFFIX.to_string());
+
+    assert!(
+        facts.sans.iter().any(|s| s == &format!("*.{suffix}")),
+        "the wildcard for {suffix} should be in the SAN list, got {:?}",
+        facts.sans
+    );
+    assert!(
+        facts.not_after.is_some(),
+        "a certificate always has a not_after"
+    );
+
+    // Not an assertion about the developer's machine — an expired certificate
+    // is a legitimate state, and reporting it is the point.
+    eprintln!(
+        "certificate covers {} name(s), {} day(s) remaining",
+        facts.sans.len(),
+        facts
+            .days_remaining
+            .map(|d| d.to_string())
+            .unwrap_or_else(|| "expired, 0".into())
+    );
+}
+
+/// The reload has to work against the directory the generator really writes,
+/// not only against a fixture shaped like it.
+///
+/// Reissuing a certificate replaces a file Traefik does not watch: the proxy
+/// watches `generated/traefik/dynamic`, and reads a `certFile` only while
+/// parsing what it finds there. On the checkout this was written against,
+/// Traefik had been up two days serving a certificate a day older than the one
+/// on disk. Rewriting the watched files with their own bytes is what closes
+/// that gap, so this asserts both halves: that it finds something to rewrite,
+/// and that the bytes survive — `generated/` is under a byte-for-byte contract
+/// with the Bash generator, and a reload that reformatted a file would break it.
+#[test]
+fn the_traefik_reload_touches_real_config_without_altering_it() {
+    use stackvo_desktop_lib::certs;
+
+    let Some(root) = checkout() else {
+        eprintln!("no StackVo checkout found, skipping");
+        return;
+    };
+
+    let dir = root.join("generated").join("traefik").join("dynamic");
+    if !dir.is_dir() {
+        eprintln!("{} has not been generated, skipping", dir.display());
+        return;
+    }
+
+    let before: Vec<(PathBuf, String)> = std::fs::read_dir(&dir)
+        .expect("reading the dynamic directory")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .filter_map(|p| std::fs::read_to_string(&p).ok().map(|text| (p, text)))
+        .collect();
+
+    assert!(
+        certs::reload_proxy(&root),
+        "a generated dynamic directory always holds at least routes.yml"
+    );
+
+    for (path, text) in &before {
+        assert_eq!(
+            &std::fs::read_to_string(path).expect("re-reading after the reload"),
+            text,
+            "{} changed, and nothing under generated/ may",
+            path.display()
+        );
+    }
+
+    eprintln!("reloaded {} dynamic config file(s)", before.len());
+}
+
+/// Discovery has to find what real projects actually write, which is not what a
+/// fixture would contain: Laravel channels nest into subdirectories, roll over
+/// daily, and sit alongside a separate tree of nginx, php-fpm and supervisord
+/// files that the stack mounts from `logs/projects/<name>`.
+#[test]
+fn real_projects_expose_the_logs_they_actually_write() {
+    use stackvo_desktop_lib::applog;
+
+    let Some(root) = checkout() else {
+        eprintln!("no StackVo checkout found, skipping");
+        return;
+    };
+
+    let mut total = 0;
+    for (name, _) in manifests(&root) {
+        let files = match applog::candidates(&root, &name) {
+            Ok(files) => files,
+            Err(e) => panic!("{name}: {e:?}"),
+        };
+        total += files.len();
+
+        for file in &files {
+            // Every id round-trips: what discovery hands the UI is exactly what
+            // the UI can hand back and have opened.
+            let path = applog::resolve(&root, &name, &file.id)
+                .unwrap_or_else(|e| panic!("{name}: {} did not resolve: {e:?}", file.id));
+            assert!(path.is_file(), "{}", path.display());
+
+            // And it opens. A listed file that cannot be read is a menu entry
+            // that produces an empty pane.
+            applog::tail(&path, 4096)
+                .unwrap_or_else(|e| panic!("{name}: {} did not read: {e:?}", file.id));
+        }
+
+        if !files.is_empty() {
+            eprintln!("{name}: {} file(s), e.g. {}", files.len(), files[0].label);
+        }
+    }
+
+    // Not an assertion that any particular project logs — a fresh checkout may
+    // not have run anything yet.
+    eprintln!("{total} log file(s) discovered across the checkout");
+}

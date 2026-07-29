@@ -330,7 +330,7 @@ onUnmounted(() => {
       class="nav-drawer border-0 elevation-6"
       @click="toggleDrawer('nav')"
     >
-      <v-list nav class="nav-list">
+      <v-list nav class="nav-list mt-2">
         <v-list-item
           v-for="item in NAV"
           :key="item.key"

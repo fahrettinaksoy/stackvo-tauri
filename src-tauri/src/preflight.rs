@@ -111,7 +111,11 @@ pub async fn run() -> Preflight {
     // ---- the checkout -------------------------------------------------------
     out.push(Requirement {
         id: "workspace",
-        state: if root.is_some() { State::Ok } else { State::Fail },
+        state: if root.is_some() {
+            State::Ok
+        } else {
+            State::Fail
+        },
         detail: ws.root.clone(),
         fixable: true,
     });
@@ -224,6 +228,37 @@ pub async fn run() -> Preflight {
         fixable: false,
     });
 
+    // ---- mkcert, for trusted HTTPS -----------------------------------------
+    //
+    // A warning rather than a failure: without mkcert the stack still runs, it
+    // just serves a certificate nothing trusts, and a browser warning on every
+    // project is a degraded state rather than a broken one. It is listed at all
+    // because it was previously invisible — `SSL_ENABLE=true` is the default,
+    // every generated Traefik router points at the `websecure` entry point, and
+    // the only signal that the certificate behind it was never issued was the
+    // browser refusing to open the site.
+    //
+    // Only reported when SSL is actually on: telling someone they are missing a
+    // tool they have no use for is how a preflight gate trains people to ignore
+    // it.
+    let ssl_on = root
+        .and_then(|r| crate::config::Env::load(r).ok())
+        .is_some_and(|env| env.bool("SSL_ENABLE"));
+
+    if ssl_on {
+        let mkcert = crate::certs::mkcert().await;
+        out.push(Requirement {
+            id: "mkcert",
+            state: if mkcert.available {
+                State::Ok
+            } else {
+                State::Warn
+            },
+            detail: mkcert.version,
+            fixable: false,
+        });
+    }
+
     let ready = !out.iter().any(|r| r.state == State::Fail);
     Preflight {
         os: OS,
@@ -278,10 +313,36 @@ mod tests {
 
         // The gate is only honest if it is complete: a missing entry is a
         // prerequisite nobody is told about.
-        assert_eq!(
-            ids,
-            vec!["workspace", "engine", "compose", "network", "projects", "bash"]
+        const ALWAYS: [&str; 6] = [
+            "workspace",
+            "engine",
+            "compose",
+            "network",
+            "projects",
+            "bash",
+        ];
+        assert_eq!(&ids[..ALWAYS.len()], &ALWAYS);
+
+        // mkcert is reported only when SSL_ENABLE is on, so the tail varies
+        // with the checkout this runs against — and it is the only thing
+        // allowed to vary. Asserting a fixed list again would make the test
+        // pass or fail on a setting rather than on the code.
+        assert!(
+            ids[ALWAYS.len()..].iter().all(|id| *id == "mkcert"),
+            "unexpected requirement in {ids:?}"
         );
-        assert_eq!(result.ready, !result.requirements.iter().any(|r| r.state == State::Fail));
+        assert_eq!(
+            ids.len(),
+            ids.iter().collect::<std::collections::HashSet<_>>().len(),
+            "a requirement reported twice: {ids:?}"
+        );
+
+        // Warnings do not hold the app back. mkcert is the first requirement
+        // that can be absent on a machine where everything else is fine, so
+        // this rule now has something to protect.
+        assert_eq!(
+            result.ready,
+            !result.requirements.iter().any(|r| r.state == State::Fail)
+        );
     }
 }

@@ -123,8 +123,9 @@ onUnmounted(() => teardown?.());
         <v-btn
           icon
           variant="tonal"
+      size="small"
           elevation="0"
-          class="mr-1"
+          class="mr-2"
           :aria-label="t('app.refresh')"
           :loading="inventory.loadingServices"
           @click="inventory.loadServices()"

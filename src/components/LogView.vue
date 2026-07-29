@@ -4,20 +4,32 @@ import { useI18n } from 'vue-i18n';
 import { listen } from '@tauri-apps/api/event';
 import { useAppearanceStore } from '@/stores/appearance';
 import { api } from '@/lib/ipc';
+import { LEVELS, countByLevel, filterLines, withLevels } from '@/lib/logs';
 import ErrorAlert from '@/components/ErrorAlert.vue';
 
 /**
- * A live container log, with no opinion about where it is shown.
+ * A live log, with no opinion about where it is shown.
  *
  * Logs used to be a dialog over whatever page you were on. They are content,
  * not an interruption — you read them while looking at the container's detail —
  * so the dialog was retired and this renders inside a page section or a side
  * sheet tab instead. It carries the stream, the follow behaviour and the
  * console theming; the frame around it belongs to whoever mounts it.
+ *
+ * Two sources, one renderer. The container stream is stdout and stderr, which
+ * is what the entrypoint and the web server say; the files under `app_logs` are
+ * what the application recorded, and nothing an application logs reaches the
+ * container's stdout. Both arrive as `logs:line`, so switching source changes
+ * which stream is open and nothing else.
  */
 const props = defineProps({
   /** Container name or bare id; the Rust side adds the `stackvo-` prefix. */
   container: { type: String, required: true },
+  /**
+   * Project name, for the file sources. Omitted for a service, which has no
+   * project directory and therefore only its container stream.
+   */
+  project: { type: String, default: '' },
   /**
    * Whether to hold the stream open. False tears it down: a background tail is
    * wasted work here and keeps a reader task alive on the Rust side.
@@ -46,15 +58,72 @@ const error = ref(null);
 const follow = ref(true);
 const viewport = ref(null);
 
+/** '' is the container stream; anything else is a LogFile id. */
+const source = ref('');
+const files = ref([]);
+
+const query = ref('');
+const levels = ref([]);
+
 let unlistenLine = null;
 let unlistenClosed = null;
 
 const MAX_LINES = 2000;
 
+/**
+ * Levels are resolved once per buffer change rather than per filter change: a
+ * continuation line takes the level of the entry above it, which is a scan of
+ * the whole buffer and not something to redo on every keystroke.
+ */
+const tagged = computed(() => withLevels(lines.value));
+const visible = computed(() =>
+  filterLines(tagged.value, { query: query.value, levels: levels.value })
+);
+const counts = computed(() => countByLevel(tagged.value));
+const filtering = computed(() => !!query.value.trim() || levels.value.length > 0);
+
+/** The picker's entries: the container stream first, then files by group. */
+const sources = computed(() => {
+  const items = [
+    { value: '', title: tc('logs.containerStream'), props: { subtitle: props.container } },
+  ];
+  for (const group of ['application', 'server']) {
+    const inGroup = files.value.filter((f) => f.group === group);
+    if (!inGroup.length) continue;
+    items.push({ type: 'subheader', title: tc(`logs.group.${group}`) });
+    for (const file of inGroup) {
+      items.push({ value: file.id, title: file.label, props: { subtitle: fileSize(file.bytes) } });
+    }
+  }
+  return items;
+});
+
+function fileSize(bytes) {
+  if (!Number.isFinite(bytes)) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+async function loadFiles() {
+  if (!props.project) {
+    files.value = [];
+    return;
+  }
+  try {
+    files.value = await api.appLogs(props.project);
+  } catch {
+    // A project with no log directories is the common case, not a failure.
+    files.value = [];
+  }
+}
+
 async function openStream() {
   close();
   lines.value = [];
   error.value = null;
+
+  const target = source.value;
 
   try {
     // Listen before opening, or the first lines race the subscription.
@@ -69,7 +138,9 @@ async function openStream() {
       if (event.payload.streamId === streamId.value) streamId.value = null;
     });
 
-    streamId.value = await api.containerLogsOpen(props.container, 300, true);
+    streamId.value = target
+      ? await api.appLogOpen(props.project, target)
+      : await api.containerLogsOpen(props.container, 300, true);
   } catch (e) {
     error.value = e;
   }
@@ -91,13 +162,42 @@ async function scrollToEnd() {
   if (viewport.value) viewport.value.scrollTop = viewport.value.scrollHeight;
 }
 
+/** Copy what is on screen — the filtered lines, not the whole buffer. */
+async function copyVisible() {
+  try {
+    await navigator.clipboard.writeText(visible.value.map((l) => l.text).join('\n'));
+  } catch {
+    /* clipboard unavailable */
+  }
+}
+
+function toggleLevel(level) {
+  levels.value = levels.value.includes(level)
+    ? levels.value.filter((l) => l !== level)
+    : [...levels.value, level];
+}
+
 // Also on a container change: the detail page keeps this mounted and swaps the
 // target when the project is rebuilt under a new name.
 watch(
   () => [props.active, props.container],
-  ([active]) => (active ? openStream() : close()),
+  ([active]) => {
+    if (!active) {
+      close();
+      return;
+    }
+    // The file the user was reading belongs to the previous project.
+    source.value = '';
+    loadFiles();
+    openStream();
+  },
   { immediate: true }
 );
+
+// Switching source is a new stream over the same renderer.
+watch(source, () => {
+  if (props.active) openStream();
+});
 
 onUnmounted(close);
 </script>
@@ -108,9 +208,88 @@ onUnmounted(close);
       <div class="log-root">
         <div class="log-head">
           <v-icon size="20">mdi-text-box-outline</v-icon>
-          <span class="text-body-2 log-name">{{ container }}</span>
+
+          <!-- Only offered when there is something to choose between. A project
+               with no log files gets the plain container name it always had. -->
+          <v-select
+            v-if="files.length"
+            v-model="source"
+            :items="sources"
+            density="compact"
+            variant="plain"
+            hide-details
+            class="log-source"
+          />
+          <span v-else class="text-body-2 log-name">{{ container }}</span>
+
           <v-chip v-if="streamId" size="x-small" color="success">{{ tc('logs.live') }}</v-chip>
           <v-spacer />
+
+          <v-text-field
+            v-model="query"
+            :placeholder="tc('logs.search')"
+            density="compact"
+            variant="solo-filled"
+            flat
+            hide-details
+            clearable
+            prepend-inner-icon="mdi-magnify"
+            class="log-search"
+          />
+
+          <!-- Counts in the menu rather than chips in the bar: six levels of
+               chips is wider than most of the lines they filter. -->
+          <v-menu :close-on-content-click="false">
+            <template #activator="{ props: menuProps }">
+              <v-btn
+                v-bind="menuProps"
+                icon
+                variant="text"
+                size="small"
+                :color="levels.length ? 'primary' : undefined"
+                :aria-label="tc('logs.filterLevel')"
+              >
+                <v-icon>mdi-filter-variant</v-icon>
+                <v-tooltip activator="parent">{{ tc('logs.filterLevel') }}</v-tooltip>
+              </v-btn>
+            </template>
+            <v-list density="compact">
+              <v-list-item
+                v-for="level in LEVELS"
+                :key="level"
+                :active="levels.includes(level)"
+                @click="toggleLevel(level)"
+              >
+                <template #prepend>
+                  <v-icon size="16" :class="`level-${level}`">mdi-circle-medium</v-icon>
+                </template>
+                <v-list-item-title class="text-caption">
+                  {{ tc(`logs.level.${level}`) }}
+                </v-list-item-title>
+                <template #append>
+                  <span class="text-caption text-medium-emphasis ml-4">{{ counts[level] }}</span>
+                </template>
+              </v-list-item>
+              <v-divider class="my-1" />
+              <v-list-item :disabled="!levels.length" @click="levels = []">
+                <v-list-item-title class="text-caption">{{
+                  tc('logs.clearFilter')
+                }}</v-list-item-title>
+              </v-list-item>
+            </v-list>
+          </v-menu>
+
+          <v-btn
+            icon
+            variant="text"
+            size="small"
+            :aria-label="tc('logs.copy')"
+            :disabled="!visible.length"
+            @click="copyVisible"
+          >
+            <v-icon>mdi-content-copy</v-icon>
+            <v-tooltip activator="parent">{{ tc('logs.copy') }}</v-tooltip>
+          </v-btn>
 
           <v-btn
             icon
@@ -142,13 +321,32 @@ onUnmounted(close);
             {{ tc('logs.waiting') }}
           </div>
 
+          <!-- Distinguished from an empty log: one means nothing has been
+               written, the other means a filter is hiding what was. -->
+          <div
+            v-else-if="!visible.length"
+            class="text-medium-emphasis text-caption pa-4 text-center"
+          >
+            {{ tc('logs.noMatch', { n: lines.length }) }}
+          </div>
+
           <pre
-            v-for="(line, i) in lines"
+            v-for="(line, i) in visible"
             :key="i"
             class="log-line"
-            :class="{ 'log-stderr': line.stream === 'stderr' }"
+            :class="[
+              { 'log-stderr': line.stream === 'stderr' },
+              line.level ? `level-${line.level}` : null,
+            ]"
             >{{ line.text }}</pre>
         </div>
+
+        <template v-if="filtering && lines.length">
+          <v-divider />
+          <div class="log-foot text-caption text-medium-emphasis">
+            {{ tc('logs.showing', { shown: visible.length, total: lines.length }) }}
+          </div>
+        </template>
       </div>
     </v-locale-provider>
   </v-theme-provider>
@@ -178,6 +376,18 @@ onUnmounted(close);
   white-space: nowrap;
 }
 
+/* Bounded so a long channel path cannot push the controls off the bar. */
+.log-source {
+  max-width: 260px;
+  min-width: 140px;
+  flex: 0 1 auto;
+}
+
+.log-search {
+  max-width: 240px;
+  flex: 0 1 auto;
+}
+
 .log-view {
   flex: 1 1 auto;
   min-height: 0;
@@ -193,6 +403,38 @@ onUnmounted(close);
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.log-foot {
+  padding: 6px 16px;
+  background: rgb(var(--v-theme-surface));
+}
+
+/* Severity as colour on the text itself. A left border or a filled row would
+   be a block of colour per stack frame, which is most of an error log. */
+.level-critical {
+  color: rgb(var(--v-theme-error));
+  font-weight: 600;
+}
+
+.level-error {
+  color: rgb(var(--v-theme-error));
+}
+
+.level-warning {
+  color: rgb(var(--v-theme-warning));
+}
+
+.level-notice,
+.level-info,
+.level-debug {
+  /* Left as the body colour: the common levels are the background against
+     which the rare ones have to stand out. */
+  color: inherit;
+}
+
+.level-debug {
+  opacity: 0.7;
 }
 
 .log-stderr {

@@ -14,7 +14,10 @@ fn reports_a_usable_colour() {
 
     #[cfg(target_os = "macos")]
     {
-        assert!(available, "macOS always resolves an accent, multicolour included");
+        assert!(
+            available,
+            "macOS always resolves an accent, multicolour included"
+        );
 
         let hex = value["hex"].as_str().expect("hex is a string");
         assert_eq!(hex.len(), 7, "#rrggbb, got {hex}");

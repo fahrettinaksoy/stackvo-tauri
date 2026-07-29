@@ -114,7 +114,11 @@ impl Env {
                 }
 
                 let secret = Self::is_secret(key);
-                let shown = if secret { "••••••••".to_string() } else { value.clone() };
+                let shown = if secret {
+                    "••••••••".to_string()
+                } else {
+                    value.clone()
+                };
                 Some((field.to_string(), shown, secret))
             })
             .collect()

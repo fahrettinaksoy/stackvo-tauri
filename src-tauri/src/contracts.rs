@@ -12,6 +12,19 @@ use std::sync::OnceLock;
 const PHP_EXTENSIONS: &str = include_str!("../../contracts/php-extensions.json");
 const ENV_SCHEMA: &str = include_str!("../../contracts/env.schema.json");
 
+/// The IPC contract itself, compiled in.
+///
+/// Read by `mcp.rs` to check its tool table against the command surface, for
+/// the reason suites E and F exist: nothing enforces the agreement at compile
+/// time, so it has to be enforced by a test that runs.
+const IPC: &str = include_str!("../../contracts/ipc.json");
+
+/// The IPC contract as JSON. Parsed on first use, like the others.
+pub fn ipc() -> &'static serde_json::Value {
+    static CACHE: OnceLock<serde_json::Value> = OnceLock::new();
+    CACHE.get_or_init(|| serde_json::from_str(IPC).expect("ipc.json is compiled in and valid"))
+}
+
 // ---------------------------------------------------------------- php extensions
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
