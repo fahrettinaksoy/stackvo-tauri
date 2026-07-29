@@ -451,5 +451,113 @@ async fn main() {
         }
     }
 
+    // ---- mail ------------------------------------------------------------
+    heading("Mail");
+    match stackvo_desktop_lib::mail::status(&root).await {
+        Err(e) => println!("  \x1b[31m{e}\x1b[0m"),
+        Ok(status) if !status.available => {
+            println!("  \x1b[33mthis checkout has no mail catcher\x1b[0m")
+        }
+        Ok(status) => {
+            println!(
+                "  catcher   {} ({})",
+                status.service.as_deref().unwrap_or("—"),
+                if status.enabled {
+                    "enabled"
+                } else {
+                    "\x1b[90mdisabled\x1b[0m"
+                }
+            );
+            println!("  ui        {}", status.ui_url.as_deref().unwrap_or("—"));
+            if status.running {
+                println!(
+                    "  captured  {}{}",
+                    status.total,
+                    status
+                        .unread
+                        .map(|u| format!(", {u} unread"))
+                        .unwrap_or_default()
+                );
+            } else {
+                println!("  \x1b[33mnot running — nothing is being captured\x1b[0m");
+            }
+            if let Some(e) = &status.error {
+                println!("  \x1b[31m{e}\x1b[0m");
+            }
+        }
+    }
+
+    // ---- databases -------------------------------------------------------
+    heading("Databases");
+    match stackvo_desktop_lib::db::targets(&root).await {
+        Err(e) => println!("  \x1b[31m{e}\x1b[0m"),
+        Ok(targets) => {
+            for target in &targets {
+                let state = match (target.enabled, target.running) {
+                    (false, _) => "\x1b[90mdisabled\x1b[0m",
+                    (true, true) => "\x1b[32mrunning\x1b[0m",
+                    (true, false) => "\x1b[33mstopped\x1b[0m",
+                };
+                println!(
+                    "  {:<10} {:<24} {:<12} .{}",
+                    target.service,
+                    target.database.as_deref().unwrap_or("(whole server)"),
+                    state,
+                    target.extension
+                );
+            }
+            let ready = targets.iter().filter(|t| t.enabled && t.running).count();
+            println!("\n  {ready} of {} can be dumped right now", targets.len());
+        }
+    }
+
+    // ---- certificates ----------------------------------------------------
+    //
+    // The one question a browser warning raises — "is my domain in the
+    // certificate?" — answered without opening the app.
+    heading("Certificates");
+    let certs = stackvo_desktop_lib::certs::status(&root).await;
+    if !certs.ssl_enabled {
+        println!("  SSL_ENABLE is off — the stack is served over HTTP");
+    } else {
+        println!(
+            "  mkcert    {}",
+            certs
+                .mkcert_version
+                .as_deref()
+                .unwrap_or("\x1b[31mnot installed\x1b[0m")
+        );
+        println!(
+            "  CA trust  {}",
+            match certs.ca_trusted {
+                Some(true) => "\x1b[32mtrusted\x1b[0m".to_string(),
+                Some(false) => "\x1b[33mnot trusted\x1b[0m".to_string(),
+                None => "unknown on this platform".to_string(),
+            }
+        );
+        match certs.days_remaining {
+            Some(days) => println!("  expires   in {days} day(s)"),
+            None if certs.cert_path.is_some() => println!("  expires   \x1b[31mexpired\x1b[0m"),
+            None => println!("  \x1b[33mno certificate has been issued yet\x1b[0m"),
+        }
+        println!(
+            "  covers    {} name(s), {} required",
+            certs.covered.len(),
+            certs.required.len()
+        );
+        if let Some(e) = &certs.error {
+            println!("  \x1b[31m{e}\x1b[0m");
+        }
+        for domain in &certs.missing {
+            println!("  \x1b[33m✗ {domain} is not covered — the browser will refuse it\x1b[0m");
+        }
+        for domain in &certs.rejected {
+            println!("  \x1b[31m✗ {domain} is not a valid hostname; skipped\x1b[0m");
+        }
+        if !certs.stale {
+            println!("  \x1b[32m✓ every domain is covered\x1b[0m");
+        }
+    }
+
     println!();
 }

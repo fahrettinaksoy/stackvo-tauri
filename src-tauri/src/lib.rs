@@ -1,8 +1,12 @@
+pub mod applog;
 pub mod apps;
 pub mod atomic;
+pub mod certs;
 pub mod commands;
 pub mod config;
 pub mod contracts;
+pub mod db;
+pub mod detect;
 pub mod engine;
 pub mod env_writer;
 pub mod error;
@@ -11,7 +15,9 @@ pub mod generator;
 pub mod hosts;
 pub mod inflight;
 pub mod logging;
+pub mod mail;
 pub mod manifest;
+pub mod mcp;
 pub mod paths;
 pub mod preflight;
 pub mod pty;
@@ -20,6 +26,7 @@ pub mod stats;
 pub mod tray;
 pub mod watcher;
 pub mod workspace;
+pub mod xdebug;
 
 use commands::AppState;
 use tauri::Manager;
@@ -213,6 +220,8 @@ pub fn run() {
             commands::container_stats,
             commands::container_logs_open,
             commands::container_logs_close,
+            commands::app_logs,
+            commands::app_log_open,
             commands::env_set,
             commands::generate_run,
             commands::compose_up,
@@ -222,6 +231,20 @@ pub fn run() {
             commands::hosts_plan,
             commands::hosts_apply,
             commands::hosts_missing,
+            // Certificates — the trusted-HTTPS surface the Bash helper had and
+            // the app could not see.
+            commands::mail_status,
+            commands::mail_messages,
+            commands::mail_message,
+            commands::mail_clear,
+            commands::db_targets,
+            commands::db_dump,
+            commands::db_restore,
+            commands::xdebug_status,
+            commands::xdebug_set,
+            commands::cert_status,
+            commands::cert_plan,
+            commands::cert_apply,
             commands::pty_open,
             commands::pty_write,
             commands::pty_resize,
@@ -233,6 +256,8 @@ pub fn run() {
             commands::project_validate,
             commands::project_create,
             commands::project_delete,
+            commands::project_adoptable,
+            commands::project_adopt,
             commands::project_manifest_read,
             commands::project_manifest_write,
             commands::service_dependencies,

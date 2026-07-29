@@ -257,6 +257,14 @@ pub fn compose_files(root: &Path) -> Vec<PathBuf> {
 }
 
 /// `docker compose --env-file .env -f … -f … -f …` prefix.
+///
+/// The Xdebug overlay is re-derived here rather than merely appended if it
+/// happens to exist. It is a pure function of the manifests, and the failure
+/// mode of letting it persist as state is total: an overlay naming a deleted
+/// project declares a service with neither an image nor a build context, and
+/// compose then refuses every command — including the `down` that would have
+/// cleared it. Rebuilding it costs a few small file reads on a path that is
+/// about to spawn Docker.
 pub fn compose_base_args(root: &Path) -> Vec<String> {
     let mut args = vec![
         "compose".to_string(),
@@ -267,6 +275,14 @@ pub fn compose_base_args(root: &Path) -> Vec<String> {
         args.push("-f".to_string());
         args.push(file.display().to_string());
     }
+
+    // Layered last so its `environment:` merges onto the generated service
+    // rather than being merged over.
+    if crate::xdebug::sync(root) {
+        args.push("-f".to_string());
+        args.push(crate::xdebug::overlay_path(root).display().to_string());
+    }
+
     args
 }
 
@@ -353,12 +369,58 @@ mod tests {
 
     #[test]
     fn compose_args_reference_all_three_generated_files() {
-        let args = compose_base_args(Path::new("/tmp/stackvo"));
+        // A path with no projects/ directory: no project asks for Xdebug, so
+        // the overlay is not rendered and the three generated files are all
+        // that is layered.
+        let args = compose_base_args(Path::new("/tmp/stackvo-not-a-checkout"));
         assert_eq!(args.iter().filter(|a| *a == "-f").count(), 3);
         assert!(args
             .iter()
             .any(|a| a.ends_with("docker-compose.projects.yml")));
         assert!(args.iter().any(|a| a.ends_with("/.env")));
+    }
+
+    /// The overlay has to come after the generated files. Compose merges later
+    /// `-f` files onto earlier ones; reversed, the generated service would
+    /// overwrite the environment the overlay exists to add.
+    #[test]
+    fn the_xdebug_overlay_is_layered_last_when_present() {
+        let dir = std::env::temp_dir().join("stackvo-xdebug-order-test");
+        let project = dir.join("projects").join("shop");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(dir.join("generated")).unwrap();
+
+        // The overlay may only name services the generator actually emitted,
+        // so the test has to look like a generated checkout, not just a
+        // directory with a manifest in it.
+        std::fs::write(
+            dir.join("generated").join("docker-compose.projects.yml"),
+            "name: stackvo\n\nservices:\n  shop:\n    image: x\n\nnetworks:\n  stackvo-net:\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.join("stackvo.json"),
+            r#"{"name":"shop","domain":"shop.loc","runtime":"php",
+                "php":{"version":"8.4","extensions":["gd","xdebug"]}}"#,
+        )
+        .unwrap();
+
+        let args = compose_base_args(&dir);
+        assert_eq!(args.iter().filter(|a| *a == "-f").count(), 4);
+        assert!(args.last().unwrap().ends_with("docker-compose.xdebug.yml"));
+
+        // And it disappears again once nothing asks for it.
+        std::fs::write(
+            project.join("stackvo.json"),
+            r#"{"name":"shop","domain":"shop.loc","runtime":"php",
+                "php":{"version":"8.4","extensions":["gd"]}}"#,
+        )
+        .unwrap();
+        let args = compose_base_args(&dir);
+        assert_eq!(args.iter().filter(|a| *a == "-f").count(), 3);
+        assert!(!crate::xdebug::overlay_path(&dir).exists());
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]

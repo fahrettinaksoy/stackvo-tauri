@@ -7,14 +7,20 @@
 //! Phase 1 implements the read-only half; Phase 2 (below the marker near the
 //! bottom of this file) adds the mutations. PTY lands with Phase 3.
 
+use crate::applog;
+use crate::certs;
 use crate::config::Env;
 use crate::contracts::{env_schema, php_extensions};
+use crate::db;
+use crate::detect;
 use crate::engine::{self, ContainerInfo, EngineStatus, Port, SystemResources};
 use crate::error::{Code, Error, Result};
 use crate::hosts;
+use crate::mail;
 use crate::manifest::{self, Manifest};
 use crate::stats::{HostStats, Sampler};
 use crate::workspace::{self, Workspace};
+use crate::xdebug;
 use serde::Serialize;
 use std::sync::Mutex;
 use tauri::State;
@@ -643,6 +649,102 @@ pub fn container_logs_close(state: State<'_, AppState>, stream_id: String) -> Re
     Ok(())
 }
 
+/// The log files this project writes, as opposed to what its container prints.
+///
+/// Deliberately engine-free: these are read from the host, and a container that
+/// died during boot is exactly when its log matters and exactly when there is
+/// nothing left to `docker exec` into.
+#[tauri::command]
+pub fn app_logs(state: State<'_, AppState>, name: String) -> Result<Vec<applog::LogFile>> {
+    applog::candidates(&state.root()?, &name)
+}
+
+/// How often a followed file is checked for new bytes.
+///
+/// Polled rather than watched: a filesystem notification still only tells you
+/// *that* something changed, so the read-the-delta path has to exist either
+/// way, and one `stat` twice a second is cheaper than a watcher per open file.
+const APP_LOG_POLL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Follow one of those files, emitting the same events a container stream does.
+///
+/// The event shape is shared with `container_logs_open` on purpose: the viewer
+/// renders one kind of line, and giving files their own event pair would have
+/// meant a second listener in the frontend that could drift from the first.
+#[tauri::command]
+pub async fn app_log_open(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    id: String,
+    tail_bytes: Option<u64>,
+) -> Result<String> {
+    let root = state.root()?;
+    // Resolved before the task is spawned, so a bad id is an error the caller
+    // gets rather than a stream that opens and immediately says nothing.
+    let path = applog::resolve(&root, &name, &id)?;
+
+    let stream_id = events::next_operation_id("applog");
+    let (text, mut offset) = applog::tail(&path, tail_bytes.unwrap_or(64 * 1024))?;
+
+    let handle = {
+        let app = app.clone();
+        let stream_id = stream_id.clone();
+        let subject = name.clone();
+
+        tokio::spawn(async move {
+            let emit = |chunk: &str| {
+                for line in chunk.lines() {
+                    events::emit(
+                        &app,
+                        "logs:line",
+                        events::LogLineEvent {
+                            stream_id: stream_id.clone(),
+                            container: subject.clone(),
+                            line: line.to_string(),
+                            // A file has one stream. Reporting stdout keeps the
+                            // renderer's stderr colouring meaningful instead of
+                            // painting whole files red.
+                            stream: "stdout".to_string(),
+                        },
+                    );
+                }
+            };
+
+            emit(&text);
+
+            loop {
+                tokio::time::sleep(APP_LOG_POLL).await;
+                match applog::read_since(&path, offset) {
+                    Ok((chunk, next)) => {
+                        offset = next;
+                        if !chunk.is_empty() {
+                            emit(&chunk);
+                        }
+                    }
+                    // The file was deleted under us — a rotation that renamed
+                    // rather than truncated. Stop rather than spin on an error
+                    // once every poll for as long as the pane stays open.
+                    Err(_) => break,
+                }
+            }
+
+            events::emit(
+                &app,
+                "logs:closed",
+                serde_json::json!({ "streamId": stream_id }),
+            );
+        })
+        .abort_handle()
+    };
+
+    if let Ok(mut streams) = state.log_streams.lock() {
+        streams.insert(stream_id.clone(), handle);
+    }
+
+    Ok(stream_id)
+}
+
 // ---------------------------------------------------------------- .env writes
 
 #[tauri::command]
@@ -1036,6 +1138,221 @@ pub async fn hosts_missing(state: State<'_, AppState>) -> Result<Vec<String>> {
         .collect())
 }
 
+// -------------------------------------------------------------------- mail
+
+/// Which catcher this checkout has, and how full it is.
+#[tauri::command]
+pub async fn mail_status(state: State<'_, AppState>) -> Result<mail::MailStatus> {
+    let root = state.root()?;
+    mail::status(&root).await
+}
+
+#[tauri::command]
+pub async fn mail_messages(
+    state: State<'_, AppState>,
+    limit: Option<u32>,
+) -> Result<Vec<mail::MailMessage>> {
+    let root = state.root()?;
+    mail::messages(&root, limit.unwrap_or(50)).await
+}
+
+#[tauri::command]
+pub async fn mail_message(state: State<'_, AppState>, id: String) -> Result<mail::MailBody> {
+    let root = state.root()?;
+    mail::message(&root, &id).await
+}
+
+/// Empty the inbox.
+#[tauri::command]
+pub async fn mail_clear(state: State<'_, AppState>) -> Result<()> {
+    let root = state.root()?;
+    mail::clear(&root).await
+}
+
+// --------------------------------------------------------------- databases
+
+/// Which database services can be dumped, and whether they are up.
+#[tauri::command]
+pub async fn db_targets(state: State<'_, AppState>) -> Result<Vec<db::DbTarget>> {
+    let root = state.root()?;
+    db::targets(&root).await
+}
+
+/// Read a database out to a file the user chose.
+#[tauri::command]
+pub async fn db_dump(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    service: String,
+    path: String,
+) -> Result<String> {
+    db_operation(app, state, service, path, "dump").await
+}
+
+/// Put a file back into a database, replacing what is there.
+#[tauri::command]
+pub async fn db_restore(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    service: String,
+    path: String,
+) -> Result<String> {
+    db_operation(app, state, service, path, "restore").await
+}
+
+/// Both directions differ only in which way the bytes travel.
+async fn db_operation(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    service: String,
+    path: String,
+    action: &str,
+) -> Result<String> {
+    let root = state.root()?;
+
+    // One at a time per service: a dump racing a restore on the same database
+    // produces a backup of a half-restored state, which is the one file you
+    // would least want to be wrong.
+    let _busy = state.inflight.acquire(format!("db:{service}"))?;
+
+    let operation_id = events::next_operation_id(action);
+    events::emit(
+        &app,
+        "db:start",
+        serde_json::json!({
+            "operationId": operation_id, "service": service,
+            "action": action, "path": path,
+        }),
+    );
+
+    let target = std::path::PathBuf::from(&path);
+    let progress = {
+        let app = app.clone();
+        let id = operation_id.clone();
+        move |line: String| {
+            events::emit(
+                &app,
+                "db:progress",
+                serde_json::json!({ "operationId": id, "line": line }),
+            );
+        }
+    };
+
+    let outcome = if action == "dump" {
+        db::dump(&root, &service, &target, progress).await
+    } else {
+        db::restore(&root, &service, &target, progress).await
+    };
+
+    match outcome {
+        Ok(bytes) => {
+            events::emit(
+                &app,
+                "db:done",
+                serde_json::json!({
+                    "operationId": operation_id, "service": service,
+                    "action": action, "path": path, "bytes": bytes,
+                }),
+            );
+            Ok(operation_id)
+        }
+        Err(e) => {
+            events::emit(
+                &app,
+                "db:error",
+                serde_json::json!({
+                    "operationId": operation_id, "service": service,
+                    "error": e.message,
+                }),
+            );
+            Err(e)
+        }
+    }
+}
+
+// ------------------------------------------------------------------ xdebug
+
+/// Whether Xdebug is asked for, compiled in, and live — three separate answers.
+#[tauri::command]
+pub async fn xdebug_status(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<xdebug::XdebugStatus> {
+    let root = state.root()?;
+    xdebug::status(&root, &name).await
+}
+
+/// Turn it on or off for one project.
+#[tauri::command]
+pub async fn xdebug_set(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    enabled: bool,
+) -> Result<xdebug::XdebugStatus> {
+    let root = state.root()?;
+
+    // The manifest write and the overlay render have to land together: a
+    // second toggle interleaving between them would render an overlay from a
+    // half-written set of manifests.
+    let _busy = state.inflight.acquire("xdebug")?;
+
+    let status = xdebug::set(&root, &name, enabled).await?;
+    events::emit(
+        &app,
+        "xdebug:changed",
+        serde_json::json!({ "project": name, "enabled": status.enabled }),
+    );
+    Ok(status)
+}
+
+// ------------------------------------------------------------- certificates
+
+/// What the wildcard certificate covers, and whether anything trusts its CA.
+///
+/// Reads only, and deliberately does not need the Docker engine: the state
+/// worth reporting most urgently — a certificate that predates a project — is
+/// just as true with the stack down.
+#[tauri::command]
+pub async fn cert_status(state: State<'_, AppState>) -> Result<certs::CertStatus> {
+    let root = state.root()?;
+    Ok(certs::status(&root).await)
+}
+
+/// What reissuing would change, without running mkcert.
+#[tauri::command]
+pub async fn cert_plan(
+    state: State<'_, AppState>,
+    install_ca: Option<bool>,
+) -> Result<certs::CertPlan> {
+    let root = state.root()?;
+    certs::plan(&root, install_ca.unwrap_or(true)).await
+}
+
+/// Reissue the certificate, and install the CA when nothing trusts it yet.
+#[tauri::command]
+pub async fn cert_apply(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    install_ca: Option<bool>,
+) -> Result<certs::CertPlan> {
+    let root = state.root()?;
+
+    // Two reissues at once write the same two files from different argument
+    // lists, and the loser leaves a certificate covering domains the winner
+    // computed before they existed — the same race `hosts` guards against, for
+    // the same reason.
+    let _busy = state.inflight.acquire("certs")?;
+
+    let plan = certs::apply(&root, install_ca.unwrap_or(true)).await?;
+    events::emit(
+        &app,
+        "certs:changed",
+        serde_json::json!({ "added": plan.add, "removed": plan.remove }),
+    );
+    Ok(plan)
+}
+
 // ---------------------------------------------------------------- terminals
 
 /// Open a PTY, in a container or on the host.
@@ -1243,6 +1560,111 @@ pub async fn project_create(
     }
 
     outcome.map(|_| operation_id)
+}
+
+// ------------------------------------------------------- adopting a folder
+
+/// Directories under `projects/` that StackVo is not managing yet.
+#[tauri::command]
+pub fn project_adoptable(state: State<'_, AppState>) -> Result<Vec<detect::Adoptable>> {
+    let root = state.root()?;
+    Ok(detect::adoptable(&root))
+}
+
+/// Bring an existing directory under management.
+///
+/// The counterpart of `project_create`, which requires the directory to be
+/// absent. Nothing here writes application files: the code is already there,
+/// and the only thing missing is the manifest that makes StackVo see it.
+#[tauri::command]
+pub async fn project_adopt(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    spec: Option<serde_json::Value>,
+) -> Result<String> {
+    let root = state.root()?;
+    let dir = workspace::project_dir(&root, &name)?;
+
+    if !dir.is_dir() {
+        return Err(Error::not_found(format!("directory {name}")));
+    }
+
+    let manifest_path = dir.join("stackvo.json");
+    if manifest_path.exists() {
+        // Adopting something already managed would overwrite settings the user
+        // chose, which is a different operation with a different confirmation.
+        return Err(Error::new(
+            Code::AlreadyExists,
+            format!("\"{name}\" already has a stackvo.json"),
+        )
+        .with_hint("Edit it from the project's Manifest tab instead."));
+    }
+
+    // Detection fills the form; it does not bypass validation. An adopted
+    // project has to satisfy exactly the contract a created one does.
+    let spec = match spec {
+        Some(spec) => spec,
+        None => detected_spec(&name, &detect::detect(&dir)),
+    };
+    let m = parse_spec(&spec, &name)?;
+
+    let _busy = state.inflight.acquire(format!("project:{name}"))?;
+    let operation_id = events::next_operation_id("adopt");
+    events::emit(&app, "project:creating", SubjectEvent::project(&name));
+
+    let outcome = async {
+        manifest::write(&manifest_path, &m)?;
+        generate(&app, &root, &operation_id, "projects").await
+    }
+    .await;
+
+    match &outcome {
+        Ok(()) => events::emit(&app, "project:created", SubjectEvent::project(&name)),
+        Err(e) => {
+            // Remove only the manifest we just wrote. Unlike project_create
+            // there is no directory of ours to roll back — the code was the
+            // user's before this ran and stays theirs if it fails.
+            let _ = std::fs::remove_file(&manifest_path);
+            events::emit(
+                &app,
+                "project:error",
+                SubjectEvent::project(&name).error(e.message.clone()),
+            );
+        }
+    }
+
+    outcome.map(|_| operation_id)
+}
+
+/// Turn a detection into a manifest the schema accepts.
+fn detected_spec(name: &str, detected: &detect::Detected) -> serde_json::Value {
+    let mut spec = serde_json::json!({
+        "name": name,
+        // The convention the generator and the hosts helper both assume.
+        "domain": format!("{name}.loc"),
+        "runtime": detected.runtime,
+    });
+
+    if detected.runtime == "node" {
+        spec["node"] = serde_json::json!({
+            "version": detected.node_version.clone().unwrap_or_else(|| "22".into()),
+            "install": "npm install",
+            "start": detected.node_start.clone().unwrap_or_else(|| "npm run dev".into()),
+            "port": detected.node_port.unwrap_or(3000),
+        });
+    } else {
+        spec["server"] = serde_json::json!(detected.server);
+        spec["document_root"] = serde_json::json!(detected
+            .document_root
+            .clone()
+            .unwrap_or_else(|| "public".into()));
+        spec["php"] = serde_json::json!({
+            "version": detected.php_version.clone().unwrap_or_else(|| "8.4".into()),
+        });
+    }
+
+    spec
 }
 
 /// Delete a project.
@@ -1688,8 +2110,6 @@ pub fn logs_info() -> serde_json::Value {
     })
 }
 
-
-
 /// One `.env` value, unmasked, because the user asked for that one.
 ///
 /// `env_get` and the service list hand over secrets as bullets on purpose: a
@@ -1757,7 +2177,7 @@ pub fn system_accent() -> serde_json::Value {
             .map(|(_, hex)| *hex)
             .unwrap_or("#007AFF");
 
-        return serde_json::json!({ "available": true, "name": name, "hex": hex });
+        serde_json::json!({ "available": true, "name": name, "hex": hex })
     }
 
     // Windows has an accent colour too, but it lives in the registry and this

@@ -95,6 +95,14 @@ export const api = {
     call('container_logs_open', { name, tail, follow }),
   containerLogsClose: (streamId) => call('container_logs_close', { streamId }),
 
+  // The files a project writes, which its container's stdout never carries: a
+  // Laravel exception, an nginx 502, a queue worker that died. Read from the
+  // host, so they still work when the container does not.
+  appLogs: (name) => call('app_logs', { name }),
+  /** `id` is an opaque handle from appLogs, never a path. Close with
+   *  containerLogsClose — one registry, one way to stop a stream. */
+  appLogOpen: (name, id, tailBytes = 65536) => call('app_log_open', { name, id, tailBytes }),
+
   envSet: (patch) => call('env_set', { patch }),
   generateRun: (scope = 'all') => call('generate_run', { scope }),
   composeUp: (mode = 'minimal', profiles = []) => call('compose_up', { mode, profiles }),
@@ -110,6 +118,37 @@ export const api = {
   hostsApply: (add = [], remove = []) => call('hosts_apply', { add, remove }),
   hostsMissing: () => call('hosts_missing'),
 
+  // --- Mail -----------------------------------------------------------------
+  // Read in Rust, not here: the CSP allows `connect-src 'self' ipc:`, and
+  // widening it to reach one localhost port would widen it for every page.
+  mailStatus: () => call('mail_status'),
+  mailMessages: (limit = 50) => call('mail_messages', { limit }),
+  mailMessage: (id) => call('mail_message', { id }),
+  mailClear: () => call('mail_clear'),
+
+  // --- Databases ------------------------------------------------------------
+  dbTargets: () => call('db_targets'),
+  /** Streams straight to the file; resolves with an operationId, not the dump. */
+  dbDump: (service, path) => call('db_dump', { service, path }),
+  /** DESTRUCTIVE — replaces the target database. Confirm before calling. */
+  dbRestore: (service, path) => call('db_restore', { service, path }),
+
+  // --- Xdebug ---------------------------------------------------------------
+  // Three answers, not one: asked for in the manifest, compiled into the image,
+  // live in the running container. They come apart, and each needs a different
+  // fix.
+  xdebugStatus: (name) => call('xdebug_status', { name }),
+  xdebugSet: (name, enabled) => call('xdebug_set', { name, enabled }),
+
+  // --- Certificates ---------------------------------------------------------
+  // Same order as hosts: describe, then change. `certStatus` needs no engine —
+  // a certificate issued before a project existed is just as wrong with the
+  // stack down, and that is the case users actually hit.
+  certStatus: () => call('cert_status'),
+  certPlan: (installCa = true) => call('cert_plan', { installCa }),
+  /** Reissues, and installs the CA when nothing trusts it yet. */
+  certApply: (installCa = true) => call('cert_apply', { installCa }),
+
   // --- Project lifecycle ----------------------------------------------------
   /** Opens the native picker, validates, and persists in one step. */
   workspacePick: () => call('workspace_pick'),
@@ -119,6 +158,10 @@ export const api = {
   projectCreate: (spec) => call('project_create', { spec }),
   /** removeFiles defaults to false — deleting source code needs an opt-in. */
   projectDelete: (name, removeFiles = false) => call('project_delete', { name, removeFiles }),
+  /** Folders under projects/ with no stackvo.json — real code, unmanaged. */
+  projectAdoptable: () => call('project_adoptable'),
+  /** Writes the manifest for a directory that is already there. */
+  projectAdopt: (name, spec = null) => call('project_adopt', { name, spec }),
   projectManifestRead: (name) => call('project_manifest_read', { name }),
   projectManifestWrite: (name, manifest) => call('project_manifest_write', { name, manifest }),
 

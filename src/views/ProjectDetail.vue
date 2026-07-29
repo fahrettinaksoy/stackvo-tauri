@@ -11,6 +11,7 @@ import PageLayout from '@/components/PageLayout.vue';
 import ErrorAlert from '@/components/ErrorAlert.vue';
 import LogView from '@/components/LogView.vue';
 import HostsDialog from '@/components/HostsDialog.vue';
+import ProjectSettingsSheet from '@/components/ProjectSettingsSheet.vue';
 
 const props = defineProps({ name: { type: String, required: true } });
 
@@ -28,6 +29,7 @@ const error = ref(null);
 const loading = ref(true);
 const copied = ref(null);
 const showHostsFix = ref(false);
+const showSettings = ref(false);
 
 const manifestText = ref('');
 const manifestDirty = ref(false);
@@ -42,12 +44,26 @@ const SECTIONS = [
   // while looking at the rest, and a modal on top of a detail page hides the
   // thing it is about.
   { key: 'logs', icon: 'mdi-text-box-outline', label: 'logs.title' },
+  // Above the divider with the other read-and-act panes: turning Xdebug on is
+  // a thing you do to a running project, not a file you edit. PHP only — see
+  // `sections` below.
+  { key: 'xdebug', icon: 'mdi-bug-outline', label: 'xdebug.title', php: true },
   // Below the divider: the editing surfaces the screenshots do not show, kept
   // because retiring the dialog must not retire what it could do.
   { key: 'manifest', icon: 'mdi-code-json', label: 'detail.manifest', divide: true },
   { key: 'dockerfile', icon: 'mdi-file-document-outline', label: 'detail.dockerfile' },
 ];
 const section = ref('indicator');
+
+/**
+ * The panes this project actually has.
+ *
+ * Xdebug is a PHP extension, so a node project has nothing to switch on.
+ * Showing the pane and explaining that inside it would be an entry in the rail
+ * whose only content is a reason it does not apply — the navigation itself
+ * should carry that.
+ */
+const sections = computed(() => SECTIONS.filter((s) => !s.php || project.value?.runtime === 'php'));
 
 const STATS_INTERVAL = 2000;
 let statsTimer = null;
@@ -189,6 +205,21 @@ async function bringUp() {
 }
 
 /**
+ * Make the running project match the manifest: regenerate, then rebuild.
+ *
+ * Both, in that order. `compose up --build` on its own rebuilds from the
+ * Dockerfile already on disk, and that file was rendered from the manifest as
+ * it read before the edit — so skipping the generate step produces a build that
+ * succeeds and changes nothing, which is worse than one that fails.
+ */
+async function applyManifest() {
+  await act(async () => {
+    await api.generateRun('projects');
+    await api.composeUpProject(props.name);
+  });
+}
+
+/**
  * Which rendering to show.
  *
  * `compat` reproduces what Bash actually writes today, `strict` refuses where
@@ -226,6 +257,13 @@ watch(
     if (value === 'dockerfile' && !preview.value) loadPreview();
   }
 );
+
+// Navigating from a PHP project's Xdebug pane straight to a node project keeps
+// the component and the selected section, which would leave the page on a pane
+// the rail no longer offers — an empty panel with no way back to it.
+watch(sections, (available) => {
+  if (!available.some((s) => s.key === section.value)) section.value = 'indicator';
+});
 
 async function act(fn) {
   error.value = null;
@@ -277,9 +315,57 @@ async function load() {
     history.value = [];
   }
 
+  loadXdebug();
+
   loading.value = false;
   startStats();
 }
+
+/**
+ * Xdebug, across its three layers.
+ *
+ * Loaded with the rest rather than when the section opens: `xdebugPending`
+ * badges the rail, and the state worth badging — enabled but never rebuilt, so
+ * nothing actually happens when you set a breakpoint — is precisely the one a
+ * user will not go looking for.
+ */
+const xdebug = ref(null);
+const xdebugBusy = ref(false);
+
+async function loadXdebug() {
+  // Node projects have no PHP extension to report on, and the pane is not in
+  // the rail for them either.
+  if (project.value?.runtime !== 'php') {
+    xdebug.value = null;
+    return;
+  }
+  try {
+    xdebug.value = await api.xdebugStatus(props.name);
+  } catch {
+    xdebug.value = null;
+  }
+}
+
+async function toggleXdebug(enabled) {
+  xdebugBusy.value = true;
+  error.value = null;
+  try {
+    xdebug.value = await api.xdebugSet(props.name, enabled);
+    // The manifest changed on disk, so the editor above it is now stale.
+    const m = await api.projectManifestRead(props.name);
+    manifestText.value = JSON.stringify(stripDiagnostics(m), null, 2);
+    manifestDirty.value = false;
+  } catch (e) {
+    error.value = e;
+  } finally {
+    xdebugBusy.value = false;
+  }
+}
+
+/** Enabled, but not yet doing anything — the state that needs saying out loud. */
+const xdebugPending = computed(
+  () => xdebug.value?.enabled && (xdebug.value.needsRebuild || xdebug.value.active === false)
+);
 
 function startStats() {
   clearInterval(statsTimer);
@@ -336,6 +422,7 @@ onUnmounted(() => clearInterval(statsTimer));
         v-if="httpsUrl && running && project.domainConfigured"
         icon
         variant="tonal"
+        size="small"
         elevation="0"
         color="primary"
         class="mr-2"
@@ -349,6 +436,7 @@ onUnmounted(() => clearInterval(statsTimer));
         v-if="running"
         icon
         variant="tonal"
+        size="small"
         elevation="0"
         color="info"
         class="mr-2"
@@ -360,12 +448,13 @@ onUnmounted(() => clearInterval(statsTimer));
           t('detail.externalTerminal')
         }}</v-tooltip>
       </v-btn>
-      <v-btn 
-        icon 
+      <v-btn
+        icon
         variant="tonal"
+        size="small"
         elevation="0"
         class="mr-2"
-        :aria-label="t('detail.openInEditor')" 
+        :aria-label="t('detail.openInEditor')"
         @click="openInEditor"
       >
         <v-icon>mdi-folder-open</v-icon>
@@ -375,6 +464,7 @@ onUnmounted(() => clearInterval(statsTimer));
         v-if="running"
         icon
         variant="tonal"
+        size="small"
         elevation="0"
         class="mr-2"
         :aria-label="t('actions.stop')"
@@ -388,6 +478,7 @@ onUnmounted(() => clearInterval(statsTimer));
         v-else-if="project.built"
         icon
         variant="tonal"
+        size="small"
         elevation="0"
         color="success"
         class="mr-2"
@@ -403,6 +494,7 @@ onUnmounted(() => clearInterval(statsTimer));
         v-else
         icon="mdi-hammer-wrench"
         variant="tonal"
+        size="small"
         elevation="0"
         color="info"
         class="mr-2"
@@ -415,6 +507,7 @@ onUnmounted(() => clearInterval(statsTimer));
         v-if="running"
         icon
         variant="tonal"
+        size="small"
         elevation="0"
         color="warning"
         class="mr-2"
@@ -428,6 +521,7 @@ onUnmounted(() => clearInterval(statsTimer));
       <v-btn
         icon="mdi-delete"
         variant="tonal"
+        size="small"
         elevation="0"
         color="error"
         :aria-label="t('projectsView.colDelete')"
@@ -436,13 +530,14 @@ onUnmounted(() => clearInterval(statsTimer));
 
       <v-divider vertical class="mx-3 my-3" />
 
-      <v-btn 
-        icon 
+      <v-btn
+        icon
         variant="tonal"
+        size="small"
         elevation="0"
-        class="mr-2"
-        :aria-label="t('app.refresh')" 
-        :loading="loading" 
+        class="mr-3"
+        :aria-label="t('app.refresh')"
+        :loading="loading"
         @click="load"
       >
         <v-icon>mdi-refresh</v-icon>
@@ -659,9 +754,22 @@ onUnmounted(() => clearInterval(statsTimer));
 
         <!-- CONFIGURATION ------------------------------------------------ -->
         <template v-else-if="section === 'configuration'">
-          <div class="section-head mb-4">
-            <v-icon size="18" class="mr-2">mdi-folder-cog</v-icon
-            >{{ t('projectDetail.configuration') }}
+          <div class="d-flex align-center ga-2 mb-4">
+            <div class="section-head">
+              <v-icon size="18" class="mr-2">mdi-folder-cog</v-icon
+              >{{ t('projectDetail.configuration') }}
+            </div>
+            <v-spacer />
+            <!-- Every value read below is a field in stackvo.json, so the way
+                 to change one belongs beside them rather than only in the raw
+                 JSON pane further down the rail. -->
+            <v-btn
+              size="small"
+              variant="tonal"
+              prepend-icon="mdi-tune-variant"
+              @click="showSettings = true"
+              >{{ t('projectSettings.open') }}</v-btn
+            >
           </div>
 
           <v-row>
@@ -829,6 +937,92 @@ onUnmounted(() => clearInterval(statsTimer));
           </template>
         </template>
 
+        <!-- XDEBUG --------------------------------------------------------- -->
+        <!-- Three layers reported separately. Collapsing them into one "on"
+             would put a switch in the UI that reads as done while nothing has
+             been compiled in, which is worse than no switch. -->
+        <template v-else-if="section === 'xdebug'">
+          <div class="d-flex align-center ga-2 mb-3">
+            <div class="section-head">
+              <v-icon size="18" class="mr-2">mdi-bug-outline</v-icon>{{ t('xdebug.title') }}
+            </div>
+            <span class="text-caption text-medium-emphasis">{{ t('xdebug.subtitle') }}</span>
+          </div>
+
+          <template v-if="xdebug">
+            <v-switch
+              :model-value="xdebug.enabled"
+              :loading="xdebugBusy"
+              :disabled="xdebugBusy"
+              color="primary"
+              hide-details
+              density="comfortable"
+              :label="xdebug.enabled ? t('xdebug.on') : t('xdebug.off')"
+              @update:model-value="toggleXdebug($event)"
+            />
+
+            <!-- The extension is compiled in, so the manifest can be ahead of
+                 the image. Saying nothing here is how a toggle becomes a lie. -->
+            <v-alert v-if="xdebug.needsRebuild" type="warning" variant="tonal" class="mt-3">
+              <div class="text-caption">{{ t('xdebug.needsRebuild') }}</div>
+            </v-alert>
+            <v-alert
+              v-else-if="xdebug.enabled && xdebug.running && xdebug.active === false"
+              type="warning"
+              variant="tonal"
+              class="mt-3"
+            >
+              <div class="text-caption">{{ t('xdebug.notActive') }}</div>
+            </v-alert>
+            <v-alert
+              v-else-if="xdebug.enabled && xdebug.active === true"
+              type="success"
+              variant="tonal"
+              class="mt-3"
+            >
+              <div class="text-caption">{{ t('xdebug.active') }}</div>
+            </v-alert>
+
+            <!-- The path mapping is the step people get wrong, and both halves
+                 are already known here. -->
+            <template v-if="xdebug.enabled">
+              <div class="section-head mt-5 mb-2">
+                <v-icon size="18" class="mr-2">mdi-tune</v-icon>{{ t('xdebug.ideSettings') }}
+              </div>
+              <v-table density="compact">
+                <tbody>
+                  <tr>
+                    <td class="text-medium-emphasis">{{ t('xdebug.port') }}</td>
+                    <td class="mono">{{ xdebug.port }}</td>
+                  </tr>
+                  <tr>
+                    <td class="text-medium-emphasis">{{ t('xdebug.ideKey') }}</td>
+                    <td class="mono">{{ xdebug.ideKey }}</td>
+                  </tr>
+                  <tr v-if="xdebug.serverName">
+                    <td class="text-medium-emphasis">{{ t('xdebug.serverName') }}</td>
+                    <td class="mono">{{ xdebug.serverName }}</td>
+                  </tr>
+                  <tr>
+                    <td class="text-medium-emphasis">{{ t('xdebug.pathMapping') }}</td>
+                    <td class="mono">{{ xdebug.hostPath }} → {{ xdebug.containerPath }}</td>
+                  </tr>
+                  <tr v-if="xdebug.peclVersion">
+                    <td class="text-medium-emphasis">{{ t('xdebug.version') }}</td>
+                    <td class="mono">{{ xdebug.peclVersion }} (PHP {{ xdebug.phpVersion }})</td>
+                  </tr>
+                </tbody>
+              </v-table>
+
+              <!-- The one thing this design cannot fix, said where it will be
+                   read rather than left for someone to discover. -->
+              <div class="text-caption text-medium-emphasis mt-3">
+                {{ t('xdebug.cliCaveat') }}
+              </div>
+            </template>
+          </template>
+        </template>
+
         <!-- MANIFEST ------------------------------------------------------ -->
         <template v-else-if="section === 'manifest'">
           <div class="d-flex align-center ga-2 mb-3">
@@ -868,9 +1062,12 @@ onUnmounted(() => clearInterval(statsTimer));
 
         <!-- LOGS ------------------------------------------------------------ -->
         <template v-else-if="section === 'logs'">
+          <!-- `project` is what unlocks the file sources: the container stream
+               carries stdout, and nothing an application logs goes there. -->
           <LogView
             v-if="project.built"
             :container="project.containerName"
+            :project="name"
             :active="section === 'logs'"
           />
           <div v-else class="text-caption text-medium-emphasis py-8 text-center">
@@ -1115,7 +1312,7 @@ onUnmounted(() => clearInterval(statsTimer));
       <!-- Section navigation ---------------------------------------------- -->
       <div class="detail-nav">
         <v-list nav class="bg-transparent">
-          <template v-for="s in SECTIONS" :key="s.key">
+          <template v-for="s in sections" :key="s.key">
             <v-divider v-if="s.divide" class="my-2" />
             <v-list-item
               :prepend-icon="s.icon"
@@ -1123,7 +1320,19 @@ onUnmounted(() => clearInterval(statsTimer));
               :active="section === s.key"
               class="nav-item"
               @click="section = s.key"
-            />
+            >
+              <!-- Enabled but not doing anything: a breakpoint that never
+                   fires looks like an IDE fault, and nothing else on screen
+                   would say otherwise. -->
+              <template v-if="s.key === 'xdebug' && xdebugPending" #append>
+                <v-icon
+                  size="x-small"
+                  color="warning"
+                  icon="mdi-alert-circle"
+                  :aria-label="t('xdebug.needsRebuild')"
+                />
+              </template>
+            </v-list-item>
           </template>
         </v-list>
       </div>
@@ -1138,6 +1347,17 @@ onUnmounted(() => clearInterval(statsTimer));
       v-model="showHostsFix"
       :add="[project.domain]"
       @applied="load"
+    />
+
+    <!-- Mounted only while open: the sheet reads the manifest when it opens, and
+         one that lived in the DOM all along would hold whatever it read the
+         first time this page was visited. -->
+    <ProjectSettingsSheet
+      v-if="showSettings"
+      v-model="showSettings"
+      :name="name"
+      @saved="load"
+      @apply="applyManifest"
     />
   </PageLayout>
 </template>

@@ -53,6 +53,24 @@
       "why": "Launch Docker Desktop (macOS/Windows) or `systemctl --user start docker` (Linux). Resolves the chicken-and-egg problem end to end.",
       "notes": "Best-effort. Returns Ok as soon as the launch is issued; the caller waits on engine:status_changed."
     },
+    "preflight": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "Preflight",
+      "why": "Everything that has to be true before the app can do anything: a checkout, a reachable daemon, compose v2, the shared network, a projects directory, bash, and mkcert. Without it the app opened regardless and each button failed on its own terms — three different errors, one cause each, none stated up front.",
+      "notes": "Runs before the first screen. `Unknown` is a distinct state from failure: with the engine down there is no answer to \"does the network exist\", and reporting one sends the user after the wrong problem. Declared retroactively — this shipped without a contract entry."
+    },
+    "preflight_fix": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "id": "string"
+      },
+      "returns": "void",
+      "why": "A requirement that reports a problem the app could have fixed itself is a diagnosis pretending to be a product. `fixable` on each Requirement says which ids this accepts.",
+      "notes": "Rejects any id it cannot fix rather than silently succeeding — a no-op that returns Ok would report the requirement as repaired on the next poll and it would still be broken. Declared retroactively."
+    },
     "workspace_get": {
       "new": true,
       "kind": "query",
@@ -335,6 +353,32 @@
       },
       "returns": "void"
     },
+    "app_logs": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "name": "string (project)"
+      },
+      "returns": "LogFile[]",
+      "why": "The container stream carries stdout and stderr, which is what the entrypoint and the web server say — not what the application records. A Laravel exception goes to storage/logs/laravel.log, an nginx 502 to the mounted error.log, and a queue worker that died to its own file under supervisord. None of those reach stdout, so none of them were visible anywhere in the app.",
+      "notes": "Reads the host filesystem, not the container: the generated compose mounts projects/<name> at /var/www/html and logs/projects/<name> at /var/log, so both roots are already there. No engine required — which is the point, because a container that crashed on boot is exactly when its log is worth reading and exactly when there is nothing left to exec into. Discovery recurses, because Laravel channels nest (storage/logs/parser/parser-2026-07-28.log is a real path from the checkout this was built against), and is capped at depth 3 and 60 files so a stray node_modules cannot turn it into a full-disk walk."
+    },
+    "app_log_open": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string (project)",
+        "id": "string (LogFile.id)",
+        "tail_bytes": "u64? (default 65536)"
+      },
+      "returns": "StreamId",
+      "emits": [
+        "logs:line",
+        "logs:closed"
+      ],
+      "why": "Follows one of those files. Shares the event pair with container_logs_open because the viewer renders one kind of line; a second pair would have meant a second frontend listener free to drift from the first. Closed with container_logs_close — one registry of abort handles, one way to stop a stream.",
+      "notes": "`id` is an opaque `app:` or `server:` handle from app_logs, never a path. Paths do not cross the boundary in either direction: a log viewer that accepts an absolute path from its own frontend is a file reader for the whole disk. The id's components are checked for traversal before the filesystem is touched, and the resolved path is checked against its root again afterwards, because a symlink inside the project can escape with no `..` in sight. Polled twice a second rather than watched — a notification still only says that something changed, so the read-the-delta path exists either way. A file shorter than the reader's offset was truncated or rotated (`> laravel.log`, or a daily channel rolling over) and restarts from the top instead of going silent for ever."
+    },
     "containers_start_all": {
       "replaces": "POST /api/docker/start-all",
       "kind": "operation",
@@ -359,6 +403,16 @@
       "args": {},
       "returns": "map<string,string>",
       "notes": "MUST redact secret-matching keys unless `reveal: true` is passed and the user has confirmed in-session."
+    },
+    "env_reveal": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "key": "string"
+      },
+      "returns": "string",
+      "why": "env_get redacts secrets, so revealing one needs a separate call the user has to ask for. Returning the whole map unmasked on a flag would put every password in one payload the moment anyone wanted to see one.",
+      "notes": "One key per call, by design. Declared retroactively: this shipped in lib.rs without a contract entry and suite E was reporting it as UNDECLARED_COMMAND."
     },
     "env_set": {
       "new": true,
@@ -556,7 +610,10 @@
     "window_close_action": {
       "new": true,
       "kind": "command",
-      "args": { "action": "\"tray\" | \"quit\" | \"stopAndQuit\"", "remember": "boolean" },
+      "args": {
+        "action": "\"tray\" | \"quit\" | \"stopAndQuit\"",
+        "remember": "boolean"
+      },
       "returns": "void",
       "notes": "Carries out the choice the close dialog collected, optionally storing it as closeBehaviour. Four behaviours exist including \"ask\"; the extra \"quit\" (close, leave the stack running) is meaningful here because the containers are Docker's and outlive the app."
     },
@@ -580,6 +637,14 @@
       "args": {},
       "returns": "{ configured: boolean, hasPublicKey: boolean, endpoints: number }",
       "notes": "Whether this build can verify an update. Tauri checks a bundle's signature against the public key compiled into the app; with an empty `pubkey` every check fails inside the plugin with a message about signatures, which reads like a server fault and is a build fault. Read from tauri.conf.json via include_str! so the answer describes the binary, not the working tree."
+    },
+    "system_accent": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "{ available: boolean, name: string|null, hex: string|null }",
+      "why": "The desktop's own accent colour, so the app can match it instead of shipping a brand colour that clashes with everyone's system theme.",
+      "notes": "macOS reads AppleHighlightColor via `defaults` and maps it to the eight colours the OS itself draws with. Elsewhere `available` is false and both fields are null — Windows keeps its accent in the registry, and saying \"unknown\" beats returning a wrong blue. Declared retroactively — this shipped without a contract entry."
     },
     "prefs_get": {
       "new": true,
@@ -620,6 +685,159 @@
       "args": {},
       "returns": "string[]",
       "why": "Every project domain with no hosts entry. Drives the one-click fix; the web UI could detect this but had no way to act on it."
+    },
+    "cert_status": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "CertStatus",
+      "why": "HTTPS was already working and entirely invisible. `core/cli/utils/generate-ssl-certs.sh` issues an mkcert wildcard covering stackvo.loc and every project domain, and traefik.sh installs it as the default certificate — but nothing in the app could say whether mkcert was installed, whether the CA was trusted, whether the certificate had expired, or which domains it actually covered. A user whose new project shows a browser warning had no way to learn why.",
+      "notes": "Reads only: it never runs mkcert and never writes. The SAN list and expiry are parsed out of the certificate itself rather than inferred from the project list, because the file on disk is what the browser validates against — a list of what SHOULD be covered would agree with the certificate right up until it mattered."
+    },
+    "cert_plan": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "CertPlan",
+      "why": "Same order as hosts_plan: say what would change before doing it. Reissuing replaces the file Traefik is serving, and `installCa` can touch the system trust store, so neither should be the first thing the user learns about it.",
+      "notes": "`domains` is the exact argument list mkcert would be invoked with — the same value cert_apply uses, not a second computation that could differ."
+    },
+    "cert_apply": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "install_ca": "bool (default true)"
+      },
+      "returns": "CertPlan",
+      "emits": [
+        "certs:changed"
+      ],
+      "elevation": "conditional",
+      "why": "Reissues the wildcard certificate for the domains the projects actually have, and — when the CA is not trusted yet — installs it. Without this the certificate goes stale the moment a project is created, and on Linux and Windows the CA is never trusted at all: the Bash helper's trust step returns early on anything but macOS, so those users get a browser warning and no explanation.",
+      "notes": "Trust installation delegates to `mkcert -install` rather than reimplementing four trust stores (macOS keychain, Linux ca-certificates, NSS for Firefox and Chrome, Windows Root). mkcert may need a password for the system store; on Linux it shells out to sudo, which a GUI process has no terminal for. That failure MUST be reported with the exact command to run, not swallowed — a CA that silently failed to install looks identical to one that worked until the browser disagrees. Issuing the certificate itself writes only inside the workspace and never elevates."
+    },
+    "project_adoptable": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "Adoptable[]",
+      "why": "`project_create` refuses when the directory already exists, so a folder cloned into projects/ could not be brought under management at all — the only way in was writing stackvo.json by hand. On the checkout this was written against, 11 of 21 directories under projects/ were in that state: real code, unmanaged.",
+      "notes": "Reads only, and needs no Docker. Each entry carries a detected runtime, server, document root and framework, plus the files that detection was based on — a document root inferred wrongly produces a project that builds, starts and serves a 404, which is a failure with no error attached to it."
+    },
+    "project_adopt": {
+      "new": true,
+      "kind": "operation",
+      "args": {
+        "name": "string",
+        "spec": "ProjectSpec (optional — defaults to what was detected)"
+      },
+      "returns": "OperationId",
+      "emits": [
+        "project:creating",
+        "project:created",
+        "project:error"
+      ],
+      "why": "Writes stackvo.json for a directory that is already there, then regenerates. The counterpart of project_create, which requires the directory to be absent.",
+      "notes": "Refuses when a manifest already exists — adopting a managed project would silently overwrite settings the user chose. The spec is validated against project.schema.json exactly as project_create's is; detection fills the form, it does not bypass the check."
+    },
+    "mail_status": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "MailStatus",
+      "why": "StackVo has shipped a mail catcher all along and never showed it — reading a captured message meant leaving for a browser tab, which is exactly the round trip four competitors charge for removing.",
+      "notes": "Reads both MailHog and Mailpit. The upstream template installs the unmaintained `mailhog/mailhog`; Mailpit is what the ecosystem moved to, and swapping renames a service, its .env keys, its container and its volume — a migration for every running stack. Supporting both is the same stance the app takes everywhere else: it manages a checkout, it does not dictate one. `error` is set when the container is up but its API did not answer, because that otherwise renders as an empty inbox, which is a lie."
+    },
+    "mail_messages": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "limit": "u32 (default 50)"
+      },
+      "returns": "MailMessage[]",
+      "notes": "Both wire formats are normalised in Rust. They agree on almost nothing: MailHog spells an address as `{Mailbox, Domain}` and buries the subject in a header array, Mailpit uses `{Name, Address}` and a field. Reading either as the other yields an inbox of blank rows that still look like messages."
+    },
+    "mail_message": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "id": "string"
+      },
+      "returns": "MailBody",
+      "notes": "Mailpit returns decoded text and HTML parts. MailHog returns the raw MIME document and leaves decoding to the caller, so `html` is always null there — showing a half-decoded multipart as if it were the message would be worse than showing the source."
+    },
+    "mail_clear": {
+      "new": true,
+      "kind": "mutation",
+      "args": {},
+      "returns": "void",
+      "notes": "DESTRUCTIVE in the small: it empties the inbox. The UI MUST confirm, but this needs no backup — a mail catcher is a bin by design."
+    },
+    "db_targets": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "DbTarget[]",
+      "why": "Which database services can be dumped, what they are called, and whether they are running. The credentials were already read out of .env and rendered in the services list; what was missing was anything to do with them.",
+      "notes": "Reads .env and the engine. A service that is enabled but not running is still listed, with `running: false` — the reason a dump cannot start right now is worth showing next to the button that is disabled because of it."
+    },
+    "db_dump": {
+      "new": true,
+      "kind": "operation",
+      "args": {
+        "service": "string",
+        "path": "string"
+      },
+      "returns": "OperationId",
+      "emits": [
+        "db:start",
+        "db:progress",
+        "db:done",
+        "db:error"
+      ],
+      "why": "Lerd sells snapshots, Laragon sells automatic backups, ServBay sells both; StackVo had no way to take a copy of a database at all. The tools are already inside the container — `mysqldump`, `pg_dump` and `mongodump` ship with the images the stack runs.",
+      "notes": "Streams the dump straight from `docker exec` into the chosen file rather than buffering it: a production-sized database does not fit in a UI process's memory, and the failure would arrive as an out-of-memory kill with no explanation. The password is passed through the child's environment and named — not valued — on the docker command line, so it does not appear in `ps` output on a shared machine."
+    },
+    "db_restore": {
+      "new": true,
+      "kind": "operation",
+      "args": {
+        "service": "string",
+        "path": "string"
+      },
+      "returns": "OperationId",
+      "emits": [
+        "db:start",
+        "db:progress",
+        "db:done",
+        "db:error"
+      ],
+      "why": "A backup nobody has restored is a file, not a backup.",
+      "notes": "DESTRUCTIVE: this replaces the contents of the target database. The UI MUST name the database and require confirmation before calling it. Reads the file into the container's stdin, the mirror of how the dump was written."
+    },
+    "xdebug_status": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "name": "string"
+      },
+      "returns": "XdebugStatus",
+      "why": "Step debugging is the thing Docker makes hardest and the thing a PHP developer needs most. `xdebug` was already in the extension catalog with per-version pecl pins, so it could be compiled in by hand-editing stackvo.json — and then it still would not connect, because nothing set xdebug.mode or told it which host the IDE is on. This reports all three layers separately: listed in the manifest, present in the built image, and live in the running container.",
+      "notes": "`active` is read from the running container's environment rather than assumed from the manifest. The two disagree in a case users hit: `stackvo up` from the CLI does not layer the overlay this app writes, so it recreates the container without the Xdebug environment and debugging stops working with nothing on screen to explain it."
+    },
+    "xdebug_set": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string",
+        "enabled": "bool"
+      },
+      "returns": "XdebugStatus",
+      "emits": [
+        "xdebug:changed"
+      ],
+      "why": "One switch instead of three manual steps: adding the extension to the manifest, configuring the client host and port, and telling the IDE where the code is mounted.",
+      "notes": "Writes `php.extensions` in the manifest and re-renders `generated/docker-compose.xdebug.yml`. The extension is COMPILED IN, so enabling it needs a rebuild before it takes effect — `needsRebuild` says so rather than letting the toggle look finished. Writing the manifest canonicalises it the same way project_manifest_write does (`webserver` becomes `server`); that is the contract's rule for writers, not a side effect of this command."
     },
     "project_dockerfile_preview": {
       "new": true,
@@ -939,6 +1157,57 @@
       },
       "why": "Warn when a project's domain has no hosts entry, with a one-click fix."
     },
+    "db:start": {
+      "new": true,
+      "payload": {
+        "operationId": "string",
+        "service": "string",
+        "action": "'dump'|'restore'",
+        "path": "string"
+      }
+    },
+    "db:progress": {
+      "new": true,
+      "payload": {
+        "operationId": "string",
+        "line": "string"
+      },
+      "notes": "The tools write progress and warnings to stderr; stdout is the dump itself and never reaches the UI."
+    },
+    "db:done": {
+      "new": true,
+      "payload": {
+        "operationId": "string",
+        "service": "string",
+        "action": "'dump'|'restore'",
+        "path": "string",
+        "bytes": "number"
+      }
+    },
+    "db:error": {
+      "new": true,
+      "payload": {
+        "operationId": "string",
+        "service": "string",
+        "error": "string"
+      }
+    },
+    "xdebug:changed": {
+      "new": true,
+      "payload": {
+        "project": "string",
+        "enabled": "bool"
+      },
+      "why": "The toggle changes the manifest and the compose overlay, so anything showing the project's configuration or its pending-regenerate state is now out of date."
+    },
+    "certs:changed": {
+      "new": true,
+      "payload": {
+        "added": "string[]",
+        "removed": "string[]"
+      },
+      "why": "The certificate was reissued, so anything showing coverage or an expiry has to re-read it. Traefik picks the new file up on its own; the UI has no way to know without being told."
+    },
     "_removed": {
       "generate:error": "Removed: `generate:done` carries `success` and `error`, and generate_run returns Err as well. A second failure channel is one more thing to keep consistent for no gain.",
       "terminal:error": "Removed: pty_open returns Err when the shell cannot start, which is the only case this covered."
@@ -1141,6 +1410,132 @@
       "changed": "bool",
       "path": "string",
       "note": "`preview` is the exact text that will be written — the same value the diff is rendered from, so what the user approves is what lands."
+    },
+    "CertStatus": {
+      "ssl_enabled": "bool",
+      "mkcert_available": "bool",
+      "mkcert_version": "string?",
+      "ca_root": "string?",
+      "ca_path": "string?",
+      "ca_trusted": "bool?",
+      "cert_path": "string?",
+      "key_path": "string?",
+      "not_after": "string?",
+      "days_remaining": "number?",
+      "expired": "bool",
+      "covered": "string[]",
+      "required": "string[]",
+      "missing": "string[]",
+      "stale": "bool",
+      "note": "`covered` is read from the certificate's subjectAltName, not from the project list. `missing` is wildcard-aware: `*.stackvo.loc` covers `api.stackvo.loc` but not `shop.loc` and not `a.b.stackvo.loc`, because a wildcard matches exactly one label. `ca_trusted` is null when the platform gives no cheap way to ask, which is not the same as false. `stale` is true when anything is missing or the certificate has expired — it is what the UI badges."
+    },
+    "LogFile": {
+      "id": "string",
+      "label": "string",
+      "group": "'application'|'server'",
+      "bytes": "u64",
+      "modified": "i64? (unix seconds)",
+      "note": "`id` is `<root>:<relative path>` — `app:` for files the code wrote under projects/<name>, `server:` for files the stack wrote under logs/projects/<name>. It is a handle, not a path: it is what app_log_open takes, and it is the reason no absolute path is ever accepted from the frontend. `modified` is epoch seconds so the date is formatted in the user's locale rather than the backend's."
+    },
+    "CertPlan": {
+      "add": "string[]",
+      "remove": "string[]",
+      "domains": "string[]",
+      "covered": "string[]",
+      "rejected": "string[]",
+      "changed": "bool",
+      "cert_path": "string",
+      "install_ca": "bool",
+      "reloaded": "bool (cert_apply only)",
+      "note": "`domains` is the exact SAN list mkcert will be invoked with, so what the user approves is what lands — the same relationship `preview` has to the hosts file. `remove` names domains the certificate still covers that no project asks for any more; they disappear on the next reissue and are listed so that is not a surprise. `rejected` names domains dropped as invalid rather than silently omitting them.",
+      "reloadedNote": "Writing the certificate is not enough to change what a browser gets. Traefik's file provider watches generated/traefik/dynamic, and the certificates are not in it — routes.yml only points at them, and a certFile is read while the dynamic configuration is parsed. So cert_apply rewrites the watched files with their own bytes to force a reparse. Observed on a real checkout: Traefik up two days, serving a certificate a day older than the one on disk. False after an apply means the new certificate is on disk but not yet served."
+    },
+    "Detected": {
+      "framework": "string?",
+      "runtime": "'php'|'node'",
+      "server": "string",
+      "document_root": "string?",
+      "php_version": "string?",
+      "node_version": "string?",
+      "node_port": "number?",
+      "node_start": "string?",
+      "confidence": "'certain'|'likely'|'guess'",
+      "evidence": "string[]",
+      "note": "`evidence` names the files the answer was read from, and `confidence` says how much to trust it. `guess` means nothing recognisable was there and the fields are defaults the user is expected to correct — presenting that as an answer is the failure this distinction exists to avoid."
+    },
+    "Adoptable": {
+      "name": "string",
+      "path": "string",
+      "detected": "Detected",
+      "has_files": "bool",
+      "note": "`has_files` ignores dotfiles: a directory holding nothing but a `.DS_Store` is empty for this purpose, and offering it for adoption as if it had code in it is how a real checkout looked before this was handled."
+    },
+    "MailStatus": {
+      "available": "bool",
+      "kind": "'mailhog'|'mailpit'|null",
+      "service": "string?",
+      "enabled": "bool",
+      "running": "bool",
+      "ui_url": "string?",
+      "total": "number",
+      "unread": "number?",
+      "error": "string?",
+      "note": "`unread` is null rather than 0 on MailHog, which has no concept of a read message — a zero would render as \"all caught up\" on a server that cannot know. `available` is false when the checkout has neither catcher at all, which is different from having one that is switched off."
+    },
+    "MailMessage": {
+      "id": "string",
+      "from": "string",
+      "to": "string[]",
+      "subject": "string",
+      "date": "string?",
+      "snippet": "string?",
+      "read": "bool",
+      "note": "`date` is passed through unparsed: the UI formats it in the user's locale, and the two servers disagree about which field it lives in, not about the format. `snippet` is null on MailHog, which does not send one — deriving it from the raw body would render MIME boundaries as preview text."
+    },
+    "MailBody": {
+      "text": "string?",
+      "html": "string?"
+    },
+    "DbTarget": {
+      "service": "string",
+      "kind": "'mysql'|'mariadb'|'postgres'|'mongo'",
+      "container": "string",
+      "database": "string?",
+      "user": "string?",
+      "enabled": "bool",
+      "running": "bool",
+      "extension": "string",
+      "note": "`extension` is the suggested file extension, and it differs by engine rather than being cosmetic: mysql and postgres dump to plain SQL a person can read and edit, while mongodump produces a gzipped BSON archive that only mongorestore can read. `database` is null for mongo, where the dump covers the whole server."
+    },
+    "XdebugStatus": {
+      "supported": "bool",
+      "enabled": "bool",
+      "active": "bool?",
+      "needs_rebuild": "bool",
+      "running": "bool",
+      "port": "number",
+      "mode": "string",
+      "ide_key": "string",
+      "server_name": "string?",
+      "host_path": "string?",
+      "container_path": "string",
+      "php_version": "string?",
+      "pecl_version": "string?",
+      "overlay_path": "string",
+      "note": "Three layers, deliberately not collapsed into one boolean. `enabled` is what the manifest asks for; `needsRebuild` is true while the image predates that ask, because extensions are compiled in and a toggle that looked done but changed nothing would be worse than no toggle; `active` is what the running container actually carries, and is null when there is no container to read. `hostPath` and `containerPath` are the two halves of the IDE's path mapping — the mapping is the step people get wrong, and both sides are already known here."
+    },
+    "Preflight": {
+      "os": "'macos'|'windows'|'linux'",
+      "ready": "bool",
+      "requirements": [
+        {
+          "id": "'workspace'|'engine'|'compose'|'network'|'projects'|'bash'|'mkcert'",
+          "state": "'ok'|'warn'|'fail'|'unknown'",
+          "detail": "string?",
+          "fixable": "bool"
+        }
+      ],
+      "note": "`detail` is what the machine said — a version, a path, the daemon's own error — and is deliberately not translated. `ready` ignores warnings: mkcert reports `warn` rather than `fail` because a stack without HTTPS still runs, it just serves a browser warning."
     },
     "DockerfilePreview": {
       "project": "string",

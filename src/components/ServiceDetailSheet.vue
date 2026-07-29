@@ -1,9 +1,10 @@
 <script setup>
-import { computed, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useDisplay } from 'vuetify';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { api } from '@/lib/ipc';
+import { listenAll } from '@/lib/events';
 import SideSheet from '@/components/SideSheet.vue';
 import ErrorAlert from '@/components/ErrorAlert.vue';
 import LogView from '@/components/LogView.vue';
@@ -136,6 +137,132 @@ function credentialIcon(key) {
 /** A mount that lands under /var/log is the one the log section is about. */
 const isLogMount = (mount) => /(^|\/)log/i.test(mount.destination);
 
+// ------------------------------------------------------------------ mail
+
+/**
+ * The inbox, for whichever catcher this checkout has.
+ *
+ * `mail_status` names the service rather than this matching on "mailhog": the
+ * upstream template still installs the unmaintained image, Mailpit is where the
+ * ecosystem went, and which one is present is the Rust side's answer.
+ */
+const mail = ref(null);
+const messages = ref([]);
+const mailLoading = ref(false);
+const openMessage = ref(null);
+const body = ref(null);
+
+const isMailService = computed(
+  () => !!mail.value?.available && mail.value.service === props.service?.id
+);
+
+async function loadMail() {
+  mailLoading.value = true;
+  try {
+    mail.value = await api.mailStatus();
+    messages.value = mail.value?.running ? await api.mailMessages(50) : [];
+  } catch (e) {
+    error.value = e;
+    messages.value = [];
+  } finally {
+    mailLoading.value = false;
+  }
+}
+
+// Fetched when a message is opened, not with the list: a body per row would be
+// fifty requests to render a screen showing subjects.
+watch(openMessage, async (id) => {
+  body.value = null;
+  if (!id) return;
+  try {
+    body.value = await api.mailMessage(id);
+  } catch (e) {
+    error.value = e;
+  }
+});
+
+async function clearMail() {
+  const { confirm } = await import('@tauri-apps/plugin-dialog');
+  if (!(await confirm(t('mail.confirmClear'), { title: t('mail.clear'), kind: 'warning' }))) return;
+  try {
+    await api.mailClear();
+    await loadMail();
+  } catch (e) {
+    error.value = e;
+  }
+}
+
+// ---------------------------------------------------------------- backup
+
+/**
+ * Backup, for the four services that have a dump tool inside their image.
+ *
+ * Read from `db_targets` rather than matched on the service name here: which
+ * engines are supported is the Rust side's answer, and a second list in the UI
+ * is a second thing to update when a fifth engine arrives.
+ */
+const dbTargets = ref([]);
+const dbBusy = ref(null);
+const dbLine = ref('');
+const dbResult = ref('');
+
+const dbTarget = computed(() =>
+  dbTargets.value.find((target) => target.service === props.service?.id)
+);
+
+/**
+ * A filename that sorts chronologically and is legal on every platform.
+ *
+ * Colons are not allowed in Windows filenames, so the obvious RFC 3339 spelling
+ * would produce a backup that cannot be saved on one of the three platforms
+ * this ships to.
+ */
+function stamp() {
+  return new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+}
+
+async function dumpDatabase() {
+  const { save } = await import('@tauri-apps/plugin-dialog');
+  const path = await save({
+    defaultPath: `${dbTarget.value.service}-${stamp()}.${dbTarget.value.extension}`,
+  });
+  if (!path) return;
+
+  await runDb('dump', () => api.dbDump(props.service.id, path), path);
+}
+
+async function restoreDatabase() {
+  const { open, confirm } = await import('@tauri-apps/plugin-dialog');
+  const path = await open({ multiple: false, directory: false });
+  if (!path) return;
+
+  // Named, not generic: "are you sure" without saying what gets replaced is a
+  // dialog people learn to click through.
+  const target = dbTarget.value.database ?? props.service.id;
+  const ok = await confirm(t('db.confirmRestore', { db: target }), {
+    title: t('db.restore'),
+    kind: 'warning',
+  });
+  if (!ok) return;
+
+  await runDb('restore', () => api.dbRestore(props.service.id, path), path);
+}
+
+async function runDb(action, call, path) {
+  dbBusy.value = action;
+  dbLine.value = '';
+  dbResult.value = '';
+  error.value = null;
+  try {
+    await call();
+    dbResult.value = t(action === 'dump' ? 'db.dumped' : 'db.restored', { path });
+  } catch (e) {
+    error.value = e;
+  } finally {
+    dbBusy.value = null;
+  }
+}
+
 // Inspected when a row is opened, not with the list: inspecting twenty
 // containers to render a sheet showing one is nineteen wasted round trips.
 watch(
@@ -145,10 +272,30 @@ watch(
     // A different service is a different panel: start it on the detail tab
     // rather than on whatever the last one was left showing.
     tab.value = 'detail';
+    dbLine.value = '';
+    dbResult.value = '';
+    openMessage.value = null;
+    body.value = null;
     load(props.service);
+    loadMail();
+    api.dbTargets().then(
+      (targets) => (dbTargets.value = targets),
+      () => (dbTargets.value = [])
+    );
   },
   { immediate: true }
 );
+
+// The dump tools report to stderr as they go. Shown as a single moving line
+// rather than a log panel: on a healthy dump there is almost nothing to say,
+// and a panel that is empty most of the time reads as broken.
+let stopDbEvents = null;
+onMounted(async () => {
+  stopDbEvents = await listenAll(['db:progress'], (_name, payload) => {
+    dbLine.value = payload?.line ?? '';
+  });
+});
+onUnmounted(() => stopDbEvents?.());
 </script>
 
 <template>
@@ -180,10 +327,85 @@ watch(
         <v-tab value="detail" prepend-icon="mdi-information-outline">
           {{ t('servicesView.colDetail') }}
         </v-tab>
+        <!-- Only on the mail catcher, and only when the checkout has one. A
+             tab that is present but empty on nineteen other services is
+             nineteen wrong answers to "what does this do". -->
+        <v-tab v-if="isMailService" value="inbox" prepend-icon="mdi-email-outline">
+          {{ t('mail.inbox') }}
+          <v-chip v-if="mail?.total" size="x-small" class="ml-2">{{ mail.total }}</v-chip>
+        </v-tab>
         <v-tab value="logs" prepend-icon="mdi-text-box-outline" :disabled="!service?.built">
           {{ t('logs.title') }}
         </v-tab>
       </v-tabs>
+    </template>
+
+    <!-- Inbox ----------------------------------------------------------- -->
+    <template v-if="tab === 'inbox' && service">
+      <ErrorAlert :error="error" type="error" class="mb-2" />
+
+      <div v-if="!service.running" class="text-caption text-medium-emphasis">
+        {{ t('mail.notRunning') }}
+      </div>
+
+      <!-- Up but not answering renders as an empty inbox otherwise, which
+           reads as "no mail" rather than "could not ask". -->
+      <v-alert v-else-if="mail?.error" type="warning" variant="tonal">
+        <div class="text-caption">{{ mail.error }}</div>
+      </v-alert>
+
+      <template v-else>
+        <div class="d-flex align-center ga-2 mb-3">
+          <span class="text-caption text-medium-emphasis">
+            {{ t('mail.count', { n: mail?.total ?? 0 }) }}
+          </span>
+          <v-spacer />
+          <v-btn
+            size="x-small"
+            variant="text"
+            icon="mdi-refresh"
+            :aria-label="t('app.refresh')"
+            :loading="mailLoading"
+            @click="loadMail"
+          />
+          <v-btn
+            size="small"
+            variant="text"
+            color="error"
+            prepend-icon="mdi-delete-sweep-outline"
+            :disabled="!messages.length"
+            @click="clearMail"
+          >
+            {{ t('mail.clear') }}
+          </v-btn>
+        </div>
+
+        <div v-if="!messages.length" class="text-caption text-medium-emphasis">
+          {{ t('mail.empty') }}
+        </div>
+
+        <v-expansion-panels v-model="openMessage" variant="accordion">
+          <v-expansion-panel v-for="m in messages" :key="m.id" :value="m.id">
+            <v-expansion-panel-title>
+              <div class="mail-row">
+                <span class="mail-subject">{{ m.subject || t('mail.noSubject') }}</span>
+                <span class="mail-meta">{{ m.from }} → {{ m.to.join(', ') }}</span>
+                <span v-if="m.snippet" class="mail-meta">{{ m.snippet }}</span>
+              </div>
+            </v-expansion-panel-title>
+            <v-expansion-panel-text>
+              <div v-if="m.date" class="text-caption text-medium-emphasis mb-2">{{ m.date }}</div>
+              <!-- The HTML part is shown as source, never rendered: a captured
+                   message is untrusted input, and injecting it into this
+                   document would give any application under test a script tag
+                   inside the app that manages the whole stack. -->
+              <pre v-if="body?.html" class="mail-body">{{ body.html }}</pre>
+              <pre v-else-if="body?.text" class="mail-body">{{ body.text }}</pre>
+              <div v-else class="text-caption text-medium-emphasis">{{ t('app.loading') }}</div>
+            </v-expansion-panel-text>
+          </v-expansion-panel>
+        </v-expansion-panels>
+      </template>
     </template>
 
     <!-- Streamed only while its tab is showing. -->
@@ -193,7 +415,10 @@ watch(
       :active="modelValue && tab === 'logs'"
     />
 
-    <template v-else-if="service">
+    <!-- Explicitly the detail tab rather than "whatever is left": the inbox
+         above is its own v-if chain, so an `v-else` here would render the
+         detail panel underneath it. -->
+    <template v-else-if="service && tab === 'detail'">
       <ErrorAlert :error="error" type="error" class="mb-2" />
 
       <!-- Network ------------------------------------------------------- -->
@@ -315,6 +540,51 @@ watch(
           </v-tooltip>
         </v-btn>
       </div>
+
+      <!-- Backup --------------------------------------------------------- -->
+      <!-- Only for the four engines with a dump tool in their image; every
+           other service row is unchanged. -->
+      <template v-if="dbTarget">
+        <div class="sheet-group">{{ t('db.title') }}</div>
+
+        <div class="text-caption text-medium-emphasis mb-2">
+          {{
+            dbTarget.database ? t('db.subtitle', { db: dbTarget.database }) : t('db.subtitleAll')
+          }}
+        </div>
+
+        <div v-if="!service.running" class="text-caption text-warning mb-2">
+          {{ t('db.notRunning') }}
+        </div>
+
+        <div class="d-flex ga-2 flex-wrap">
+          <v-btn
+            size="small"
+            variant="tonal"
+            prepend-icon="mdi-database-export"
+            :loading="dbBusy === 'dump'"
+            :disabled="!service.running || !!dbBusy"
+            @click="dumpDatabase"
+          >
+            {{ t('db.dump') }}
+          </v-btn>
+          <v-btn
+            size="small"
+            variant="tonal"
+            color="warning"
+            prepend-icon="mdi-database-import"
+            :loading="dbBusy === 'restore'"
+            :disabled="!service.running || !!dbBusy"
+            @click="restoreDatabase"
+          >
+            {{ t('db.restore') }}
+          </v-btn>
+        </div>
+
+        <!-- The tools report to stderr; the last line is the useful one. -->
+        <div v-if="dbLine" class="text-caption text-medium-emphasis mt-2 mono">{{ dbLine }}</div>
+        <div v-if="dbResult" class="text-caption text-success mt-2">{{ dbResult }}</div>
+      </template>
 
       <!-- Logs and mounts ----------------------------------------------- -->
       <div class="sheet-group">{{ t('servicesView.logInfo') }}</div>
@@ -444,5 +714,42 @@ watch(
   white-space: normal;
   word-break: break-all;
   padding: 2px 0;
+}
+
+/* Subject on its own line above the addresses: a captured message is usually
+   from one no-reply address to one developer, so the subject is the only part
+   that distinguishes two rows. */
+.mail-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mail-subject {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mail-meta {
+  font-size: 12px;
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Shown as source, never rendered — see the template. Wrapped rather than
+   scrolled sideways: an HTML mail is one very long line. */
+.mail-body {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 420px;
+  overflow-y: auto;
+  margin: 0;
 }
 </style>

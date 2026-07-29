@@ -318,6 +318,85 @@ export default {
       windows:
         'Üreteç core/cli/stackvo.sh betiği. Windows’ta WSL veya Git Bash kurulu olmalı ve PATH’te bulunmalı.',
     },
+
+    mkcert: 'mkcert',
+    mkcertHint: {
+      macos:
+        'SSL açık, yani her alan adı HTTPS üzerinden sunuluyor. mkcert olmadan sertifika üretilmez ve tarayıcılar siteyi açmayı reddeder. `brew install mkcert` ile kurun.',
+      linux:
+        'SSL açık, yani her alan adı HTTPS üzerinden sunuluyor. mkcert olmadan sertifika üretilmez ve tarayıcılar siteyi açmayı reddeder. Paket yöneticinizden kurun, sonra `mkcert -install` çalıştırın.',
+      windows:
+        'SSL açık, yani her alan adı HTTPS üzerinden sunuluyor. mkcert olmadan sertifika üretilmez ve tarayıcılar siteyi açmayı reddeder. `choco install mkcert` ile kurun.',
+    },
+  },
+  adopt: {
+    found: 'projects/ altındaki {n} klasörün stackvo.json dosyası yok.',
+    from: '{files} dosyasından algılandı',
+    noEvidence: 'tanınan bir şey yok — varsayılanlar kullanılacak',
+    action: 'Sahiplen',
+  },
+  mail: {
+    inbox: 'Gelen kutusu',
+    count: '{n} mesaj yakalandı',
+    empty: 'Henüz hiçbir şey gönderilmedi.',
+    noSubject: '(konu yok)',
+    notRunning: 'Posta yakalayıcı çalışmıyor, hiçbir şey yakalanmıyor.',
+    clear: 'Gelen kutusunu boşalt',
+    confirmClear:
+      'Yakalanan tüm mesajlar silinecek. Posta yakalayıcı bir çöp kutusudur, yedeği yoktur.',
+  },
+  db: {
+    title: 'Yedekleme',
+    subtitle: '{db} veritabanını dışa aktar ve geri yükle.',
+    subtitleAll: 'Bu sunucudaki tüm veritabanlarını dışa aktar ve geri yükle.',
+    notRunning: 'Konteyner çalışmıyor, okunacak bir şey yok.',
+    dump: 'Yedekle',
+    restore: 'Geri yükle',
+    dumped: '{path} dosyasına yazıldı',
+    restored: '{path} dosyasından geri yüklendi',
+    confirmRestore:
+      '{db} içeriği seçilen dosyanın içeriğiyle değiştirilecek. Şu anda içinde ne varsa kaybolur.',
+  },
+  xdebug: {
+    title: 'Xdebug',
+    subtitle: 'Bu proje için adım adım hata ayıklama.',
+    on: 'Etkin',
+    off: 'Devre dışı',
+    needsRebuild:
+      'Eklenti imaja derleniyor, bu yüzden proje yeniden üretilip derlenene kadar bunun bir etkisi olmaz.',
+    notActive:
+      'Çalışan konteyner Xdebug ayarlarını taşımıyor. Uygulanması için projeyi yeniden başlatın.',
+    active: 'Çalışan konteynerde etkin — bir kesme noktası koyup siteyi açın.',
+    ideSettings: 'IDE ayarları',
+    port: 'Port',
+    ideKey: 'IDE anahtarı',
+    serverName: 'Sunucu adı (PHP_IDE_CONFIG)',
+    pathMapping: 'Yol eşlemesi',
+    version: 'Xdebug sürümü',
+    cliCaveat:
+      'Not: komut satırından `stackvo up` bu yapılandırmayı katmanlamaz ve konteyneri onsuz yeniden oluşturur.',
+  },
+  certs: {
+    title: 'HTTPS sertifikası',
+    subtitle: 'Tek bir joker sertifika panoyu, her servisi ve her projeyi kapsar.',
+    sslOff:
+      '.env içinde SSL_ENABLE kapalı, yani yığın HTTP üzerinden sunuluyor ve sertifika kullanılmıyor.',
+    current: 'Güncel',
+    stale: 'Yeniden üretilmeli',
+    caTrusted: 'CA güveniliyor',
+    caUntrusted: 'CA güvenilmiyor',
+    caUnknown: 'CA güveni bilinmiyor',
+    expiresOn: 'Bitiş {date} ({days} gün)',
+    expiredOn: '{date} tarihinde doldu',
+    noMkcert: 'mkcert kurulu değil, bu yüzden sertifika üretilemez ya da yenilenemez.',
+    missing: 'Kapsam dışı — bu alan adları tarayıcı uyarısı verecek',
+    dropping: 'Sonraki yenilemede kapsam dışı kalacak',
+    rejected: 'Atlandı — geçerli alan adı değil',
+    covered: 'Kapsanan ({n})',
+    reissue: 'Sertifikayı yenile',
+    reissueAndTrust: 'Yenile ve CA’ya güven',
+    notReloaded:
+      'Sertifika yenilendi, ancak proxy hâlâ öncekini sunuyor. Devreye girmesi için stack’i yeniden başlatın veya generate çalıştırın.',
   },
   settings: {
     subtitle: 'Uygulama tercihleri',
@@ -391,6 +470,8 @@ export default {
     workspaceDesc: 'Yönetilen StackVo dizini ve Docker motorunun durumu.',
     preferencesDesc: 'Görünüm, dil, dış uygulamalar ve kapatma davranışı.',
     stackDesc: 'Compose seviyesinde üretim ve konteyner yönetimi.',
+    certificates: 'Sertifikalar',
+    certificatesDesc: 'HTTPS sertifikası, kapsadığı alan adları ve arkasındaki CA.',
     envFileDesc: 'Yığının okuduğu .env değerlerini yerinde düzenle.',
     aboutDesc: 'Sürüm, imzalı güncellemeler ve tanılama.',
 
@@ -472,6 +553,25 @@ export default {
     title: 'Loglar',
     live: 'canlı',
     waiting: 'Log bekleniyor…',
+    containerStream: 'Konteyner çıktısı',
+    group: {
+      application: 'Uygulama',
+      server: 'Sunucu',
+    },
+    search: 'Ara',
+    filterLevel: 'Seviyeye göre filtrele',
+    clearFilter: 'Filtreyi temizle',
+    copy: 'Görünenleri kopyala',
+    noMatch: 'Eşleşen yok — {n} satır gizli.',
+    showing: '{total} satırın {shown} tanesi',
+    level: {
+      debug: 'Debug',
+      info: 'Bilgi',
+      notice: 'Uyarı notu',
+      warning: 'Uyarı',
+      error: 'Hata',
+      critical: 'Kritik',
+    },
   },
 
   hosts: {
@@ -515,6 +615,21 @@ export default {
     deleteBody: 'Proje StackVo listesinden çıkar. Kaynak dosyalar diskte kalır.',
     deleteFiles: 'Proje klasörünü de sil (geri alınamaz)',
     delete: 'Sil',
+  },
+
+  projectSettings: {
+    title: '{name} yapılandırması',
+    open: 'Yapılandır',
+    nameLocked: 'Klasör adı projenin kimliğidir; yeniden adlandırmak klasörü taşımak demektir.',
+    extensionUnknown: 'Bu projenin istediği bir eklenti, katalogda yok',
+    domainChanged:
+      'Hosts kaydı ve sertifika hâlâ eski alan adını taşıyor. Değişiklik uygulandıktan sonra ikisi de önerilir.',
+    applyPending:
+      'Kaydedildi. Dosyalar yeniden üretilip imaj derlenene kadar konteyner önceki yapılandırmayla çalışmaya devam eder.',
+    applyNow: 'Şimdi uygula',
+    saveAndApply: 'Kaydet ve uygula',
+    engineDown:
+      'Docker çalışmıyor, bu yüzden hiçbir şey yeniden derlenemez. Kaydet, değişikliği diskte tutar.',
   },
 
   detail: {

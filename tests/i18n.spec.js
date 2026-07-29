@@ -37,13 +37,16 @@ const sources = sourceFiles().map((path) => readFileSync(path, 'utf8'));
 const allSource = sources.join('\n');
 
 /**
- * Every `t('some.key')` in the app, including the `$t` template form.
+ * Every `t('some.key')` in the app, including the `$t` template form and the
+ * `tc()` wrapper that LogView uses to render the console in its own language.
  *
  * The lookbehind matters: without it `emit('close')` matches, because `emit(`
- * ends in `t(`, and the check then demands translations for event names.
+ * ends in `t(`, and the check then demands translations for event names. It
+ * still does its job with `tc` allowed — the character before the `t` is what
+ * is tested, and in `emit(` that is `i`.
  */
 const usedKeys = new Set(
-  [...allSource.matchAll(/(?<![\w$.])\$?t\(\s*['"`]([a-zA-Z0-9_.]+)['"`]/g)].map((m) => m[1])
+  [...allSource.matchAll(/(?<![\w$.])\$?tc?\(\s*['"`]([a-zA-Z0-9_.]+)['"`]/g)].map((m) => m[1])
 );
 
 describe('translations', () => {
@@ -129,9 +132,13 @@ describe('unused translations', () => {
   it('are not defined at all', () => {
     const defined = flatten(en);
 
-    // Reached through a template literal: the whole prefix stays live.
+    // Reached through a template literal: the whole prefix stays live. `tc` is
+    // included for the same reason as above — a key reached as
+    // ``tc(`logs.level.${level}`)`` is reached, and the literal form of that
+    // same call was already being counted through `indirect` below, so leaving
+    // the template form out reported live keys as dead.
     const prefixes = [
-      ...allSource.matchAll(/(?<![\w$.])\$?t\(\s*`([a-zA-Z0-9_.]+)\.\$\{/g),
+      ...allSource.matchAll(/(?<![\w$.])\$?tc?\(\s*`([a-zA-Z0-9_.]+)\.\$\{/g),
     ].map((m) => m[1]);
 
     // Held as a plain string and passed to t() later.

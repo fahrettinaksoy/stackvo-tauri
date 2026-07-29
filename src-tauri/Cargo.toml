@@ -7,6 +7,11 @@ license = "MIT"
 edition = "2021"
 rust-version = "1.82"
 
+# Two binaries live here — the app and `stackvo-mcp` — and `tauri dev` runs a
+# bare `cargo run`, which refuses to guess. Naming the app here keeps that
+# working; the MCP server is reached with an explicit `--bin stackvo-mcp`.
+default-run = "stackvo-desktop"
+
 [lib]
 # Tauri's mobile targets require a cdylib; the bin below is a thin wrapper.
 name = "stackvo_desktop_lib"
@@ -44,7 +49,8 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "io-util"] }
+# `io-std` is for the MCP server, which speaks JSON-RPC over stdin and stdout.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "io-util", "io-std"] }
 thiserror = "2"
 dirs = "6"
 
@@ -57,6 +63,29 @@ portable-pty = "0.9"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tracing-appender = "0.2.5"
+
+# Reading the SAN list and expiry out of the generated wildcard certificate.
+# Shelling out to `openssl x509 -noout -text` would have been one line and is
+# what the Bash side does, but openssl is not reliably on PATH on Windows — and
+# a parser that only runs on two of three platforms cannot be unit-tested on the
+# third. This is pure Rust (nom/asn1-rs, no C), so `covers` and `expiry` are
+# ordinary functions with tests that run everywhere.
+x509-parser = "0.18.1"
+
+# Docker reports container creation as an RFC 3339 string. Comparing it against
+# the generated Dockerfile's mtime is what tells Xdebug's "compiled in yet?"
+# apart from "configured yet?" — two states that look identical from the
+# manifest and send people to different fixes. Already in the tree via
+# x509-parser; `parsing` only, no formatting and no std time source.
+time = { version = "0.3.44", default-features = false, features = ["parsing"] }
+
+# Reading the mail catcher's inbox. The webview cannot do this itself: the CSP
+# in tauri.conf.json allows `connect-src 'self' ipc:` and nothing else, which is
+# the point — widening it to reach one localhost port would widen it for every
+# page the app ever renders. Already in the tree via the updater plugin, and
+# taken here without default features: this only ever talks to 127.0.0.1, so it
+# needs no TLS stack, no cookie store and no proxy resolution.
+reqwest = { version = "0.13.3", default-features = false, features = ["json"] }
 
 # Desktop-only plugins: single-instance and autostart are meaningless on mobile.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]

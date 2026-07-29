@@ -11,7 +11,10 @@ async fn main() {
             "  {:<10} {:?}{}{}",
             r.id,
             r.state,
-            r.detail.as_deref().map(|d| format!("  — {d}")).unwrap_or_default(),
+            r.detail
+                .as_deref()
+                .map(|d| format!("  — {d}"))
+                .unwrap_or_default(),
             if r.fixable { "  [düzeltilebilir]" } else { "" }
         );
     }

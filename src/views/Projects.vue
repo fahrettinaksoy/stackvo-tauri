@@ -116,10 +116,47 @@ async function regenerate(project) {
   staleManifests.value = new Set([...staleManifests.value].filter((n) => n !== project.name));
 }
 
+/**
+ * Folders under `projects/` with no `stackvo.json`.
+ *
+ * Shown above the table rather than behind a menu: they are invisible
+ * everywhere else in the app, which is exactly why they accumulate. On the
+ * checkout this was written against there were eleven of them, three of which
+ * were Laravel applications.
+ */
+const adoptable = ref([]);
+const adopting = ref(null);
+
+async function loadAdoptable() {
+  try {
+    adoptable.value = await api.projectAdoptable();
+  } catch {
+    // A missing workspace is already reported by the requirements gate.
+    adoptable.value = [];
+  }
+}
+
+async function adopt(folder) {
+  adopting.value = folder.name;
+  actionError.value = null;
+  try {
+    // No spec: the Rust side re-detects and validates against the same schema
+    // project_create uses. Passing the detection back would let a stale reading
+    // from before an edit be the thing that gets written.
+    await api.projectAdopt(folder.name);
+    await Promise.all([inventory.loadProjects(), loadAdoptable()]);
+  } catch (e) {
+    actionError.value = e;
+  } finally {
+    adopting.value = null;
+  }
+}
+
 let teardown = null;
 
 onMounted(async () => {
   inventory.loadProjects();
+  loadAdoptable();
 
   const offRefresh = await listenAll(REFRESH_TRIGGERS, () => inventory.loadProjects());
 
@@ -158,6 +195,7 @@ onUnmounted(() => teardown?.());
         <v-btn
           icon
           variant="tonal"
+          size="small"
           elevation="0"
           :aria-label="t('newProject.title')"
           :disabled="!app.hasWorkspace"
@@ -169,8 +207,9 @@ onUnmounted(() => teardown?.());
         <v-btn
           icon
           variant="tonal"
+          size="small"
           elevation="0"
-          class="mr-1"
+          class="mr-2"
           :aria-label="t('app.refresh')"
           :loading="inventory.loadingProjects"
           @click="inventory.loadProjects()"
@@ -188,6 +227,54 @@ onUnmounted(() => teardown?.());
       class="ma-2"
       @close="actionError = null"
     />
+
+    <!-- Unmanaged folders ------------------------------------------------ -->
+    <!-- Real code sitting in projects/ with no stackvo.json. It is invisible
+         everywhere else in the app, which is why it accumulates. -->
+    <v-alert
+      v-if="adoptable.length"
+      type="info"
+      variant="tonal"
+      class="ma-2"
+      :icon="false"
+      density="compact"
+    >
+      <div class="d-flex align-center ga-2 mb-2">
+        <v-icon size="small">mdi-folder-search-outline</v-icon>
+        <span class="text-body-2">{{ t('adopt.found', { n: adoptable.length }) }}</span>
+      </div>
+
+      <div v-for="folder in adoptable" :key="folder.name" class="adopt-row">
+        <span class="adopt-name">{{ folder.name }}</span>
+
+        <v-chip v-if="folder.detected.framework" size="x-small" color="success" variant="tonal">
+          {{ folder.detected.framework }}
+        </v-chip>
+        <v-chip v-else size="x-small" variant="tonal">{{ folder.detected.runtime }}</v-chip>
+
+        <!-- The files the guess came from. A document root inferred wrongly
+             builds, starts and serves a 404 with no error anywhere. -->
+        <span class="adopt-evidence">
+          {{
+            folder.detected.evidence.length
+              ? t('adopt.from', { files: folder.detected.evidence.join(', ') })
+              : t('adopt.noEvidence')
+          }}
+        </span>
+
+        <v-spacer />
+
+        <v-btn
+          size="x-small"
+          variant="tonal"
+          :loading="adopting === folder.name"
+          :disabled="!!adopting || !folder.hasFiles"
+          @click="adopt(folder)"
+        >
+          {{ t('adopt.action') }}
+        </v-btn>
+      </div>
+    </v-alert>
 
     <v-text-field
       v-model="search"
@@ -473,5 +560,30 @@ onUnmounted(() => teardown?.());
 
 .table-wrap :deep(.v-table) {
   height: 100%;
+}
+
+.adopt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  min-width: 0;
+}
+
+.adopt-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* The evidence is the part that lets someone check the guess, so it truncates
+   rather than wrapping the row into two lines per folder. */
+.adopt-evidence {
+  font-size: 12px;
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 </style>

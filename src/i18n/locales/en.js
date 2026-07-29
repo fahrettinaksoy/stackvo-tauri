@@ -312,6 +312,85 @@ export default {
       windows:
         'The generator is the core/cli/stackvo.sh script. Windows needs WSL or Git Bash on the PATH.',
     },
+
+    mkcert: 'mkcert',
+    mkcertHint: {
+      macos:
+        'SSL is on, so every domain is served over HTTPS. Without mkcert the certificate is not issued and browsers refuse the site. Install it with `brew install mkcert`.',
+      linux:
+        'SSL is on, so every domain is served over HTTPS. Without mkcert the certificate is not issued and browsers refuse the site. Install it from your package manager, then run `mkcert -install`.',
+      windows:
+        'SSL is on, so every domain is served over HTTPS. Without mkcert the certificate is not issued and browsers refuse the site. Install it with `choco install mkcert`.',
+    },
+  },
+  adopt: {
+    found: '{n} folder(s) under projects/ have no stackvo.json.',
+    from: 'detected from {files}',
+    noEvidence: 'nothing recognisable — defaults will be used',
+    action: 'Adopt',
+  },
+  mail: {
+    inbox: 'Inbox',
+    count: '{n} captured',
+    empty: 'Nothing has been sent yet.',
+    noSubject: '(no subject)',
+    notRunning: 'The mail catcher is not running, so nothing is being captured.',
+    clear: 'Empty inbox',
+    confirmClear:
+      'This deletes every captured message. A mail catcher is a bin, so there is no backup.',
+  },
+  db: {
+    title: 'Backup',
+    subtitle: 'Dump and restore the {db} database.',
+    subtitleAll: 'Dump and restore every database on this server.',
+    notRunning: 'The container is not running, so there is nothing to read from.',
+    dump: 'Back up',
+    restore: 'Restore',
+    dumped: 'Written to {path}',
+    restored: 'Restored from {path}',
+    confirmRestore:
+      'This replaces the contents of {db} with the contents of the chosen file. Anything currently in it is lost.',
+  },
+  xdebug: {
+    title: 'Xdebug',
+    subtitle: 'Step debugging for this project.',
+    on: 'Enabled',
+    off: 'Disabled',
+    needsRebuild:
+      'The extension is compiled into the image, so this does nothing until the project is regenerated and rebuilt.',
+    notActive:
+      'The running container does not carry the Xdebug settings. Restart the project to apply them.',
+    active: 'Live in the running container — set a breakpoint and load the site.',
+    ideSettings: 'IDE settings',
+    port: 'Port',
+    ideKey: 'IDE key',
+    serverName: 'Server name (PHP_IDE_CONFIG)',
+    pathMapping: 'Path mapping',
+    version: 'Xdebug version',
+    cliCaveat:
+      'Note: `stackvo up` from the command line does not layer this configuration, and will recreate the container without it.',
+  },
+  certs: {
+    title: 'HTTPS certificate',
+    subtitle: 'One wildcard certificate covers the dashboard, every service and every project.',
+    sslOff:
+      'SSL_ENABLE is off in .env, so the stack is served over HTTP and no certificate is used.',
+    current: 'Up to date',
+    stale: 'Needs reissuing',
+    caTrusted: 'CA trusted',
+    caUntrusted: 'CA not trusted',
+    caUnknown: 'CA trust unknown',
+    expiresOn: 'Expires {date} ({days} days)',
+    expiredOn: 'Expired on {date}',
+    noMkcert: 'mkcert is not installed, so the certificate cannot be issued or reissued.',
+    missing: 'Not covered — these domains will show a browser warning',
+    dropping: 'Will be dropped on the next reissue',
+    rejected: 'Skipped — not valid hostnames',
+    covered: 'Covered ({n})',
+    reissue: 'Reissue certificate',
+    reissueAndTrust: 'Reissue and trust the CA',
+    notReloaded:
+      'The certificate was reissued, but the proxy is still serving the previous one. Restart the stack, or run generate, to pick it up.',
   },
   settings: {
     subtitle: 'Application preferences',
@@ -385,6 +464,8 @@ export default {
     workspaceDesc: 'The StackVo checkout being managed, and the Docker engine behind it.',
     preferencesDesc: 'Appearance, language, external apps and close behaviour.',
     stackDesc: 'Generation and container management at the compose level.',
+    certificates: 'Certificates',
+    certificatesDesc: 'The HTTPS certificate, the domains it covers and the CA behind it.',
     envFileDesc: 'Edit the .env values the stack reads, in place.',
     aboutDesc: 'Version, signed updates and diagnostics.',
 
@@ -466,6 +547,25 @@ export default {
     title: 'Logs',
     live: 'live',
     waiting: 'Waiting for output…',
+    containerStream: 'Container output',
+    group: {
+      application: 'Application',
+      server: 'Server',
+    },
+    search: 'Search',
+    filterLevel: 'Filter by level',
+    clearFilter: 'Clear filter',
+    copy: 'Copy what is shown',
+    noMatch: 'Nothing matches — {n} lines hidden.',
+    showing: 'Showing {shown} of {total}',
+    level: {
+      debug: 'Debug',
+      info: 'Info',
+      notice: 'Notice',
+      warning: 'Warning',
+      error: 'Error',
+      critical: 'Critical',
+    },
   },
 
   hosts: {
@@ -510,6 +610,20 @@ export default {
     deleteBody: 'The project leaves the StackVo list. Your source files stay on disk.',
     deleteFiles: 'Also delete the project folder (cannot be undone)',
     delete: 'Delete',
+  },
+
+  projectSettings: {
+    title: 'Configure {name}',
+    open: 'Configure',
+    nameLocked: 'The folder name is the project’s identity; renaming means moving the folder.',
+    extensionUnknown: 'Requested by this project, not in the catalogue',
+    domainChanged:
+      'The hosts entry and the certificate still name the old domain. Both are offered once the change is applied.',
+    applyPending:
+      'Saved. The container still runs the previous configuration until the files are regenerated and the image rebuilt.',
+    applyNow: 'Apply now',
+    saveAndApply: 'Save & apply',
+    engineDown: 'Docker is not running, so nothing can be rebuilt. Save keeps the change on disk.',
   },
 
   detail: {

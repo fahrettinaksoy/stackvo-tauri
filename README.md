@@ -114,6 +114,40 @@ warnings` and `cargo fmt --check`. The Rust toolchain is pinned in
 `src-tauri/rust-toolchain.toml`, so a new stable release cannot turn the build
 red without a commit.
 
+### Driving it from an AI assistant
+
+`stackvo-mcp` is an MCP server over the same core the app drives, so an
+assistant can answer "why is shop.loc not loading?" from the preflight report,
+the hosts file, the certificate's SAN list and a container's last hundred log
+lines — without a window open.
+
+```bash
+cargo build --release --bin stackvo-mcp
+```
+
+```json
+{ "mcpServers": { "stackvo": { "command": "/path/to/stackvo-mcp" } } }
+```
+
+**Read-only by default.** Two tools change things (Xdebug on a project,
+reissuing the certificate) and appear only with `--allow-writes`. Every tool is
+annotated `readOnlyHint` / `destructiveHint`, so a client can require
+confirmation for a tool it has never seen.
+
+The tool table names, for each tool, the `contracts/ipc.json` command it
+implements, and three tests cross-check the two: a tool naming a command that
+does not exist fails, a read-only tool backed by a declared `mutation` fails,
+and a write-gated tool backed by a mere `query` fails — the gate would be
+guarding nothing. Generating the list outright was the obvious move and is the
+wrong one: dispatch cannot be generated, so a generated list advertises tools
+that fail when called.
+
+**Not exposed:** the rest of the mutating surface. Thirty-four commands take an
+`AppHandle` because they report progress through Tauri's event system, and a
+stdio subprocess has no app to emit into. Decoupling that is a refactor of its
+own; pretending otherwise would mean advertising `project_build` and having it
+fail.
+
 ### When something goes wrong
 
 The app writes a rotating log — seven days, then it drops the oldest.

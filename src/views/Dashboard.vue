@@ -166,7 +166,8 @@ onMounted(() => {
       icon 
       variant="tonal"
       elevation="0"
-      class="mr-1"
+      size="small"
+      class="mr-2"
       :aria-label="t('app.refresh')" 
       :loading="metrics.loading" 
       @click="refreshAll"
