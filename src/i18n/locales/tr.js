@@ -53,9 +53,9 @@ export default {
   },
 
   quickActions: {
-    startAll: 'Hepsini başlat',
-    stopAll: 'Hepsini durdur',
-    restart: 'Yeniden başlat',
+    startAll: 'Tüm konteynerleri başlat',
+    stopAll: 'Tüm konteynerleri durdur',
+    restart: 'Tüm konteynerleri yeniden başlat',
   },
 
   dashboard: {

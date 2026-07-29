@@ -107,6 +107,38 @@
   border-radius: var(--app-radius) !important;
 }
 
+/* Inside a button group the group owns the corners. Vuetify squares every
+   grouped button and lets only the first and last inherit the group's radius,
+   but that rule is not `!important` and loses to both the md3 `rounded="xl"`
+   utility and the per-button override above — leaving each button a fully
+   rounded pill floating on the group's background: surface on surface where
+   there should be one segmented control. Restore the group model at the same
+   weight. `inherit` picks up the group's own radius, which follows the
+   setting via the component rule at the top. */
+:root .v-btn-group .v-btn {
+  border-radius: 0 !important;
+}
+
+:root .v-btn-group--horizontal .v-btn:first-child {
+  border-start-start-radius: inherit !important;
+  border-end-start-radius: inherit !important;
+}
+
+:root .v-btn-group--horizontal .v-btn:last-child {
+  border-start-end-radius: inherit !important;
+  border-end-end-radius: inherit !important;
+}
+
+:root .v-btn-group--vertical .v-btn:first-child {
+  border-start-start-radius: inherit !important;
+  border-start-end-radius: inherit !important;
+}
+
+:root .v-btn-group--vertical .v-btn:last-child {
+  border-end-start-radius: inherit !important;
+  border-end-end-radius: inherit !important;
+}
+
 /* An explicit shape outranks the setting.
  *
  * `rounded="0"` in this app is not a style preference, it is structural: it

@@ -52,9 +52,9 @@ export default {
   },
 
   quickActions: {
-    startAll: 'Start all',
-    stopAll: 'Stop all',
-    restart: 'Restart',
+    startAll: 'Start all containers',
+    stopAll: 'Stop all containers',
+    restart: 'Restart all containers',
   },
 
   dashboard: {
