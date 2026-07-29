@@ -116,12 +116,15 @@ onUnmounted(() => teardown?.());
   >
     <template #bar-append>
       <div class="d-flex ga-2 align-center">
-        <v-chip size="small" variant="tonal" color="success">
+        <v-chip size="large" variant="tonal" color="success">
           {{ inventory.runningServices.length }} / {{ inventory.services.length }}
           {{ t('projectsView.running') }}
         </v-chip>
         <v-btn
           icon
+          variant="tonal"
+          elevation="0"
+          class="mr-1"
           :aria-label="t('app.refresh')"
           :loading="inventory.loadingServices"
           @click="inventory.loadServices()"

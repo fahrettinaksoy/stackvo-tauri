@@ -162,7 +162,15 @@ onMounted(() => {
     :bar-title="t('dashboard.overview')"
   >
     <template #bar-append>
-      <v-btn icon :aria-label="t('app.refresh')" :loading="metrics.loading" @click="refreshAll">
+      <v-btn 
+      icon 
+      variant="tonal"
+      elevation="0"
+      class="mr-1"
+      :aria-label="t('app.refresh')" 
+      :loading="metrics.loading" 
+      @click="refreshAll"
+      >
         <v-icon>mdi-refresh</v-icon>
         <v-tooltip activator="parent" location="bottom">{{ t('app.refresh') }}</v-tooltip>
       </v-btn>
@@ -172,7 +180,7 @@ onMounted(() => {
       <!-- Counters -->
       <v-row class="dash-row">
         <v-col cols="12" md="3">
-          <v-card rounded="0" elevation="1" hover>
+          <v-card elevation="1" hover>
             <v-card-text style="min-height: 100px">
               <div class="d-flex align-center">
                 <v-icon color="info" size="48" class="mr-4">mdi-heart-pulse</v-icon>
@@ -193,7 +201,6 @@ onMounted(() => {
 
         <v-col cols="12" md="3">
           <v-card
-            rounded="0"
             elevation="1"
             hover
             class="cursor-pointer"
@@ -220,7 +227,6 @@ onMounted(() => {
 
         <v-col cols="12" md="3">
           <v-card
-            rounded="0"
             elevation="1"
             hover
             class="cursor-pointer"
@@ -246,7 +252,7 @@ onMounted(() => {
         </v-col>
 
         <v-col cols="12" md="3">
-          <v-card rounded="0" elevation="1" hover>
+          <v-card elevation="1" hover>
             <v-card-text style="min-height: 100px">
               <div class="d-flex align-center">
                 <v-icon color="info" size="48" class="mr-4">mdi-layers</v-icon>
@@ -270,7 +276,7 @@ onMounted(() => {
            inside a container, which on macOS meant no /proc at all. -->
       <v-row class="dash-row">
         <v-col cols="12" md="6" lg="3">
-          <v-card rounded="0" elevation="1" class="pa-4 d-flex flex-column metric-card">
+          <v-card elevation="1" class="pa-4 d-flex flex-column metric-card">
             <div class="text-subtitle-2 text-grey mb-2">{{ t('dashboard.cpuLoad') }}</div>
 
             <div v-if="loading" class="flex-grow-1 d-flex align-center justify-center">
@@ -328,7 +334,7 @@ onMounted(() => {
         </v-col>
 
         <v-col cols="12" md="6" lg="3">
-          <v-card rounded="0" elevation="1" class="pa-4 d-flex flex-column metric-card">
+          <v-card elevation="1" class="pa-4 d-flex flex-column metric-card">
             <div class="d-flex align-center mb-2">
               <span class="text-subtitle-2 text-grey">{{ t('dashboard.cpuHistory') }}</span>
               <v-spacer />
@@ -355,7 +361,7 @@ onMounted(() => {
         </v-col>
 
         <v-col cols="12" md="6" lg="3">
-          <v-card rounded="0" elevation="1" class="pa-4 d-flex flex-column metric-card">
+          <v-card elevation="1" class="pa-4 d-flex flex-column metric-card">
             <div class="text-subtitle-2 text-grey mb-2">{{ t('stats.memory') }}</div>
             <div v-if="loading" class="flex-grow-1 d-flex align-center justify-center">
               <v-progress-circular indeterminate size="28" />
@@ -410,7 +416,7 @@ onMounted(() => {
         </v-col>
 
         <v-col cols="12" md="6" lg="3">
-          <v-card rounded="0" elevation="1" class="pa-4 d-flex flex-column metric-card">
+          <v-card elevation="1" class="pa-4 d-flex flex-column metric-card">
             <div class="text-subtitle-2 text-grey mb-2">{{ t('stats.storage') }}</div>
             <div v-if="loading" class="flex-grow-1 d-flex align-center justify-center">
               <v-progress-circular indeterminate size="28" />
@@ -468,7 +474,7 @@ onMounted(() => {
       <!-- Throughput -->
       <v-row class="dash-row">
         <v-col cols="12" lg="6">
-          <v-card rounded="0" elevation="1" class="pa-4">
+          <v-card elevation="1" class="pa-4">
             <div class="d-flex align-start">
               <div class="flex-grow-1">
                 <div class="text-subtitle-1 font-weight-medium">{{ t('dashboard.diskIo') }}</div>
@@ -522,7 +528,7 @@ onMounted(() => {
         </v-col>
 
         <v-col cols="12" lg="6">
-          <v-card rounded="0" elevation="1" class="pa-4">
+          <v-card elevation="1" class="pa-4">
             <div class="d-flex align-start">
               <div class="flex-grow-1">
                 <div class="text-subtitle-1 font-weight-medium">{{ t('dashboard.network') }}</div>
@@ -586,7 +592,7 @@ onMounted(() => {
         class="dash-row"
       >
         <v-col cols="12">
-          <v-card rounded="0" variant="tonal" color="warning">
+          <v-card variant="tonal" color="warning">
             <v-card-text class="d-flex flex-column ga-2">
               <div v-if="inventory.invalidProjects.length" class="d-flex align-center ga-2">
                 <v-icon size="18">mdi-file-alert-outline</v-icon>

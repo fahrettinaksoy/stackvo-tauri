@@ -151,12 +151,14 @@ onUnmounted(() => teardown?.());
   >
     <template #bar-append>
       <div class="d-flex ga-2 align-center">
-        <v-chip size="small" variant="tonal" color="success">
+        <v-chip size="large" variant="tonal" color="success">
           {{ inventory.runningProjects.length }} / {{ inventory.projects.length }}
           {{ t('projectsView.running') }}
         </v-chip>
         <v-btn
           icon
+          variant="tonal"
+          elevation="0"
           :aria-label="t('newProject.title')"
           :disabled="!app.hasWorkspace"
           @click="app.newProjectOpen = true"
@@ -166,6 +168,9 @@ onUnmounted(() => teardown?.());
         </v-btn>
         <v-btn
           icon
+          variant="tonal"
+          elevation="0"
+          class="mr-1"
           :aria-label="t('app.refresh')"
           :loading="inventory.loadingProjects"
           @click="inventory.loadProjects()"
@@ -447,7 +452,7 @@ onUnmounted(() => teardown?.());
 
 <style scoped>
 .domain-link {
-  color: rgb(var(--v-theme-primary));
+  color: inherit;
   cursor: pointer;
   text-decoration: none;
 }

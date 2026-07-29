@@ -321,7 +321,7 @@ onUnmounted(() => clearInterval(statsTimer));
       <v-toolbar-title class="text-h6 font-weight-bold">{{ project.name }}</v-toolbar-title>
 
       <v-chip
-        size="small"
+        size="large"
         variant="tonal"
         :color="running ? 'success' : 'grey'"
         :prepend-icon="running ? 'mdi-check-circle' : 'mdi-stop-circle'"
@@ -335,8 +335,10 @@ onUnmounted(() => clearInterval(statsTimer));
       <v-btn
         v-if="httpsUrl && running && project.domainConfigured"
         icon
-        variant="text"
+        variant="tonal"
+        elevation="0"
         color="primary"
+        class="mr-2"
         :aria-label="t('projectsView.colOpen')"
         @click="openUrl(httpsUrl)"
       >
@@ -346,8 +348,10 @@ onUnmounted(() => clearInterval(statsTimer));
       <v-btn
         v-if="running"
         icon
-        variant="text"
+        variant="tonal"
+        elevation="0"
         color="info"
+        class="mr-2"
         :aria-label="t('detail.externalTerminal')"
         @click="openExternalTerminal"
       >
@@ -356,15 +360,23 @@ onUnmounted(() => clearInterval(statsTimer));
           t('detail.externalTerminal')
         }}</v-tooltip>
       </v-btn>
-      <v-btn icon variant="text" :aria-label="t('detail.openInEditor')" @click="openInEditor">
+      <v-btn 
+        icon 
+        variant="tonal"
+        elevation="0"
+        class="mr-2"
+        :aria-label="t('detail.openInEditor')" 
+        @click="openInEditor"
+      >
         <v-icon>mdi-folder-open</v-icon>
         <v-tooltip activator="parent" location="bottom">{{ t('detail.openInEditor') }}</v-tooltip>
       </v-btn>
       <v-btn
         v-if="running"
         icon
-        variant="text"
-        color="error"
+        variant="tonal"
+        elevation="0"
+        class="mr-2"
         :aria-label="t('actions.stop')"
         :loading="ops.isBusy(name)"
         @click="act(api.projectStop)"
@@ -375,8 +387,10 @@ onUnmounted(() => clearInterval(statsTimer));
       <v-btn
         v-else-if="project.built"
         icon
-        variant="text"
+        variant="tonal"
+        elevation="0"
         color="success"
+        class="mr-2"
         :aria-label="t('actions.start')"
         :disabled="!app.engineUp"
         :loading="ops.isBusy(name)"
@@ -388,8 +402,10 @@ onUnmounted(() => clearInterval(statsTimer));
       <v-btn
         v-else
         icon="mdi-hammer-wrench"
-        variant="text"
+        variant="tonal"
+        elevation="0"
         color="info"
+        class="mr-2"
         :aria-label="t('actions.build')"
         :disabled="!app.engineUp || !project.manifestValid"
         :loading="ops.isBusy(name)"
@@ -398,8 +414,10 @@ onUnmounted(() => clearInterval(statsTimer));
       <v-btn
         v-if="running"
         icon
-        variant="text"
+        variant="tonal"
+        elevation="0"
         color="warning"
+        class="mr-2"
         :aria-label="t('actions.restart')"
         :loading="ops.isBusy(name)"
         @click="act(api.projectRestart)"
@@ -409,15 +427,24 @@ onUnmounted(() => clearInterval(statsTimer));
       </v-btn>
       <v-btn
         icon="mdi-delete"
-        variant="text"
+        variant="tonal"
+        elevation="0"
         color="error"
         :aria-label="t('projectsView.colDelete')"
         @click="act((n) => api.projectDelete(n, false))"
       />
 
-      <v-divider vertical class="mx-2" />
+      <v-divider vertical class="mx-3 my-3" />
 
-      <v-btn icon variant="text" :aria-label="t('app.refresh')" :loading="loading" @click="load">
+      <v-btn 
+        icon 
+        variant="tonal"
+        elevation="0"
+        class="mr-2"
+        :aria-label="t('app.refresh')" 
+        :loading="loading" 
+        @click="load"
+      >
         <v-icon>mdi-refresh</v-icon>
         <v-tooltip activator="parent" location="bottom">{{ t('app.refresh') }}</v-tooltip>
       </v-btn>

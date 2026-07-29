@@ -97,15 +97,21 @@ function toggleTheme() {
   appearance.toggleTheme(isDark.value);
 }
 
-async function stackAction(fn) {
+/* Which stack-wide action is in flight, so only the pressed button spins
+   while all three stay disabled. */
+const stackActionKey = ref(null);
+
+async function stackAction(fn, key = null) {
   stackError.value = null;
   commandLoading.value = true;
+  stackActionKey.value = key;
   try {
     await fn();
   } catch (e) {
     stackError.value = e;
   } finally {
     commandLoading.value = false;
+    stackActionKey.value = null;
   }
 }
 
@@ -179,23 +185,74 @@ onUnmounted(() => {
   <v-app>
     <!-- App bar ---------------------------------------------------------- -->
     <v-app-bar color="primary" elevation="3">
-      <v-toolbar-title class="text-h4">
+      <v-toolbar-title class="text-h4 app-title">
         <span class="font-weight-bold">Stack</span><span class="font-weight-light">Vo</span>
       </v-toolbar-title>
 
       <v-defaults-provider :defaults="{ VBtn: { variant: 'text', density: 'comfortable' } }">
+        <!-- Stack-wide actions, next to the identity they act on behalf of:
+             these operate on everything, so they live in the global bar rather
+             than the navigation drawer. -->
+        <v-divider vertical class="mx-4 my-3"></v-divider>
+        <v-btn
+          icon="mdi-play-circle-outline"
+          variant="elevated"
+          elevation="0"
+          color="success"
+          class="mr-2"
+          :title="t('quickActions.startAll')"
+          :disabled="commandLoading || !app.engineUp"
+          :loading="stackActionKey === 'start'"
+          @click="stackAction(() => api.containersStartAll(), 'start')"
+        />
+        <v-btn
+          icon="mdi-stop-circle-outline"
+          variant="elevated"
+          elevation="0"
+          color="error"
+          class="mr-2"
+          :title="t('quickActions.stopAll')"
+          :disabled="commandLoading || !app.engineUp"
+          :loading="stackActionKey === 'stop'"
+          @click="stackAction(() => api.containersStopAll(), 'stop')"
+        />
+        <v-btn
+          icon="mdi-restart"
+          variant="elevated"
+          elevation="0"
+          color="warning"
+          :title="t('quickActions.restart')"
+          :disabled="commandLoading || !app.engineUp"
+          :loading="stackActionKey === 'restart'"
+          @click="stackAction(() => api.containersRestartAll(), 'restart')"
+        />
+
+        <v-spacer />
+
         <v-btn
           icon
+          variant="tonal"
+          elevation="0"
+          class="mr-2"
           :title="t('app.documentation')"
           @click="openUrl('https://stackvo.github.io/stackvo')"
         >
           <v-icon>mdi-book-open-variant</v-icon>
         </v-btn>
-        <v-btn icon title="GitHub" @click="openUrl('https://github.com/stackvo/stackvo')">
+        <v-btn 
+          icon 
+          variant="tonal"
+          elevation="0"
+          class="mr-2"
+          title="GitHub"
+          @click="openUrl('https://github.com/stackvo/stackvo')">
           <v-icon>mdi-github</v-icon>
         </v-btn>
         <v-btn
           icon
+          variant="tonal"
+          elevation="0"
+          class="mr-2"
           :title="t('app.buyMeCoffee')"
           @click="openUrl('https://buymeacoffee.com/fahrettinaksoy')"
         >
@@ -204,7 +261,11 @@ onUnmounted(() => {
 
         <v-menu>
           <template #activator="{ props }">
-            <v-btn icon v-bind="props" :title="t('app.socialMedia')">
+            <v-btn 
+            icon
+            variant="tonal"
+            elevation="0"
+            v-bind="props" :title="t('app.socialMedia')">
               <v-icon>mdi-share-variant</v-icon>
             </v-btn>
           </template>
@@ -218,15 +279,24 @@ onUnmounted(() => {
           </v-list>
         </v-menu>
 
-        <v-divider vertical class="mx-2" />
+        <v-divider vertical class="mx-4 my-3"></v-divider>
 
-        <v-menu>
+        <v-menu
+        location="bottom end"
+        >
           <template #activator="{ props }">
-            <v-btn icon v-bind="props" :title="t('app.language')">
+            <v-btn 
+              icon
+              variant="tonal"
+              elevation="0"
+              class="mr-2"
+              v-bind="props" 
+              :title="t('app.language')"
+            >
               <v-icon>mdi-translate</v-icon>
             </v-btn>
           </template>
-          <v-list>
+          <v-list density="compact" class="px-2 py-2">
             <v-list-item
               v-for="lang in LANGUAGES"
               :key="lang.value"
@@ -238,7 +308,13 @@ onUnmounted(() => {
           </v-list>
         </v-menu>
 
-        <v-btn icon :title="t('app.toggleTheme')" @click="toggleTheme">
+        <v-btn 
+        icon
+        variant="tonal"
+        elevation="0"
+        class="mr-5"
+        :title="t('app.toggleTheme')" @click="toggleTheme"
+        >
           <v-icon>{{ isDark ? 'mdi-weather-sunny' : 'mdi-weather-night' }}</v-icon>
         </v-btn>
       </v-defaults-provider>
@@ -319,42 +395,6 @@ onUnmounted(() => {
             </template>
           </v-tooltip>
         </div>
-
-        <v-divider class="mx-3 mb-1" />
-
-        <v-list nav class="pb-1">
-          <v-list-item
-            rounded="lg"
-            :title="t('quickActions.startAll')"
-            :disabled="commandLoading || !app.engineUp"
-            @click.stop="stackAction(() => api.containersStartAll())"
-          >
-            <template #prepend
-              ><v-icon class="text-success">mdi-play-circle-outline</v-icon></template
-            >
-            <template v-if="commandLoading" #append>
-              <v-progress-circular indeterminate size="18" width="2" />
-            </template>
-          </v-list-item>
-          <v-list-item
-            rounded="lg"
-            :title="t('quickActions.stopAll')"
-            :disabled="commandLoading || !app.engineUp"
-            @click.stop="stackAction(() => api.containersStopAll())"
-          >
-            <template #prepend
-              ><v-icon class="text-error">mdi-stop-circle-outline</v-icon></template
-            >
-          </v-list-item>
-          <v-list-item
-            rounded="lg"
-            :title="t('quickActions.restart')"
-            :disabled="commandLoading || !app.engineUp"
-            @click.stop="stackAction(() => api.containersRestartAll())"
-          >
-            <template #prepend><v-icon class="text-warning">mdi-restart</v-icon></template>
-          </v-list-item>
-        </v-list>
 
         <v-divider />
         <v-list nav>
@@ -571,6 +611,13 @@ onUnmounted(() => {
   padding-top: 2px;
 }
 
+/* `v-toolbar-title` grows by default, which would push everything after it to
+   the far side. The stack actions belong beside the logo, so the title keeps
+   its natural width and an explicit spacer splits the bar instead. */
+.app-title {
+  flex: 0 0 auto;
+}
+
 .status-panel {
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: var(--app-radius);
@@ -650,5 +697,22 @@ onUnmounted(() => {
 /* A stopped project stays legible but recedes, so running ones read first. */
 .project-icon--stopped {
   opacity: 0.45;
+}
+
+/* A railed drawer shows only the icon, but the list item's grid keeps all
+   three columns — and `content` is `1fr`, so the invisible title still claims
+   the width and pins the icon to the left edge. Collapse the grid to the one
+   visible column and center it. The append slot (row menus, spinners) is
+   hidden outright: clipped halves of buttons are not chrome, they are noise.
+   Overlay menus are teleported to the body and unaffected. */
+.v-navigation-drawer--rail :deep(.v-list-item) {
+  grid-template-columns: min-content;
+  justify-content: center;
+}
+
+.v-navigation-drawer--rail :deep(.v-list-item .v-list-item__spacer),
+.v-navigation-drawer--rail :deep(.v-list-item .v-list-item__content),
+.v-navigation-drawer--rail :deep(.v-list-item .v-list-item__append) {
+  display: none;
 }
 </style>
