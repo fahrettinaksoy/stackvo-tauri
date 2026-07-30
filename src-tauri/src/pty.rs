@@ -290,6 +290,28 @@ pub fn open_external(target: &PtyTarget, preferred: Option<&str>) -> Result<()> 
     spawn_terminal(id, &command)
 }
 
+/// Open the user's terminal running one of the catalog's commands.
+///
+/// Separate from [`open_external`] because the command is not a shell here: it
+/// comes from [`crate::quickcmd::CATALOG`] by id, so the string assembled below
+/// is built from compiled-in words plus a container name the workspace helper
+/// has already validated. Nothing the frontend typed reaches it.
+///
+/// A string rather than argv only because that is what a terminal emulator
+/// takes — every one of them is handed a command line, which is why
+/// `spawn_terminal` exists in three platform flavours.
+pub fn open_external_command(
+    container: &str,
+    spec: &crate::quickcmd::Spec,
+    preferred: Option<&str>,
+) -> Result<()> {
+    let argv = crate::quickcmd::exec_argv(container, spec);
+    let command = format!("docker {}", argv.join(" "));
+
+    let (id, ..) = crate::apps::resolve_terminal(preferred)?;
+    spawn_terminal(id, &command)
+}
+
 /// Launch `id` running `command`.
 ///
 /// Each terminal wants the command a different way, and none of them takes it

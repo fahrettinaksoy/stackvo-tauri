@@ -276,11 +276,32 @@ pub fn compose_base_args(root: &Path) -> Vec<String> {
         args.push(file.display().to_string());
     }
 
-    // Layered last so its `environment:` merges onto the generated service
-    // rather than being merged over.
+    // Layered last so their `environment:` and `volumes:` merge onto the
+    // generated service rather than being merged over. Two files rather than
+    // one: the overlays are independent — Xdebug adds environment, php.ini adds
+    // a mount — and a fault in either must not take the other's projects down.
     if crate::xdebug::sync(root) {
         args.push("-f".to_string());
         args.push(crate::xdebug::overlay_path(root).display().to_string());
+    }
+    if crate::phpini::sync(root) {
+        args.push("-f".to_string());
+        args.push(crate::phpini::overlay_path(root).display().to_string());
+    }
+    // Two environment variables, and nothing else. Safe to layer for every
+    // eligible project because a dump with no collector listening falls back to
+    // rendering into the response — verified, not assumed.
+    if crate::dumps::sync(root) {
+        args.push("-f".to_string());
+        args.push(crate::dumps::overlay_path(root).display().to_string());
+    }
+    // Last of the three, and it is the only one that overrides rather than
+    // adds: it replaces the container's `command` with the dev server. Anything
+    // layered after it would be merging onto a service already in a different
+    // mode, so this is where the chain ends.
+    if crate::devserver::sync(root) {
+        args.push("-f".to_string());
+        args.push(crate::devserver::overlay_path(root).display().to_string());
     }
 
     args
@@ -419,6 +440,182 @@ mod tests {
         let args = compose_base_args(&dir);
         assert_eq!(args.iter().filter(|a| *a == "-f").count(), 3);
         assert!(!crate::xdebug::overlay_path(&dir).exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The php.ini overlay is a second, independent layer. Both can be present
+    /// at once, and neither depends on the other — which is the reason they are
+    /// two files and not two sections of one.
+    #[test]
+    fn the_php_ini_overlay_layers_alongside_the_xdebug_one() {
+        let dir = std::env::temp_dir().join("stackvo-phpini-order-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let project = dir.join("projects").join("shop");
+        std::fs::create_dir_all(project.join(".stackvo")).unwrap();
+        std::fs::create_dir_all(dir.join("generated")).unwrap();
+
+        std::fs::write(
+            dir.join("generated").join("docker-compose.projects.yml"),
+            "name: stackvo\n\nservices:\n  shop:\n    image: x\n\nnetworks:\n  stackvo-net:\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.join("stackvo.json"),
+            r#"{"name":"shop","domain":"shop.loc","runtime":"php",
+                "php":{"version":"8.4","extensions":["gd"]}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            project.join(".stackvo").join("php.ini"),
+            "memory_limit = 512M\n",
+        )
+        .unwrap();
+
+        // php.ini alone: four files, and the last one is the mount.
+        let args = compose_base_args(&dir);
+        assert_eq!(args.iter().filter(|a| *a == "-f").count(), 4);
+        assert!(args.last().unwrap().ends_with("docker-compose.phpini.yml"));
+
+        // Both: five, with php.ini still last.
+        std::fs::write(
+            project.join("stackvo.json"),
+            r#"{"name":"shop","domain":"shop.loc","runtime":"php",
+                "php":{"version":"8.4","extensions":["gd","xdebug"]}}"#,
+        )
+        .unwrap();
+        let args = compose_base_args(&dir);
+        assert_eq!(args.iter().filter(|a| *a == "-f").count(), 5);
+
+        // And the mount goes when the file does — a stale overlay pointing at a
+        // path that no longer exists mounts an empty directory into conf.d.
+        std::fs::remove_file(project.join(".stackvo").join("php.ini")).unwrap();
+        let args = compose_base_args(&dir);
+        assert_eq!(args.iter().filter(|a| *a == "-f").count(), 4);
+        assert!(!crate::phpini::overlay_path(&dir).exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The dumps overlay reaches a PHP project that has the collector in its
+    /// vendor tree, and nothing else — a project with no `var-dump-server`
+    /// would be pointed at a server it can never run.
+    #[test]
+    fn the_dumps_overlay_needs_the_collector_to_be_installed() {
+        let dir = std::env::temp_dir().join("stackvo-dumps-overlay-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let shop = dir.join("projects").join("shop");
+        std::fs::create_dir_all(&shop).unwrap();
+        std::fs::create_dir_all(dir.join("generated")).unwrap();
+
+        std::fs::write(
+            dir.join("generated").join("docker-compose.projects.yml"),
+            "name: stackvo\n\nservices:\n  shop:\n    image: x\n\nnetworks:\n  stackvo-net:\n",
+        )
+        .unwrap();
+        std::fs::write(
+            shop.join("stackvo.json"),
+            r#"{"name":"shop","domain":"shop.loc","runtime":"php",
+                "php":{"version":"8.4","extensions":["gd"]}}"#,
+        )
+        .unwrap();
+
+        // No vendor tree yet: three files, no dumps overlay.
+        assert_eq!(
+            compose_base_args(&dir)
+                .iter()
+                .filter(|a| *a == "-f")
+                .count(),
+            3
+        );
+
+        std::fs::create_dir_all(shop.join("vendor").join("bin")).unwrap();
+        std::fs::write(shop.join(crate::dumps::BINARY), "#!/usr/bin/env php\n").unwrap();
+
+        let args = compose_base_args(&dir);
+        assert_eq!(args.iter().filter(|a| *a == "-f").count(), 4);
+        assert!(args.iter().any(|a| a.ends_with("docker-compose.dumps.yml")));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The dev-server overlay is the only one that *overrides* rather than
+    /// adds — it replaces the container's command — so it has to be last, and
+    /// it must not attach to a PHP project, whose `/app` does not exist and
+    /// whose site would be replaced by an empty mount.
+    #[test]
+    fn the_dev_server_overlay_is_last_and_node_only() {
+        let dir = std::env::temp_dir().join("stackvo-devserver-order-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let php = dir.join("projects").join("shop");
+        let node = dir.join("projects").join("site");
+        std::fs::create_dir_all(php.join(".stackvo")).unwrap();
+        std::fs::create_dir_all(node.join(".stackvo")).unwrap();
+        std::fs::create_dir_all(dir.join("generated")).unwrap();
+
+        std::fs::write(
+            dir.join("generated").join("docker-compose.projects.yml"),
+            "name: stackvo\n\nservices:\n  shop:\n    image: x\n  site:\n    image: y\n\nnetworks:\n  stackvo-net:\n",
+        )
+        .unwrap();
+        std::fs::write(
+            php.join("stackvo.json"),
+            r#"{"name":"shop","domain":"shop.loc","runtime":"php",
+                "php":{"version":"8.4","extensions":["gd"]}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            node.join("stackvo.json"),
+            r#"{"name":"site","domain":"site.loc","runtime":"node",
+                "node":{"version":"22","install":"npm ci","start":"node server.js","port":3000}}"#,
+        )
+        .unwrap();
+
+        // A PHP project asking for dev mode is refused by the renderer, not by
+        // the UI: an overlay is derived from files, and a file can be dropped
+        // in by hand.
+        std::fs::write(
+            php.join(".stackvo").join("devserver.json"),
+            r#"{"command":"npm run dev"}"#,
+        )
+        .unwrap();
+        let args = compose_base_args(&dir);
+        assert_eq!(
+            args.iter().filter(|a| *a == "-f").count(),
+            3,
+            "a PHP project got a dev-server overlay"
+        );
+
+        std::fs::write(
+            node.join(".stackvo").join("devserver.json"),
+            r#"{"command":"npm run dev"}"#,
+        )
+        .unwrap();
+        let args = compose_base_args(&dir);
+        assert_eq!(args.iter().filter(|a| *a == "-f").count(), 4);
+        assert!(args
+            .last()
+            .unwrap()
+            .ends_with("docker-compose.devserver.yml"));
+
+        // And it stays last with the others present.
+        std::fs::write(
+            php.join(".stackvo").join("php.ini"),
+            "memory_limit = 512M\n",
+        )
+        .unwrap();
+        std::fs::write(
+            php.join("stackvo.json"),
+            r#"{"name":"shop","domain":"shop.loc","runtime":"php",
+                "php":{"version":"8.4","extensions":["gd","xdebug"]}}"#,
+        )
+        .unwrap();
+        let args = compose_base_args(&dir);
+        assert_eq!(args.iter().filter(|a| *a == "-f").count(), 6);
+        assert!(args
+            .last()
+            .unwrap()
+            .ends_with("docker-compose.devserver.yml"));
 
         std::fs::remove_dir_all(&dir).ok();
     }

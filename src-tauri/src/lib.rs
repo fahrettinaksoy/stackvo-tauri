@@ -7,7 +7,9 @@ pub mod config;
 pub mod contracts;
 pub mod db;
 pub mod detect;
+pub mod devserver;
 pub mod doctor;
+pub mod dumps;
 pub mod engine;
 pub mod env_writer;
 pub mod error;
@@ -19,12 +21,19 @@ pub mod logging;
 pub mod mail;
 pub mod manifest;
 pub mod mcp;
+pub mod migrate;
 pub mod paths;
+pub mod phpini;
 pub mod preflight;
+pub mod preset;
+pub mod profile;
 pub mod pty;
+pub mod quickcmd;
+pub mod release;
 pub mod runner;
 pub mod scaffold;
 pub mod stats;
+pub mod template;
 pub mod tray;
 pub mod tunnel;
 pub mod watcher;
@@ -237,6 +246,8 @@ pub fn run() {
             commands::container_logs_close,
             commands::app_logs,
             commands::app_log_open,
+            commands::app_logs_all,
+            commands::app_logs_all_open,
             commands::env_set,
             commands::generate_run,
             commands::compose_up,
@@ -257,6 +268,30 @@ pub fn run() {
             commands::db_restore,
             commands::xdebug_status,
             commands::xdebug_set,
+            commands::php_ini_status,
+            commands::php_ini_set,
+            commands::doctor_drop_extension,
+            commands::dumps_status,
+            commands::dumps_open,
+            commands::dumps_close,
+            commands::release_plan,
+            commands::release_build,
+            commands::release_save,
+            commands::profiler_status,
+            commands::profiler_set_mode,
+            commands::profiler_read,
+            commands::profiler_delete,
+            commands::profiler_clear,
+            commands::quick_commands,
+            commands::quick_command_run,
+            commands::devserver_status,
+            commands::devserver_set,
+            commands::migrate_scan,
+            commands::migrate_apply,
+            commands::preset_export,
+            commands::preset_save,
+            commands::preset_plan,
+            commands::preset_apply,
             commands::cert_status,
             commands::cert_plan,
             commands::cert_apply,

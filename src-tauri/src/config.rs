@@ -40,6 +40,17 @@ impl Env {
         self.vars.get(key).map(|s| s.as_str())
     }
 
+    /// The whole map, unredacted.
+    ///
+    /// For the template renderer, which is reproducing what Bash does after
+    /// exporting `.env` — it needs the real values, including the secrets that
+    /// legitimately end up inside a generated service definition. Everything
+    /// user-facing uses [`Self::redacted`] instead; this is deliberately not
+    /// something a command returns.
+    pub fn raw(&self) -> &BTreeMap<String, String> {
+        &self.vars
+    }
+
     /// First key that is present, in the order given. Encodes the precedence
     /// chains in `contracts/project.schema.json` → `x-stackvo-read-rules`.
     pub fn first_of(&self, keys: &[&str]) -> Option<&str> {

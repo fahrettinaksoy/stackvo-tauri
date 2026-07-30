@@ -49,6 +49,7 @@ function mountShell() {
       { path: '/', component: { template: '<div />' } },
       { path: '/projects', component: { template: '<div />' } },
       { path: '/services', component: { template: '<div />' } },
+      { path: '/logs', component: { template: '<div />' } },
       { path: '/settings', component: { template: '<div />' } },
     ],
   });
@@ -75,16 +76,30 @@ beforeEach(() => {
 describe('the navigation drawer', () => {
   it('renders every destination', () => {
     const text = wrapper.text();
-    for (const label of ['nav.dashboard', 'nav.projects', 'nav.services', 'nav.settings']) {
+    for (const label of [
+      'nav.dashboard',
+      'nav.projects',
+      'nav.services',
+      'nav.logs',
+      'nav.settings',
+    ]) {
       const title = i18n.global.t(label);
       expect(text, `${label} is missing from the drawer`).toContain(title);
     }
   });
 
-  it('renders the quick actions', () => {
-    const text = wrapper.text();
+  it('renders the quick actions in the app bar', () => {
+    // The stack-wide actions moved out of the drawer and into the global app
+    // bar in 100a2d4, because they act on everything rather than on a
+    // destination. They are icon buttons, so their label is a `title`
+    // attribute — invisible to `wrapper.text()`, which is what made the
+    // previous version of this test fail for the wrong reason.
+    const bar = wrapper.find('.v-app-bar');
+    expect(bar.exists(), 'no app bar').toBe(true);
+
     for (const key of ['quickActions.startAll', 'quickActions.stopAll', 'quickActions.restart']) {
-      expect(text, `${key} is missing`).toContain(i18n.global.t(key));
+      const label = i18n.global.t(key);
+      expect(bar.find(`[title="${label}"]`).exists(), `${key} is missing`).toBe(true);
     }
   });
 
@@ -99,10 +114,11 @@ describe('the navigation drawer', () => {
     expect(html).toMatch(/mdi-chevron-(left|right)/);
   });
 
-  it('pins the status, the quick actions and the collapse control to the floor', () => {
-    // All three are fixed chrome, not content: they belong in the drawer's
-    // append region, which sits on the floor and outside the scroll area. Only
-    // the destinations scroll.
+  it('pins the status and the collapse control to the floor', () => {
+    // Both are fixed chrome, not content: they belong in the drawer's append
+    // region, which sits on the floor and outside the scroll area. Only the
+    // destinations scroll. The quick actions are no longer asserted here —
+    // they live in the app bar now, covered by the test above.
     const drawer = wrapper.find('.nav-drawer');
     expect(drawer.exists()).toBe(true);
 
@@ -111,9 +127,6 @@ describe('the navigation drawer', () => {
 
     const footer = append.html();
     expect(footer, 'engine status is not in the footer').toContain('mdi-docker');
-    expect(footer, 'quick actions are not in the footer').toContain(
-      i18n.global.t('quickActions.startAll')
-    );
     expect(footer, 'the collapse control is not in the footer').toMatch(/mdi-chevron-(left|right)/);
   });
 

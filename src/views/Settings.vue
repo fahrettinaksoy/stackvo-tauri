@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useTheme } from 'vuetify';
 import { openPath } from '@tauri-apps/plugin-opener';
@@ -115,6 +115,14 @@ const SECTIONS = [
     desc: 'settings.preferencesDesc',
   },
   { key: 'stack', icon: 'mdi-server', label: 'settings.stack', desc: 'settings.stackDesc' },
+  // Next to the stack section because it is that section, made portable: which
+  // services are on and at which versions, as a file a teammate can be handed.
+  {
+    key: 'sharing',
+    icon: 'mdi-share-variant-outline',
+    label: 'stackPreset.title',
+    desc: 'stackPreset.sectionDesc',
+  },
   {
     key: 'doctor',
     icon: 'mdi-stethoscope',
@@ -148,6 +156,108 @@ async function savePreset() {
   await appearance.savePreset(presetName.value);
   presetName.value = '';
 }
+
+/**
+ * Stack presets — a different thing from the appearance presets above, which is
+ * why nothing here shares their names.
+ *
+ * The file carries which services are enabled and at which versions. That is
+ * the part of a StackVo configuration a teammate does not get from a clone:
+ * `stackvo.json` is already in the repository, `.env` is not, because `.env` is
+ * also where every password lives.
+ *
+ * Import is plan-then-apply, like the hosts file and the certificate — you see
+ * the diff before anything is written over your own stack.
+ */
+const stackPresetName = ref('');
+const stackPreset = ref(null);
+const stackPresetPlan = ref(null);
+const stackPresetPath = ref('');
+const stackPresetBusy = ref(false);
+const stackPresetApplied = ref(false);
+
+async function loadStackPreset() {
+  try {
+    stackPreset.value = await api.presetExport();
+  } catch (e) {
+    envError.value = e;
+  }
+}
+
+const stackPresetJson = computed(() =>
+  stackPreset.value ? JSON.stringify(stackPreset.value, null, 2) : ''
+);
+
+/** How many services the current stack has on, for the summary line. */
+const stackPresetEnabled = computed(
+  () => Object.values(stackPreset.value?.services ?? {}).filter((s) => s.enabled).length
+);
+
+async function exportStackPreset() {
+  const { save } = await import('@tauri-apps/plugin-dialog');
+  const suggested = stackPresetName.value.trim() || 'stack';
+  const path = await save({ defaultPath: `${suggested}.stackvo-preset.json` });
+  if (!path) return;
+
+  stackPresetBusy.value = true;
+  envError.value = null;
+  try {
+    await api.presetSave(path, stackPresetName.value.trim() || null);
+  } catch (e) {
+    envError.value = e;
+  } finally {
+    stackPresetBusy.value = false;
+  }
+}
+
+async function chooseStackPreset() {
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const path = await open({ multiple: false, directory: false });
+  if (!path) return;
+
+  stackPresetBusy.value = true;
+  envError.value = null;
+  stackPresetApplied.value = false;
+  try {
+    stackPresetPlan.value = await api.presetPlan(path);
+    stackPresetPath.value = path;
+  } catch (e) {
+    // A file that is not a preset is an error, not an empty plan — clear the
+    // pane so a previous review cannot be mistaken for this file's.
+    stackPresetPlan.value = null;
+    stackPresetPath.value = '';
+    envError.value = e;
+  } finally {
+    stackPresetBusy.value = false;
+  }
+}
+
+async function applyStackPreset() {
+  stackPresetBusy.value = true;
+  envError.value = null;
+  try {
+    stackPresetPlan.value = await api.presetApply(stackPresetPath.value);
+    stackPresetApplied.value = true;
+    // The stack this pane describes is the stack that just changed.
+    await loadStackPreset();
+  } catch (e) {
+    envError.value = e;
+  } finally {
+    stackPresetBusy.value = false;
+  }
+}
+
+function clearStackPresetPlan() {
+  stackPresetPlan.value = null;
+  stackPresetPath.value = '';
+  stackPresetApplied.value = false;
+}
+
+// Loaded when the pane is opened rather than on mount: it reads .env, and the
+// other eight sections have no use for it.
+watch(tab, (value) => {
+  if (value === 'sharing' && !stackPreset.value) loadStackPreset();
+});
 
 const statusItems = computed(() =>
   STATUS_PALETTES.map((p) => ({ value: p.id, title: t(`settings.statusPalettes.${p.id}`) }))
@@ -997,6 +1107,165 @@ onMounted(async () => {
             </SettingsGroup>
           </template>
 
+          <!-- ---- stack preset ----------------------------------------------- -->
+          <!-- The stack, made portable. `stackvo.json` is already in the
+               teammate's clone; which services are on and at which versions is
+               not, because that lives in .env and .env is where the passwords
+               are. A preset carries the first half and, by construction, has
+               nowhere to put the second. -->
+          <template v-if="tab === 'sharing'">
+            <SettingsGroup
+              icon="mdi-export-variant"
+              :title="t('stackPreset.export')"
+              :description="t('stackPreset.exportDesc')"
+            >
+              <div class="d-flex ga-2 align-start">
+                <v-text-field
+                  v-model="stackPresetName"
+                  :label="t('stackPreset.name')"
+                  :placeholder="t('stackPreset.namePlaceholder')"
+                  persistent-placeholder
+                  hide-details
+                />
+                <v-btn
+                  color="primary"
+                  variant="flat"
+                  :loading="stackPresetBusy"
+                  @click="exportStackPreset"
+                >
+                  {{ t('stackPreset.saveFile') }}
+                </v-btn>
+              </div>
+
+              <div v-if="stackPreset" class="text-caption text-medium-emphasis mt-3">
+                {{
+                  t('stackPreset.summary', {
+                    enabled: stackPresetEnabled,
+                    total: Object.keys(stackPreset.services).length,
+                  })
+                }}
+              </div>
+
+              <!-- Shown, not just written. The reason to read it is the reason
+                   to trust it: there is no password in there because there is
+                   nowhere in the format to put one. -->
+              <v-expansion-panels v-if="stackPresetJson" variant="accordion" class="mt-3">
+                <v-expansion-panel :title="t('stackPreset.preview')">
+                  <v-expansion-panel-text>
+                    <pre class="preset-json">{{ stackPresetJson }}</pre>
+                  </v-expansion-panel-text>
+                </v-expansion-panel>
+              </v-expansion-panels>
+            </SettingsGroup>
+
+            <SettingsGroup
+              icon="mdi-import"
+              :title="t('stackPreset.import')"
+              :description="t('stackPreset.importDesc')"
+            >
+              <v-btn variant="tonal" :loading="stackPresetBusy" @click="chooseStackPreset">
+                {{ t('stackPreset.chooseFile') }}
+              </v-btn>
+
+              <template v-if="stackPresetPlan">
+                <div class="text-body-2 mt-4">
+                  <strong>{{ stackPresetPlan.name || t('stackPreset.untitled') }}</strong>
+                  <span v-if="stackPresetPlan.description" class="text-medium-emphasis">
+                    — {{ stackPresetPlan.description }}
+                  </span>
+                </div>
+
+                <!-- "Nothing to do" and "everything was rejected" both produce
+                     an empty change list and need opposite responses, so the
+                     unchanged count is what tells them apart. -->
+                <v-alert
+                  v-if="stackPresetApplied"
+                  type="success"
+                  variant="tonal"
+                  class="mt-3"
+                  :text="t('stackPreset.applied')"
+                />
+                <v-alert
+                  v-else-if="!stackPresetPlan.changes.length"
+                  type="info"
+                  variant="tonal"
+                  class="mt-3"
+                  :text="
+                    stackPresetPlan.unchanged
+                      ? t('stackPreset.alreadyMatches', { n: stackPresetPlan.unchanged })
+                      : t('stackPreset.nothingUsable')
+                  "
+                />
+
+                <v-table v-if="stackPresetPlan.changes.length" density="compact" class="mt-3">
+                  <thead>
+                    <tr>
+                      <th>{{ t('stackPreset.colSubject') }}</th>
+                      <th>{{ t('stackPreset.colFrom') }}</th>
+                      <th>{{ t('stackPreset.colTo') }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="change in stackPresetPlan.changes" :key="change.key">
+                      <td>
+                        <div>{{ change.subject }}</div>
+                        <div class="text-caption text-medium-emphasis mono">{{ change.key }}</div>
+                      </td>
+                      <td class="mono text-medium-emphasis">
+                        {{ change.from ?? t('stackPreset.absent') }}
+                      </td>
+                      <td class="mono">{{ change.to }}</td>
+                    </tr>
+                  </tbody>
+                </v-table>
+
+                <!-- Named, never silently dropped: a preset that quietly skips
+                     half of what it was given is how somebody concludes it
+                     worked and then loses an afternoon to the service it
+                     ignored. -->
+                <v-alert
+                  v-if="stackPresetPlan.rejected.length"
+                  type="warning"
+                  variant="tonal"
+                  class="mt-3"
+                >
+                  <div class="text-caption font-weight-medium mb-1">
+                    {{ t('stackPreset.rejected') }}
+                  </div>
+                  <div v-for="line in stackPresetPlan.rejected" :key="line" class="text-caption">
+                    {{ line }}
+                  </div>
+                </v-alert>
+
+                <div class="d-flex ga-2 align-center mt-4">
+                  <v-btn
+                    v-if="!stackPresetApplied && stackPresetPlan.changes.length"
+                    color="primary"
+                    variant="flat"
+                    :loading="stackPresetBusy"
+                    @click="applyStackPreset"
+                  >
+                    {{ t('stackPreset.apply', { n: stackPresetPlan.changes.length }) }}
+                  </v-btn>
+                  <v-btn variant="text" :disabled="stackPresetBusy" @click="clearStackPresetPlan">
+                    {{ stackPresetApplied ? t('app.close') : t('app.cancel') }}
+                  </v-btn>
+                </div>
+
+                <!-- Enabling a service changes what the generator emits, so the
+                     import is not live until regenerate-then-up. Saying so here
+                     is the difference between a feature that worked and one the
+                     user believes did nothing. -->
+                <div
+                  v-if="stackPresetApplied && stackPresetPlan.needsRegenerate"
+                  class="text-caption text-medium-emphasis mt-2"
+                >
+                  {{ t('stackPreset.thenRegenerate') }}
+                </div>
+              </template>
+            </SettingsGroup>
+          </template>
+
           <!-- ---- doctor ----------------------------------------------------- -->
           <!-- Diagnosis next to its repair. The findings here used to surface
                one failed compose up at a time, each as an error about itself:
@@ -1372,6 +1641,22 @@ onMounted(async () => {
 .settings-nav {
   flex: 0 0 220px;
   overflow-y: auto;
+}
+
+/* The preset, as it will be committed. Scrolls in its own box rather than
+   widening the page — a twenty-service preset is longer than the pane. */
+.preset-json {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+}
+
+/* A key or a version, where the difference between 8.0 and 8.O matters. */
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 /* Small caption above a control group. Vuetify's own labels sit inside the

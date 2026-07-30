@@ -25,6 +25,7 @@
 //! reader for the whole disk.
 
 use crate::error::{Code, Error, Result};
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
 /// How deep to look inside a log directory.
@@ -334,6 +335,239 @@ pub fn read_since(path: &Path, offset: u64) -> Result<(String, u64)> {
     Ok((String::from_utf8_lossy(&buffer).into_owned(), len))
 }
 
+// ------------------------------------------------------- across every project
+
+/// How many files the cross-project tail follows at once.
+///
+/// Eight projects at the per-project cap is 480 files, and a `stat` apiece
+/// twice a second is not the problem — 480 concurrently interesting files is.
+/// The cap is on attention, not on cost, and what it drops is *reported* rather
+/// than silently trimmed: `FanoutScan` carries both numbers so the UI can say
+/// "following 60 of 137" instead of implying it covers everything.
+const MAX_FOLLOWED: usize = 60;
+
+/// The managed projects, read from disk with no engine involved.
+///
+/// A directory counts when it holds a `stackvo.json`; an unadopted folder under
+/// `projects/` is somebody's checkout, not a project this app has anything to
+/// say about. Matches `list_projects`, minus the container lookup — this path
+/// must keep working with the engine down, which is the whole premise of
+/// reading logs from the host.
+pub fn projects(root: &Path) -> Result<Vec<String>> {
+    let dir = root.join("projects");
+    let entries =
+        std::fs::read_dir(&dir).map_err(|e| Error::io(format!("reading {}", dir.display()), e))?;
+
+    let mut names = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name.starts_with('.') || !crate::workspace::is_safe_name(name) {
+            continue;
+        }
+        if !path.join("stackvo.json").is_file() {
+            continue;
+        }
+        names.push(name.to_string());
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// One log file, told apart from the identically-named file in another project.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectLogFile {
+    pub project: String,
+    #[serde(flatten)]
+    pub file: LogFile,
+}
+
+/// Every log file every project has, newest first.
+pub fn candidates_all(root: &Path) -> Result<Vec<ProjectLogFile>> {
+    let mut out = Vec::new();
+    for name in projects(root)? {
+        // One unreadable project does not sink the list — a directory whose
+        // permissions changed is a gap in coverage, not a failed call.
+        let Ok(files) = candidates(root, &name) else {
+            continue;
+        };
+        for file in files {
+            out.push(ProjectLogFile {
+                project: name.clone(),
+                file,
+            });
+        }
+    }
+    out.sort_by(|a, b| {
+        b.file
+            .modified
+            .cmp(&a.file.modified)
+            .then_with(|| a.project.cmp(&b.project))
+            .then_with(|| a.file.id.cmp(&b.file.id))
+    });
+    Ok(out)
+}
+
+/// A line, with enough identity to say where it came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FanoutLine {
+    pub project: String,
+    /// The `LogFile.id` the line was read from — an opaque handle, not a path.
+    pub id: String,
+    pub text: String,
+}
+
+/// What one discovery pass found.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FanoutScan {
+    /// Files now being followed.
+    pub followed: usize,
+    /// Files that exist. Larger than `followed` means the cap bit.
+    pub total: usize,
+    pub projects: usize,
+}
+
+struct Tracked {
+    path: PathBuf,
+    offset: u64,
+}
+
+/// A live tail across every project at once.
+///
+/// **It is live only, with no history.** That is a decision, not an omission:
+/// interleaving the existing tails of sixty files would present an ordering
+/// this code cannot justify. Nothing here parses a timestamp — Laravel, nginx
+/// and supervisord do not agree on a format — so the only chronology available
+/// across files is the order bytes arrive in, which is real for new output and
+/// fiction for old. So each file is adopted at its current end and only what is
+/// written afterwards is shown. Per-file history stays where it is honest: the
+/// per-project viewer, which reads one file and can show all of it.
+///
+/// Re-discovery is the other half. A daily channel rolls over at midnight into
+/// a filename that did not exist when the tail started, so a fixed file set
+/// goes quiet exactly when the day's log begins. Files found by a later scan
+/// are adopted at offset zero, because everything in them was written after the
+/// tail was already watching.
+pub struct Fanout {
+    root: PathBuf,
+    tracked: HashMap<(String, String), Tracked>,
+    /// The first scan adopts at end-of-file; later scans adopt at the top.
+    seeded: bool,
+}
+
+impl Fanout {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self {
+            root: root.into(),
+            tracked: HashMap::new(),
+            seeded: false,
+        }
+    }
+
+    /// Re-discover, adopting files that appeared and forgetting files that did
+    /// not survive. Emits nothing: what a newly adopted file holds is delivered
+    /// by the next `poll`, through the same delta path as everything else.
+    pub fn scan(&mut self, only: &[String]) -> FanoutScan {
+        let Ok(names) = projects(&self.root) else {
+            return FanoutScan::default();
+        };
+        let names: Vec<String> = if only.is_empty() {
+            names
+        } else {
+            names.into_iter().filter(|n| only.contains(n)).collect()
+        };
+
+        let mut found: Vec<(String, LogFile)> = Vec::new();
+        for name in &names {
+            let Ok(files) = candidates(&self.root, name) else {
+                continue;
+            };
+            for file in files {
+                found.push((name.clone(), file));
+            }
+        }
+        let total = found.len();
+
+        // Newest first, so what the cap drops is what nobody has written to in
+        // the longest — and the tie-break is stable, or the followed set would
+        // churn between scans and re-adopt files at their end, losing lines.
+        found.sort_by(|a, b| {
+            b.1.modified
+                .cmp(&a.1.modified)
+                .then_with(|| a.0.cmp(&b.0))
+                .then_with(|| a.1.id.cmp(&b.1.id))
+        });
+        found.truncate(MAX_FOLLOWED);
+
+        let mut keep = HashMap::new();
+        for (project, file) in found {
+            let key = (project.clone(), file.id.clone());
+            if let Some(existing) = self.tracked.remove(&key) {
+                keep.insert(key, existing);
+                continue;
+            }
+            let Ok(path) = resolve(&self.root, &project, &file.id) else {
+                continue;
+            };
+            // First scan: start at the end, because everything already in the
+            // file predates the request to watch. Later scans: start at zero,
+            // because the file itself postdates it.
+            let offset = if self.seeded { 0 } else { file.bytes };
+            keep.insert(key, Tracked { path, offset });
+        }
+
+        // Whatever is left in `tracked` was not found this time — rotated away
+        // or deleted. Dropping it is what stops a vanished file from erroring
+        // on every poll for as long as the pane stays open.
+        self.tracked = keep;
+        self.seeded = true;
+
+        FanoutScan {
+            followed: self.tracked.len(),
+            total,
+            projects: names.len(),
+        }
+    }
+
+    /// Everything written since the last call, tagged with its origin.
+    pub fn poll(&mut self) -> Vec<FanoutLine> {
+        let mut out = Vec::new();
+        let mut gone = Vec::new();
+
+        for (key, tracked) in self.tracked.iter_mut() {
+            match read_since(&tracked.path, tracked.offset) {
+                Ok((chunk, next)) => {
+                    tracked.offset = next;
+                    for line in chunk.lines() {
+                        out.push(FanoutLine {
+                            project: key.0.clone(),
+                            id: key.1.clone(),
+                            text: line.to_string(),
+                        });
+                    }
+                }
+                Err(_) => gone.push(key.clone()),
+            }
+        }
+
+        for key in gone {
+            self.tracked.remove(&key);
+        }
+
+        // Grouped by file as read, which within one file is true order. Across
+        // files the map's iteration order is arbitrary, so sorting by project
+        // at least makes the same batch render the same way twice.
+        out.sort_by(|a, b| a.project.cmp(&b.project).then_with(|| a.id.cmp(&b.id)));
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,6 +709,166 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A workspace with `n` projects, each holding one Laravel-shaped log.
+    fn workspace(name: &str, projects: &[&str]) -> PathBuf {
+        let root = scratch(name);
+        for project in projects {
+            let logs = root.join("projects").join(project).join("storage/logs");
+            std::fs::create_dir_all(&logs).unwrap();
+            std::fs::write(
+                root.join("projects").join(project).join("stackvo.json"),
+                "{}",
+            )
+            .unwrap();
+            std::fs::write(logs.join("laravel.log"), "old line\n").unwrap();
+        }
+        root
+    }
+
+    /// An unadopted checkout under `projects/` is somebody's folder, not a
+    /// project this app follows.
+    #[test]
+    fn only_projects_with_a_manifest_are_listed() {
+        let root = workspace("projects-list", &["alpha", "beta"]);
+        std::fs::create_dir_all(root.join("projects/stray/storage/logs")).unwrap();
+        std::fs::create_dir_all(root.join("projects/.hidden")).unwrap();
+
+        assert_eq!(projects(&root).unwrap(), vec!["alpha", "beta"]);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The premise of the whole module: no engine is consulted, so a file in a
+    /// project whose container never started is still listed.
+    #[test]
+    fn candidates_span_every_project() {
+        let root = workspace("candidates-all", &["alpha", "beta"]);
+        let all = candidates_all(&root).unwrap();
+
+        assert_eq!(all.len(), 2);
+        let mut seen: Vec<&str> = all.iter().map(|f| f.project.as_str()).collect();
+        seen.sort();
+        assert_eq!(seen, ["alpha", "beta"]);
+        assert!(all
+            .iter()
+            .all(|f| f.file.label == "storage/logs/laravel.log"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Live only. What was in the file before the tail started is history the
+    /// fanout cannot order against the other fifty-nine files, so it is not
+    /// shown — and the first poll after adoption must be silent, not a dump.
+    #[test]
+    fn the_fanout_starts_at_the_end_and_shows_only_what_follows() {
+        let root = workspace("fanout-live", &["alpha", "beta"]);
+        let mut fanout = Fanout::new(&root);
+
+        let scan = fanout.scan(&[]);
+        assert_eq!(scan.followed, 2);
+        assert_eq!(scan.projects, 2);
+        assert!(fanout.poll().is_empty(), "existing content was replayed");
+
+        std::fs::write(
+            root.join("projects/alpha/storage/logs/laravel.log"),
+            "old line\nfresh\n",
+        )
+        .unwrap();
+
+        let lines = fanout.poll();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].project, "alpha");
+        assert_eq!(lines[0].text, "fresh");
+        assert_eq!(lines[0].id, "app:storage/logs/laravel.log");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A daily channel rolls over into a filename that did not exist when the
+    /// tail started. A fixed file set goes quiet exactly at midnight, which is
+    /// exactly when the day's log begins — so rediscovery adopts at the top,
+    /// since everything in a file that new was written while we were watching.
+    #[test]
+    fn a_file_created_after_the_tail_started_is_read_from_the_top() {
+        let root = workspace("fanout-rollover", &["alpha"]);
+        let mut fanout = Fanout::new(&root);
+        fanout.scan(&[]);
+        assert!(fanout.poll().is_empty());
+
+        std::fs::write(
+            root.join("projects/alpha/storage/logs/laravel-2026-07-31.log"),
+            "first line of the new day\n",
+        )
+        .unwrap();
+
+        let scan = fanout.scan(&[]);
+        assert_eq!(scan.followed, 2, "the rolled-over file was not adopted");
+
+        let lines = fanout.poll();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "first line of the new day");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Re-scanning must not re-adopt a file already being followed: adoption on
+    /// a later scan starts at zero, so a churning followed-set would replay the
+    /// whole file every thirty seconds.
+    #[test]
+    fn rescanning_does_not_replay_a_file_already_followed() {
+        let root = workspace("fanout-stable", &["alpha"]);
+        let mut fanout = Fanout::new(&root);
+        fanout.scan(&[]);
+        fanout.poll();
+
+        std::fs::write(
+            root.join("projects/alpha/storage/logs/laravel.log"),
+            "old line\nsecond\n",
+        )
+        .unwrap();
+        fanout.scan(&[]);
+
+        let lines = fanout.poll();
+        assert_eq!(lines.len(), 1, "got {lines:?}");
+        assert_eq!(lines[0].text, "second");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A file that rotated away by rename errors on every read. Dropping it is
+    /// what stops the poll spinning on it for as long as the pane stays open.
+    #[test]
+    fn a_vanished_file_is_dropped_rather_than_polled_for_ever() {
+        let root = workspace("fanout-gone", &["alpha"]);
+        let mut fanout = Fanout::new(&root);
+        assert_eq!(fanout.scan(&[]).followed, 1);
+
+        std::fs::remove_file(root.join("projects/alpha/storage/logs/laravel.log")).unwrap();
+        assert!(fanout.poll().is_empty());
+        assert!(fanout.tracked.is_empty(), "the dead file is still tracked");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_fanout_can_be_narrowed_to_chosen_projects() {
+        let root = workspace("fanout-filter", &["alpha", "beta"]);
+        let mut fanout = Fanout::new(&root);
+
+        let scan = fanout.scan(&["beta".to_string()]);
+        assert_eq!(scan.followed, 1);
+        assert_eq!(scan.projects, 1);
+
+        std::fs::write(
+            root.join("projects/alpha/storage/logs/laravel.log"),
+            "old line\nignored\n",
+        )
+        .unwrap();
+        assert!(fanout.poll().is_empty(), "an unselected project leaked in");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

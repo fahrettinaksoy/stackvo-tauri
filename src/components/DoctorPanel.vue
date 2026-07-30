@@ -63,6 +63,32 @@ const hostsMissing = computed(() => report.value?.hostsMissing ?? []);
 const generated = computed(() => report.value?.generated ?? null);
 const space = computed(() => report.value?.space ?? null);
 
+/**
+ * Extensions that will be dropped from a build without anyone being told.
+ *
+ * The generator skips one it cannot install and says nothing, so the symptom
+ * arrives much later as a fatal `Call to undefined function` — with nothing
+ * connecting it to a build that reported success. This is the only place the
+ * app says it out loud.
+ */
+const extensions = computed(() => report.value?.extensions ?? []);
+
+/** The default-set rows first: they break a project nobody has touched yet. */
+const extensionsDefault = computed(() => extensions.value.filter((e) => e.isDefaultSet));
+const extensionsProjects = computed(() => extensions.value.filter((e) => !e.isDefaultSet));
+
+/** One row per extension, with the versions it fails on folded together —
+ *  `imap` failing on both candidate defaults is one problem, not two. */
+const extensionsDefaultRows = computed(() => {
+  const byName = new Map();
+  for (const e of extensionsDefault.value) {
+    const row = byName.get(e.extension) ?? { ...e, versions: [] };
+    row.versions.push(e.phpVersion);
+    byName.set(e.extension, row);
+  }
+  return [...byName.values()];
+});
+
 async function load() {
   loading.value = true;
   error.value = null;
@@ -89,6 +115,25 @@ async function fixRequirement(id) {
   try {
     await app.fixRequirement(id);
     await load();
+  } finally {
+    busy.value = null;
+  }
+}
+
+/**
+ * Take one unbuildable extension out of one selection.
+ *
+ * No confirmation dialog, deliberately: the extension is already being dropped
+ * from the build, so this removes nothing the container ever had — it makes the
+ * manifest agree with reality. The row itself names exactly what goes.
+ */
+async function dropExtension(row) {
+  busy.value = `ext-${row.subject}-${row.extension}`;
+  error.value = null;
+  try {
+    report.value = await api.doctorDropExtension(row.subject, row.extension);
+  } catch (e) {
+    error.value = e;
   } finally {
     busy.value = null;
   }
@@ -234,6 +279,74 @@ onMounted(load);
         </v-btn>
       </div>
     </template>
+  </SettingsGroup>
+
+  <!-- ---- php extensions ---------------------------------------------------- -->
+  <!-- The generator drops an extension it cannot install and says nothing, so
+       the failure surfaces much later as a fatal "undefined function" with
+       nothing tying it back to a build that reported success. -->
+  <SettingsGroup
+    icon="mdi-puzzle-outline"
+    :title="t('doctor.extTitle')"
+    :description="`${t('doctor.extDesc')} ${t('doctor.extRemoveHint')}`"
+    class="mt-4"
+  >
+    <div v-if="report && !extensions.length" class="row">
+      <v-icon color="success" size="18">mdi-check-circle</v-icon>
+      <span class="text-body-2">{{ t('doctor.extOk') }}</span>
+    </div>
+
+    <!-- The default set first: this one breaks a project nobody has touched. -->
+    <div v-for="row in extensionsDefaultRows" :key="`d-${row.extension}`" class="row">
+      <v-icon color="error" size="18">mdi-alert-circle</v-icon>
+      <div class="min-w-0">
+        <span class="text-body-2">
+          {{ t('doctor.extDefault', { ext: row.extension, detail: row.detail }) }}
+        </span>
+        <div class="text-caption text-medium-emphasis">
+          {{ t('doctor.extDefaultWhy', { versions: row.versions.join(', ') }) }}
+        </div>
+      </div>
+      <v-spacer />
+      <v-btn
+        size="small"
+        color="primary"
+        variant="tonal"
+        :loading="busy === `ext-${row.subject}-${row.extension}`"
+        @click="dropExtension(row)"
+      >
+        {{ t('doctor.extRemove') }}
+      </v-btn>
+    </div>
+
+    <div v-for="row in extensionsProjects" :key="`${row.subject}-${row.extension}`" class="row">
+      <v-icon color="warning" size="18">mdi-alert</v-icon>
+      <div class="min-w-0">
+        <span class="text-body-2">
+          {{ t('doctor.extProject', { ext: row.extension, project: row.subject }) }}
+        </span>
+        <div class="text-caption text-medium-emphasis">{{ row.detail }}</div>
+      </div>
+      <v-spacer />
+      <v-btn
+        size="small"
+        variant="text"
+        :to="{ name: 'ProjectDetail', params: { name: row.subject } }"
+      >
+        {{ t('doctor.extOpen') }}
+      </v-btn>
+      <!-- Safe without a confirmation: the extension is already absent from
+           the built container, so this removes nothing it ever had. -->
+      <v-btn
+        size="small"
+        color="primary"
+        variant="tonal"
+        :loading="busy === `ext-${row.subject}-${row.extension}`"
+        @click="dropExtension(row)"
+      >
+        {{ t('doctor.extRemove') }}
+      </v-btn>
+    </div>
   </SettingsGroup>
 
   <!-- ---- generated config -------------------------------------------------- -->

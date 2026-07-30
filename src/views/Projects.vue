@@ -152,6 +152,75 @@ async function adopt(folder) {
   }
 }
 
+/**
+ * Reading a folder's own `docker-compose.yml` before adopting it.
+ *
+ * Detection reads the code and gets runtime, framework and document root. The
+ * compose file records what its author decided — the PHP version, the domain,
+ * the extensions, and the backing services, which no marker file states at all.
+ * Adopting without it produces a project that builds and then cannot reach its
+ * database.
+ *
+ * Reviewed before applied: the diff covers a manifest *and* somebody's `.env`,
+ * which is more than an adoption has ever written in one go.
+ */
+const migration = ref(null);
+const migrationFor = ref('');
+const migrationBusy = ref(false);
+
+async function scanCompose(folder) {
+  migrationBusy.value = true;
+  actionError.value = null;
+  migrationFor.value = folder.name;
+  try {
+    migration.value = await api.migrateScan(folder.name);
+  } catch (e) {
+    migration.value = null;
+    migrationFor.value = '';
+    actionError.value = e;
+  } finally {
+    migrationBusy.value = false;
+  }
+}
+
+async function applyMigration() {
+  migrationBusy.value = true;
+  actionError.value = null;
+  try {
+    await api.migrateApply(migrationFor.value);
+    migration.value = null;
+    migrationFor.value = '';
+    await Promise.all([inventory.loadProjects(), loadAdoptable()]);
+  } catch (e) {
+    actionError.value = e;
+  } finally {
+    migrationBusy.value = false;
+  }
+}
+
+function closeMigration() {
+  migration.value = null;
+  migrationFor.value = '';
+}
+
+/** The conclusions worth a row. Anything the file did not state is left out
+ *  rather than shown as a blank — an empty cell reads as "it said nothing"
+ *  only if you already know the row was optional. */
+const migrationFields = computed(() => {
+  const m = migration.value?.migration;
+  if (!m) return {};
+  const rows = {
+    runtime: m.runtime,
+    server: m.server,
+    phpVersion: m.phpVersion,
+    nodeVersion: m.nodeVersion,
+    documentRoot: m.documentRoot,
+    domain: m.domain,
+    extensions: m.extensions.length ? m.extensions.join(', ') : null,
+  };
+  return Object.fromEntries(Object.entries(rows).filter(([, v]) => v));
+});
+
 let teardown = null;
 
 onMounted(async () => {
@@ -264,17 +333,135 @@ onUnmounted(() => teardown?.());
 
         <v-spacer />
 
+        <!-- Offered only when the folder has one. It is the better route when
+             it exists: a compose file states the PHP version, the domain and
+             the services, none of which any marker file does. -->
+        <v-btn
+          v-if="folder.composeFile"
+          size="x-small"
+          variant="tonal"
+          color="primary"
+          prepend-icon="mdi-file-import-outline"
+          :loading="migrationBusy && migrationFor === folder.name"
+          :disabled="!!adopting || migrationBusy"
+          @click="scanCompose(folder)"
+        >
+          {{ t('migrate.read') }}
+        </v-btn>
+
         <v-btn
           size="x-small"
           variant="tonal"
           :loading="adopting === folder.name"
-          :disabled="!!adopting || !folder.hasFiles"
+          :disabled="!!adopting || !folder.hasFiles || migrationBusy"
           @click="adopt(folder)"
         >
           {{ t('adopt.action') }}
         </v-btn>
       </div>
     </v-alert>
+
+    <!-- The compose review. A dialog rather than an inline expansion: it is a
+         decision about two files at once — a manifest and the shared .env —
+         and it deserves the whole of the reader's attention. -->
+    <v-dialog :model-value="!!migration" max-width="760" @update:model-value="closeMigration">
+      <v-card v-if="migration">
+        <v-card-title class="d-flex align-center ga-2">
+          <v-icon size="20">mdi-file-import-outline</v-icon>
+          {{ t('migrate.title', { name: migrationFor }) }}
+        </v-card-title>
+        <v-card-subtitle class="text-caption pb-2">
+          {{ migration.migration.source }}
+        </v-card-subtitle>
+
+        <v-divider />
+
+        <v-card-text>
+          <div class="section-head mb-2">{{ t('migrate.project') }}</div>
+          <v-table density="compact">
+            <tbody>
+              <tr v-for="(value, key) in migrationFields" :key="key">
+                <td class="text-medium-emphasis">{{ t(`migrate.field.${key}`) }}</td>
+                <td class="mono">{{ value }}</td>
+              </tr>
+            </tbody>
+          </v-table>
+
+          <!-- The half no marker file can state, and the reason this exists. -->
+          <template v-if="migration.env.changes.length">
+            <div class="section-head mt-5 mb-2">{{ t('migrate.services') }}</div>
+            <v-table density="compact">
+              <tbody>
+                <tr v-for="change in migration.env.changes" :key="change.key">
+                  <td>{{ change.subject }}</td>
+                  <td class="mono text-medium-emphasis">{{ change.from ?? '—' }}</td>
+                  <td class="mono">{{ change.to }}</td>
+                </tr>
+              </tbody>
+            </v-table>
+          </template>
+          <div
+            v-else-if="migration.migration.services.length"
+            class="text-caption text-medium-emphasis mt-4"
+          >
+            {{ t('migrate.servicesAlready') }}
+          </div>
+
+          <!-- Named, not dropped: silently ignoring the one service the project
+               actually needs looks finished and is not. -->
+          <v-alert
+            v-if="migration.migration.unmapped.length"
+            type="warning"
+            variant="tonal"
+            class="mt-4"
+          >
+            <div class="text-caption font-weight-medium mb-1">{{ t('migrate.unmapped') }}</div>
+            <div
+              v-for="entry in migration.migration.unmapped"
+              :key="entry"
+              class="text-caption mono"
+            >
+              {{ entry }}
+            </div>
+          </v-alert>
+
+          <v-alert v-if="migration.alreadyManaged" type="info" variant="tonal" class="mt-4">
+            <div class="text-caption">{{ t('migrate.alreadyManaged') }}</div>
+          </v-alert>
+
+          <v-expansion-panels variant="accordion" class="mt-4">
+            <v-expansion-panel :title="t('migrate.evidence')">
+              <v-expansion-panel-text>
+                <div
+                  v-for="line in migration.migration.evidence"
+                  :key="line"
+                  class="text-caption mono"
+                >
+                  {{ line }}
+                </div>
+              </v-expansion-panel-text>
+            </v-expansion-panel>
+            <v-expansion-panel :title="t('migrate.manifest')">
+              <v-expansion-panel-text>
+                <pre class="migrate-json">{{ JSON.stringify(migration.spec, null, 2) }}</pre>
+              </v-expansion-panel-text>
+            </v-expansion-panel>
+          </v-expansion-panels>
+        </v-card-text>
+
+        <v-divider />
+
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" :disabled="migrationBusy" @click="closeMigration">
+            {{ t('app.cancel') }}
+          </v-btn>
+          <v-btn color="primary" variant="flat" :loading="migrationBusy" @click="applyMigration">
+            {{ t('migrate.apply') }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
 
     <v-text-field
       v-model="search"
@@ -302,6 +489,7 @@ onUnmounted(() => teardown?.());
         striped="even"
         hide-default-footer
         height="100%"
+        density="compact"
       >
         <template #item.domain="{ item }">
           <div v-if="item.domain" class="d-flex align-center ga-2">
@@ -538,6 +726,29 @@ onUnmounted(() => teardown?.());
 </template>
 
 <style scoped>
+/* Names a block inside the migration review, which has four of them. */
+.section-head {
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0.82;
+}
+
+/* A version, a domain or a container path — places where 8.0 and 8.O differ. */
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* The proposed manifest, scrolling in its own box rather than stretching the
+   dialog to the height of whatever the compose file turned out to imply. */
+.migrate-json {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  max-height: 260px;
+  overflow: auto;
+  margin: 0;
+}
+
 .domain-link {
   color: inherit;
   cursor: pointer;

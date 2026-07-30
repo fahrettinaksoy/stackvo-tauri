@@ -127,13 +127,26 @@ export function parseLevel(line) {
  *
  * Lines before the first declared level keep `null`, because there is genuinely
  * nothing to inherit: the buffer starts mid-file.
+ *
+ * Inheritance is **per origin**, keyed on `line.origin`. In a single stream
+ * every line shares the one origin and this is the plain running level. In the
+ * cross-project tail it is not optional: sixty files interleave into one
+ * buffer, so the line above a stack frame is routinely from another project
+ * entirely, and a single running level would paint one project's INFO with
+ * another's ERROR — and then hide it under a filter that has no idea it is
+ * looking at the wrong file.
  */
 export function withLevels(lines) {
-  let current = null;
+  const current = new Map();
   return lines.map((line) => {
+    const origin = line.origin ?? '';
     const declared = parseLevel(line.text);
-    if (declared) current = declared;
-    return { ...line, level: declared ?? current, startsEntry: !!declared };
+    if (declared) current.set(origin, declared);
+    return {
+      ...line,
+      level: declared ?? current.get(origin) ?? null,
+      startsEntry: !!declared,
+    };
   });
 }
 

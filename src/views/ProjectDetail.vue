@@ -44,16 +44,36 @@ const SECTIONS = [
   // while looking at the rest, and a modal on top of a detail page hides the
   // thing it is about.
   { key: 'logs', icon: 'mdi-text-box-outline', label: 'logs.title' },
+  // The daily loop. Above the divider with the other act-on-a-running-project
+  // panes, because that is what these are — they exec into the container.
+  { key: 'commands', icon: 'mdi-console-line', label: 'quickCmd.title' },
+  // Next to the logs, because that is what it is: output the application
+  // produced, arriving out of band instead of in the page.
+  { key: 'dumps', icon: 'mdi-bug-check-outline', label: 'dumps.title', php: true },
   // Above the divider with the other read-and-act panes: turning Xdebug on is
   // a thing you do to a running project, not a file you edit. PHP only — see
   // `sections` below.
   { key: 'xdebug', icon: 'mdi-bug-outline', label: 'xdebug.title', php: true },
+  // Next to Xdebug because it is the same kind of thing: a PHP setting that
+  // reaches the container through a compose overlay this app layers, not
+  // through the manifest. PHP only, for the same reason.
+  // Beside Xdebug because it *is* Xdebug — profiling is a mode of the same
+  // extension, not a second thing to switch on.
+  { key: 'profiler', icon: 'mdi-speedometer', label: 'profiler.title', php: true },
+  { key: 'phpini', icon: 'mdi-language-php', label: 'phpIni.title', php: true },
+  // The node counterpart of the two above: a setting that reaches the container
+  // through a compose overlay this app layers. Node only, and for the sharper
+  // reason — a PHP project has no /app to mount over.
+  { key: 'devserver', icon: 'mdi-lightning-bolt-outline', label: 'devServer.title', node: true },
   // Sharing is something you do to a running project too: a public URL for
   // the webhook sender that cannot reach myapp.loc.
   { key: 'share', icon: 'mdi-earth', label: 'tunnel.title' },
   // PHP only in the rail, and empty-list-aware inside: workers are detected
   // from artisan, so a plain PHP project without Laravel gets an explanation.
   { key: 'workers', icon: 'mdi-cog-sync-outline', label: 'workers.title', php: true },
+  // The one artefact here that leaves the machine, so it sits at the end of
+  // the act-on-the-project group rather than among the editing surfaces.
+  { key: 'release', icon: 'mdi-package-variant-closed', label: 'release.title' },
   // Below the divider: the editing surfaces the screenshots do not show, kept
   // because retiring the dialog must not retire what it could do.
   { key: 'manifest', icon: 'mdi-code-json', label: 'detail.manifest', divide: true },
@@ -69,7 +89,12 @@ const section = ref('indicator');
  * whose only content is a reason it does not apply — the navigation itself
  * should carry that.
  */
-const sections = computed(() => SECTIONS.filter((s) => !s.php || project.value?.runtime === 'php'));
+const sections = computed(() =>
+  SECTIONS.filter(
+    (s) =>
+      (!s.php || project.value?.runtime === 'php') && (!s.node || project.value?.runtime === 'node')
+  )
+);
 
 const STATS_INTERVAL = 2000;
 let statsTimer = null;
@@ -415,6 +440,12 @@ async function load() {
   }
 
   loadXdebug();
+  loadPhpIni();
+  loadDevServer();
+  loadQuickCommands();
+  loadProfiler();
+  loadRelease();
+  loadDumps();
 
   loading.value = false;
   startStats();
@@ -466,6 +497,404 @@ const xdebugPending = computed(
   () => xdebug.value?.enabled && (xdebug.value.needsRebuild || xdebug.value.active === false)
 );
 
+/**
+ * PHP overrides — `memory_limit` and the rest.
+ *
+ * The form is four text fields over a real ini file. It is deliberately not a
+ * manifest form: these are not manifest keys and cannot become them (the schema
+ * is `additionalProperties: false`), and the file the docs pointed at was
+ * mounted by nothing until the compose overlay behind this shipped.
+ *
+ * Local edit state rather than binding straight at `phpIni.values`: an empty
+ * field has to mean "remove this directive", and a v-model onto the status
+ * object would make every keystroke look like a pending removal.
+ */
+const PHP_INI_FIELDS = [
+  'memory_limit',
+  'upload_max_filesize',
+  'post_max_size',
+  'max_execution_time',
+];
+
+const phpIni = ref(null);
+const phpIniBusy = ref(false);
+const phpIniDraft = ref({});
+
+function resetPhpIniDraft() {
+  const values = phpIni.value?.values ?? {};
+  phpIniDraft.value = Object.fromEntries(PHP_INI_FIELDS.map((k) => [k, values[k] ?? '']));
+}
+
+async function loadPhpIni() {
+  if (project.value?.runtime !== 'php') {
+    phpIni.value = null;
+    return;
+  }
+  try {
+    phpIni.value = await api.phpIniStatus(props.name);
+  } catch {
+    phpIni.value = null;
+  }
+  resetPhpIniDraft();
+}
+
+const phpIniDirty = computed(() => {
+  const values = phpIni.value?.values ?? {};
+  return PHP_INI_FIELDS.some((k) => (phpIniDraft.value[k] ?? '') !== (values[k] ?? ''));
+});
+
+/** Every field cleared and nothing unmanaged left — the whole file goes. */
+const phpIniWouldRemoveFile = computed(
+  () =>
+    PHP_INI_FIELDS.every((k) => !(phpIniDraft.value[k] ?? '').trim()) &&
+    !Object.keys(phpIni.value?.unmanaged ?? {}).length
+);
+
+/**
+ * `dump()` and `dd()`, caught out of the response.
+ *
+ * Symfony's own dump server runs inside the container and renders the output
+ * itself, so nothing here parses its internals — the lines arrive already
+ * formatted. There is no on/off switch because there is nothing to switch: with
+ * the environment set and no collector listening, a dump renders into the page
+ * exactly as it does today.
+ */
+const dumps = ref(null);
+const dumpLines = ref([]);
+const dumpStreamId = ref('');
+const dumpsBusy = ref(false);
+let stopDumpListener = null;
+
+async function loadDumps() {
+  if (project.value?.runtime !== 'php') {
+    dumps.value = null;
+    return;
+  }
+  try {
+    dumps.value = await api.dumpsStatus(props.name);
+  } catch {
+    dumps.value = null;
+  }
+}
+
+async function openDumps() {
+  dumpsBusy.value = true;
+  error.value = null;
+  try {
+    dumpStreamId.value = await api.dumpsOpen(props.name);
+
+    const { listen } = await import('@tauri-apps/api/event');
+    const offLine = await listen('logs:line', (event) => {
+      // Filtered by stream id, not by source: two panes can be open on two
+      // projects, and both send `dumps`.
+      if (event.payload.streamId !== dumpStreamId.value) return;
+      dumpLines.value.push(event.payload.line);
+      // The pane is a live tail, not an archive; the log viewer has the archive.
+      if (dumpLines.value.length > 2000) dumpLines.value.splice(0, 500);
+    });
+    const offClosed = await listen('logs:closed', (event) => {
+      if (event.payload.streamId === dumpStreamId.value) dumpStreamId.value = '';
+    });
+    stopDumpListener = () => {
+      offLine();
+      offClosed();
+    };
+  } catch (e) {
+    error.value = e;
+    dumpStreamId.value = '';
+  } finally {
+    dumpsBusy.value = false;
+  }
+}
+
+async function closeDumps() {
+  const id = dumpStreamId.value;
+  dumpStreamId.value = '';
+  stopDumpListener?.();
+  stopDumpListener = null;
+  if (id) await api.dumpsClose(props.name, id).catch(() => {});
+}
+
+/**
+ * A deployable image, built from the one this project already runs.
+ *
+ * Reviewed before it is built, like the hosts file and the certificate — a
+ * production image is the one thing here that leaves the machine. And verified
+ * after: the built image is run and asked whether it leaked an `.env`, because
+ * that guarantee is easy to state in a Dockerfile and quietly wrong in the
+ * result.
+ */
+const release = ref(null);
+const releaseTag = ref('');
+const releaseBusy = ref('');
+const releaseResult = ref(null);
+
+async function loadRelease() {
+  try {
+    release.value = await api.releasePlan(props.name, releaseTag.value || null);
+    if (!releaseTag.value) releaseTag.value = release.value.tag;
+  } catch (e) {
+    release.value = null;
+    if (e.code && e.code !== 'NOT_FOUND') error.value = e;
+  }
+}
+
+async function buildRelease() {
+  releaseBusy.value = 'build';
+  error.value = null;
+  releaseResult.value = null;
+  try {
+    releaseResult.value = await api.releaseBuild(props.name, releaseTag.value || null);
+  } catch (e) {
+    error.value = e;
+  } finally {
+    releaseBusy.value = '';
+  }
+}
+
+async function saveRelease() {
+  const { save } = await import('@tauri-apps/plugin-dialog');
+  const suggested = `${props.name}-production.tar`;
+  const path = await save({ defaultPath: suggested });
+  if (!path) return;
+
+  releaseBusy.value = 'save';
+  error.value = null;
+  try {
+    await api.releaseSave(props.name, path, releaseTag.value || null);
+  } catch (e) {
+    error.value = e;
+  } finally {
+    releaseBusy.value = '';
+  }
+}
+
+/**
+ * Xdebug's profiler.
+ *
+ * A mode of the existing Xdebug toggle rather than a second switch: the
+ * extension has to be compiled in either way. The two modes are exclusive
+ * because they want opposite start triggers — stepping connects on the next
+ * request, profiling waits for `XDEBUG_TRIGGER` so an idle stack does not write
+ * a multi-megabyte file per page load.
+ */
+const profiler = ref(null);
+const profilerBusy = ref('');
+const profileReport = ref(null);
+const profileOpenId = ref('');
+
+async function loadProfiler() {
+  if (project.value?.runtime !== 'php') {
+    profiler.value = null;
+    return;
+  }
+  try {
+    profiler.value = await api.profilerStatus(props.name);
+  } catch {
+    profiler.value = null;
+  }
+}
+
+async function setProfilerMode(mode) {
+  profilerBusy.value = 'mode';
+  error.value = null;
+  try {
+    profiler.value = await api.profilerSetMode(props.name, mode);
+  } catch (e) {
+    error.value = e;
+  } finally {
+    profilerBusy.value = '';
+  }
+}
+
+async function openProfile(file) {
+  profilerBusy.value = file.id;
+  error.value = null;
+  profileReport.value = null;
+  try {
+    profileReport.value = await api.profilerRead(props.name, file.id);
+    profileOpenId.value = file.id;
+  } catch (e) {
+    error.value = e;
+    profileOpenId.value = '';
+  } finally {
+    profilerBusy.value = '';
+  }
+}
+
+async function deleteProfile(file) {
+  profilerBusy.value = file.id;
+  error.value = null;
+  try {
+    await api.profilerDelete(props.name, file.id);
+    // The open report belongs to a file that no longer exists.
+    if (profileOpenId.value === file.id) {
+      profileReport.value = null;
+      profileOpenId.value = '';
+    }
+    await loadProfiler();
+  } catch (e) {
+    error.value = e;
+  } finally {
+    profilerBusy.value = '';
+  }
+}
+
+async function clearProfiles() {
+  profilerBusy.value = 'clear';
+  error.value = null;
+  try {
+    await api.profilerClear(props.name);
+    profileReport.value = null;
+    profileOpenId.value = '';
+    await loadProfiler();
+  } catch (e) {
+    error.value = e;
+  } finally {
+    profilerBusy.value = '';
+  }
+}
+
+/**
+ * The time unit the *file* declares — never assumed.
+ *
+ * Measured on a real profile: `Time_(10ns)`. Reading it as microseconds would
+ * be wrong by two orders of magnitude, and the number would look plausible.
+ */
+const profileUnit = computed(() => {
+  const declared = profileReport.value?.events?.[0] ?? '';
+  const match = declared.match(/\(([^)]+)\)/);
+  return match ? match[1] : '';
+});
+
+/** Cost in the file's own unit, rendered as ms when the unit is known. */
+function profileCost(value) {
+  const unit = profileUnit.value;
+  const ns = { '10ns': 10, ns: 1, us: 1000, ms: 1_000_000 }[unit];
+  if (!ns) return `${value} ${unit}`.trim();
+  const ms = (value * ns) / 1_000_000;
+  return ms >= 1 ? `${ms.toFixed(1)} ms` : `${(ms * 1000).toFixed(0)} µs`;
+}
+
+/**
+ * The commands you run in this project every day.
+ *
+ * Only the id crosses the boundary; the argv is built on the Rust side from a
+ * fixed catalog, so nothing here can name a program to execute.
+ *
+ * Interactive commands open the user's own terminal and resolve to null —
+ * there is nothing to stream, and an in-app REPL beside the terminal they have
+ * already configured would be the worse of the two.
+ */
+const quickCommands = ref([]);
+const quickCommandBusy = ref('');
+
+async function loadQuickCommands() {
+  try {
+    quickCommands.value = await api.quickCommands(props.name);
+  } catch {
+    // A project with none of the marker files is the common case, not a fault.
+    quickCommands.value = [];
+  }
+}
+
+async function runQuickCommand(command) {
+  quickCommandBusy.value = command.id;
+  error.value = null;
+  try {
+    await api.quickCommandRun(props.name, command.id);
+  } catch (e) {
+    error.value = e;
+  } finally {
+    quickCommandBusy.value = '';
+  }
+}
+
+/**
+ * Hot reload for a node project.
+ *
+ * Not a toggle over a routing detail. Today a node project's source is COPYed
+ * into the image at build time and never mounted, so editing a file on the host
+ * changes nothing in the container — hot reload was impossible rather than
+ * broken. Turning this on layers a compose overlay that mounts the source and
+ * runs the dev server instead of the production start command.
+ *
+ * The third requirement is the project's own dev-server config, which lives in
+ * the user's repository. It is shown as a snippet and never written.
+ */
+const devServer = ref(null);
+const devServerBusy = ref(false);
+const devServerCommand = ref('');
+const snippetCopied = ref(false);
+
+async function loadDevServer() {
+  if (project.value?.runtime !== 'node') {
+    devServer.value = null;
+    return;
+  }
+  try {
+    devServer.value = await api.devserverStatus(props.name);
+    devServerCommand.value = devServer.value.command;
+  } catch {
+    devServer.value = null;
+  }
+}
+
+async function toggleDevServer(enabled) {
+  devServerBusy.value = true;
+  error.value = null;
+  try {
+    devServer.value = await api.devserverSet(props.name, enabled, devServerCommand.value || null);
+    devServerCommand.value = devServer.value.command;
+  } catch (e) {
+    error.value = e;
+  } finally {
+    devServerBusy.value = false;
+  }
+}
+
+async function copySnippet() {
+  try {
+    await navigator.clipboard.writeText(devServer.value.snippet);
+    snippetCopied.value = true;
+    setTimeout(() => (snippetCopied.value = false), 1500);
+  } catch {
+    /* clipboard unavailable */
+  }
+}
+
+/** On, mounted, and the project's own config still rejects the domain — the
+ *  state where the container is right and the site answers 403. */
+const devServerBlocked = computed(
+  () => devServer.value?.enabled && devServer.value.hostAllowed === false
+);
+
+async function savePhpIni() {
+  phpIniBusy.value = true;
+  error.value = null;
+  try {
+    // Only what changed. Sending the unchanged fields too would rewrite lines
+    // the user may have commented next to, for no reason.
+    const values = phpIni.value?.values ?? {};
+    const patch = {};
+    for (const key of PHP_INI_FIELDS) {
+      const next = (phpIniDraft.value[key] ?? '').trim();
+      const now = values[key] ?? '';
+      if (next === now) continue;
+      // An empty field is a removal, not an empty value: this file is an
+      // override layer, and `memory_limit =` with nothing after it is a
+      // directive PHP reads as zero.
+      patch[key] = next === '' ? null : next;
+    }
+    phpIni.value = await api.phpIniSet(props.name, patch);
+    resetPhpIniDraft();
+  } catch (e) {
+    error.value = e;
+  } finally {
+    phpIniBusy.value = false;
+  }
+}
+
 function startStats() {
   clearInterval(statsTimer);
   if (!running.value) {
@@ -487,7 +916,12 @@ function startStats() {
 
 watch(() => props.name, load);
 onMounted(load);
-onUnmounted(() => clearInterval(statsTimer));
+onUnmounted(() => {
+  clearInterval(statsTimer);
+  // The collector is a process in somebody's container. Leaving the view must
+  // not leave it running with nothing reading it.
+  closeDumps();
+});
 </script>
 
 <template>
@@ -1122,6 +1556,639 @@ onUnmounted(() => clearInterval(statsTimer));
           </template>
         </template>
 
+        <!-- COMMANDS ------------------------------------------------------- -->
+        <!-- A fixed catalog, filtered by the files the project actually has.
+             Offering `artisan migrate` to a project with no artisan produces
+             `not found` in the console, which reads as a broken app rather
+             than as a button that never applied. -->
+        <template v-else-if="section === 'commands'">
+          <div class="section-head mb-1">
+            <v-icon size="18" class="mr-2">mdi-console-line</v-icon>{{ t('quickCmd.title') }}
+          </div>
+          <p class="text-caption text-medium-emphasis mb-4">{{ t('quickCmd.explain') }}</p>
+
+          <!-- They exec into the container, so there has to be one. -->
+          <v-alert v-if="!running" type="info" variant="tonal" class="mb-4">
+            <div class="text-caption">{{ t('quickCmd.needsRunning') }}</div>
+          </v-alert>
+
+          <div v-if="!quickCommands.length" class="text-caption text-medium-emphasis">
+            {{ t('quickCmd.none') }}
+          </div>
+
+          <div v-for="command in quickCommands" :key="command.id" class="cmd-row">
+            <div class="flex-grow-1 min-width-0">
+              <div class="mono text-body-2">{{ command.display }}</div>
+              <div class="text-caption text-medium-emphasis">
+                {{ command.about }}
+                <span class="ml-1">· {{ t('quickCmd.because', { file: command.because }) }}</span>
+              </div>
+            </div>
+
+            <!-- Said on the button, not discovered by pressing it: one of these
+                 opens a terminal window and the other prints into the console
+                 below, and they look identical otherwise. -->
+            <v-chip v-if="command.interactive" size="x-small" variant="tonal">
+              {{ t('quickCmd.opensTerminal') }}
+            </v-chip>
+
+            <v-btn
+              size="small"
+              variant="tonal"
+              :prepend-icon="command.interactive ? 'mdi-console' : 'mdi-play'"
+              :loading="quickCommandBusy === command.id"
+              :disabled="!running || !!quickCommandBusy"
+              @click="runQuickCommand(command)"
+            >
+              {{ t('quickCmd.run') }}
+            </v-btn>
+          </div>
+        </template>
+
+        <!-- DEV SERVER ----------------------------------------------------- -->
+        <!-- Three requirements, kept apart because they fail separately: the
+             source has to be mounted, the dev server has to be what is running,
+             and the dev server has to accept a request for this domain. Only
+             the first two are this app's to fix. -->
+        <template v-else-if="section === 'devserver'">
+          <div class="section-head mb-1">
+            <v-icon size="18" class="mr-2">mdi-lightning-bolt-outline</v-icon>
+            {{ t('devServer.title') }}
+          </div>
+          <p class="text-caption text-medium-emphasis mb-4">{{ t('devServer.explain') }}</p>
+
+          <template v-if="devServer">
+            <v-switch
+              :model-value="devServer.enabled"
+              :loading="devServerBusy"
+              :disabled="devServerBusy"
+              color="primary"
+              hide-details
+              density="comfortable"
+              :label="devServer.enabled ? t('devServer.on') : t('devServer.off')"
+              @update:model-value="toggleDevServer($event)"
+            />
+
+            <v-text-field
+              v-model="devServerCommand"
+              :label="t('devServer.command')"
+              :hint="
+                devServer.productionCommand
+                  ? t('devServer.commandHint', { production: devServer.productionCommand })
+                  : ''
+              "
+              persistent-hint
+              density="compact"
+              variant="outlined"
+              class="mt-4"
+              :disabled="devServerBusy"
+              @keyup.enter="devServer.enabled && toggleDevServer(true)"
+            />
+
+            <!-- On, but the container predates it — the source is not mounted
+                 in the thing that is actually running. -->
+            <v-alert v-if="devServer.needsRecreate" type="warning" variant="tonal" class="mt-4">
+              <div class="text-caption">{{ t('devServer.needsRecreate') }}</div>
+            </v-alert>
+            <v-alert
+              v-else-if="devServer.enabled && devServer.mounted"
+              type="success"
+              variant="tonal"
+              class="mt-4"
+            >
+              <div class="text-caption">{{ t('devServer.live') }}</div>
+            </v-alert>
+
+            <!-- The half that is not ours. A .loc domain gets a flat 403 from
+                 Vite unless its own config names it, which reads as "the site
+                 is up and broken" with nothing pointing at the dev server. -->
+            <template v-if="devServer.snippet">
+              <div class="section-head mt-5 mb-1">
+                <v-icon size="18" class="mr-2">mdi-file-code-outline</v-icon>
+                {{ t('devServer.projectConfig') }}
+              </div>
+              <p class="text-caption text-medium-emphasis mb-2">
+                {{ t('devServer.projectConfigWhy') }}
+              </p>
+
+              <v-alert
+                v-if="devServerBlocked"
+                type="warning"
+                variant="tonal"
+                density="compact"
+                class="mb-2"
+              >
+                <div class="text-caption">
+                  {{ t('devServer.notAllowed', { file: devServer.configFile }) }}
+                </div>
+              </v-alert>
+              <v-alert
+                v-else-if="devServer.hostAllowed"
+                type="success"
+                variant="tonal"
+                density="compact"
+                class="mb-2"
+              >
+                <div class="text-caption">{{ t('devServer.configured') }}</div>
+              </v-alert>
+
+              <div class="d-flex align-start ga-2">
+                <pre class="snippet flex-grow-1">{{ devServer.snippet }}</pre>
+                <v-btn
+                  icon
+                  size="small"
+                  variant="text"
+                  :aria-label="t('a11y.copy')"
+                  @click="copySnippet"
+                >
+                  <v-icon>{{ snippetCopied ? 'mdi-check' : 'mdi-content-copy' }}</v-icon>
+                  <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
+                </v-btn>
+              </div>
+            </template>
+            <div v-else class="text-caption text-medium-emphasis mt-4">
+              {{ t('devServer.noAdvice') }}
+            </div>
+
+            <div class="text-caption text-medium-emphasis mt-4">
+              {{ t('devServer.modulesNote') }}
+            </div>
+            <div class="text-caption text-medium-emphasis mt-2">
+              {{ t('devServer.cliCaveat') }}
+            </div>
+          </template>
+        </template>
+
+        <!-- DUMPS ---------------------------------------------------------- -->
+        <!-- Symfony's own dump server, running in the project's container and
+             rendering its own output. Nothing here parses its internals, so
+             nothing here breaks when they change. -->
+        <template v-else-if="section === 'dumps'">
+          <div class="section-head mb-1">
+            <v-icon size="18" class="mr-2">mdi-bug-check-outline</v-icon>{{ t('dumps.title') }}
+          </div>
+          <p class="text-caption text-medium-emphasis mb-4">{{ t('dumps.explain') }}</p>
+
+          <template v-if="dumps">
+            <v-alert v-if="!dumps.available" type="info" variant="tonal" class="mb-4">
+              <div class="text-caption">{{ t('dumps.unavailable', { binary: dumps.binary }) }}</div>
+            </v-alert>
+
+            <template v-else>
+              <!-- Read from the running container: `stackvo up` from the CLI
+                   layers three compose files, not seven. -->
+              <v-alert v-if="!dumps.configured" type="warning" variant="tonal" class="mb-4">
+                <div class="text-caption">{{ t('dumps.needsRestart') }}</div>
+              </v-alert>
+
+              <div class="d-flex ga-2 align-center">
+                <v-btn
+                  v-if="!dumpStreamId"
+                  color="primary"
+                  variant="flat"
+                  prepend-icon="mdi-play"
+                  :loading="dumpsBusy"
+                  :disabled="!running"
+                  @click="openDumps"
+                >
+                  {{ t('dumps.start') }}
+                </v-btn>
+                <v-btn v-else variant="tonal" prepend-icon="mdi-stop" @click="closeDumps">
+                  {{ t('dumps.stop') }}
+                </v-btn>
+
+                <v-chip v-if="dumpStreamId" size="small" color="success" variant="tonal">
+                  <v-icon start size="small">mdi-pulse</v-icon>{{ t('dumps.listening') }}
+                </v-chip>
+                <v-spacer />
+                <v-btn v-if="dumpLines.length" size="small" variant="text" @click="dumpLines = []">
+                  {{ t('dumps.clear') }}
+                </v-btn>
+              </div>
+
+              <div v-if="!running" class="text-caption text-medium-emphasis mt-2">
+                {{ t('dumps.needsRunning') }}
+              </div>
+
+              <pre v-if="dumpLines.length" class="dump-stream mt-4">{{ dumpLines.join('\n') }}</pre>
+              <div v-else-if="dumpStreamId" class="text-caption text-medium-emphasis mt-4">
+                {{ t('dumps.waiting') }}
+              </div>
+            </template>
+          </template>
+        </template>
+
+        <!-- RELEASE -------------------------------------------------------- -->
+        <!-- The dev image is not a production image: for PHP it holds no
+             application code at all (the source is bind-mounted) and it carries
+             Xdebug. So this is a build, and the result is checked rather than
+             trusted. -->
+        <template v-else-if="section === 'release'">
+          <div class="section-head mb-1">
+            <v-icon size="18" class="mr-2">mdi-package-variant-closed</v-icon>
+            {{ t('release.title') }}
+          </div>
+          <p class="text-caption text-medium-emphasis mb-4">{{ t('release.explain') }}</p>
+
+          <template v-if="release">
+            <div class="d-flex ga-2 align-start">
+              <v-text-field
+                v-model="releaseTag"
+                :label="t('release.tag')"
+                :hint="t('release.tagHint', { base: release.baseImage })"
+                persistent-hint
+                density="compact"
+                variant="outlined"
+                :disabled="!!releaseBusy"
+              />
+              <v-btn
+                color="primary"
+                variant="flat"
+                :loading="releaseBusy === 'build'"
+                :disabled="!releaseTag.trim() || !!releaseBusy"
+                @click="buildRelease"
+              >
+                {{ t('release.build') }}
+              </v-btn>
+            </div>
+
+            <!-- Everything the result will be true of, before the build rather
+                 than after. None of these is a decision to make silently. -->
+            <v-alert type="info" variant="tonal" class="mt-4">
+              <div v-for="line in release.warnings" :key="line" class="text-caption">
+                • {{ line }}
+              </div>
+            </v-alert>
+
+            <div class="section-head mt-5 mb-2">
+              <v-icon size="18" class="mr-2">mdi-eye-off-outline</v-icon>
+              {{ t('release.excluded') }}
+            </div>
+            <v-table density="compact">
+              <tbody>
+                <tr v-for="[pattern, reason] in release.excluded" :key="pattern">
+                  <td class="mono">{{ pattern }}</td>
+                  <td class="text-medium-emphasis text-caption">{{ reason }}</td>
+                </tr>
+              </tbody>
+            </v-table>
+
+            <v-expansion-panels v-if="release.dockerfile" variant="accordion" class="mt-4">
+              <v-expansion-panel :title="t('release.dockerfile')">
+                <v-expansion-panel-text>
+                  <pre class="snippet">{{ release.dockerfile }}</pre>
+                </v-expansion-panel-text>
+              </v-expansion-panel>
+            </v-expansion-panels>
+
+            <!-- Read out of the built image, not inferred from the Dockerfile:
+                 this guarantee is easy to state and easy to get wrong. -->
+            <template v-if="releaseResult">
+              <div class="section-head mt-5 mb-2">
+                <v-icon size="18" class="mr-2">mdi-shield-check-outline</v-icon>
+                {{ t('release.checked') }}
+              </div>
+
+              <v-alert
+                :type="releaseResult.verification.clean ? 'success' : 'error'"
+                variant="tonal"
+              >
+                <div class="text-caption">
+                  {{
+                    releaseResult.verification.clean
+                      ? t('release.clean', { tag: releaseResult.plan.tag })
+                      : t('release.notClean')
+                  }}
+                </div>
+                <ul class="text-caption mt-2 pl-4">
+                  <li v-if="releaseResult.verification.envFiles.length">
+                    {{
+                      t('release.leaked', {
+                        files: releaseResult.verification.envFiles.join(', '),
+                      })
+                    }}
+                  </li>
+                  <li v-else>{{ t('release.noEnv') }}</li>
+                  <li v-if="releaseResult.verification.xdebugActive === true">
+                    {{ t('release.xdebugOn') }}
+                  </li>
+                  <li v-else-if="releaseResult.verification.xdebugActive === false">
+                    {{ t('release.xdebugOff') }}
+                  </li>
+                  <li v-if="!releaseResult.verification.hasApp">{{ t('release.noApp') }}</li>
+                </ul>
+              </v-alert>
+
+              <v-btn
+                v-if="releaseResult.verification.clean"
+                class="mt-3"
+                variant="tonal"
+                prepend-icon="mdi-download-outline"
+                :loading="releaseBusy === 'save'"
+                :disabled="!!releaseBusy"
+                @click="saveRelease"
+              >
+                {{ t('release.save') }}
+              </v-btn>
+            </template>
+          </template>
+        </template>
+
+        <!-- PROFILER ------------------------------------------------------- -->
+        <!-- Xdebug's own profiler. Blackfire needs an account and SPX is not
+             in the extension contract; this needs neither. -->
+        <template v-else-if="section === 'profiler'">
+          <div class="section-head mb-1">
+            <v-icon size="18" class="mr-2">mdi-speedometer</v-icon>{{ t('profiler.title') }}
+          </div>
+          <p class="text-caption text-medium-emphasis mb-4">{{ t('profiler.explain') }}</p>
+
+          <template v-if="profiler">
+            <!-- Compiled in first. Without the extension there is nothing to
+                 switch a mode on. -->
+            <v-alert v-if="!profiler.xdebug.enabled" type="info" variant="tonal" class="mb-4">
+              <div class="text-caption">{{ t('profiler.needsXdebug') }}</div>
+            </v-alert>
+
+            <template v-else>
+              <v-btn-toggle
+                :model-value="profiler.mode"
+                mandatory
+                density="comfortable"
+                variant="outlined"
+                divided
+                @update:model-value="setProfilerMode($event)"
+              >
+                <v-btn value="debug" :disabled="!!profilerBusy" prepend-icon="mdi-bug-outline">
+                  {{ t('profiler.modeDebug') }}
+                </v-btn>
+                <v-btn value="profile" :disabled="!!profilerBusy" prepend-icon="mdi-speedometer">
+                  {{ t('profiler.modeProfile') }}
+                </v-btn>
+              </v-btn-toggle>
+              <div class="text-caption text-medium-emphasis mt-2">
+                {{ t('profiler.modesExclusive') }}
+              </div>
+
+              <!-- The step people miss. Profiling waits for a trigger, so
+                   loading the page changes nothing until it carries one. -->
+              <v-alert v-if="profiler.mode === 'profile'" type="info" variant="tonal" class="mt-4">
+                <div class="text-caption">
+                  {{ t('profiler.howToRecord', { trigger: profiler.trigger }) }}
+                </div>
+              </v-alert>
+              <v-alert
+                v-if="profiler.mode === 'profile' && profiler.xdebug.active === false"
+                type="warning"
+                variant="tonal"
+                class="mt-3"
+              >
+                <div class="text-caption">{{ t('profiler.needsRestart') }}</div>
+              </v-alert>
+            </template>
+
+            <div class="section-head mt-5 mb-2 d-flex align-center">
+              <v-icon size="18" class="mr-2">mdi-file-chart-outline</v-icon>
+              {{ t('profiler.recorded', { n: profiler.profiles.length }) }}
+              <v-spacer />
+              <!-- One run of a tight loop produced 10 MB. Sixty delete buttons
+                   is not a disk-hygiene story. -->
+              <v-btn
+                v-if="profiler.profiles.length"
+                size="x-small"
+                variant="text"
+                color="error"
+                :loading="profilerBusy === 'clear'"
+                @click="clearProfiles"
+              >
+                {{ t('profiler.clear', { size: bytes(profiler.bytes) }) }}
+              </v-btn>
+            </div>
+
+            <div v-if="!profiler.profiles.length" class="text-caption text-medium-emphasis">
+              {{ t('profiler.noneYet') }}
+            </div>
+
+            <div v-for="file in profiler.profiles" :key="file.id" class="cmd-row">
+              <div class="flex-grow-1 min-width-0">
+                <div class="mono text-body-2">{{ file.id }}</div>
+                <div class="text-caption text-medium-emphasis">
+                  {{ bytes(file.bytes) }}
+                  <span v-if="file.modified">
+                    · {{ new Date(file.modified * 1000).toLocaleString() }}</span
+                  >
+                </div>
+              </div>
+              <v-chip v-if="file.compressed" size="x-small" color="warning" variant="tonal">
+                {{ t('profiler.compressed') }}
+              </v-chip>
+              <v-btn
+                size="small"
+                variant="tonal"
+                :loading="profilerBusy === file.id"
+                :disabled="file.compressed || !!profilerBusy"
+                @click="openProfile(file)"
+              >
+                {{ t('profiler.open') }}
+              </v-btn>
+              <!-- No confirmation: a profile is a recording you can make again
+                   by reloading the page, not something to lose. -->
+              <v-btn
+                icon
+                size="x-small"
+                variant="text"
+                :aria-label="t('profiler.deleteOne')"
+                :disabled="!!profilerBusy"
+                @click="deleteProfile(file)"
+              >
+                <v-icon>mdi-delete-outline</v-icon>
+                <v-tooltip activator="parent">{{ t('profiler.deleteOne') }}</v-tooltip>
+              </v-btn>
+            </div>
+
+            <!-- The report. Self cost, because it is the one this parser can
+                 state exactly and the one that answers "what is slow". -->
+            <template v-if="profileReport">
+              <div class="section-head mt-5 mb-1">
+                <v-icon size="18" class="mr-2">mdi-podium</v-icon>{{ profileOpenId }}
+              </div>
+              <div class="text-caption text-medium-emphasis mb-2">
+                {{
+                  t('profiler.summary', {
+                    n: profileReport.functionCount,
+                    total: profileCost(profileReport.selfTotal),
+                    creator: profileReport.creator,
+                  })
+                }}
+              </div>
+              <v-alert
+                v-if="profileReport.truncated"
+                type="warning"
+                variant="tonal"
+                density="compact"
+                class="mb-2"
+              >
+                <div class="text-caption">{{ t('profiler.truncated') }}</div>
+              </v-alert>
+
+              <v-table density="compact">
+                <thead>
+                  <tr>
+                    <th>{{ t('profiler.colFunction') }}</th>
+                    <th class="text-right">{{ t('profiler.colSelf') }}</th>
+                    <th class="text-right">{{ t('profiler.colInclusive') }}</th>
+                    <th class="text-right">{{ t('profiler.colCalls') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="fn in profileReport.functions" :key="fn.name">
+                    <td class="min-width-0">
+                      <div class="mono text-truncate">{{ fn.name }}</div>
+                      <!-- The bar is the percentage, so the eye finds the hot
+                           row before it reads a single number. -->
+                      <v-progress-linear
+                        :model-value="fn.percent"
+                        height="3"
+                        color="primary"
+                        class="mt-1"
+                      />
+                    </td>
+                    <td class="text-right mono">
+                      {{ profileCost(fn.selfTime) }}
+                      <div class="text-caption text-medium-emphasis">
+                        {{ fn.percent.toFixed(1) }}%
+                      </div>
+                    </td>
+                    <td class="text-right mono">{{ profileCost(fn.inclusiveTime) }}</td>
+                    <td class="text-right mono">{{ fn.calls }}</td>
+                  </tr>
+                </tbody>
+              </v-table>
+            </template>
+          </template>
+        </template>
+
+        <!-- PHP.INI -------------------------------------------------------- -->
+        <!-- Three states again, and for the same reason as Xdebug: the file on
+             disk, the mount in the running container, and PHP having read it.
+             They come apart in practice — the Bash CLI's `up` layers three
+             compose files, not five, and recreates the container without the
+             mount — so collapsing them would produce a form that saves happily
+             and changes nothing. -->
+        <template v-else-if="section === 'phpini'">
+          <div class="section-head mb-1">
+            <v-icon size="18" class="mr-2">mdi-language-php</v-icon>{{ t('phpIni.title') }}
+          </div>
+          <p class="text-caption text-medium-emphasis mb-4">{{ t('phpIni.explain') }}</p>
+
+          <template v-if="phpIni">
+            <v-row dense>
+              <v-col v-for="key in PHP_INI_FIELDS" :key="key" cols="12" sm="6">
+                <!-- The placeholder is what PHP in the container reports right
+                     now, not a documented default. Measured, because assuming
+                     was wrong: these images ship no php.ini at all, and
+                     max_execution_time is 0 under FPM rather than the 30 the
+                     manual lists. Falls back to the field name when nothing is
+                     running — inventing a number would be worse. -->
+                <v-text-field
+                  v-model="phpIniDraft[key]"
+                  :label="t(`phpIni.field.${key}`)"
+                  :placeholder="phpIni.effective?.[key] || t('phpIni.notMeasured')"
+                  :hint="t(`phpIni.hint.${key}`)"
+                  persistent-placeholder
+                  persistent-hint
+                  density="compact"
+                  variant="outlined"
+                  :disabled="phpIniBusy"
+                />
+              </v-col>
+            </v-row>
+
+            <!-- Legal, and almost always a mistake: the upload fails at the
+                 smaller of the two, which is a number the user can see they
+                 have already raised. -->
+            <v-alert v-if="phpIni.warning" type="warning" variant="tonal" class="mt-3">
+              <div class="text-caption">{{ phpIni.warning }}</div>
+            </v-alert>
+
+            <div class="d-flex align-center ga-2 mt-4">
+              <v-btn
+                color="primary"
+                variant="flat"
+                size="small"
+                :loading="phpIniBusy"
+                :disabled="!phpIniDirty"
+                @click="savePhpIni"
+              >
+                {{
+                  phpIniWouldRemoveFile && phpIniDirty ? t('phpIni.removeFile') : t('phpIni.save')
+                }}
+              </v-btn>
+              <v-btn
+                variant="text"
+                size="small"
+                :disabled="!phpIniDirty || phpIniBusy"
+                @click="resetPhpIniDraft"
+              >
+                {{ t('app.cancel') }}
+              </v-btn>
+              <span class="text-caption text-medium-emphasis">{{ t('phpIni.emptyRemoves') }}</span>
+            </div>
+
+            <div v-if="phpIni.effective" class="text-caption text-medium-emphasis mt-2">
+              {{ t('phpIni.measured') }}
+            </div>
+
+            <!-- What is true after a save, which is not the same as saved. PHP
+                 reads its ini at process start, so a bind-mounted edit is on
+                 disk and not yet in the process. -->
+            <v-alert v-if="phpIni.needsRecreate" type="warning" variant="tonal" class="mt-4">
+              <div class="text-caption">{{ t('phpIni.needsRecreate') }}</div>
+            </v-alert>
+            <v-alert
+              v-else-if="phpIni.exists && phpIni.running"
+              type="info"
+              variant="tonal"
+              class="mt-4"
+            >
+              <div class="text-caption">{{ t('phpIni.needsRestart') }}</div>
+            </v-alert>
+
+            <!-- Directives the form does not manage, shown because they are
+                 preserved on every write and a form that hid them would look
+                 like it had lost them. -->
+            <template v-if="Object.keys(phpIni.unmanaged).length">
+              <div class="section-head mt-5 mb-2">
+                <v-icon size="18" class="mr-2">mdi-file-document-edit-outline</v-icon>
+                {{ t('phpIni.unmanaged') }}
+              </div>
+              <v-table density="compact">
+                <tbody>
+                  <tr v-for="(value, key) in phpIni.unmanaged" :key="key">
+                    <td class="text-medium-emphasis mono">{{ key }}</td>
+                    <td class="mono">{{ value }}</td>
+                  </tr>
+                </tbody>
+              </v-table>
+            </template>
+
+            <v-table density="compact" class="mt-5">
+              <tbody>
+                <tr>
+                  <td class="text-medium-emphasis">{{ t('phpIni.file') }}</td>
+                  <td class="mono">{{ phpIni.path }}</td>
+                </tr>
+                <tr>
+                  <td class="text-medium-emphasis">{{ t('phpIni.mountedAt') }}</td>
+                  <td class="mono">{{ phpIni.containerPath }}</td>
+                </tr>
+              </tbody>
+            </v-table>
+
+            <div class="text-caption text-medium-emphasis mt-3">{{ t('phpIni.cliCaveat') }}</div>
+          </template>
+        </template>
+
         <!-- SHARE ---------------------------------------------------------- -->
         <template v-else-if="section === 'share'">
           <div class="section-head mb-1">
@@ -1215,10 +2282,7 @@ onUnmounted(() => clearInterval(statsTimer));
           </v-alert>
 
           <div v-for="kind in workerKinds" :key="kind" class="worker-row">
-            <v-icon
-              :color="workerFor(kind)?.running ? 'success' : 'grey'"
-              size="18"
-            >
+            <v-icon :color="workerFor(kind)?.running ? 'success' : 'grey'" size="18">
               {{ workerFor(kind)?.running ? 'mdi-check-circle' : 'mdi-stop-circle-outline' }}
             </v-icon>
             <div class="min-w-0">
@@ -1817,5 +2881,53 @@ onUnmounted(() => clearInterval(statsTimer));
 
 .worker-row + .worker-row {
   border-top: thin solid rgba(var(--v-border-color), calc(var(--v-border-opacity) / 2));
+}
+
+/* Symfony renders the dump with its own alignment and box drawing, so this has
+   to be monospaced and must not reflow — a wrapped `array:2 [` tree is unreadable
+   in a way that a scrollbar is not. */
+.dump-stream {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+  padding: 12px;
+  border-radius: 6px;
+  max-height: 60vh;
+  overflow: auto;
+  background: rgb(var(--v-theme-surface-bright));
+  user-select: text;
+}
+
+/* One command per row, the same shape as the worker rows above it. */
+.cmd-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+}
+
+.cmd-row + .cmd-row {
+  border-top: thin solid rgba(var(--v-border-color), calc(var(--v-border-opacity) / 2));
+}
+
+/* A long `php artisan …` must not push the button off the row. */
+.min-width-0 {
+  min-width: 0;
+}
+
+/* Config for the user to paste into their own repository. Selectable, and it
+   keeps its own line breaks — this is code, and a reflowed `hmr: { … }` block
+   is code somebody has to repair before it runs. */
+.snippet {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  background: rgb(var(--v-theme-surface-bright));
+  user-select: text;
 }
 </style>

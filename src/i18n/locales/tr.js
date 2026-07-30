@@ -14,6 +14,7 @@ export default {
     loading: 'Yükleniyor…',
     never: '—',
     cancel: 'Vazgeç',
+    close: 'Kapat',
     documentation: 'Belgeler',
     buyMeCoffee: 'Bir kahve ısmarla',
     socialMedia: 'Sosyal medya',
@@ -40,6 +41,7 @@ export default {
     dashboard: 'Panel',
     projects: 'Projeler',
     services: 'Servisler',
+    logs: 'Loglar',
     settings: 'Ayarlar',
     collapse: 'Daralt',
     expand: 'Genişlet',
@@ -335,6 +337,27 @@ export default {
     noEvidence: 'tanınan bir şey yok — varsayılanlar kullanılacak',
     action: 'Sahiplen',
   },
+  migrate: {
+    read: 'Compose’u oku',
+    title: '{name} projesini compose dosyasından içe aktar',
+    project: 'Proje',
+    field: {
+      runtime: 'Çalışma ortamı',
+      server: 'Sunucu',
+      phpVersion: 'PHP sürümü',
+      nodeVersion: 'Node sürümü',
+      documentRoot: 'Belge kökü',
+      domain: 'Alan adı',
+      extensions: 'PHP eklentileri',
+    },
+    services: 'Etkinleştirilecek servisler',
+    servicesAlready: 'Bu projenin ihtiyaç duyduğu servisler zaten etkin.',
+    unmapped: 'StackVo karşılığı yok — bunları kendiniz ele almanız gerekecek:',
+    alreadyManaged: 'Bu projenin zaten bir stackvo.json dosyası var; yalnızca servisler değişecek.',
+    evidence: 'Her yanıtın okunduğu yer',
+    manifest: 'Yazılacak stackvo.json',
+    apply: 'İçe aktar',
+  },
   mail: {
     inbox: 'Gelen kutusu',
     count: '{n} mesaj yakalandı',
@@ -375,6 +398,164 @@ export default {
     version: 'Xdebug sürümü',
     cliCaveat:
       'Not: komut satırından `stackvo up` bu yapılandırmayı katmanlamaz ve konteyneri onsuz yeniden oluşturur.',
+  },
+  stackPreset: {
+    title: 'Yığın önayarı',
+    sectionDesc: 'Bu yığının hangi servisleri çalıştırdığını, sırlarını paylaşmadan paylaşın.',
+    export: 'Bu yığını dışa aktar',
+    exportDesc:
+      'Hangi servislerin etkin olduğunu ve sürümlerini küçük bir JSON dosyasına yazar; sürüm kontrolüne eklemek güvenlidir. Parolalar içinde yer almaz — biçimde onları koyacak bir yer yoktur.',
+    name: 'Önayar adı',
+    namePlaceholder: 'örn. ekip-backend',
+    saveFile: 'Dosyaya kaydet…',
+    summary: '{total} servisten {enabled} tanesi etkin.',
+    preview: 'Dosyanın içeriği',
+    import: 'Önayar içe aktar',
+    importDesc:
+      'Hiçbir şey yazılmadan önce tam olarak neyin değişeceğini gösterir. Parolalarınıza ve portlarınıza dokunulmaz.',
+    chooseFile: 'Dosya seç…',
+    untitled: 'Adsız önayar',
+    colSubject: 'Ne',
+    colFrom: 'Şimdi',
+    colTo: 'Sonra',
+    absent: 'tanımsız',
+    apply: '{n} değişikliği uygula',
+    applied: 'Uygulandı.',
+    alreadyMatches: 'Bu yığın önayarla zaten uyuşuyor — {n} ayar denetlendi, hiçbiri farklı değil.',
+    nothingUsable: 'Bu önayardaki hiçbir şey StackVo’nun bu sürümüne uygulanmıyor.',
+    rejected: 'Uygulanmadı:',
+    thenRegenerate:
+      'Bir servisi etkinleştirmek üreticinin çıktısını değiştirir — yapılandırmayı yeniden üretip yığını ayağa kaldırın.',
+  },
+
+  dumps: {
+    title: 'Dump’lar',
+    explain:
+      'dump() ve dd() çıktılarını yanıttan alıp burada gösterir. Biçimlendirmeyi, projenizin konteyneri içinde çalışan Symfony’nin kendi dump sunucusu yapar.',
+    unavailable:
+      'Bu projede {binary} yok. symfony/var-dumper ile gelir, Laravel de ona bağlıdır — composer install çalıştırın.',
+    needsRestart:
+      'Çalışan konteynerde dump ayarları henüz yok. Uygulanması için projeyi yeniden başlatın.',
+    needsRunning: 'Toplayıcı projenin konteyneri içinde çalışır. Önce projeyi başlatın.',
+    start: 'Yakalamaya başla',
+    stop: 'Durdur',
+    listening: 'Dinleniyor',
+    clear: 'Temizle',
+    waiting: 'Bir dump bekleniyor… uygulamada herhangi bir yerde dump() çağırın.',
+  },
+
+  release: {
+    title: 'Üretim imajı',
+    explain:
+      'Bu projenin hâlihazırda çalıştırdığı imajdan türetilen, dağıtılabilir bir imaj — aynı PHP sürümü, aynı eklentiler, aynı web sunucusu. Onun kopyası değil: geliştirme imajında uygulama kodu yok (kaynak diskinizden bağlanıyor) ve Xdebug taşıyor.',
+    tag: 'İmaj etiketi',
+    tagHint: '{base} üzerine kurulur',
+    build: 'Derle',
+    excluded: 'İmajın dışında tutulanlar',
+    dockerfile: 'Kullanılacak Dockerfile',
+    checked: 'Derlenen imaj gerçekte ne içeriyor',
+    clean: '{tag} hazır. Dockerfile okunarak değil, imaj çalıştırılarak denetlendi.',
+    notClean: 'Bu imaj henüz gönderilmeye uygun değil.',
+    leaked: 'Ortam dosyaları imajın içinde: {files}',
+    noEnv: 'Ortam dosyası yok — yapılandırmayı çalıştırırken verin.',
+    xdebugOn: 'Xdebug hâlâ etkin. Bunu dağıtmayın.',
+    xdebugOff: 'Xdebug etkin değil.',
+    noApp: 'İmajda uygulama dosyası yok.',
+    save: 'Tarball olarak kaydet…',
+  },
+
+  profiler: {
+    title: 'Profilleyici',
+    explain:
+      'Xdebug’in kendi profilleyicisi; çıktıyı bu uygulamanın okuduğu dosyalara yazar. Hesap da ek eklenti de gerekmez — adım adım hata ayıklamayı yapan Xdebug’in ta kendisi.',
+    needsXdebug: 'Önce Xdebug’i açın — profilleme aynı eklentinin bir kipidir.',
+    modeDebug: 'Adım adım hata ayıklama',
+    modeProfile: 'Profilleme',
+    modesExclusive:
+      'Biri ya da diğeri. Adım ayıklama her istekte bağlanır, profilleme bir tetikleyici bekler; ikisini birden açık bırakmak birini bozar.',
+    howToRecord:
+      'Bir istek talep etmeden hiçbir şey kaydedilmez. URL’ye ?{trigger}=1 ekleyin veya çerez olarak tanımlayın.',
+    needsRestart: 'Çalışan konteynerde bu henüz yok. Uygulanması için projeyi yeniden başlatın.',
+    recorded: 'Kayıtlı profiller ({n})',
+    noneYet: 'Henüz kayıt yok.',
+    clear: 'Tümünü sil ({size})',
+    compressed: 'gzip’li',
+    open: 'Aç',
+    deleteOne: 'Bu profili sil',
+    summary: '{n} fonksiyon · ölçülen işin {total} kadarı · {creator}',
+    truncated:
+      'Bu profil okuma sınırından büyüktü; aşağıdaki sayılar yalnızca bir bölümünü kapsıyor.',
+    colFunction: 'Fonksiyon',
+    colSelf: 'Kendi süresi',
+    colInclusive: 'Çağrılarla',
+    colCalls: 'Çağrı',
+  },
+
+  quickCmd: {
+    title: 'Komutlar',
+    explain:
+      'Bu projede sık çalıştırdığınız komutlar; terminal açıp konteyner adını hatırlamanıza gerek kalmadan. Yalnızca projenin dosyalarının izin verdiği komutlar sunulur.',
+    because: '{file} dosyasından',
+    opensTerminal: 'terminal açar',
+    run: 'Çalıştır',
+    needsRunning: 'Bunlar projenin konteynerinin içinde çalışır. Önce projeyi başlatın.',
+    none: 'Burada artisan, composer.json, package.json veya wp-config.php yok; sunulacak bir şey de yok.',
+  },
+
+  devServer: {
+    title: 'Geliştirme sunucusu',
+    explain:
+      'İmaja gömülü üretim derlemesi yerine, kaynağınız canlı bağlanmış hâlde projenin geliştirme sunucusunu çalıştırır. Bu olmadan konteyner, derlendiği anda alınmış bir kod kopyası taşır; dosya düzenlemek hiçbir şeyi değiştirmez.',
+    on: 'Açık — kaynak bağlı, geliştirme sunucusu çalışıyor',
+    off: 'Kapalı — imajdaki üretim derlemesi',
+    command: 'Geliştirme komutu',
+    commandHint: 'Üretim komutunun yerine geçer; o komut: {production}',
+    live: 'Canlı. Bir dosyayı kaydedin, tarayıcı takip etsin.',
+    needsRecreate:
+      'Geliştirme kipi açık ama çalışan konteyner kaynak bağlaması olmadan oluşturulmuş. Projeyi yeniden ayağa kaldırın.',
+    projectConfig: 'Projenizin de şuna ihtiyacı var',
+    projectConfigWhy:
+      'Bu kısım sizin deponuzda yaşıyor, bu yüzden yazılmıyor yalnızca gösteriliyor. Vite, yapılandırmasının tanımadığı bir alan adına 403 döner; sıcak yenileme istemcisine de tarayıcının gerçekte hangi portta olduğu söylenmelidir — proxy’nin arkasında bu 443’tür, geliştirme sunucusunun kendi portu değil.',
+    notAllowed: '{file} bundan söz etmiyor — bu alan adına gelen istekler 403 dönecek.',
+    configured: 'Yapılandırmanız bunu zaten karşılıyor.',
+    noAdvice:
+      'package.json içinde Vite, Nuxt veya Next bulunamadı; verilecek yapılandırma önerisi yok — kaynak bağlaması yine de geçerli.',
+    modulesNote:
+      'node_modules kendi biriminde kalır, böylece bağlama imajın Linux için yaptığı kurulumu gizlemez. Bağımlılıkları değiştirdikten sonra projeyi yeniden derleyin.',
+    cliCaveat:
+      'Not: komut satırından `stackvo up` bunu katmanlamaz ve konteyneri üretim kipinde yeniden oluşturur.',
+  },
+
+  phpIni: {
+    title: 'PHP ayarları',
+    explain:
+      'Bu projeye özel değerler; .stackvo/php.ini dosyasına yazılır ve PHP’nin conf.d dizinine salt okunur bağlanır. PHP kendi php.ini dosyasından sonra okuduğu için burada yazan geçerli olur. Elle düzenlemek de sürüm kontrolüne eklemek de güvenlidir.',
+    field: {
+      memory_limit: 'Bellek sınırı',
+      upload_max_filesize: 'En büyük yükleme boyutu',
+      post_max_size: 'En büyük POST boyutu',
+      max_execution_time: 'En uzun çalışma süresi',
+    },
+    notMeasured: 'tanımsız',
+    measured: 'Alan içindeki değerler, çalışan konteynerdeki PHP’nin şu anki değerleridir.',
+    hint: {
+      memory_limit: 'K, M veya G ekli bir sayı. Sınırsız için -1.',
+      upload_max_filesize: 'İkisinden küçüğü geçerli olduğu için POST boyutu bunu kısıtlar.',
+      post_max_size: 'En az yükleme boyutu kadar olmalı.',
+      max_execution_time: 'Tam saniye. Sınırsız için 0.',
+    },
+    save: 'Kaydet',
+    removeFile: 'Dosyayı kaldır',
+    emptyRemoves: 'Boş bırakılan alan yönergeyi kaldırır.',
+    needsRestart:
+      'Kaydedildi. PHP yapılandırmasını başlangıçta okur — uygulanması için projeyi yeniden başlatın.',
+    needsRecreate:
+      'Dosya diskte ama çalışan konteynerde bağlaması yok. Eklenmesi için projeyi yeniden ayağa kaldırın.',
+    unmanaged: 'Bu dosyadaki diğer yönergeler',
+    file: 'Dosya',
+    mountedAt: 'Bağlandığı yer',
+    cliCaveat:
+      'Not: komut satırından `stackvo up` bu bağlamayı katmanlamaz ve konteyneri onsuz yeniden oluşturur.',
   },
   certs: {
     title: 'HTTPS sertifikası',
@@ -555,6 +736,13 @@ export default {
     openInEditor: 'Bu dosyayı editörde aç',
     waiting: 'Log bekleniyor…',
     containerStream: 'Konteyner çıktısı',
+    all: 'Tüm projeler',
+    allDescription:
+      'Her projeyi kapsayan canlı bir akış. Burada yalnızca bu andan sonra yazılan çıktı görünür — bir dosyanın geçmişini okumak için projesini açın.',
+    allProjects: 'Bütün projeler',
+    waitingAll: 'İzleniyor. Projeleriniz yazdıkça satırlar burada belirir.',
+    following: '{total} dosyanın {followed} tanesi izleniyor · {projects} proje',
+    files: '{n} dosya',
     group: {
       application: 'Uygulama',
       server: 'Sunucu',
@@ -593,14 +781,18 @@ export default {
     none: 'artisan dosyası bulunamadı — işçiler Laravel dosyalarından tespit edilir.',
     needsRunning: 'Önce projeyi başlatın — işçi, projenin derlenmiş imajını çalıştırır.',
     queue: 'Kuyruk işçisi',
-    queueDesc: 'php artisan queue:work — kuyruktaki işleri işler; bayat kodla uzun kalmamak için saatte bir yeniden başlar.',
+    queueDesc:
+      'php artisan queue:work — kuyruktaki işleri işler; bayat kodla uzun kalmamak için saatte bir yeniden başlar.',
     scheduler: 'Zamanlayıcı',
-    schedulerDesc: 'php artisan schedule:work — zamanlanmış görevleri ön planda çalıştırır; host cron kaydı gerekmez.',
+    schedulerDesc:
+      'php artisan schedule:work — zamanlanmış görevleri ön planda çalıştırır; host cron kaydı gerekmez.',
     horizon: 'Horizon',
-    horizonDesc: 'php artisan horizon — Laravel Horizon süpervizörü; composer.json gerektirdiği için sunulur.',
+    horizonDesc:
+      'php artisan horizon — Laravel Horizon süpervizörü; composer.json gerektirdiği için sunulur.',
     start: 'Başlat',
     stop: 'Durdur',
-    restarts: 'Docker bu işçiyi {count} kez yeniden başlattı — artmaya devam ederse loglarına bakın.',
+    restarts:
+      'Docker bu işçiyi {count} kez yeniden başlattı — artmaya devam ederse loglarına bakın.',
   },
 
   tunnel: {
@@ -638,6 +830,17 @@ export default {
     hostsTitle: 'hosts dosyası',
     hostsDesc: 'hosts kaydı olmayan bir proje alan adı, tarayıcının bulamayacağı bir sitedir.',
     hostsOk: 'Her proje alan adının kaydı var.',
+    extTitle: 'PHP eklentileri',
+    extDesc:
+      'Üretici, kuramadığı bir eklentiyi sessizce atlar; hata daha sonra ölümcül bir “tanımsız fonksiyon” olarak ortaya çıkar.',
+    extOk: 'Seçili her eklenti derlenebiliyor.',
+    extDefault: '“{ext}” varsayılan seçimde ama derlenemiyor — {detail}.',
+    extDefaultWhy:
+      'Şimdi oluşturulacak yeni bir projede eksik olurdu. PHP {versions} sürümlerine karşı denetlendi.',
+    extProject: '“{ext}” {project} projesinde derlenemiyor.',
+    extOpen: 'Projeyi aç',
+    extRemove: 'Kaldır',
+    extRemoveHint: 'Çalışan hiçbir şey değişmez — derleme onu zaten düşürüyor.',
     hostsMissing: '{count} alan adının hosts kaydı yok.',
     hostsRepair: 'İncele ve onar',
 

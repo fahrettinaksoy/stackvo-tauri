@@ -14,6 +14,7 @@ export default {
     loading: 'Loading…',
     never: '—',
     cancel: 'Cancel',
+    close: 'Close',
     documentation: 'Documentation',
     buyMeCoffee: 'Buy me a coffee',
     socialMedia: 'Social media',
@@ -39,6 +40,7 @@ export default {
     dashboard: 'Dashboard',
     projects: 'Projects',
     services: 'Services',
+    logs: 'Logs',
     settings: 'Settings',
     collapse: 'Collapse',
     expand: 'Expand',
@@ -329,6 +331,27 @@ export default {
     noEvidence: 'nothing recognisable — defaults will be used',
     action: 'Adopt',
   },
+  migrate: {
+    read: 'Read compose',
+    title: 'Import {name} from its compose file',
+    project: 'The project',
+    field: {
+      runtime: 'Runtime',
+      server: 'Server',
+      phpVersion: 'PHP version',
+      nodeVersion: 'Node version',
+      documentRoot: 'Document root',
+      domain: 'Domain',
+      extensions: 'PHP extensions',
+    },
+    services: 'Services to enable',
+    servicesAlready: 'The services this project needs are already enabled.',
+    unmapped: 'No StackVo equivalent — you will need to handle these yourself:',
+    alreadyManaged: 'This project already has a stackvo.json; only the services will be changed.',
+    evidence: 'What each answer was read from',
+    manifest: 'The stackvo.json this would write',
+    apply: 'Import',
+  },
   mail: {
     inbox: 'Inbox',
     count: '{n} captured',
@@ -369,6 +392,167 @@ export default {
     version: 'Xdebug version',
     cliCaveat:
       'Note: `stackvo up` from the command line does not layer this configuration, and will recreate the container without it.',
+  },
+  stackPreset: {
+    title: 'Stack preset',
+    sectionDesc: 'Share which services this stack runs, without sharing its secrets.',
+    export: 'Export this stack',
+    exportDesc:
+      'Writes which services are enabled and at which versions to a small JSON file, safe to commit. Passwords are not in it — the format has nowhere to put them.',
+    name: 'Preset name',
+    namePlaceholder: 'e.g. team-backend',
+    saveFile: 'Save file…',
+    summary: '{enabled} of {total} services enabled.',
+    preview: 'What the file will contain',
+    import: 'Import a preset',
+    importDesc:
+      'Shows exactly what would change before anything is written. Your passwords and ports are never touched.',
+    chooseFile: 'Choose a file…',
+    untitled: 'Untitled preset',
+    colSubject: 'What',
+    colFrom: 'Now',
+    colTo: 'After',
+    absent: 'not set',
+    apply: 'Apply {n} changes',
+    applied: 'Applied.',
+    alreadyMatches: 'This stack already matches the preset — {n} settings checked, none differ.',
+    nothingUsable: 'Nothing in this preset applies to this version of StackVo.',
+    rejected: 'Not applied:',
+    thenRegenerate:
+      'Enabling a service changes what the generator emits — regenerate the configuration, then bring the stack up.',
+  },
+
+  dumps: {
+    title: 'Dumps',
+    explain:
+      'Catches dump() and dd() out of the response and shows them here instead. Symfony’s own dump server does the rendering, inside your project’s container.',
+    unavailable:
+      'This project has no {binary}. It ships with symfony/var-dumper, which Laravel depends on — run composer install.',
+    needsRestart:
+      'The running container does not have the dump settings yet. Restart the project to apply them.',
+    needsRunning: 'The collector runs inside the project’s container. Start it first.',
+    start: 'Start catching',
+    stop: 'Stop',
+    listening: 'Listening',
+    clear: 'Clear',
+    waiting: 'Waiting for a dump… call dump() anywhere in the app.',
+  },
+
+  release: {
+    title: 'Production image',
+    explain:
+      'A deployable image built from the one this project already runs — same PHP version, same extensions, same web server. Not a copy of it: the development image has no application code (the source is mounted from your disk) and carries Xdebug.',
+    tag: 'Image tag',
+    tagHint: 'Built from {base}',
+    build: 'Build',
+    excluded: 'Kept out of the image',
+    dockerfile: 'The Dockerfile this will use',
+    checked: 'What the built image actually contains',
+    clean: '{tag} is ready. Checked by running it, not by reading the Dockerfile.',
+    notClean: 'This image is not safe to ship yet.',
+    leaked: 'Environment files are in the image: {files}',
+    noEnv: 'No environment file — supply configuration when you run it.',
+    xdebugOn: 'Xdebug is still active. Do not deploy this.',
+    xdebugOff: 'Xdebug is not active.',
+    noApp: 'The image has no application files.',
+    save: 'Save as a tarball…',
+  },
+
+  profiler: {
+    title: 'Profiler',
+    explain:
+      'Xdebug’s own profiler, recorded into files this app reads. No account and no extra extension — it is the same Xdebug that does the step debugging.',
+    needsXdebug: 'Turn Xdebug on first — profiling is a mode of the same extension.',
+    modeDebug: 'Step debugging',
+    modeProfile: 'Profiling',
+    modesExclusive:
+      'One or the other. Stepping connects on every request; profiling waits for a trigger, so leaving both on would break one of them.',
+    howToRecord:
+      'Nothing is recorded until a request asks for it. Add ?{trigger}=1 to the URL, or set it as a cookie.',
+    needsRestart: 'The running container does not have this yet. Restart the project to apply it.',
+    recorded: 'Recorded profiles ({n})',
+    noneYet: 'Nothing recorded yet.',
+    clear: 'Delete all ({size})',
+    compressed: 'gzipped',
+    open: 'Open',
+    deleteOne: 'Delete this profile',
+    summary: '{n} functions · {total} of measured work · {creator}',
+    truncated:
+      'This profile was larger than the read limit, so the numbers below cover only part of it.',
+    colFunction: 'Function',
+    colSelf: 'Own time',
+    colInclusive: 'With calls',
+    colCalls: 'Calls',
+  },
+
+  quickCmd: {
+    title: 'Commands',
+    explain:
+      'The commands you run in this project, without opening a terminal and remembering the container name. Only what the project has the files for is offered.',
+    because: 'from {file}',
+    opensTerminal: 'opens a terminal',
+    run: 'Run',
+    needsRunning: 'These run inside the project’s container. Start it first.',
+    none: 'No artisan, composer.json, package.json or wp-config.php here, so there is nothing to offer.',
+  },
+
+  devServer: {
+    title: 'Dev server',
+    explain:
+      'Runs the project’s dev server with your source mounted live, instead of the production build baked into the image. Without this the container holds a copy of the code taken when it was built, so editing a file changes nothing.',
+    on: 'On — source mounted, dev server running',
+    off: 'Off — production build from the image',
+    command: 'Dev command',
+    commandHint: 'Replaces the production command, which is: {production}',
+    live: 'Live. Save a file and the browser follows.',
+    needsRecreate:
+      'Dev mode is on but the running container was created without the source mount. Bring the project up again.',
+    projectConfig: 'Your project also needs this',
+    projectConfigWhy:
+      'This part lives in your repository, so it is shown rather than written. Vite answers 403 to a domain its config does not name, and its hot-reload client has to be told the port the browser is really on — behind the proxy that is 443, not the dev server’s own port.',
+    notAllowed: '{file} does not mention this — requests to this domain will come back 403.',
+    configured: 'Your config already handles this.',
+    noAdvice:
+      'No Vite, Nuxt or Next found in package.json, so there is no config advice to give — the source mount still applies.',
+    modulesNote:
+      'node_modules stays in its own volume so the mount does not hide the install the image did for Linux. After changing dependencies, rebuild the project.',
+    cliCaveat:
+      'Note: `stackvo up` from the command line does not layer this, and will recreate the container in production mode.',
+  },
+
+  phpIni: {
+    title: 'PHP settings',
+    explain:
+      'Overrides for this project, written to .stackvo/php.ini and mounted read-only into PHP’s conf.d — parsed after PHP’s own php.ini, so what is set here wins. Safe to edit by hand and safe to commit.',
+    field: {
+      memory_limit: 'Memory limit',
+      upload_max_filesize: 'Max upload size',
+      post_max_size: 'Max POST size',
+      max_execution_time: 'Max execution time',
+    },
+    // The placeholder is measured from the running container, never a
+    // documented default: these images ship no php.ini at all, and
+    // max_execution_time is 0 under FPM rather than the 30 the manual lists.
+    notMeasured: 'not set',
+    measured: 'Placeholders are what PHP in the running container reports now.',
+    hint: {
+      memory_limit: 'A number with K, M or G. -1 for unlimited.',
+      upload_max_filesize: 'Capped by the POST size, whichever is smaller.',
+      post_max_size: 'Should be at least the upload size.',
+      max_execution_time: 'Whole seconds. 0 for unlimited.',
+    },
+    save: 'Save',
+    removeFile: 'Remove the file',
+    emptyRemoves: 'An empty field removes the directive.',
+    needsRestart:
+      'Saved. PHP reads its configuration at start-up — restart the project to apply it.',
+    needsRecreate:
+      'The file is on disk but the running container has no mount for it. Bring the project up again to add it.',
+    unmanaged: 'Other directives in this file',
+    file: 'File',
+    mountedAt: 'Mounted at',
+    cliCaveat:
+      'Note: `stackvo up` from the command line does not layer this mount, and will recreate the container without it.',
   },
   certs: {
     title: 'HTTPS certificate',
@@ -549,6 +733,15 @@ export default {
     openInEditor: 'Open this file in the editor',
     waiting: 'Waiting for output…',
     containerStream: 'Container output',
+    // The cross-project tail. Live only, so an empty pane is its opening state
+    // and not a fault — the wording has to say that outright.
+    all: 'All projects',
+    allDescription:
+      'A live tail across every project. Only output written from now on appears here — open a project to read the history of one file.',
+    allProjects: 'Every project',
+    waitingAll: 'Watching. Lines appear as your projects write them.',
+    following: 'following {followed} of {total} files · {projects} projects',
+    files: '{n} files',
     group: {
       application: 'Application',
       server: 'Server',
@@ -588,14 +781,18 @@ export default {
     none: 'No artisan file found — workers are detected from Laravel’s files.',
     needsRunning: 'Start the project first — a worker runs the project’s built image.',
     queue: 'Queue worker',
-    queueDesc: 'php artisan queue:work — processes queued jobs; restarts hourly so it never serves stale code for long.',
+    queueDesc:
+      'php artisan queue:work — processes queued jobs; restarts hourly so it never serves stale code for long.',
     scheduler: 'Scheduler',
-    schedulerDesc: 'php artisan schedule:work — runs scheduled tasks in the foreground; no host cron entry needed.',
+    schedulerDesc:
+      'php artisan schedule:work — runs scheduled tasks in the foreground; no host cron entry needed.',
     horizon: 'Horizon',
-    horizonDesc: 'php artisan horizon — Laravel Horizon supervisor, offered because composer.json requires it.',
+    horizonDesc:
+      'php artisan horizon — Laravel Horizon supervisor, offered because composer.json requires it.',
     start: 'Start',
     stop: 'Stop',
-    restarts: 'Docker has restarted this worker {count} time(s) — check its logs if this keeps climbing.',
+    restarts:
+      'Docker has restarted this worker {count} time(s) — check its logs if this keeps climbing.',
   },
 
   tunnel: {
@@ -633,6 +830,16 @@ export default {
     hostsTitle: 'Hosts file',
     hostsDesc: 'A project domain without a hosts entry is a site the browser cannot find.',
     hostsOk: 'Every project domain has an entry.',
+    extTitle: 'PHP extensions',
+    extDesc:
+      'The generator skips an extension it cannot install and says nothing, so the failure turns up later as a fatal “undefined function”.',
+    extOk: 'Every selected extension can build.',
+    extDefault: '“{ext}” is in the default selection but cannot build — {detail}.',
+    extDefaultWhy: 'A new project created now would be missing it. Checked against PHP {versions}.',
+    extProject: '“{ext}” cannot build in {project}.',
+    extOpen: 'Open project',
+    extRemove: 'Remove it',
+    extRemoveHint: 'Nothing that runs changes — the build already drops it.',
     hostsMissing: '{count} domain(s) have no hosts entry.',
     hostsRepair: 'Review & repair',
 
