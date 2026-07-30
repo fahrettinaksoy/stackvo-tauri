@@ -17,26 +17,37 @@ import ErrorAlert from '@/components/ErrorAlert.vue';
  * sheet tab instead. It carries the stream, the follow behaviour and the
  * console theming; the frame around it belongs to whoever mounts it.
  *
- * Two sources, one renderer. The container stream is stdout and stderr, which
+ * Three sources, one renderer. The container stream is stdout and stderr, which
  * is what the entrypoint and the web server say; the files under `app_logs` are
  * what the application recorded, and nothing an application logs reaches the
- * container's stdout. Both arrive as `logs:line`, so switching source changes
- * which stream is open and nothing else.
+ * container's stdout; and `scope="all"` is the same files across every project
+ * at once. All three arrive as `logs:line`, so changing source changes which
+ * stream is open and nothing else.
  */
 const props = defineProps({
-  /** Container name or bare id; the Rust side adds the `stackvo-` prefix. */
-  container: { type: String, required: true },
+  /** Container name or bare id; the Rust side adds the `stackvo-` prefix.
+   *  Empty in `scope="all"`, which is not about one container. */
+  container: { type: String, default: '' },
   /**
    * Project name, for the file sources. Omitted for a service, which has no
    * project directory and therefore only its container stream.
    */
   project: { type: String, default: '' },
   /**
+   * `container` follows one container or one of its files; `all` follows every
+   * project at once. The second is live-only — see `applog::Fanout`: nothing
+   * parses a timestamp, so interleaved *history* from sixty files would be an
+   * ordering the backend cannot justify.
+   */
+  scope: { type: String, default: 'container' },
+  /**
    * Whether to hold the stream open. False tears it down: a background tail is
    * wasted work here and keeps a reader task alive on the Rust side.
    */
   active: { type: Boolean, default: true },
 });
+
+const fanout = computed(() => props.scope === 'all');
 
 const appearance = useAppearanceStore();
 const consoleTheme = computed(() => (appearance.value.darkConsoles ? 'dark' : undefined));
@@ -63,11 +74,16 @@ const viewport = ref(null);
 const source = ref('');
 const files = ref([]);
 
+/** Fanout only: which projects to follow, and how much of them is covered. */
+const chosen = ref([]);
+const coverage = ref(null);
+
 const query = ref('');
 const levels = ref([]);
 
 let unlistenLine = null;
 let unlistenClosed = null;
+let unlistenSources = null;
 
 const MAX_LINES = 2000;
 
@@ -80,10 +96,17 @@ const app = useAppStore();
  */
 const CONTAINER_PATH = /\/var\/www\/html\/([A-Za-z0-9_@./-]+\.[A-Za-z0-9]+)/g;
 
+/** The project a line belongs to. One stream has one; the fanout carries it
+ *  per line, because that is the only place it differs. */
+function lineProject(line) {
+  return line.project || props.project;
+}
+
 /** Split one line around clickable file paths. Services have no source
  *  directory, so without a project the line comes back whole. */
-function segments(text) {
-  if (!props.project) return [{ text }];
+function segments(line) {
+  const text = line.text;
+  if (!lineProject(line)) return [{ text }];
   const out = [];
   let last = 0;
   for (const m of text.matchAll(CONTAINER_PATH)) {
@@ -98,11 +121,12 @@ function segments(text) {
 /** The substitution the bind mount states: /var/www/html ↔ projects/<name>.
  *  `open_in_editor` still confines the result to the workspace on the Rust
  *  side — this is convenience, not the boundary. */
-async function jump(file) {
+async function jump(line, file) {
   const root = app.workspace?.root;
-  if (!root) return;
+  const project = lineProject(line);
+  if (!root || !project) return;
   try {
-    await api.openInEditor(`${root}/projects/${props.project}/${file}`);
+    await api.openInEditor(`${root}/projects/${project}/${file}`);
   } catch (e) {
     error.value = e;
   }
@@ -143,7 +167,30 @@ function fileSize(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+/** Fanout only: the projects that have any log file at all, with how many. */
+const projectItems = computed(() => {
+  const counts = new Map();
+  for (const file of files.value) {
+    counts.set(file.project, (counts.get(file.project) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, n]) => ({
+      value: name,
+      title: name,
+      props: { subtitle: tc('logs.files', { n }) },
+    }));
+});
+
 async function loadFiles() {
+  if (fanout.value) {
+    try {
+      files.value = await api.appLogsAll();
+    } catch {
+      files.value = [];
+    }
+    return;
+  }
   if (!props.project) {
     files.value = [];
     return;
@@ -162,12 +209,25 @@ async function openStream() {
   error.value = null;
 
   const target = source.value;
+  coverage.value = null;
 
   try {
     // Listen before opening, or the first lines race the subscription.
     unlistenLine = await listen('logs:line', (event) => {
       if (event.payload.streamId !== streamId.value) return;
-      lines.value.push({ text: event.payload.line, stream: event.payload.stream });
+      const { line, stream, container, source: from } = event.payload;
+      lines.value.push({
+        text: line,
+        stream,
+        // Present on the fanout only, where one buffer carries many files.
+        project: from ? container : '',
+        // What level inheritance is keyed on: a stack frame must take the
+        // level of the entry above it *in its own file*, not of whichever
+        // project happened to write in between. Doubles as the badge's
+        // tooltip, so the separator is one a human reads — safe as a key
+        // either way, since `is_safe_name` keeps it out of a project name.
+        origin: from ? `${container} · ${from}` : '',
+      });
       if (lines.value.length > MAX_LINES) lines.value.splice(0, lines.value.length - MAX_LINES);
       if (follow.value) scrollToEnd();
     });
@@ -176,9 +236,23 @@ async function openStream() {
       if (event.payload.streamId === streamId.value) streamId.value = null;
     });
 
-    streamId.value = target
-      ? await api.appLogOpen(props.project, target)
-      : await api.containerLogsOpen(props.container, 300, true);
+    // Coverage *updates*. The first one comes back from the open call itself,
+    // because an event would race this assignment and leave the line blank
+    // until the next rediscovery thirty seconds later.
+    unlistenSources = await listen('logs:sources', (event) => {
+      if (event.payload.streamId !== streamId.value) return;
+      coverage.value = event.payload;
+    });
+
+    if (fanout.value) {
+      const opened = await api.appLogsAllOpen(chosen.value.length ? [...chosen.value] : null);
+      streamId.value = opened.streamId;
+      coverage.value = opened;
+    } else if (target) {
+      streamId.value = await api.appLogOpen(props.project, target);
+    } else {
+      streamId.value = await api.containerLogsOpen(props.container, 300, true);
+    }
   } catch (e) {
     error.value = e;
   }
@@ -191,8 +265,10 @@ function close() {
   }
   if (unlistenLine) unlistenLine();
   if (unlistenClosed) unlistenClosed();
+  if (unlistenSources) unlistenSources();
   unlistenLine = null;
   unlistenClosed = null;
+  unlistenSources = null;
 }
 
 async function scrollToEnd() {
@@ -200,10 +276,15 @@ async function scrollToEnd() {
   if (viewport.value) viewport.value.scrollTop = viewport.value.scrollHeight;
 }
 
-/** Copy what is on screen — the filtered lines, not the whole buffer. */
+/** Copy what is on screen — the filtered lines, not the whole buffer.
+ *  Interleaved lines are prefixed with their project: pasted without it, a
+ *  fanout excerpt is a set of lines from nowhere in particular. */
 async function copyVisible() {
+  const text = visible.value
+    .map((l) => (l.project ? `[${l.project}] ${l.text}` : l.text))
+    .join('\n');
   try {
-    await navigator.clipboard.writeText(visible.value.map((l) => l.text).join('\n'));
+    await navigator.clipboard.writeText(text);
   } catch {
     /* clipboard unavailable */
   }
@@ -237,6 +318,12 @@ watch(source, () => {
   if (props.active) openStream();
 });
 
+// So is narrowing the fanout: the selection is applied on the Rust side, which
+// is what stops sixty pollers running for eight lines the user wants to see.
+watch(chosen, () => {
+  if (props.active && fanout.value) openStream();
+});
+
 onUnmounted(close);
 </script>
 
@@ -247,10 +334,27 @@ onUnmounted(close);
         <div class="log-head">
           <v-icon size="20">mdi-text-box-outline</v-icon>
 
+          <!-- The fanout picks projects, not files: choosing a file across a
+               whole workspace is the question this view exists to avoid having
+               to answer. Empty means every project. -->
+          <v-select
+            v-if="fanout"
+            v-model="chosen"
+            :items="projectItems"
+            :placeholder="tc('logs.allProjects')"
+            multiple
+            chips
+            closable-chips
+            density="compact"
+            variant="plain"
+            hide-details
+            class="log-source"
+          />
+
           <!-- Only offered when there is something to choose between. A project
                with no log files gets the plain container name it always had. -->
           <v-select
-            v-if="files.length"
+            v-else-if="files.length"
             v-model="source"
             :items="sources"
             density="compact"
@@ -261,6 +365,19 @@ onUnmounted(close);
           <span v-else class="text-body-2 log-name">{{ container }}</span>
 
           <v-chip v-if="streamId" size="x-small" color="success">{{ tc('logs.live') }}</v-chip>
+
+          <!-- Coverage, because the fanout follows at most 60 files. A view
+               that caps itself and says nothing reads as "nothing else is
+               happening". -->
+          <span v-if="fanout && coverage" class="text-caption text-medium-emphasis">
+            {{
+              tc('logs.following', {
+                followed: coverage.followed,
+                total: coverage.total,
+                projects: coverage.projects,
+              })
+            }}
+          </span>
           <v-spacer />
 
           <v-text-field
@@ -352,11 +469,14 @@ onUnmounted(close);
         <div ref="viewport" class="log-view">
           <ErrorAlert :error="error" type="error" />
 
+          <!-- The fanout is live-only, so an empty pane is the normal opening
+               state and not a fault: nothing has been written since it opened.
+               Saying so is the difference between "waiting" and "broken". -->
           <div
             v-if="!error && !lines.length"
             class="text-medium-emphasis text-caption pa-4 text-center"
           >
-            {{ tc('logs.waiting') }}
+            {{ fanout ? tc('logs.waitingAll') : tc('logs.waiting') }}
           </div>
 
           <!-- Distinguished from an empty log: one means nothing has been
@@ -379,13 +499,18 @@ onUnmounted(close);
               { 'log-stderr': line.stream === 'stderr' },
               line.level ? `level-${line.level}` : null,
             ]"
-            ><template v-for="(seg, j) in segments(line.text)"><span
+          ><span
+              v-if="line.project"
+              class="log-origin"
+              :title="line.origin"
+              >{{ line.project }}</span
+            ><template v-for="(seg, j) in segments(line)"><span
                 v-if="seg.file"
                 :key="j"
                 class="log-jump"
                 role="link"
                 :title="tc('logs.openInEditor')"
-                @click="jump(seg.file)"
+                @click="jump(line, seg.file)"
                 >{{ seg.text }}</span
               ><template v-else>{{ seg.text }}</template></template></pre>
         </div>
@@ -452,6 +577,22 @@ onUnmounted(close);
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Which project a line came from, on the fanout only. A fixed width so the
+   text starts on one column — a ragged left edge is what makes an interleaved
+   buffer unreadable, and the whole value of this view is that you can scan it.
+   Truncated rather than wrapped; the full origin is in the title. */
+.log-origin {
+  display: inline-block;
+  width: 11ch;
+  margin-right: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  opacity: 0.6;
+  user-select: none;
 }
 
 /* A stack-frame path, one click from the editor. Underlined only on hover so

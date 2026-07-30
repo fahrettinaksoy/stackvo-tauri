@@ -132,9 +132,11 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "stackvo_project",
         command: "project_get",
-        description: "One project in full: its manifest, its container, its Xdebug state and \
-                      whether the HTTPS certificate covers its domain. Use this to explain why \
-                      a specific site does not load.",
+        description: "One project in full: its manifest, its container, its Xdebug state, its \
+                      PHP limits as the running container actually reports them, and whether the \
+                      HTTPS certificate covers its domain. Use this to explain why a specific \
+                      site does not load — or why an upload fails at a limit the user believes \
+                      they have already raised.",
         writes: false,
         schema: project_arg,
     },
@@ -153,6 +155,18 @@ pub const TOOLS: &[Tool] = &[
                       not follow.",
         writes: false,
         schema: logs_args,
+    },
+    Tool {
+        name: "stackvo_log_files",
+        command: "app_logs_all",
+        description: "Every log file every project writes, newest first, with its size and when \
+                      it last changed. The container log carries only stdout — an application's \
+                      own exception is in one of these. Read the timestamps to find where the \
+                      activity is before opening anything: the file that changed a minute ago is \
+                      the one worth reading. Needs no engine, so it still answers with Docker \
+                      stopped.",
+        writes: false,
+        schema: no_args,
     },
     Tool {
         name: "stackvo_certificates",
@@ -328,6 +342,8 @@ pub async fn call(name: &str, args: &Value, allow_writes: bool) -> Result<Value>
 
         "stackvo_doctor" => Ok(json!(crate::doctor::run(Some(&root)).await)),
 
+        "stackvo_log_files" => Ok(json!(crate::applog::candidates_all(&root)?)),
+
         "stackvo_projects" => Ok(json!(crate::commands::list_projects(&root).await?)),
 
         "stackvo_project" => {
@@ -351,6 +367,10 @@ pub async fn call(name: &str, args: &Value, allow_writes: bool) -> Result<Value>
             Ok(json!({
                 "project": project,
                 "xdebug": crate::xdebug::status(&root, &name).await.ok(),
+                // Carries `effective` — what PHP in the container actually has
+                // — which turns "why is my upload failing at 2M" from a guess
+                // into a reading.
+                "phpIni": crate::phpini::status(&root, &name).await.ok(),
                 "certificateCoversDomain": covered,
                 "container": crate::engine::inspect(&name).await.ok(),
             }))

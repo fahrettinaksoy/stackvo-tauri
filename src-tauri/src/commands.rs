@@ -625,6 +625,7 @@ pub async fn container_logs_open(
                         container: container.clone(),
                         line: line.text,
                         stream: line.stream.to_string(),
+                        source: None,
                     },
                 );
             }
@@ -713,6 +714,8 @@ pub async fn app_log_open(
                             // renderer's stderr colouring meaningful instead of
                             // painting whole files red.
                             stream: "stdout".to_string(),
+                            // One file, named once when the stream opened.
+                            source: None,
                         },
                     );
                 }
@@ -750,6 +753,121 @@ pub async fn app_log_open(
     }
 
     Ok(stream_id)
+}
+
+// --------------------------------------------------- across every project
+
+/// Every log file every project writes, newest first.
+///
+/// The picker for the cross-project tail, and — because it needs no engine —
+/// the one list in the app that is complete with Docker stopped.
+#[tauri::command]
+pub fn app_logs_all(state: State<'_, AppState>) -> Result<Vec<applog::ProjectLogFile>> {
+    applog::candidates_all(&state.root()?)
+}
+
+/// How often the fanout re-discovers files.
+///
+/// Rediscovery is not free the way a `stat` is — it walks the log directories
+/// of every project — so it runs on its own, much slower clock than the read.
+/// Thirty seconds is the largest gap that still feels immediate when a daily
+/// channel rolls over or a project is created while the pane is open.
+const FANOUT_SCAN: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Follow every project at once.
+///
+/// Live only, and deliberately: see `applog::Fanout`. Nothing here parses a
+/// timestamp, so the only ordering this can honestly claim across files is the
+/// order the bytes arrive in — true for new output, invented for old. History
+/// stays in the per-project viewer, which reads one file and can show all of
+/// it. Closed with `container_logs_close`, like every other stream.
+#[tauri::command]
+pub async fn app_logs_all_open(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    projects: Option<Vec<String>>,
+) -> Result<FanoutStream> {
+    let root = state.root()?;
+    let only = projects.unwrap_or_default();
+
+    // The first scan happens before the task is spawned, and its result is
+    // *returned* rather than emitted. An event would race the caller: the task
+    // can emit before the frontend has the stream id it filters events by, and
+    // the coverage line would then stay blank until the next rediscovery
+    // thirty seconds later. Only updates are events, because only updates have
+    // somewhere to arrive.
+    let mut fanout = applog::Fanout::new(&root);
+    let first = fanout.scan(&only);
+
+    let stream_id = events::next_operation_id("applog");
+
+    let handle = {
+        let app = app.clone();
+        let stream_id = stream_id.clone();
+
+        tokio::spawn(async move {
+            let mut since_scan = std::time::Duration::ZERO;
+            loop {
+                tokio::time::sleep(APP_LOG_POLL).await;
+
+                for line in fanout.poll() {
+                    events::emit(
+                        &app,
+                        "logs:line",
+                        events::LogLineEvent {
+                            stream_id: stream_id.clone(),
+                            container: line.project,
+                            line: line.text,
+                            stream: "stdout".to_string(),
+                            source: Some(line.id),
+                        },
+                    );
+                }
+
+                since_scan += APP_LOG_POLL;
+                if since_scan >= FANOUT_SCAN {
+                    since_scan = std::time::Duration::ZERO;
+                    // Scanned *after* the poll, so the files being dropped this
+                    // round have already given up their last lines.
+                    let scan = fanout.scan(&only);
+                    events::emit(
+                        &app,
+                        "logs:sources",
+                        serde_json::json!({
+                            "streamId": stream_id,
+                            "followed": scan.followed,
+                            "total": scan.total,
+                            "projects": scan.projects,
+                        }),
+                    );
+                }
+            }
+        })
+        .abort_handle()
+    };
+
+    if let Ok(mut streams) = state.log_streams.lock() {
+        streams.insert(stream_id.clone(), handle);
+    }
+
+    Ok(FanoutStream {
+        stream_id,
+        followed: first.followed,
+        total: first.total,
+        projects: first.projects,
+    })
+}
+
+/// An open fanout, with the coverage it starts on.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FanoutStream {
+    pub stream_id: String,
+    /// Files being followed now.
+    pub followed: usize,
+    /// Files that exist. Larger than `followed` means the 60-file cap bit.
+    pub total: usize,
+    pub projects: usize,
 }
 
 // ---------------------------------------------------------------- .env writes
@@ -1313,6 +1431,711 @@ pub async fn xdebug_set(
     Ok(status)
 }
 
+// ------------------------------------------------------------ dump catcher
+
+#[tauri::command]
+pub async fn dumps_status(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<crate::dumps::Status> {
+    crate::dumps::status(&state.root()?, &name).await
+}
+
+/// Start Symfony's own dump server in the project's container and stream what
+/// it renders.
+///
+/// The rendering is Symfony's, not this app's — see `dumps.rs`. Reusing the log
+/// stream's events on purpose: the viewer already renders one kind of line, and
+/// a second event pair would be a second listener that could drift from the
+/// first.
+#[tauri::command]
+pub async fn dumps_open(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<String> {
+    let root = state.root()?;
+    let argv = crate::dumps::prepare(&root, &name).await?;
+
+    let stream_id = events::next_operation_id("dumps");
+
+    let handle = {
+        let app = app.clone();
+        let stream_id = stream_id.clone();
+        let container = name.clone();
+
+        tokio::spawn(async move {
+            // `stream` returns when the process exits; aborting this task drops
+            // the child, and `kill_on_drop` stops the collector with it.
+            let _ = runner::stream("docker", &argv, std::path::Path::new("."), |line| {
+                if crate::dumps::is_banner(line) {
+                    return;
+                }
+                events::emit(
+                    &app,
+                    "logs:line",
+                    events::LogLineEvent {
+                        stream_id: stream_id.clone(),
+                        container: container.clone(),
+                        line: line.to_string(),
+                        stream: "stdout".to_string(),
+                        source: Some("dumps".to_string()),
+                    },
+                );
+            })
+            .await;
+
+            events::emit(
+                &app,
+                "logs:closed",
+                serde_json::json!({ "streamId": stream_id }),
+            );
+        })
+        .abort_handle()
+    };
+
+    if let Ok(mut streams) = state.log_streams.lock() {
+        streams.insert(stream_id.clone(), handle);
+    }
+
+    Ok(stream_id)
+}
+
+/// Stop the collector and the stream together.
+///
+/// Not `container_logs_close`: aborting the task kills the local `docker exec`
+/// client, and the PHP process inside the container carries on holding the
+/// port. The next `dumps_open` then fails with Symfony's own "Address already
+/// in use", which is how this was found.
+#[tauri::command]
+pub async fn dumps_close(
+    state: State<'_, AppState>,
+    name: String,
+    stream_id: String,
+) -> Result<()> {
+    if let Ok(mut streams) = state.log_streams.lock() {
+        if let Some(handle) = streams.remove(&stream_id) {
+            handle.abort();
+        }
+    }
+    crate::dumps::stop(&crate::engine::container_name(&name)).await;
+    Ok(())
+}
+
+// ------------------------------------------------------- production images
+
+/// What building a production image would do, before it does it.
+#[tauri::command]
+pub fn release_plan(
+    state: State<'_, AppState>,
+    name: String,
+    tag: Option<String>,
+) -> Result<crate::release::Plan> {
+    crate::release::plan(&state.root()?, &name, tag)
+}
+
+/// The result of a build: the plan that produced it, and what the image was
+/// found to contain.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseResult {
+    pub plan: crate::release::Plan,
+    pub verification: crate::release::Verification,
+}
+
+/// Build it, then open the image and check the two things that matter.
+///
+/// The verification is not optional and not a separate button. This feature's
+/// safety property — no `.env`, no active debugger — is exactly the kind that
+/// is easy to state in a Dockerfile and quietly wrong in the result, and the
+/// method this project keeps finding those with is asking the running thing.
+#[tauri::command]
+pub async fn release_build(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    tag: Option<String>,
+) -> Result<ReleaseResult> {
+    let root = state.root()?;
+    let _busy = state.inflight.acquire("release")?;
+
+    let plan = crate::release::plan(&root, &name, tag)?;
+    let context = workspace::project_dir(&root, &name)?;
+    let operation_id = events::next_operation_id("release");
+
+    events::emit(
+        &app,
+        "build:start",
+        serde_json::json!({ "project": name, "operationId": operation_id, "tag": plan.tag }),
+    );
+
+    match plan.strategy {
+        crate::release::Strategy::Layer => {
+            let dockerfile = crate::release::write(&root, &name, &plan)?;
+            let argv = crate::release::build_argv(&context, &dockerfile, &plan.tag);
+
+            runner::run_operation(
+                &app,
+                runner::Operation {
+                    operation_id: &operation_id,
+                    subject: &name,
+                    progress_event: "build:progress",
+                    finished_event: "build:success",
+                    program: "docker",
+                    args: &argv,
+                    cwd: &root,
+                },
+            )
+            .await?;
+        }
+        crate::release::Strategy::Retag => {
+            // Nothing to add: the node image already carries the code and the
+            // build. Rebuilding from it would replace a Linux `node_modules`
+            // with whatever the host has.
+            let argv = vec!["tag".to_string(), plan.base_image.clone(), plan.tag.clone()];
+            runner::run_operation(
+                &app,
+                runner::Operation {
+                    operation_id: &operation_id,
+                    subject: &name,
+                    progress_event: "build:progress",
+                    finished_event: "build:success",
+                    program: "docker",
+                    args: &argv,
+                    cwd: &root,
+                },
+            )
+            .await?;
+        }
+    }
+
+    let verification = crate::release::verify(&plan.tag, &plan.runtime).await?;
+    Ok(ReleaseResult { plan, verification })
+}
+
+/// Write a built image out as a tarball. Returns its size.
+#[tauri::command]
+pub async fn release_save(
+    state: State<'_, AppState>,
+    name: String,
+    tag: Option<String>,
+    path: String,
+) -> Result<u64> {
+    let root = state.root()?;
+    let plan = crate::release::plan(&root, &name, tag)?;
+    crate::release::save(&plan.tag, std::path::Path::new(&path)).await
+}
+
+// ------------------------------------------------------------------ profiler
+
+/// What Xdebug is set up to do for this project, and what it has recorded.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfilerStatus {
+    /// The Xdebug state this is layered on. Profiling is a *mode* of the
+    /// existing toggle, not a second switch: the extension has to be compiled
+    /// in either way, and two switches for one extension is two states to
+    /// explain instead of one.
+    pub xdebug: xdebug::XdebugStatus,
+    pub mode: xdebug::Mode,
+    /// The header a request needs when profiling is on: Xdebug is left on
+    /// `start_with_request=trigger` so an idle stack does not write a
+    /// multi-megabyte file per page load.
+    pub trigger: String,
+    pub profiles: Vec<crate::profile::ProfileFile>,
+    /// Total bytes the profiles hold — this fills a disk fast.
+    pub bytes: u64,
+    pub directory: String,
+}
+
+/// The name Xdebug looks for in a cookie, GET, POST or the environment.
+const TRIGGER: &str = "XDEBUG_TRIGGER";
+
+#[tauri::command]
+pub async fn profiler_status(state: State<'_, AppState>, name: String) -> Result<ProfilerStatus> {
+    let root = state.root()?;
+    let profiles = crate::profile::list(&root, &name)?;
+
+    Ok(ProfilerStatus {
+        bytes: profiles.iter().map(|p| p.bytes).sum(),
+        directory: crate::profile::host_dir(&root, &name).display().to_string(),
+        mode: xdebug::read_mode(&root, &name),
+        trigger: TRIGGER.to_string(),
+        xdebug: xdebug::status(&root, &name).await?,
+        profiles,
+    })
+}
+
+/// Switch between stepping and profiling.
+///
+/// Not a set: the two modes want opposite start triggers — stepping wants to
+/// connect on the next request, profiling wants a trigger so an idle stack does
+/// not fill the disk — so `debug,profile` would have to break one of them.
+#[tauri::command]
+pub async fn profiler_set_mode(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    mode: xdebug::Mode,
+) -> Result<ProfilerStatus> {
+    let root = state.root()?;
+    let dir = workspace::project_dir(&root, &name)?;
+    if !dir.join("stackvo.json").is_file() {
+        return Err(Error::not_found(format!("project {name}")));
+    }
+
+    let _busy = state.inflight.acquire("xdebug")?;
+
+    let path = xdebug::mode_path(&root, &name);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| Error::io(format!("creating {}", parent.display()), e))?;
+    }
+    let text = serde_json::to_string_pretty(&xdebug::ModeConfig { mode })
+        .map_err(|e| Error::new(Code::IoError, format!("serialising the mode: {e}")))?;
+    crate::atomic::write(&path, &format!("{text}\n"))?;
+
+    // So the ini and the overlay exist before the next compose call rather than
+    // being written by it — and so the reply describes a state that is real.
+    xdebug::sync(&root);
+
+    events::emit(
+        &app,
+        "xdebug:changed",
+        serde_json::json!({ "project": name, "mode": mode }),
+    );
+    profiler_status(state, name).await
+}
+
+/// One recorded profile, aggregated.
+#[tauri::command]
+pub fn profiler_read(
+    state: State<'_, AppState>,
+    name: String,
+    id: String,
+) -> Result<crate::profile::Report> {
+    crate::profile::read(&state.root()?, &name, &id)
+}
+
+#[tauri::command]
+pub fn profiler_delete(state: State<'_, AppState>, name: String, id: String) -> Result<()> {
+    crate::profile::delete(&state.root()?, &name, &id)
+}
+
+/// Remove every recorded profile. Returns how many, and how much was freed.
+#[tauri::command]
+pub fn profiler_clear(state: State<'_, AppState>, name: String) -> Result<serde_json::Value> {
+    let (removed, freed) = crate::profile::clear(&state.root()?, &name)?;
+    Ok(serde_json::json!({ "removed": removed, "freed": freed }))
+}
+
+// ---------------------------------------------------------- quick commands
+
+/// The commands this project has the files to run.
+#[tauri::command]
+pub fn quick_commands(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<Vec<crate::quickcmd::QuickCommand>> {
+    crate::quickcmd::for_project(&state.root()?, &name)
+}
+
+/// Run one of them, by id.
+///
+/// The id is looked up in the catalog and the argv is built here; the frontend
+/// never names a program. Interactive commands open the user's own terminal and
+/// return no operation id — there is nothing to stream, and an in-app REPL next
+/// to the terminal they already configured would be the worse of the two.
+#[tauri::command]
+pub async fn quick_command_run(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    id: String,
+) -> Result<Option<String>> {
+    let root = state.root()?;
+    let spec = crate::quickcmd::resolve(&id)?;
+
+    // Validated before the container name is built from it, as everywhere else.
+    workspace::project_dir(&root, &name)?;
+    let container = crate::engine::container_name(&name);
+
+    // `docker exec` needs something to exec into. Without this the failure is
+    // Docker's "No such container", which reads as a broken button rather than
+    // as a project that is not running.
+    let running = crate::engine::inspect(&name)
+        .await
+        .map(|d| d.running)
+        .unwrap_or(false);
+    if !running {
+        return Err(Error::new(Code::Conflict, format!("{name} is not running"))
+            .with_hint("Start the project first — these commands run inside its container."));
+    }
+
+    if spec.interactive {
+        let preferred = prefs_get().ok().and_then(|p| {
+            p.get("terminalApp")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        });
+        crate::pty::open_external_command(&container, spec, preferred.as_deref())?;
+        return Ok(None);
+    }
+
+    // One-shot: through the operation console, like every other long-running
+    // thing in this app. Reported under the `build:` family because that is the
+    // one the project detail page already listens to for its own operations.
+    let operation_id = events::next_operation_id("cmd");
+    let argv = crate::quickcmd::exec_argv(&container, spec);
+
+    events::emit(
+        &app,
+        "build:start",
+        serde_json::json!({
+            "project": name, "operationId": operation_id, "command": spec.display
+        }),
+    );
+
+    let handle = app.clone();
+    let subject = name.clone();
+    let op_id = operation_id.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = runner::run_operation(
+            &handle,
+            runner::Operation {
+                operation_id: &op_id,
+                subject: &subject,
+                progress_event: "build:progress",
+                finished_event: "build:success",
+                program: "docker",
+                args: &argv,
+                cwd: &root,
+            },
+        )
+        .await;
+    });
+
+    Ok(Some(operation_id))
+}
+
+// -------------------------------------------------------------- dev server
+
+/// Whether a node project runs its dev server with the source mounted live.
+#[tauri::command]
+pub async fn devserver_status(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<crate::devserver::DevServerStatus> {
+    let root = state.root()?;
+    crate::devserver::status(&root, &name).await
+}
+
+/// Turn it on or off.
+#[tauri::command]
+pub async fn devserver_set(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    enabled: bool,
+    command: Option<String>,
+) -> Result<crate::devserver::DevServerStatus> {
+    let root = state.root()?;
+
+    // The config write and the overlay render have to land together, for the
+    // same reason as Xdebug's toggle: a second change interleaving between them
+    // would render an overlay from a half-written set of files.
+    let _busy = state.inflight.acquire("devserver")?;
+
+    let status = crate::devserver::set(&root, &name, enabled, command).await?;
+    events::emit(
+        &app,
+        "devserver:changed",
+        serde_json::json!({ "project": name, "enabled": status.enabled }),
+    );
+    Ok(status)
+}
+
+// ------------------------------------------------- migrating a compose file
+
+/// What reading a project's `docker-compose.yml` would produce.
+///
+/// Everything the review needs, in one round trip: what was read, the manifest
+/// it implies, and the `.env` diff enabling its services would make.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationPlan {
+    pub migration: crate::migrate::Migration,
+    /// The proposed `stackvo.json`, already validated against the schema —
+    /// reviewing a spec that would then be refused is a review of nothing.
+    pub spec: serde_json::Value,
+    /// Services to enable, as the same reviewed diff a preset import shows.
+    pub env: crate::preset::Plan,
+    /// True when the directory already has a manifest, so this is a comparison
+    /// rather than an adoption.
+    pub already_managed: bool,
+}
+
+/// Detection, then the compose file on top of it.
+///
+/// Order matters and is the whole point: detection reads the *code* and gets
+/// runtime, framework and document root; the compose file records what the
+/// person who wrote it *decided* — the PHP version, the domain, the extensions,
+/// and the services, none of which any marker file states. Where both have an
+/// answer the compose file wins, because a guess loses to a declaration.
+fn migrated_spec(
+    name: &str,
+    detected: &detect::Detected,
+    m: &crate::migrate::Migration,
+) -> serde_json::Value {
+    let mut spec = detected_spec(name, detected);
+
+    if let Some(domain) = &m.domain {
+        spec["domain"] = serde_json::json!(domain);
+    }
+
+    let runtime = m.runtime.as_deref().unwrap_or(detected.runtime);
+    if runtime == "node" {
+        spec["runtime"] = serde_json::json!("node");
+        // The three PHP-only keys have to go with it, or the spec describes two
+        // runtimes at once and the contract rejects it (W-02).
+        if let Some(object) = spec.as_object_mut() {
+            for key in ["server", "document_root", "php"] {
+                object.remove(key);
+            }
+        }
+
+        // Built rather than patched: `detected_spec` only emits a node block
+        // when *detection* said node, and the case that brings us here is
+        // precisely the one where it did not — a Laravel repository whose
+        // compose file runs the Vite container. Patching a block that is not
+        // there silently produced a node project with no node settings.
+        let node = spec
+            .get("node")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+        let field =
+            |key: &str, fallback: serde_json::Value| node.get(key).cloned().unwrap_or(fallback);
+
+        spec["node"] = serde_json::json!({
+            "version": m
+                .node_version
+                .clone()
+                .map(serde_json::Value::from)
+                .unwrap_or_else(|| field("version", serde_json::json!("22"))),
+            "install": field("install", serde_json::json!("npm install")),
+            "start": field("start", serde_json::json!("npm run dev")),
+            "port": m
+                .port
+                .map(serde_json::Value::from)
+                .unwrap_or_else(|| field("port", serde_json::json!(3000))),
+        });
+        return spec;
+    }
+
+    if let Some(server) = &m.server {
+        spec["server"] = serde_json::json!(server);
+    }
+    if let Some(root) = &m.document_root {
+        spec["document_root"] = serde_json::json!(root);
+    }
+    if let Some(php) = spec.get_mut("php").and_then(|v| v.as_object_mut()) {
+        if let Some(version) = &m.php_version {
+            php.insert("version".into(), serde_json::json!(version));
+        }
+        // `extensions` last: the contract's write rules put it at the end of
+        // the php block, and a form that reorders it produces valid JSON the
+        // differential check still fails on.
+        if !m.extensions.is_empty() {
+            php.insert("extensions".into(), serde_json::json!(m.extensions));
+        }
+    }
+
+    spec
+}
+
+/// Read a project's compose file and say what importing it would do.
+#[tauri::command]
+pub async fn migrate_scan(state: State<'_, AppState>, name: String) -> Result<MigrationPlan> {
+    let root = state.root()?;
+    let dir = workspace::project_dir(&root, &name)?;
+    if !dir.is_dir() {
+        return Err(Error::not_found(format!("directory {name}")));
+    }
+
+    let Some(compose) = detect::compose_file(&dir) else {
+        return Err(
+            Error::not_found(format!("a compose file in {name}")).with_hint(
+                "Looked for compose.yaml, compose.yml, docker-compose.yaml and docker-compose.yml.",
+            ),
+        );
+    };
+
+    let migration = crate::migrate::read(&compose).await?;
+    let detected = detect::detect(&dir);
+    let spec = migrated_spec(&name, &detected, &migration);
+
+    // Validated here rather than at adopt time: a review of a spec that would
+    // then be refused is a review of nothing.
+    parse_spec(&spec, &name)?;
+
+    let env = Env::load(&root)
+        .map(|env| {
+            crate::preset::plan(
+                &env,
+                &crate::contracts::env_schema().service_catalog(),
+                &crate::migrate::to_preset(&migration, Some(name.clone())),
+            )
+        })
+        .unwrap_or_else(|_| {
+            crate::preset::plan(
+                &Env::parse(""),
+                &crate::contracts::env_schema().service_catalog(),
+                &crate::migrate::to_preset(&migration, Some(name.clone())),
+            )
+        });
+
+    Ok(MigrationPlan {
+        migration,
+        spec,
+        env,
+        already_managed: dir.join("stackvo.json").is_file(),
+    })
+}
+
+/// Import it: adopt the project, then enable the services it named.
+///
+/// The two halves in that order. Adoption is the one that can fail on a schema
+/// violation, and enabling services for a project that then did not get created
+/// leaves the stack carrying a database nothing uses.
+#[tauri::command]
+pub async fn migrate_apply(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    spec: Option<serde_json::Value>,
+    services: Option<bool>,
+) -> Result<MigrationPlan> {
+    let root = state.root()?;
+    let _busy = state.inflight.acquire("migrate")?;
+
+    let plan = migrate_scan(state.clone(), name.clone()).await?;
+
+    if !plan.already_managed {
+        // The reviewed spec, or the one just computed. Passing it back is what
+        // lets the user correct a document root before it is written.
+        let spec = spec.unwrap_or_else(|| plan.spec.clone());
+        project_adopt(app.clone(), state.clone(), name.clone(), Some(spec)).await?;
+    }
+
+    if services.unwrap_or(true) && !plan.env.changes.is_empty() {
+        crate::env_writer::apply(&root, &crate::preset::patch(&plan.env))?;
+        events::emit(
+            &app,
+            "preset:applied",
+            serde_json::json!({ "changed": plan.env.changes.len() }),
+        );
+    }
+
+    // Re-read, so what comes back describes the state that now exists rather
+    // than the one that did before the write.
+    migrate_scan(state, name).await
+}
+
+// ------------------------------------------------------------ stack presets
+
+/// This stack as a preset, for preview and for copying.
+#[tauri::command]
+pub fn preset_export(
+    state: State<'_, AppState>,
+    name: Option<String>,
+) -> Result<crate::preset::Preset> {
+    crate::preset::export_current(&state.root()?, name)
+}
+
+/// Write it to a file the user picked.
+#[tauri::command]
+pub fn preset_save(
+    state: State<'_, AppState>,
+    path: String,
+    name: Option<String>,
+) -> Result<String> {
+    let root = state.root()?;
+    let target = std::path::PathBuf::from(&path);
+    crate::preset::save(&root, &target, name)?;
+    Ok(path)
+}
+
+/// What importing this file would change, without changing anything.
+#[tauri::command]
+pub fn preset_plan(state: State<'_, AppState>, path: String) -> Result<crate::preset::Plan> {
+    crate::preset::plan_file(&state.root()?, std::path::Path::new(&path))
+}
+
+/// Import it. Re-planned inside `apply`, so a `.env` that moved between the
+/// review and the click is not overwritten with a stale diff.
+#[tauri::command]
+pub fn preset_apply(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<crate::preset::Plan> {
+    let root = state.root()?;
+
+    // `.env` has several writers — env_set, service_enable/disable — and this
+    // one rewrites many keys at once. The lock inside env_writer serialises the
+    // read-modify-write; this serialises the plan against it too, so the diff
+    // that is applied is the diff that was planned.
+    let _busy = state.inflight.acquire("preset")?;
+
+    let plan = crate::preset::apply_file(&root, std::path::Path::new(&path))?;
+    if !plan.changes.is_empty() {
+        events::emit(
+            &app,
+            "preset:applied",
+            serde_json::json!({ "changed": plan.changes.len() }),
+        );
+    }
+    Ok(plan)
+}
+
+// ----------------------------------------------------------------- php.ini
+
+/// The project's PHP overrides: what is on disk, what the container has, and
+/// whether the two agree — three separate answers, like Xdebug's.
+#[tauri::command]
+pub async fn php_ini_status(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<crate::phpini::PhpIniStatus> {
+    let root = state.root()?;
+    crate::phpini::status(&root, &name).await
+}
+
+/// Write directives. `null` removes one; removing the last removes the file.
+#[tauri::command]
+pub async fn php_ini_set(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    patch: std::collections::BTreeMap<String, Option<String>>,
+) -> Result<crate::phpini::PhpIniStatus> {
+    let root = state.root()?;
+
+    // The file write and the overlay render have to land together, for the same
+    // reason as Xdebug: a second edit interleaving between them would render an
+    // overlay from a half-written set of files.
+    let _busy = state.inflight.acquire("php_ini")?;
+
+    let status = crate::phpini::set(&root, &name, &patch).await?;
+    events::emit(
+        &app,
+        "php_ini:changed",
+        serde_json::json!({ "project": name, "exists": status.exists }),
+    );
+    Ok(status)
+}
+
 // ------------------------------------------------------------- certificates
 
 /// What the wildcard certificate covers, and whether anything trusts its CA.
@@ -1468,6 +2291,34 @@ fn parse_spec(value: &serde_json::Value, expected_name: &str) -> Result<Manifest
     let m = manifest::normalize(value, &raw, expected_name);
 
     if !m.valid {
+        // Two of the contract's rules are about the *layout of a file* — W-01
+        // (`php.extensions` must be the last key, because the Bash extractor
+        // swallows whatever follows the array) and C-04 (the 50-line parser
+        // window). An incoming spec is a JSON value, and a value has no
+        // meaningful key order: `serde_json`'s map is sorted, so `extensions`
+        // lands before `version` and W-01 fires on a spec that is perfectly
+        // fine. Checking a layout rule against something that has no layout is
+        // checking nothing.
+        //
+        // What *will* have a layout is `manifest::to_json`, which exists
+        // precisely to satisfy these rules. So when the only complaints are
+        // layout ones, re-validate the bytes that are actually going to be
+        // written. Found by the first spec to carry `php.extensions` — every
+        // caller before the compose importer happened to omit them.
+        const LAYOUT_ONLY: [&str; 2] = ["W-01", "C-04"];
+        if m.errors
+            .iter()
+            .all(|e| LAYOUT_ONLY.contains(&e.code.as_str()))
+        {
+            let canonical = manifest::to_json(&m);
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&canonical) {
+                let rechecked = manifest::normalize(&parsed, &canonical, expected_name);
+                if rechecked.valid {
+                    return Ok(rechecked);
+                }
+            }
+        }
+
         return Err(
             Error::new(Code::InvalidManifest, "the project definition is not valid")
                 .with_details(serde_json::json!({ "errors": m.errors })),
@@ -2069,6 +2920,36 @@ pub async fn doctor(state: State<'_, AppState>) -> Result<crate::doctor::Doctor>
     Ok(crate::doctor::run(root.as_deref()).await)
 }
 
+/// Remove an extension the build cannot install, and re-report.
+///
+/// The one repair in this panel that changes a file the *user* wrote, which is
+/// why it is worth being exact about what it does: **nothing about the running
+/// stack changes.** The generator already drops the extension silently, so it
+/// is already missing from every built container — this only stops the manifest
+/// claiming something the container never had.
+#[tauri::command]
+pub async fn doctor_drop_extension(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    subject: String,
+    extension: String,
+) -> Result<crate::doctor::Doctor> {
+    let root = state.root()?;
+
+    // `.env` has several writers, and a manifest edit races the watcher.
+    let _busy = state.inflight.acquire("doctor")?;
+
+    crate::doctor::drop_extension(&root, &subject, &extension)?;
+
+    events::emit(
+        &app,
+        "manifest:changed",
+        serde_json::json!({ "project": subject, "reason": "extension-removed" }),
+    );
+
+    Ok(crate::doctor::run(Some(&root)).await)
+}
+
 // ---------------------------------------------------------------- scaffold
 
 /// Fill a new project directory by running the framework's own installer in
@@ -2527,6 +3408,104 @@ pub fn preferred_locale() -> String {
 #[tauri::command]
 pub fn tray_relabel(app: AppHandle) {
     crate::tray::relabel(&app);
+}
+
+#[cfg(test)]
+mod migrate_tests {
+    use super::*;
+
+    fn detected(runtime: &'static str) -> detect::Detected {
+        detect::Detected {
+            framework: None,
+            runtime,
+            server: "nginx",
+            document_root: Some("public".into()),
+            php_version: Some("8.2".into()),
+            node_version: Some("20".into()),
+            node_port: Some(3000),
+            node_start: Some("npm run dev".into()),
+            confidence: detect::Confidence::Likely,
+            evidence: vec![],
+        }
+    }
+
+    fn migration() -> crate::migrate::Migration {
+        crate::migrate::Migration {
+            source: "/w/shop/docker-compose.yml".into(),
+            app_service: Some("app".into()),
+            runtime: Some("php".into()),
+            server: Some("apache".into()),
+            php_version: Some("8.3".into()),
+            document_root: Some("web".into()),
+            domain: Some("shop.test".into()),
+            extensions: vec!["pdo_mysql".into(), "gd".into()],
+            ..Default::default()
+        }
+    }
+
+    /// The whole point of the merge, and the thing that decides whether the
+    /// import is worth anything: where both have an answer, the compose file
+    /// wins. Detection *guesses* from the shape of the code; the compose file
+    /// records what its author decided.
+    #[test]
+    fn a_declaration_beats_a_guess() {
+        let spec = migrated_spec("shop", &detected("php"), &migration());
+
+        assert_eq!(spec["domain"], "shop.test");
+        assert_eq!(spec["server"], "apache");
+        assert_eq!(spec["document_root"], "web");
+        assert_eq!(spec["php"]["version"], "8.3");
+        assert_eq!(
+            spec["php"]["extensions"],
+            serde_json::json!(["pdo_mysql", "gd"])
+        );
+    }
+
+    /// And the merged spec has to actually validate. A review of a spec that
+    /// adoption would then refuse is a review of nothing — which is why
+    /// migrate_scan runs this check before returning, and why it is worth an
+    /// assertion here rather than a discovery at apply time.
+    #[test]
+    fn the_merged_spec_satisfies_the_same_contract_a_created_project_does() {
+        let spec = migrated_spec("shop", &detected("php"), &migration());
+        parse_spec(&spec, "shop").expect("the merged spec must validate");
+    }
+
+    /// Detection saying "php" and the compose file saying "node" is a real
+    /// disagreement — a Laravel repo whose compose file runs only the Vite
+    /// container. The runtime blocks are mutually exclusive in the contract, so
+    /// switching has to take the PHP keys with it or the spec describes two
+    /// runtimes and is refused.
+    #[test]
+    fn switching_runtime_removes_the_other_runtime_s_keys() {
+        let node = crate::migrate::Migration {
+            runtime: Some("node".into()),
+            node_version: Some("22".into()),
+            port: Some(5173),
+            domain: Some("app.test".into()),
+            ..Default::default()
+        };
+
+        let spec = migrated_spec("app", &detected("php"), &node);
+
+        assert_eq!(spec["runtime"], "node");
+        assert!(spec.get("php").is_none(), "php block survived: {spec}");
+        assert!(spec.get("server").is_none());
+        assert!(spec.get("document_root").is_none());
+        assert_eq!(spec["node"]["version"], "22");
+        assert_eq!(spec["node"]["port"], 5173);
+
+        parse_spec(&spec, "app").expect("the switched spec must validate");
+    }
+
+    /// A compose file that states nothing extra must leave detection alone
+    /// rather than overwrite it with nulls.
+    #[test]
+    fn an_empty_migration_changes_nothing() {
+        let plain = detected_spec("shop", &detected("php"));
+        let merged = migrated_spec("shop", &detected("php"), &Default::default());
+        assert_eq!(plain, merged);
+    }
 }
 
 #[cfg(test)]

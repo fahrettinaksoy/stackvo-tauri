@@ -96,6 +96,29 @@ describe('withLevels', () => {
     );
     expect(tagged.map((l) => l.level)).toEqual(['error', 'error', 'info', 'info']);
   });
+
+  /**
+   * The cross-project tail interleaves sixty files into one buffer, so the line
+   * above a stack frame is routinely from a different project. Inheriting from
+   * it would paint one project's line with another project's severity — and
+   * then hide it under a level filter that has no idea it is looking at the
+   * wrong file.
+   */
+  it('does not let one origin inherit another origin s level', () => {
+    const tagged = withLevels([
+      { text: LARAVEL_ERROR, origin: 'shop' },
+      { text: SUPERVISOR_BARE, origin: 'blog' },
+      { text: STACK_FRAME, origin: 'shop' },
+    ]);
+
+    expect(tagged.map((l) => l.level)).toEqual(['error', null, 'error']);
+  });
+
+  it('keeps a single stream s inheritance unchanged when no origin is given', () => {
+    // Every line shares the one empty origin, which is the plain running level.
+    const tagged = withLevels([{ text: LARAVEL_ERROR }, { text: STACK_FRAME }]);
+    expect(tagged.map((l) => l.level)).toEqual(['error', 'error']);
+  });
 });
 
 describe('filterLines', () => {

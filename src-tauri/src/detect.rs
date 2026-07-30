@@ -414,6 +414,28 @@ pub struct Adoptable {
     pub detected: Detected,
     /// False for a directory with nothing in it — there is nothing to adopt.
     pub has_files: bool,
+    /// A `docker-compose.yml` beside the project, if it has one.
+    ///
+    /// Reported here so the list can offer to read it, and *only* reported —
+    /// resolving it costs a `docker compose config` per project, which is not
+    /// something to spend on a page that loads on every visit.
+    pub compose_file: Option<String>,
+}
+
+/// The names Compose itself looks for, in its own precedence order.
+const COMPOSE_NAMES: [&str; 4] = [
+    "compose.yaml",
+    "compose.yml",
+    "docker-compose.yaml",
+    "docker-compose.yml",
+];
+
+/// The compose file a directory has, if any.
+pub fn compose_file(dir: &Path) -> Option<std::path::PathBuf> {
+    COMPOSE_NAMES
+        .iter()
+        .map(|name| dir.join(name))
+        .find(|path| path.is_file())
 }
 
 /// Every directory under `projects/` with no `stackvo.json`.
@@ -453,6 +475,7 @@ pub fn adoptable(root: &Path) -> Vec<Adoptable> {
             path: path.display().to_string(),
             detected: detect(&path),
             has_files,
+            compose_file: compose_file(&path).map(|p| p.display().to_string()),
         });
     }
 

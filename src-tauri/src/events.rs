@@ -94,10 +94,18 @@ pub struct FinishedEvent {
 #[serde(rename_all = "camelCase")]
 pub struct LogLineEvent {
     pub stream_id: String,
+    /// The container the line came from, or — for the cross-project tail — the
+    /// project. One stream has one origin; a fanout has one per line, which is
+    /// why this is per-event rather than settled when the stream opens.
     pub container: String,
     pub line: String,
     /// `stdout` or `stderr`.
     pub stream: String,
+    /// The `LogFile.id` this line was read from, on a fanout only. Omitted from
+    /// the payload otherwise, so a single-source stream is byte-identical to
+    /// what it emitted before the fanout existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// Which side of a container/service lifecycle transition an event describes.

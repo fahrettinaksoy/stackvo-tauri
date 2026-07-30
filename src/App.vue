@@ -73,6 +73,12 @@ const NAV = [
   { key: 'dashboard', to: '/', icon: 'mdi-view-dashboard-outline', label: 'nav.dashboard' },
   { key: 'projects', to: '/projects', icon: 'mdi-folder-multiple-outline', label: 'nav.projects' },
   { key: 'services', to: '/services', icon: 'mdi-server-outline', label: 'nav.services' },
+  {
+    key: 'logs',
+    to: '/logs',
+    icon: 'mdi-text-box-multiple-outline',
+    label: 'nav.logs',
+  },
   { key: 'settings', to: '/settings', icon: 'mdi-cog-outline', label: 'nav.settings' },
 ];
 
@@ -239,13 +245,14 @@ onUnmounted(() => {
         >
           <v-icon>mdi-book-open-variant</v-icon>
         </v-btn>
-        <v-btn 
-          icon 
+        <v-btn
+          icon
           variant="tonal"
           elevation="0"
           class="mr-2"
           title="GitHub"
-          @click="openUrl('https://github.com/stackvo/stackvo')">
+          @click="openUrl('https://github.com/stackvo/stackvo')"
+        >
           <v-icon>mdi-github</v-icon>
         </v-btn>
         <v-btn
@@ -261,11 +268,7 @@ onUnmounted(() => {
 
         <v-menu>
           <template #activator="{ props }">
-            <v-btn 
-            icon
-            variant="tonal"
-            elevation="0"
-            v-bind="props" :title="t('app.socialMedia')">
+            <v-btn icon variant="tonal" elevation="0" v-bind="props" :title="t('app.socialMedia')">
               <v-icon>mdi-share-variant</v-icon>
             </v-btn>
           </template>
@@ -281,16 +284,14 @@ onUnmounted(() => {
 
         <v-divider vertical class="mx-4 my-3"></v-divider>
 
-        <v-menu
-        location="bottom end"
-        >
+        <v-menu location="bottom end">
           <template #activator="{ props }">
-            <v-btn 
+            <v-btn
               icon
               variant="tonal"
               elevation="0"
               class="mr-2"
-              v-bind="props" 
+              v-bind="props"
               :title="t('app.language')"
             >
               <v-icon>mdi-translate</v-icon>
@@ -308,12 +309,13 @@ onUnmounted(() => {
           </v-list>
         </v-menu>
 
-        <v-btn 
-        icon
-        variant="tonal"
-        elevation="0"
-        class="mr-5"
-        :title="t('app.toggleTheme')" @click="toggleTheme"
+        <v-btn
+          icon
+          variant="tonal"
+          elevation="0"
+          class="mr-5"
+          :title="t('app.toggleTheme')"
+          @click="toggleTheme"
         >
           <v-icon>{{ isDark ? 'mdi-weather-sunny' : 'mdi-weather-night' }}</v-icon>
         </v-btn>

@@ -162,15 +162,15 @@ onMounted(() => {
     :bar-title="t('dashboard.overview')"
   >
     <template #bar-append>
-      <v-btn 
-      icon 
-      variant="tonal"
-      elevation="0"
-      size="small"
-      class="mr-2"
-      :aria-label="t('app.refresh')" 
-      :loading="metrics.loading" 
-      @click="refreshAll"
+      <v-btn
+        icon
+        variant="tonal"
+        elevation="0"
+        size="small"
+        class="mr-2"
+        :aria-label="t('app.refresh')"
+        :loading="metrics.loading"
+        @click="refreshAll"
       >
         <v-icon>mdi-refresh</v-icon>
         <v-tooltip activator="parent" location="bottom">{{ t('app.refresh') }}</v-tooltip>
@@ -201,12 +201,7 @@ onMounted(() => {
         </v-col>
 
         <v-col cols="12" md="3">
-          <v-card
-            elevation="1"
-            hover
-            class="cursor-pointer"
-            @click="$router.push('/projects')"
-          >
+          <v-card elevation="1" hover class="cursor-pointer" @click="$router.push('/projects')">
             <v-card-text style="min-height: 100px">
               <div class="d-flex align-center">
                 <v-icon color="info" size="48" class="mr-4">mdi-folder-multiple</v-icon>
@@ -227,12 +222,7 @@ onMounted(() => {
         </v-col>
 
         <v-col cols="12" md="3">
-          <v-card
-            elevation="1"
-            hover
-            class="cursor-pointer"
-            @click="$router.push('/services')"
-          >
+          <v-card elevation="1" hover class="cursor-pointer" @click="$router.push('/services')">
             <v-card-text style="min-height: 100px">
               <div class="d-flex align-center">
                 <v-icon color="info" size="48" class="mr-4">mdi-server</v-icon>

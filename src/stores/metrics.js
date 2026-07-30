@@ -38,6 +38,10 @@ export const useMetricsStore = defineStore('metrics', () => {
     loading.value = true;
     try {
       const sample = await api.hostStats();
+      // A poll that comes back empty is a skipped tick, not a reason to poison
+      // the history with `undefined` — refresh runs on a timer, so throwing
+      // here surfaces as an unhandled rejection with no caller to catch it.
+      if (!sample) return;
       stats.value = sample;
       push(cpuHistory, sample.cpu.percent);
       push(memoryHistory, sample.memory.percent);

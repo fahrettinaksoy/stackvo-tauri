@@ -55,6 +55,9 @@ const routes = [
     props: true,
   },
   { path: '/services', name: 'Services', component: view(() => import('@/views/Services.vue')) },
+  // Belongs to no project, which is the point: it is where you look before you
+  // know which project to open.
+  { path: '/logs', name: 'Logs', component: view(() => import('@/views/Logs.vue')) },
   { path: '/settings', name: 'Settings', component: view(() => import('@/views/Settings.vue')) },
 ];
 

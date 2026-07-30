@@ -417,6 +417,209 @@ pub fn generated_status(root: &Path) -> GeneratedStatus {
 
 // ------------------------------------------------------------------ report
 
+/// An extension selection that cannot build where it is being asked to.
+///
+/// Found by running `tools/validate-contracts.mjs` and reading its output
+/// instead of the summary line. Three of that tool's four errors on this
+/// checkout are `C-06`, all one root cause — `imap`, removed in PHP 8.2, in
+/// two project manifests *and* in the stack's default extension set — and every
+/// one of them is local and fixable. The desktop app reported none of them,
+/// because the doctor knew about ports, disk and hosts and nothing about
+/// extensions.
+///
+/// It matters more than a lint: the Bash generator **skips a bad extension
+/// silently**. Nothing fails, nothing is logged, and the container comes up
+/// without it — so the symptom is a fatal `Call to undefined function
+/// imap_open()` at runtime, with nothing anywhere connecting it to a build that
+/// reported success.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionProblem {
+    /// The project name, or `.env` for the stack's default selection.
+    pub subject: String,
+    /// The PHP version the extension was measured against.
+    pub php_version: String,
+    pub extension: String,
+    pub detail: String,
+    /// True for the default set, which is the worse case: it means a project
+    /// created right now, with nothing customised, cannot build.
+    pub is_default_set: bool,
+}
+
+/// Extensions that cannot build on the PHP version they are paired with.
+///
+/// Reuses [`crate::manifest::normalize`] for projects rather than restating the
+/// rule — one implementation of "removed in", used by the validator, the
+/// manifest editor and this.
+pub fn extension_problems(root: &Path) -> Vec<ExtensionProblem> {
+    use std::cmp::Ordering;
+
+    let mut out = Vec::new();
+    let matrix = &crate::contracts::php_extensions().extensions;
+
+    // --- the default selection -------------------------------------------
+    //
+    // The default PHP version is itself contested — `DEFAULT_PHP_VERSION` and
+    // `SUPPORTED_LANGUAGES_PHP_DEFAULT` disagree, which is CONFLICTS.md C-12.
+    // Both are checked rather than one being picked, because an extension that
+    // fails on either is a problem whichever key turns out to win.
+    if let Ok(env) = crate::config::Env::load(root) {
+        let mut versions: Vec<String> = ["SUPPORTED_LANGUAGES_PHP_DEFAULT", "DEFAULT_PHP_VERSION"]
+            .iter()
+            .filter_map(|key| env.get(key).map(str::to_string))
+            .collect();
+        versions.sort();
+        versions.dedup();
+
+        for name in env.list("SUPPORTED_LANGUAGES_PHP_EXTENSIONS_DEFAULT") {
+            let Some(spec) = matrix.get(&name) else {
+                continue;
+            };
+            for version in &versions {
+                if let Some(removed) = &spec.removed_in {
+                    if crate::contracts::cmp_php_version(version, removed) != Ordering::Less {
+                        out.push(ExtensionProblem {
+                            subject: ".env".into(),
+                            php_version: version.clone(),
+                            extension: name.clone(),
+                            detail: format!("removed in PHP {removed}"),
+                            is_default_set: true,
+                        });
+                    }
+                }
+                if let Some(min) = &spec.min_php {
+                    if crate::contracts::cmp_php_version(version, min) == Ordering::Less {
+                        out.push(ExtensionProblem {
+                            subject: ".env".into(),
+                            php_version: version.clone(),
+                            extension: name.clone(),
+                            detail: format!("needs PHP {min} or newer"),
+                            is_default_set: true,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // --- each project -----------------------------------------------------
+    let Ok(dirs) = std::fs::read_dir(root.join("projects")) else {
+        return out;
+    };
+
+    for dir in dirs.flatten() {
+        let path = dir.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !path.is_dir() || name.starts_with('.') {
+            continue;
+        }
+        let file = path.join("stackvo.json");
+        if !file.is_file() {
+            continue;
+        }
+        let Ok(manifest) = crate::manifest::read(&file, name) else {
+            continue;
+        };
+        let version = manifest
+            .php
+            .as_ref()
+            .map(|p| p.version.clone())
+            .unwrap_or_default();
+
+        for finding in &manifest.errors {
+            if finding.code != "C-06" && finding.code != "C-07" {
+                continue;
+            }
+            // `php.extensions[imap]` → `imap`.
+            let extension = finding
+                .path
+                .rsplit_once('[')
+                .and_then(|(_, rest)| rest.strip_suffix(']'))
+                .unwrap_or(&finding.path)
+                .to_string();
+
+            out.push(ExtensionProblem {
+                subject: name.to_string(),
+                php_version: version.clone(),
+                extension,
+                detail: finding.message.clone(),
+                is_default_set: false,
+            });
+        }
+    }
+
+    // The default set first: it is the one that breaks a project nobody has
+    // touched yet.
+    out.sort_by(|a, b| {
+        b.is_default_set
+            .cmp(&a.is_default_set)
+            .then_with(|| a.subject.cmp(&b.subject))
+            .then_with(|| a.extension.cmp(&b.extension))
+    });
+    out
+}
+
+/// Take one extension out of one selection.
+///
+/// **This changes nothing about what runs**, and that is the point worth
+/// stating before anyone presses the button. The generator already drops the
+/// extension — silently, which is the bug — so it is already absent from every
+/// built container. Removing it from the manifest does not remove a capability;
+/// it stops the manifest claiming one the container never had.
+///
+/// The catalog leaves no alternative to offer: `imap` is `install: core` with
+/// `removedIn: 8.2` and no PECL package, so on PHP 8.2 or newer there is
+/// nothing StackVo could install instead. If the project genuinely needs it,
+/// the answer is an older PHP version, which is a decision for the person who
+/// owns the project and not a button.
+///
+/// Writes through the same paths the rest of the app uses — `manifest::write`
+/// for a project, `env_writer` for `.env`, which backs the file up and
+/// serialises against the other writers.
+pub fn drop_extension(root: &Path, subject: &str, extension: &str) -> crate::error::Result<()> {
+    use crate::error::{Code, Error};
+
+    if subject == ".env" {
+        let env = crate::config::Env::load(root)?;
+        const KEY: &str = "SUPPORTED_LANGUAGES_PHP_EXTENSIONS_DEFAULT";
+
+        let kept: Vec<String> = env
+            .list(KEY)
+            .into_iter()
+            .filter(|name| !name.eq_ignore_ascii_case(extension))
+            .collect();
+
+        // The contract's own parsing rules: comma-separated, no spaces after
+        // the comma. A list written any other way is read back wrong.
+        let patch = std::collections::BTreeMap::from([(KEY.to_string(), kept.join(","))]);
+        return crate::env_writer::apply(root, &patch).map(|_| ());
+    }
+
+    let dir = crate::workspace::project_dir(root, subject)?;
+    let file = dir.join("stackvo.json");
+    let mut manifest = crate::manifest::read(&file, subject)?;
+
+    let Some(php) = manifest.php.as_mut() else {
+        return Err(Error::new(
+            Code::Unsupported,
+            format!("{subject} has no PHP block"),
+        ));
+    };
+
+    let before = php.extensions.len();
+    php.extensions
+        .retain(|name| !name.eq_ignore_ascii_case(extension));
+    if php.extensions.len() == before {
+        // Already gone — someone else got there, or the panel is stale. Not an
+        // error: the state the caller wanted is the state on disk.
+        return Ok(());
+    }
+
+    crate::manifest::write(&file, &manifest)
+}
+
 /// The full report: the boot gate's rows plus everything above.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -429,6 +632,8 @@ pub struct Doctor {
     pub generated: GeneratedStatus,
     /// Unused image/volume counts and bytes; `None` with the engine down.
     pub space: Option<crate::engine::SystemResources>,
+    /// Extensions that will be dropped from a build without anyone being told.
+    pub extensions: Vec<ExtensionProblem>,
 }
 
 /// Assemble the whole report. Shared by the IPC command and the MCP tool.
@@ -488,12 +693,156 @@ pub async fn run(root: Option<&Path>) -> Doctor {
         hosts_missing,
         generated,
         space,
+        // Reads files only, so it survives the engine being down — which is
+        // exactly when somebody is reading this page.
+        extensions: root.map(extension_problems).unwrap_or_default(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A workspace with the failure this check exists for: `imap` in the
+    /// default selection, on a PHP version where it no longer exists.
+    fn workspace_with_imap(dir: &Path) {
+        let shop = dir.join("projects").join("shop");
+        std::fs::create_dir_all(&shop).unwrap();
+        std::fs::write(
+            dir.join(".env"),
+            "DEFAULT_PHP_VERSION=8.2\n\
+             SUPPORTED_LANGUAGES_PHP_DEFAULT=8.4\n\
+             SUPPORTED_LANGUAGES_PHP_EXTENSIONS_DEFAULT=mbstring,imap,gd\n",
+        )
+        .unwrap();
+        std::fs::write(
+            shop.join("stackvo.json"),
+            r#"{"name":"shop","domain":"shop.loc","runtime":"php",
+                "php":{"version":"8.4","extensions":["mbstring","imap"]}}"#,
+        )
+        .unwrap();
+    }
+
+    /// The gap this closes: the validator reported three `C-06` errors on the
+    /// real checkout and the desktop app showed none of them, because the
+    /// doctor knew about ports, disk and hosts and nothing about extensions.
+    #[test]
+    fn an_extension_that_cannot_build_is_reported_for_the_stack_and_the_project() {
+        let dir = std::env::temp_dir().join("stackvo-doctor-ext-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        workspace_with_imap(&dir);
+
+        let found = extension_problems(&dir);
+
+        // Every one of them is imap, which is the point: one root cause,
+        // reported everywhere it bites.
+        assert!(found.iter().all(|p| p.extension == "imap"), "{found:?}");
+
+        // The default set comes first — it is the case that breaks a project
+        // nobody has touched yet.
+        assert!(found[0].is_default_set);
+        assert_eq!(found[0].subject, ".env");
+
+        // Both candidate default versions are checked, because the two keys
+        // disagree (C-12) and an extension failing on either is a problem
+        // whichever one turns out to win.
+        let versions: Vec<&str> = found
+            .iter()
+            .filter(|p| p.is_default_set)
+            .map(|p| p.php_version.as_str())
+            .collect();
+        assert!(versions.contains(&"8.2"), "{versions:?}");
+        assert!(versions.contains(&"8.4"), "{versions:?}");
+
+        // And the project's own manifest.
+        let project = found.iter().find(|p| p.subject == "shop").expect("project");
+        assert!(!project.is_default_set);
+        assert!(
+            project.detail.contains("skips it silently"),
+            "{}",
+            project.detail
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The repair, end to end: the finding must disappear because the files
+    /// changed, not because the check stopped looking.
+    #[test]
+    fn dropping_the_extension_clears_the_finding_from_both_places() {
+        let dir = std::env::temp_dir().join("stackvo-doctor-ext-fix-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        workspace_with_imap(&dir);
+
+        assert!(!extension_problems(&dir).is_empty());
+
+        drop_extension(&dir, ".env", "imap").expect("drop from the default set");
+        drop_extension(&dir, "shop", "imap").expect("drop from the manifest");
+
+        assert!(
+            extension_problems(&dir).is_empty(),
+            "{:?}",
+            extension_problems(&dir)
+        );
+
+        // The rest of each selection survives — a repair that emptied the list
+        // would also clear the finding.
+        let env = crate::config::Env::load(&dir).unwrap();
+        let kept = env.list("SUPPORTED_LANGUAGES_PHP_EXTENSIONS_DEFAULT");
+        assert_eq!(kept, ["mbstring", "gd"], "the other defaults were lost");
+
+        let manifest = crate::manifest::read(
+            &dir.join("projects").join("shop").join("stackvo.json"),
+            "shop",
+        )
+        .unwrap();
+        assert_eq!(
+            manifest.php.as_ref().unwrap().extensions,
+            ["mbstring"],
+            "the other extensions were lost"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Removing something already gone is the state the caller asked for, not
+    /// an error — the panel can be a moment stale.
+    #[test]
+    fn dropping_twice_is_not_an_error() {
+        let dir = std::env::temp_dir().join("stackvo-doctor-ext-twice-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        workspace_with_imap(&dir);
+
+        drop_extension(&dir, "shop", "imap").unwrap();
+        drop_extension(&dir, "shop", "imap").expect("the second call is a no-op");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A selection that is fine must produce nothing, or the panel cries wolf
+    /// and stops being read.
+    #[test]
+    fn a_valid_selection_reports_nothing() {
+        let dir = std::env::temp_dir().join("stackvo-doctor-ext-ok-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let shop = dir.join("projects").join("shop");
+        std::fs::create_dir_all(&shop).unwrap();
+        std::fs::write(
+            dir.join(".env"),
+            "DEFAULT_PHP_VERSION=8.4\n\
+             SUPPORTED_LANGUAGES_PHP_EXTENSIONS_DEFAULT=mbstring,gd\n",
+        )
+        .unwrap();
+        std::fs::write(
+            shop.join("stackvo.json"),
+            r#"{"name":"shop","domain":"shop.loc","runtime":"php",
+                "php":{"version":"8.4","extensions":["mbstring","gd"]}}"#,
+        )
+        .unwrap();
+
+        assert!(extension_problems(&dir).is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     const COMPOSE: &str = r#"
 services:

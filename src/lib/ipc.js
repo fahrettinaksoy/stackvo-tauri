@@ -109,6 +109,14 @@ export const api = {
    *  containerLogsClose — one registry, one way to stop a stream. */
   appLogOpen: (name, id, tailBytes = 65536) => call('app_log_open', { name, id, tailBytes }),
 
+  // The same files, across every project at once — the view for "which of my
+  // eight projects just errored", which you ask before you know where to look.
+  appLogsAll: () => call('app_logs_all'),
+  /** Live only: each file is adopted at its current end, because nothing here
+   *  parses a timestamp and interleaved *history* from sixty files would be an
+   *  ordering the backend cannot justify. Closed with containerLogsClose. */
+  appLogsAllOpen: (projects = null) => call('app_logs_all_open', { projects }),
+
   envSet: (patch) => call('env_set', { patch }),
   generateRun: (scope = 'all') => call('generate_run', { scope }),
   composeUp: (mode = 'minimal', profiles = []) => call('compose_up', { mode, profiles }),
@@ -145,6 +153,74 @@ export const api = {
   // fix.
   xdebugStatus: (name) => call('xdebug_status', { name }),
   xdebugSet: (name, enabled) => call('xdebug_set', { name, enabled }),
+
+  // The project's PHP overrides. `.stackvo/php.ini` was documented for years
+  // and mounted by nothing; the mount is a compose overlay this app layers.
+  phpIniStatus: (name) => call('php_ini_status', { name }),
+  /** `patch` maps a directive to its value; null removes it. Removing the last
+   *  one removes the file, and the mount goes with it. */
+  phpIniSet: (name, patch) => call('php_ini_set', { name, patch }),
+
+  // The stack, as something a teammate can be handed. `stackvo.json` is already
+  // in their clone; which services are on and at which versions is not — that
+  // lives in .env, the one file nobody commits.
+  // dump()/dd() caught out of the response. Symfony's own collector ships with
+  // Laravel and renders the dumps itself — nothing here parses its internals.
+  /** Removes an extension the build cannot install. Changes nothing about what
+   *  runs — it is already being dropped silently. */
+  doctorDropExtension: (subject, extension) =>
+    call('doctor_drop_extension', { subject, extension }),
+
+  dumpsStatus: (name) => call('dumps_status', { name }),
+  /** Streams as `logs:line`; close it with containerLogsClose. */
+  dumpsOpen: (name) => call('dumps_open', { name }),
+  /** Stops the in-container collector too — killing `docker exec` does not. */
+  dumpsClose: (name, streamId) => call('dumps_close', { name, streamId }),
+
+  // A deployable image from the one the project already runs. The dev image
+  // has no application code for PHP (it is bind-mounted) and carries Xdebug,
+  // so this is a build, not a copy.
+  releasePlan: (name, tag = null) => call('release_plan', { name, tag }),
+  /** Builds, then runs the result and asks whether it leaked an .env. */
+  releaseBuild: (name, tag = null) => call('release_build', { name, tag }),
+  releaseSave: (name, path, tag = null) => call('release_save', { name, tag, path }),
+
+  // Xdebug's own profiler. Blackfire needs an account and SPX is not in the
+  // extension contract; xdebug.mode=profile needs neither.
+  profilerStatus: (name) => call('profiler_status', { name }),
+  /** 'debug' or 'profile' — never both: the two want opposite start triggers. */
+  profilerSetMode: (name, mode) => call('profiler_set_mode', { name, mode }),
+  profilerRead: (name, id) => call('profiler_read', { name, id }),
+  profilerDelete: (name, id) => call('profiler_delete', { name, id }),
+  profilerClear: (name) => call('profiler_clear', { name }),
+
+  // The handful of commands you run in a project every day. The id is the only
+  // thing that crosses — the argv is built on the Rust side from a fixed
+  // catalog, so the webview cannot name a program to execute.
+  quickCommands: (name) => call('quick_commands', { name }),
+  /** Resolves to an operation id, or null for an interactive command that
+   *  opened the user's own terminal. */
+  quickCommandRun: (name, id) => call('quick_command_run', { name, id }),
+
+  // Hot reload for node projects. Not a routing change: a node project has no
+  // bind mount at all today, so the source in the container is a snapshot taken
+  // when the image was built.
+  devserverStatus: (name) => call('devserver_status', { name }),
+  devserverSet: (name, enabled, command = null) =>
+    call('devserver_set', { name, enabled, command }),
+
+  // Somebody else's docker-compose.yml, read by Docker itself. Detection sees
+  // the code; the compose file records what its author decided — the PHP
+  // version, the domain, and which backing services the project needs.
+  migrateScan: (name) => call('migrate_scan', { name }),
+  migrateApply: (name, spec = null, services = true) =>
+    call('migrate_apply', { name, spec, services }),
+
+  presetExport: (name = null) => call('preset_export', { name }),
+  presetSave: (path, name = null) => call('preset_save', { path, name }),
+  /** Reviewed before applied, like hosts and certificates. */
+  presetPlan: (path) => call('preset_plan', { path }),
+  presetApply: (path) => call('preset_apply', { path }),
 
   // --- Certificates ---------------------------------------------------------
   // Same order as hosts: describe, then change. `certStatus` needs no engine —

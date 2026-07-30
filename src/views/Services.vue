@@ -123,7 +123,7 @@ onUnmounted(() => teardown?.());
         <v-btn
           icon
           variant="tonal"
-      size="small"
+          size="small"
           elevation="0"
           class="mr-2"
           :aria-label="t('app.refresh')"
@@ -170,6 +170,7 @@ onUnmounted(() => teardown?.());
         striped="even"
         hide-default-footer
         height="100%"
+        density="compact"
       >
         <template #item.id="{ item }">
           <span class="font-weight-bold">{{ item.id }}</span>
