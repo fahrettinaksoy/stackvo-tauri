@@ -7,6 +7,7 @@ pub mod config;
 pub mod contracts;
 pub mod db;
 pub mod detect;
+pub mod doctor;
 pub mod engine;
 pub mod env_writer;
 pub mod error;
@@ -22,9 +23,12 @@ pub mod paths;
 pub mod preflight;
 pub mod pty;
 pub mod runner;
+pub mod scaffold;
 pub mod stats;
 pub mod tray;
+pub mod tunnel;
 pub mod watcher;
+pub mod worker;
 pub mod workspace;
 pub mod xdebug;
 
@@ -199,14 +203,25 @@ pub fn run() {
             commands::engine_start,
             commands::host_stats,
             commands::docker_system_resources,
+            commands::docker_disk_usage,
             commands::projects_list,
             commands::services_list,
             commands::catalog_get,
             commands::preflight,
             commands::preflight_fix,
+            commands::doctor,
             commands::env_get,
             commands::env_reveal,
+            commands::tunnel_status,
+            commands::worker_options,
+            commands::worker_status,
             // Phase 2 — mutations
+            commands::docker_prune,
+            commands::tunnel_start,
+            commands::tunnel_stop,
+            commands::worker_start,
+            commands::worker_stop,
+            commands::project_scaffold,
             commands::project_start,
             commands::project_stop,
             commands::project_restart,

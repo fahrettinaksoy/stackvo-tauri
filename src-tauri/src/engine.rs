@@ -367,6 +367,224 @@ pub async fn stackvo_containers() -> Result<std::collections::HashMap<String, Co
     Ok(out)
 }
 
+/// `host port → container name` for every *running* container, ours or not.
+///
+/// The doctor uses this to turn "com.docker.backend is listening on 3306" —
+/// true and useless — into the name of the container that actually owns the
+/// port, which is the difference between a conflict and the stack seeing
+/// itself in the mirror.
+pub async fn port_owners() -> Result<std::collections::HashMap<u16, String>> {
+    use bollard::query_parameters::ListContainersOptionsBuilder;
+
+    let docker = connect()?;
+    // Running only: a stopped container publishes nothing.
+    let options = ListContainersOptionsBuilder::new().all(false).build();
+
+    let summaries = docker.list_containers(Some(options)).await.map_err(|e| {
+        Error::new(
+            Code::EngineUnreachable,
+            format!("Cannot list containers: {e}"),
+        )
+    })?;
+
+    let mut out = std::collections::HashMap::new();
+    for c in summaries {
+        let Some(name) = c
+            .names
+            .as_ref()
+            .and_then(|n| n.first())
+            .map(|n| n.trim_start_matches('/').to_string())
+        else {
+            continue;
+        };
+        for p in c.ports.unwrap_or_default() {
+            if let Some(host) = p.public_port {
+                out.entry(host).or_insert_with(|| name.clone());
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// One stack member's share of the disk.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiskOwner {
+    /// `stackvo-`-stripped id: a project name, a service, or `tunnel-<x>`.
+    /// Empty container fields with a `stackvo-*` image mean an orphaned build
+    /// — an image this stack produced whose container is gone.
+    pub id: String,
+    pub image: Option<String>,
+    pub image_size: u64,
+    /// True when the image is one this stack built (`stackvo-<name>`), so its
+    /// bytes belong to this entry alone and vanish with it. False for shared
+    /// upstream images (`mysql:8.0`), which removing this member cannot free.
+    pub image_dedicated: bool,
+    /// The container's writable layer — what it has changed on top of the
+    /// image. Zero for an orphaned image.
+    pub container_rw: u64,
+    pub running: bool,
+}
+
+/// Who holds the bytes: every StackVo container with its image size and
+/// writable layer, plus stack-built images whose container no longer exists.
+///
+/// This is the per-member answer `docker system df` cannot give — its numbers
+/// are totals, and the question a full disk raises is *which project*.
+pub async fn disk_attribution() -> Result<Vec<DiskOwner>> {
+    use bollard::query_parameters::{ListContainersOptionsBuilder, ListImagesOptionsBuilder};
+
+    let docker = connect()?;
+
+    let containers = docker
+        .list_containers(Some(
+            ListContainersOptionsBuilder::new()
+                .all(true)
+                .size(true)
+                .build(),
+        ))
+        .await
+        .map_err(|e| {
+            Error::new(
+                Code::EngineUnreachable,
+                format!("Cannot list containers: {e}"),
+            )
+        })?;
+
+    let images = docker
+        .list_images(Some(ListImagesOptionsBuilder::new().all(false).build()))
+        .await
+        .map_err(|e| Error::new(Code::EngineUnreachable, format!("Cannot list images: {e}")))?;
+
+    let mut image_sizes: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    for img in &images {
+        for tag in &img.repo_tags {
+            image_sizes.insert(tag.clone(), img.size.max(0) as u64);
+        }
+    }
+
+    let mut referenced: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out = Vec::new();
+
+    for c in containers {
+        let Some(id) = c
+            .names
+            .as_ref()
+            .and_then(|n| n.first())
+            .map(|n| n.trim_start_matches('/'))
+            .and_then(|n| n.strip_prefix(CONTAINER_PREFIX))
+        else {
+            continue;
+        };
+
+        let image = c.image.clone();
+        if let Some(tag) = &image {
+            referenced.insert(tag.clone());
+        }
+        let image_size = image
+            .as_deref()
+            .and_then(|t| image_sizes.get(t))
+            .copied()
+            .unwrap_or(0);
+
+        out.push(DiskOwner {
+            id: id.to_string(),
+            image_dedicated: image
+                .as_deref()
+                .is_some_and(|t| t.starts_with(CONTAINER_PREFIX)),
+            image,
+            image_size,
+            container_rw: c.size_rw.unwrap_or(0).max(0) as u64,
+            running: c
+                .state
+                .as_ref()
+                .is_some_and(|s| format!("{s:?}").eq_ignore_ascii_case("running")),
+        });
+    }
+
+    // Images this stack built whose container is gone: invisible in every
+    // list the app shows, and exactly the bytes nobody remembers spending.
+    for img in &images {
+        for tag in &img.repo_tags {
+            if tag.starts_with(CONTAINER_PREFIX) && !referenced.contains(tag) {
+                out.push(DiskOwner {
+                    id: tag
+                        .strip_prefix(CONTAINER_PREFIX)
+                        .unwrap_or(tag)
+                        .split(':')
+                        .next()
+                        .unwrap_or(tag)
+                        .to_string(),
+                    image: Some(tag.clone()),
+                    image_size: img.size.max(0) as u64,
+                    image_dedicated: true,
+                    container_rw: 0,
+                    running: false,
+                });
+            }
+        }
+    }
+
+    out.sort_by(|a, b| {
+        (b.image_size + b.container_rw)
+            .cmp(&(a.image_size + a.container_rw))
+            .then(a.id.cmp(&b.id))
+    });
+    Ok(out)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PruneReport {
+    pub images_deleted: u64,
+    pub volumes_deleted: u64,
+    pub space_reclaimed: u64,
+}
+
+/// Remove dangling images and, only when asked, unused volumes.
+///
+/// The two are separate flags because they are not the same risk: a dangling
+/// image is rebuildable by definition, while an unused volume can be the only
+/// copy of a database that belongs to a stopped project — the engine's
+/// definition of "unused" is "not currently mounted", not "not wanted".
+pub async fn prune(images: bool, volumes: bool) -> Result<PruneReport> {
+    let docker = connect()?;
+    let mut report = PruneReport {
+        images_deleted: 0,
+        volumes_deleted: 0,
+        space_reclaimed: 0,
+    };
+
+    if images {
+        // No filter: the API default prunes dangling images only, which is
+        // exactly the safe set.
+        let r = docker
+            .prune_images(None::<bollard::query_parameters::PruneImagesOptions>)
+            .await
+            .map_err(|e| {
+                Error::new(Code::EngineUnreachable, format!("Cannot prune images: {e}"))
+            })?;
+        report.images_deleted = r.images_deleted.map(|v| v.len() as u64).unwrap_or(0);
+        report.space_reclaimed += r.space_reclaimed.unwrap_or(0).max(0) as u64;
+    }
+
+    if volumes {
+        let r = docker
+            .prune_volumes(None::<bollard::query_parameters::PruneVolumesOptions>)
+            .await
+            .map_err(|e| {
+                Error::new(
+                    Code::EngineUnreachable,
+                    format!("Cannot prune volumes: {e}"),
+                )
+            })?;
+        report.volumes_deleted = r.volumes_deleted.map(|v| v.len() as u64).unwrap_or(0);
+        report.space_reclaimed += r.space_reclaimed.unwrap_or(0).max(0) as u64;
+    }
+
+    Ok(report)
+}
+
 /// Image and volume inventory from `/system/df`.
 pub async fn system_resources() -> Result<SystemResources> {
     let docker = connect()?;

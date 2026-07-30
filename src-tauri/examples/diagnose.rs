@@ -418,6 +418,83 @@ async fn main() {
         }
     }
 
+    // ---- doctor ----------------------------------------------------------
+    // The port verdicts and staleness check the Settings → Doctor pane renders.
+    // Nothing here mutates; the repairs stay behind their own commands.
+    heading("Doctor");
+    {
+        let report = stackvo_desktop_lib::doctor::run(Some(&root)).await;
+
+        if report.ports.is_empty() {
+            println!("  \x1b[33mno published ports found — has the generator run?\x1b[0m");
+        }
+        for p in &report.ports {
+            let verdict = match p.state {
+                stackvo_desktop_lib::preflight::State::Ok if p.ours => format!(
+                    "\x1b[32mheld by the stack\x1b[0m ({})",
+                    p.process.as_deref().unwrap_or("?")
+                ),
+                stackvo_desktop_lib::preflight::State::Ok => "\x1b[32mfree\x1b[0m".into(),
+                stackvo_desktop_lib::preflight::State::Unknown => {
+                    "\x1b[90mlistener table unreadable\x1b[0m".into()
+                }
+                _ => format!(
+                    "\x1b[31min use by {}{}\x1b[0m",
+                    p.process.as_deref().unwrap_or("an unidentified process"),
+                    p.pid.map(|pid| format!(" (pid {pid})")).unwrap_or_default()
+                ),
+            };
+            println!("  :{:<6} {:<12} {verdict}", p.port, p.required_by);
+        }
+
+        let generated = match report.generated.state {
+            stackvo_desktop_lib::preflight::State::Ok => {
+                "\x1b[32mup to date with its inputs\x1b[0m".into()
+            }
+            stackvo_desktop_lib::preflight::State::Warn => format!(
+                "\x1b[33mstale — older than {}\x1b[0m",
+                report.generated.detail.as_deref().unwrap_or("an input")
+            ),
+            stackvo_desktop_lib::preflight::State::Fail => "\x1b[31mnever generated\x1b[0m".into(),
+            stackvo_desktop_lib::preflight::State::Unknown => "\x1b[90munknown\x1b[0m".into(),
+        };
+        println!("  generated {generated}");
+
+        if let Some(space) = &report.space {
+            println!(
+                "  reclaim   {} unused image(s) ({}), {} unused volume(s) ({})",
+                space.images.unused,
+                bytes(space.images.size),
+                space.volumes.unused,
+                bytes(space.volumes.size)
+            );
+        }
+
+        // Who holds the bytes — the per-member answer the totals cannot give.
+        if let Ok(owners) = engine::disk_attribution().await {
+            for o in owners.iter().take(10) {
+                let note = if o.image.is_none() {
+                    ""
+                } else if !o.image_dedicated {
+                    " (shared image)"
+                } else if !o.running && o.container_rw == 0 {
+                    " \x1b[33m(orphaned build)\x1b[0m"
+                } else {
+                    ""
+                };
+                println!(
+                    "  {:<28} image {:>9}  rw {:>9}{note}",
+                    o.id,
+                    bytes(o.image_size),
+                    bytes(o.container_rw)
+                );
+            }
+            if owners.len() > 10 {
+                println!("  … and {} more", owners.len() - 10);
+            }
+        }
+    }
+
     // ---- catalog ---------------------------------------------------------
     heading("Catalog");
     match commands::build_catalog(&root) {

@@ -64,9 +64,15 @@ export const api = {
   preflight: () => call('preflight'),
   preflightFix: (id) => call('preflight_fix', { id }),
   engineStart: () => call('engine_start'),
+  /** The full diagnosis with named culprits. See `doctor.rs`. */
+  doctor: () => call('doctor'),
+  /** Dangling images by default; unused volumes only when explicitly asked. */
+  dockerPrune: (images = true, volumes = false) => call('docker_prune', { images, volumes }),
 
   hostStats: () => call('host_stats'),
   dockerSystemResources: () => call('docker_system_resources'),
+  /** Which stack member holds the bytes: per-container image + writable layer. */
+  dockerDiskUsage: () => call('docker_disk_usage'),
 
   projectsList: () => call('projects_list'),
   servicesList: () => call('services_list'),
@@ -153,6 +159,20 @@ export const api = {
   /** Opens the native picker, validates, and persists in one step. */
   workspacePick: () => call('workspace_pick'),
   projectGet: (name) => call('project_get', { name }),
+  /** Fill a new directory with a framework via a throwaway container. */
+  projectScaffold: (name, template) => call('project_scaffold', { name, template }),
+
+  /** Every tunnel sidecar and its public URL, read live from its log. */
+  tunnelStatus: () => call('tunnel_status'),
+  tunnelStart: (name) => call('tunnel_start', { name }),
+  tunnelStop: (name) => call('tunnel_stop', { name }),
+
+  /** Worker kinds this project offers, detected from its files. */
+  workerOptions: (name) => call('worker_options', { name }),
+  /** Every worker sidecar, restart counts included. */
+  workerStatus: () => call('worker_status'),
+  workerStart: (name, kind) => call('worker_start', { name, kind }),
+  workerStop: (name, kind) => call('worker_stop', { name, kind }),
   /** Pre-flight a spec before anything touches disk. */
   projectValidate: (name, spec) => call('project_validate', { name, spec }),
   projectCreate: (spec) => call('project_create', { spec }),

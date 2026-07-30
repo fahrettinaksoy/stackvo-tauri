@@ -46,15 +46,15 @@ single cheapest thing on StackVo's list — see P1-6.
 | Capability | Herd | Lerd | EnvKit | FlyEnv | ServBay | ForgeKit | Laragon | Laradock | XAMPP | **StackVo** |
 | --- | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
 | Trusted local HTTPS (local CA) | ✅ | ✅ | ✅ | ✅ | ✅ +ACME | ✅ | ✅ | – | – | **✅** |
-| Framework scaffold / quick app | ✅ | ✅ detect | – | – | – | – | ✅ | ⚠️ detect | ⚠️ Bitnami | **⚠️ detect** |
+| Framework scaffold / quick app | ✅ | ✅ detect | – | – | – | – | ✅ | ⚠️ detect | ⚠️ Bitnami | **✅** |
 | DB backup / restore / snapshot | – | ✅ | – | – | ✅ | – | ✅ | – | – | **✅** |
 | Mail catcher with a UI | ✅ | – | ✅ | ✅ | ✅ server | ✅ | – | ✅ | – | **✅** |
 | Xdebug toggle | ✅ | – | ✅ | – | – | ✅ | ✅ | ✅ | ✅ | **✅** |
 | **MCP server** | ✅ | ✅ | ✅ | ✅ | ✅ | – | – | – | – | **✅** |
 | Unified log viewer + search | ✅ | ✅ | ✅ | ✅ | ✅ | – | ✅ | – | – | **✅ per project** |
-| Tunnel / shareable public URL | ✅ | – | – | ✅ | ✅ | – | ✅ | – | – | **❌** |
-| Doctor with repair actions | – | ✅ | ✅ | – | ✅ | – | – | – | – | **⚠️** |
-| Cron / queue worker management | – | ✅ heal | ✅ | ✅ | – | – | – | ✅ | – | **❌** |
+| Tunnel / shareable public URL | ✅ | – | – | ✅ | ✅ | – | ✅ | – | – | **✅** |
+| Doctor with repair actions | – | ✅ | ✅ | – | ✅ | – | – | – | – | **✅** |
+| Cron / queue worker management | – | ✅ heal | ✅ | ✅ | – | – | – | ✅ | – | **✅ heal** |
 | Dump / `dd()` catcher | ✅ | ✅ | ✅ | – | – | – | – | – | – | **❌** |
 | Profiler | ✅ | ✅ SPX | – | – | – | – | – | ✅ | – | **⚠️** |
 | Team config sharing | ✅ | – | – | ✅ sync | ✅ | – | ✅ | ✅ | – | **⚠️** |
@@ -73,8 +73,11 @@ Each `⚠️` hides a decision, so they are itemised. The `⚠️` rows are chea
 
 > **Shipped since this was written.** Sprint 1 is complete — P0-2
 > (certificates), P0-3 (Xdebug), P0-4 (database backup) and P0-5 (the in-app
-> inbox) — and Sprint 2 has begun with P1-6, the MCP server. Their rows above
-> read `✅`. One qualification on the MCP row: the read surface is complete, and
+> inbox) — Sprint 2 shipped P1-6 (the MCP server), Sprint 3 is complete —
+> P1-7 (the log viewer), P1-8 (the doctor), P2-16 (disk hygiene, both the
+> prune and the per-member attribution), P1-10 (the tunnel) — and Sprint 4
+> has delivered P2-13 (workers), the create half of P0-1 (scaffolding) and
+> the click-through half of P1-7b. Their rows above read `✅`. One qualification on the MCP row: the read surface is complete, and
 > only two writing tools are exposed, because thirty-four commands report
 > progress through Tauri's event system and are not reachable from a stdio
 > subprocess until that is decoupled. The per-row notes below describe the
@@ -89,14 +92,16 @@ Each `⚠️` hides a decision, so they are itemised. The `⚠️` rows are chea
 | **Trusted HTTPS** | ⚠️ | mkcert is already wired. `core/cli/utils/generate-ssl-certs.sh` issues a wildcard cert over `stackvo.loc`, `*.stackvo.loc` and every project domain; `SSL_ENABLE=true` in `.env`; `core/cli/lib/generators/traefik.sh:55` sets it as Traefik's `defaultCertificate`; the CA lands in `generated/certs/stackvo-ca.crt`. | Three holes. (a) `trust_ca_in_keychain` returns early on anything but macOS — Linux and Windows trust is manual. (b) mkcert is an undeclared dependency: `src-tauri/src/preflight.rs` checks workspace, engine, compose, network, projects and bash — not mkcert. (c) **The desktop app has no certificate commands at all** — none of the 66 in `contracts/ipc.json`. Cert state is invisible, and a new project's domain is absent from the SAN list until someone re-runs the script by hand. |
 | **Xdebug** | ⚠️ | `xdebug` is in `contracts/php-extensions.json:171` with per-version pecl pins (3.3.2 → 3.4.0), so it compiles into any project that lists it in `php.extensions`. | No toggle, no generated ini (`client_host`, `start_with_request`, path mapping), no IDE hint. The hard part — the extension matrix — is done; the ergonomics are not. |
 | **Config editing** | ✅ | **Since delivered.** `ProjectSettingsSheet.vue` edits the manifest as a form — the same fields as the create drawer, from the same `ProjectFormFields.vue` and the same `lib/manifest.js`, validated live through `project_validate`. Every field was previously set-once-at-create: changing a PHP version meant hand-editing JSON against write rules a text area cannot enforce. `Settings.vue:240` still writes `.env` through `envSet`, comment- and order-preserving. | The raw JSON pane stays as the escape hatch. `.env` remains field-by-field rather than schema-driven — a smaller gap, since `env.schema.json` fields are flat scalars. **`memory_limit` / `upload_max_filesize` were dropped from this item on evidence**: the manifest schema is `additionalProperties: false`, and `php.ini` appears nowhere in `core/cli` — the docs and the old web UI list `.stackvo/php.ini` as supported, but no generator mounts it. Making it real is a separate item. |
-| **Doctor** | ⚠️ | `preflight.rs` runs six checks behind `RequirementsGate.vue`; `preflight::fix()` repairs two of them (`network`, `projects`). `npm run diagnose` exercises every read-only command headlessly. | Four checks diagnose without repairing. No port-conflict detection — the single most common Docker failure, and one every competitor that ships a doctor covers. |
-| **Log viewer** | ✅ | **Since delivered.** `LogView.vue` has search, level filtering with counts, and a picker over both log roots; `app_logs` / `app_log_open` read them from the host, so they work with the engine down. 52 files found across 8 real projects, none of which were reachable before. | Still per project: no cross-project view, and no click-through to the editor (`open_in_editor` is wired, the line-to-file mapping is not). Herd sells this as a Pro feature. |
+| **Doctor** | ✅ | **Since delivered.** `doctor.rs` reports the gate rows plus the failures that arrive later, each next to its repair in Settings → Doctor: port conflicts with the culprit *named* (the stack's own container is fine, someone else's container is named, a host process is named with pid — one `lsof`/`ss`/`netstat` spawn for the whole table), generated config older than its inputs (oldest-output vs newest-input mtime, so one fresh file cannot mask a stale one), hosts gaps routed through the reviewed-diff dialog, and reclaimable space with `docker_prune` behind a confirmation — volumes opt-in with their own warning, because the engine's "unused" means "not currently mounted" and a stopped project's database qualifies. Exposed as the `stackvo_doctor` MCP tool and in `npm run diagnose`, which found real findings on first run: a stale `parser.ajans` manifest and 13.8 GB reclaimable. | Port conflicts are diagnosed, not repaired — killing someone else's process is not a button this app should have. |
+| **Log viewer** | ✅ | **Since delivered.** `LogView.vue` has search, level filtering with counts, and a picker over both log roots; `app_logs` / `app_log_open` read them from the host, so they work with the engine down. 52 files found across 8 real projects, none of which were reachable before. **Click-through since delivered too**: a `/var/www/html/…` path in a line opens the file in the editor, by the substitution the bind mount states. | Still per project: no cross-project view. Herd sells this as a Pro feature. |
 | **Mail** | ⚠️ | `core/templates/services/mailhog/` ships and starts. | mailhog is unmaintained upstream; Mailpit is what everyone else ships. No inbox in the app — the user leaves for a browser tab. **Since resolved in the app**: the inbox reads both APIs, so a checkout on either image gets one. The image swap itself remains an upstream change — it renames a service, its `.env` keys, its container and its volume, which is a migration for every running stack, not a one-line edit. |
 | **Profiler** | ⚠️ | `core/templates/services/blackfire/` ships. | No activation path, no UI, no result view. |
 | **Team config sharing** | ⚠️ | `stackvo.json` is per-project, commit-friendly and schema-validated — the substance of Herd's `herd.yml` is already there. | No export/import, no stack presets, no onboarding flow that says "clone this and run". The artefact exists; the story around it does not. |
 | **Runtimes** | ❌ | — | `C-02`: `.env` advertises `php,python,go,ruby,rust,nodejs` and the UI renders all six, but `core/cli/lib/generators/project/` holds generators for PHP servers and node only. Four of six are a dead end. This is a shipped bug *and* a competitive gap. |
-| **Scaffold** | ⚠️ | **Since delivered — the import half.** `project_create` refuses when the directory exists, so a cloned folder could not be adopted at all: on this checkout 11 of 21 directories under `projects/` were unmanaged, three of them Laravel. Detection now infers runtime, server, document root and PHP/Node version from `artisan`, `wp-config.php`, `composer.json` and `package.json`, and reports the files it read plus a confidence. | The create half — running `composer create-project` for a brand-new Laravel or WordPress. Detection is the harder and more-used direction; scaffolding is a container run on top of it. |
-| **Tunnel, cron, dumps** | ❌ | — | No command, no template, no plan. |
+| **Scaffold** | ✅ | **Both halves delivered.** Import first: detection infers runtime, server, document root and PHP/Node version from `artisan`, `wp-config.php`, `composer.json` and `package.json` — on this checkout 11 of 21 directories were unmanaged before it. The create half followed as predicted, "a container run on top": `project_scaffold` runs the framework's own installer (composer create-project for Laravel/Symfony, wp-cli, create-next-app) in a throwaway `--rm` container — nothing installed on the host, `--user uid:gid` on unix so nothing lands root-owned, every command pinned non-interactive because a prompt inside an operation console is a hang. Then the *same adoption path* configures the project from what the installer wrote. | Framework choice is the four with one-command installers; anything else arrives by clone and adoption. |
+| **Tunnel** | ✅ | **Since delivered.** A cloudflared *quick tunnel* as a sidecar container on the stack network — no account, no token; Cloudflare assigns a random `trycloudflare.com` URL. The sidecar targets the project container directly with the local domain as Host header, because with SSL on every Traefik project router is `websecure`-only, which a public visitor cannot handshake against. The URL is never cached: it is read out of the sidecar's own log on every status call, so app restarts and crashed tunnels stay truthful for free. Start refuses when the project container is down (a tunnel serving 502s looks like it worked), the UI states plainly that the URL is public and unauthenticated, and `--rm` means stop is also removal. | Verified by unit tests against the real cloudflared banner format; a live end-to-end start was deliberately not run unattended — it would expose a real project publicly. |
+| **Workers / cron** | ✅ | **Since delivered.** Each worker (queue, scheduler, Horizon) is a sidecar container built from the project's *own image* — same PHP, extensions, bind mount and network, so `.env` and the database resolve exactly as the web container sees them. Self-healing is deliberately not reimplemented: `--restart unless-stopped` is Docker's own supervisor, and the restart count is read back and shown, so a crash loop is a number on screen. Detection is file-based (`artisan` → queue + scheduler; `laravel/horizon` in composer.json → Horizon); `schedule:work` replaces a host cron entry outright. Stop is removal, because with unless-stopped a merely-stopped container is one engine restart away from coming back. | Run history (EnvKit ships it) is not kept; the worker's own log is one click away in the container logs pane. |
+| **Dumps** | ❌ | — | No command, no template, no plan. |
 
 ### 2.2 What only StackVo has
 
@@ -183,13 +188,20 @@ On the real `laravel.log`, 6 entries span 78 lines.
 Paths never cross the IPC boundary — the UI gets an opaque `app:`/`server:` handle, since a log
 viewer that accepts an absolute path from its own frontend is a file reader for the whole disk.
 
-Still open: the cross-project view, and click-through to the editor.
+Still open: the cross-project view. Click-through shipped with Sprint 4 — a stack-frame path in a
+line opens the file in the editor, by the substitution the bind mount states.
 
-**8. Finish the doctor** · impact high · effort medium
-Extend `preflight::fix()` from two checks to six, then add what is missing entirely: port
-conflict detection naming the offending process, hosts repair, engine start, generator re-run,
-and reclaiming space from dangling images and volumes. Lerd ships "doctor", EnvKit ships
-"self-healing", ServBay ships port-conflict checking. StackVo diagnoses well and repairs barely.
+**8. Finish the doctor** · impact high · effort medium · **delivered**
+Every repair named in the original scope now exists, but as six repair *actions* rather than six
+arms in one function — deliberately, because three of them already had confirmation flows that a
+blind `fix(id)` would have bypassed: hosts repair opens the reviewed diff before the one elevated
+write, space reclaim confirms first and keeps volumes opt-in behind their own warning, and
+generator re-run goes through `generate_run`'s operation events. `preflight::fix()` itself gained
+`engine` (for headless callers; the UI keeps `engine_start`'s start-and-poll). Port conflicts —
+the check no gate had — read the ports from the generated compose files (which *are* the enabled
+set, since the generator only writes enabled services) and name the holder: the stack's own
+container, someone else's container, or a host process with pid. Lerd ships "doctor", EnvKit
+ships "self-healing", ServBay ships port-conflict checking; none of them name the process.
 
 > **A shipped feature that did nothing.** `cert_apply` reissued the wildcard certificate,
 > reported success, and left every browser on the old one. Traefik's file provider watches
@@ -215,9 +227,14 @@ Two claims in the original entry did not survive contact with the code. `memory_
 advertise is mounted by no generator in `core/cli`. A PHP-ini form would have written to a file
 nothing reads. Left out, and recorded below as its own item.
 
-**10. Tunnel / shareable public URL** · impact medium-high · effort low-medium
-Webhook testing (Stripe, GitHub) has no answer today. With Traefik already in front, adding a
-Cloudflare Tunnel or ngrok sidecar per project is easier here than in any host-binary product.
+**10. Tunnel / shareable public URL** · impact medium-high · effort low-medium · **delivered**
+A cloudflared quick-tunnel sidecar per project, from a Share pane in the project detail. One
+design note against the original sketch: the sidecar does *not* go through Traefik — with SSL on,
+every project router is `websecure`-only, and a public visitor cannot complete a TLS handshake
+against a hostname no DNS resolves. It targets the project container directly on the port the
+generator derives (node → manifest port, Swoole → 8000, else 80), with the local domain as the
+Host header so framework URL checks behave as they do locally. The container-network attachment
+is the part no host-binary competitor can reproduce.
 
 ### P2 — breadth
 
@@ -232,10 +249,13 @@ Herd publishes three migration guides; EnvKit bulk-imports from Laragon. The var
 off here is different: point at an existing `docker-compose.yml` or project folder and emit a
 `stackvo.json`.
 
-**13. Cron and queue worker management, with self-healing** · impact medium-high · effort medium
-Lerd's worker self-heal (queue, scheduler, Horizon, Reverb) is a genuine differentiator; EnvKit
-adds run history. Daily value for any Laravel user, and container restart policies are already
-in hand.
+**13. Cron and queue worker management, with self-healing** · impact medium-high · effort medium ·
+**delivered**
+Queue, scheduler and Horizon as sidecars of the project's own image, healed by Docker's
+`unless-stopped` restart policy rather than by a reimplemented supervisor — the restart count is
+surfaced so the healing is visible and a crash loop cannot wear a green chip. Reverb was left
+out on purpose (it is a WebSocket *server*, which wants a port and Traefik routing, not a worker
+slot); run history likewise — the worker's log is one click away.
 
 **14. Presets and export/import** · impact medium · effort low-medium
 Turn the existing commit-friendly `stackvo.json` into a flow: export a stack preset, import a
@@ -245,10 +265,15 @@ teammate's, switch between stacks the way Laragon's profiles do.
 EnvKit does this. It is what makes `runtime: node` genuinely usable — a Vite or Next project
 served with hot reload on its `.loc` domain.
 
-**16. Disk and image hygiene** · impact medium · effort low
-Per-project disk usage, dangling image and volume pruning, "reclaim space".
-`docker_system_resources` already exists. **No native-binary competitor can ever ship this** —
-it is the cheapest way to turn being container-based into something visible.
+**16. Disk and image hygiene** · impact medium · effort low · **delivered**
+Both halves shipped inside the Doctor's Disk group. The prune half came with P1-8 (`docker_prune`,
+volumes opt-in behind their own warning). The attribution half is `docker_disk_usage`: every stack
+member with its image size and writable layer, shared upstream images marked as such (removing the
+member cannot free them), and **orphaned builds** — images this stack produced whose container is
+gone, which no list in the app showed and which are exactly the bytes nobody remembers spending.
+On this checkout the table's first row was a 2.0 GB project image with a 63 MB writable layer.
+**No native-binary competitor can ever ship this** — it is the cheapest way to turn being
+container-based into something visible.
 
 ### P3 — later, or selectively
 
@@ -277,8 +302,9 @@ it is the cheapest way to turn being container-based into something visible.
 | Sprint | Items | Theme |
 | --- | --- | --- |
 | 1 | P0-2 certificates · P0-3 Xdebug · P0-4 DB backup · P0-5 Mailpit | Daily friction. Three of the four are cheaper than the first pass assumed. |
-| 2 | ✅ P1-6 MCP · ⚠️ P0-1 scaffolding (import half) · ✅ P1-9 config forms | Leverage, then onboarding. Sprint 2 is done except the create half of P0-1. |
-| 3 | ✅ P1-7 log viewer · P1-8 doctor · P2-16 disk hygiene · P1-10 tunnel | Depth, and the container-only advantages. |
+| 2 | ✅ P1-6 MCP · ✅ P0-1 scaffolding (both halves) · ✅ P1-9 config forms | Leverage, then onboarding. The create half of P0-1 landed in Sprint 4. |
+| 3 | ✅ P1-7 log viewer · ✅ P1-8 doctor · ✅ P2-16 disk hygiene · ✅ P1-10 tunnel | Depth, and the container-only advantages. **Sprint 3 is complete.** |
+| 4 | ✅ P2-13 workers · ✅ P0-1b scaffold (create half) · ✅ P1-7b click-through | Laravel's daily loop, and onboarding's other half. **Sprint 4 is complete**; of P1-7b only the cross-project view remains. |
 
 `C-02` (P2-11) is scheduled separately: it is a Phase 4 generator concern, not a UI one, and
 belongs with the Rust generator port rather than in a feature sprint.
@@ -293,8 +319,7 @@ from section 3; the partial ones are named for what remains, not for what shippe
 
 | # | What remains | Why it was left | Cost |
 | --- | --- | --- | --- |
-| **P0-1b** | **Scaffolding — the create half.** Run `composer create-project` / `npm create` for a brand-new Laravel, WordPress, Symfony or Next.js in a throwaway container, then adopt the result. | Detection shipped first deliberately: it is both the harder direction and the more used one, since people already have code. Scaffolding is a container run layered on top of machinery that now exists. | Low-medium |
-| **P1-7b** | **Cross-project log view**, and **click-through from a stack frame to the editor**. `open_in_editor` is already wired; the missing piece is mapping a container path (`/var/www/html/app/…`) back to a host path — which the bind mount already states, so this is a substitution, not a search. | The per-project viewer was the part that made 52 previously unreachable files readable. A cross-project tail is a second stream multiplexer on top of that. | Low-medium |
+| **P1-7b** | **Cross-project log view** only — the click-through half is done: a `/var/www/html/…` path in a log line is now a click that opens the file in the editor, by exactly the substitution the bind mount states (`open_in_editor` still confines the result to the workspace on the Rust side, so the substitution is convenience, not the boundary). | The per-project viewer was the part that made 52 previously unreachable files readable. A cross-project tail is a second stream multiplexer on top of that. | Low-medium |
 | **P2-16b** | **Make `.stackvo/php.ini` real**, then add the PHP-ini form that P1-9 promised (`memory_limit`, `upload_max_filesize`). | Cut from P1-9 on evidence: the manifest schema is `additionalProperties: false`, and `php.ini` appears nowhere in `core/cli` — the docs and the old web UI advertise `.stackvo/php.ini`, but no generator mounts it. A form would have written to a file nothing reads. | Low-medium |
 
 The mount itself is the cheap part: the compose overlay built for Xdebug already layers a fourth
@@ -306,10 +331,6 @@ unilaterally.
 
 | # | Item | Note |
 | --- | --- | --- |
-| **P1-8** | Doctor with repair actions | Next up. `preflight::fix()` covers two of six checks; missing entirely are port-conflict detection naming the offending process, hosts repair, engine start, generator re-run, and reclaiming space. |
-| **P2-16** | Disk and image hygiene | `docker_system_resources` already exists. **No native-binary competitor can ship this at all.** |
-| **P1-10** | Tunnel / shareable public URL | Webhook testing has no answer today. Traefik is already in front. |
-| **P2-13** | Cron and queue worker management | The worker logs are now readable (P1-7); managing the workers is not. |
 | **P2-11** | The four missing runtime generators | High effort, and gated on `C-02`. |
 | **P2-12**, **P2-14**, **P2-15** | Migration assistant · presets and export/import · Node HMR through Traefik | Unchanged from section 3. |
 | **P3** | 17–21 | Unchanged: profiler UI, dump catcher, tinker action, production image export, ACME. |

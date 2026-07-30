@@ -48,6 +48,12 @@ const SECTIONS = [
   // a thing you do to a running project, not a file you edit. PHP only — see
   // `sections` below.
   { key: 'xdebug', icon: 'mdi-bug-outline', label: 'xdebug.title', php: true },
+  // Sharing is something you do to a running project too: a public URL for
+  // the webhook sender that cannot reach myapp.loc.
+  { key: 'share', icon: 'mdi-earth', label: 'tunnel.title' },
+  // PHP only in the rail, and empty-list-aware inside: workers are detected
+  // from artisan, so a plain PHP project without Laravel gets an explanation.
+  { key: 'workers', icon: 'mdi-cog-sync-outline', label: 'workers.title', php: true },
   // Below the divider: the editing surfaces the screenshots do not show, kept
   // because retiring the dialog must not retire what it could do.
   { key: 'manifest', icon: 'mdi-code-json', label: 'detail.manifest', divide: true },
@@ -264,6 +270,99 @@ watch(
 watch(sections, (available) => {
   if (!available.some((s) => s.key === section.value)) section.value = 'indicator';
 });
+
+/**
+ * This project's tunnel sidecar, when one exists.
+ *
+ * The URL is Cloudflare's to assign and arrives seconds after the sidecar
+ * starts, so starting polls until the status call can read it out of the
+ * sidecar's log — the same place it is read from after an app restart.
+ */
+const tunnel = ref(null);
+const tunnelBusy = ref(false);
+
+async function loadTunnel() {
+  try {
+    const all = await api.tunnelStatus();
+    tunnel.value = all.find((t) => t.project === props.name) ?? null;
+  } catch {
+    tunnel.value = null;
+  }
+}
+
+async function startTunnel() {
+  tunnelBusy.value = true;
+  error.value = null;
+  try {
+    await api.tunnelStart(props.name);
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 1500));
+      await loadTunnel();
+      if (tunnel.value?.url) break;
+    }
+  } catch (e) {
+    error.value = e;
+  } finally {
+    tunnelBusy.value = false;
+  }
+}
+
+async function stopTunnel() {
+  tunnelBusy.value = true;
+  error.value = null;
+  try {
+    await api.tunnelStop(props.name);
+    await loadTunnel();
+  } catch (e) {
+    error.value = e;
+  } finally {
+    tunnelBusy.value = false;
+  }
+}
+
+watch(section, (key) => {
+  if (key === 'share') loadTunnel();
+  if (key === 'workers') loadWorkers();
+});
+
+/**
+ * Worker sidecars for this project.
+ *
+ * `available` comes from the project's files (artisan, composer.json);
+ * `workers` from the engine. Docker itself does the healing — the app only
+ * starts, stops, and shows the restart count the healing produces.
+ */
+const workerKinds = ref([]);
+const workers = ref([]);
+const workerBusy = ref(null);
+
+async function loadWorkers() {
+  try {
+    const [kinds, all] = await Promise.all([api.workerOptions(props.name), api.workerStatus()]);
+    workerKinds.value = kinds;
+    workers.value = all.filter((w) => w.project === props.name);
+  } catch (e) {
+    error.value = e;
+  }
+}
+
+function workerFor(kind) {
+  return workers.value.find((w) => w.kind === kind) ?? null;
+}
+
+async function toggleWorker(kind) {
+  workerBusy.value = kind;
+  error.value = null;
+  try {
+    if (workerFor(kind)) await api.workerStop(props.name, kind);
+    else await api.workerStart(props.name, kind);
+    await loadWorkers();
+  } catch (e) {
+    error.value = e;
+  } finally {
+    workerBusy.value = null;
+  }
+}
 
 async function act(fn) {
   error.value = null;
@@ -1023,6 +1122,134 @@ onUnmounted(() => clearInterval(statsTimer));
           </template>
         </template>
 
+        <!-- SHARE ---------------------------------------------------------- -->
+        <template v-else-if="section === 'share'">
+          <div class="section-head mb-1">
+            <v-icon size="18" class="mr-2">mdi-earth</v-icon>{{ t('tunnel.title') }}
+          </div>
+          <p class="text-caption text-medium-emphasis mb-4">{{ t('tunnel.explain') }}</p>
+
+          <!-- The tunnel forwards to the container; a stopped container would
+               serve 502s from a URL that looks like it worked. -->
+          <v-alert v-if="!running" type="info" variant="tonal">
+            <div class="text-caption">{{ t('tunnel.needsRunning') }}</div>
+          </v-alert>
+
+          <template v-else-if="tunnel?.running">
+            <v-alert v-if="tunnel.url" type="success" variant="tonal" class="mb-3">
+              <div class="d-flex align-center ga-2 flex-wrap">
+                <a class="field-link" @click="openUrl(tunnel.url)">{{ tunnel.url }}</a>
+                <v-btn
+                  icon
+                  :aria-label="t('a11y.copy')"
+                  size="x-small"
+                  variant="text"
+                  @click="copy(tunnel.url, 'tunnel')"
+                >
+                  <v-icon>{{ copied === 'tunnel' ? 'mdi-check' : 'mdi-content-copy' }}</v-icon>
+                  <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
+                </v-btn>
+                <v-spacer />
+                <v-btn
+                  size="small"
+                  color="error"
+                  variant="tonal"
+                  :loading="tunnelBusy"
+                  @click="stopTunnel"
+                >
+                  {{ t('tunnel.stop') }}
+                </v-btn>
+              </div>
+            </v-alert>
+            <div v-else class="d-flex align-center ga-3">
+              <v-progress-circular indeterminate size="18" width="2" color="primary" />
+              <span class="text-caption text-medium-emphasis">{{ t('tunnel.connecting') }}</span>
+              <v-spacer />
+              <v-btn
+                size="small"
+                color="error"
+                variant="tonal"
+                :loading="tunnelBusy"
+                @click="stopTunnel"
+              >
+                {{ t('tunnel.stop') }}
+              </v-btn>
+            </div>
+
+            <!-- Said before anyone pastes the URL into a public issue: the
+                 link is live, unauthenticated, and reaches this machine. -->
+            <v-alert type="warning" variant="tonal" class="mt-3">
+              <div class="text-caption">{{ t('tunnel.publicWarning') }}</div>
+            </v-alert>
+          </template>
+
+          <template v-else>
+            <v-btn
+              color="primary"
+              variant="flat"
+              prepend-icon="mdi-earth"
+              :loading="tunnelBusy"
+              @click="startTunnel"
+            >
+              {{ t('tunnel.start') }}
+            </v-btn>
+            <div class="text-caption text-medium-emphasis mt-3">
+              {{ t('tunnel.startHint') }}
+            </div>
+          </template>
+        </template>
+
+        <!-- WORKERS --------------------------------------------------------- -->
+        <template v-else-if="section === 'workers'">
+          <div class="section-head mb-1">
+            <v-icon size="18" class="mr-2">mdi-cog-sync-outline</v-icon>{{ t('workers.title') }}
+          </div>
+          <p class="text-caption text-medium-emphasis mb-4">{{ t('workers.explain') }}</p>
+
+          <v-alert v-if="!workerKinds.length" type="info" variant="tonal">
+            <div class="text-caption">{{ t('workers.none') }}</div>
+          </v-alert>
+
+          <v-alert v-else-if="!running" type="info" variant="tonal" class="mb-3">
+            <div class="text-caption">{{ t('workers.needsRunning') }}</div>
+          </v-alert>
+
+          <div v-for="kind in workerKinds" :key="kind" class="worker-row">
+            <v-icon
+              :color="workerFor(kind)?.running ? 'success' : 'grey'"
+              size="18"
+            >
+              {{ workerFor(kind)?.running ? 'mdi-check-circle' : 'mdi-stop-circle-outline' }}
+            </v-icon>
+            <div class="min-w-0">
+              <span class="text-body-2 font-weight-medium">{{ t(`workers.${kind}`) }}</span>
+              <div class="text-caption text-medium-emphasis">
+                {{ t(`workers.${kind}Desc`) }}
+              </div>
+              <!-- The healing made visible: 0 is healthy, a big number is a
+                   crash loop wearing a green chip. -->
+              <div
+                v-if="workerFor(kind)?.restarts"
+                class="text-caption"
+                :class="workerFor(kind).restarts > 3 ? 'text-error' : 'text-warning'"
+              >
+                {{ t('workers.restarts', { count: workerFor(kind).restarts }) }}
+              </div>
+            </div>
+            <v-spacer />
+            <v-btn
+              size="small"
+              :color="workerFor(kind) ? 'error' : 'primary'"
+              variant="tonal"
+              :loading="workerBusy === kind"
+              :disabled="!workerFor(kind) && !running"
+              @click="toggleWorker(kind)"
+            >
+              {{ workerFor(kind) ? t('workers.stop') : t('workers.start') }}
+            </v-btn>
+          </div>
+        </template>
+
         <!-- MANIFEST ------------------------------------------------------ -->
         <template v-else-if="section === 'manifest'">
           <div class="d-flex align-center ga-2 mb-3">
@@ -1579,5 +1806,16 @@ onUnmounted(() => clearInterval(statsTimer));
 .heat-legend .heat-cell {
   width: 14px;
   height: 14px;
+}
+
+.worker-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 0;
+}
+
+.worker-row + .worker-row {
+  border-top: thin solid rgba(var(--v-border-color), calc(var(--v-border-opacity) / 2));
 }
 </style>

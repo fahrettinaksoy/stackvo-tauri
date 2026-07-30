@@ -21,11 +21,23 @@ const report = ref(null);
 
 const form = ref(blankForm());
 
+/**
+ * `empty` creates a bare project from the form below; a framework template
+ * instead runs the framework's own installer in a throwaway container and
+ * then adopts the result — detection reads runtime, server and document root
+ * from what the installer actually wrote, so the form's runtime fields have
+ * nothing to say and are hidden.
+ */
+const template = ref('empty');
+const TEMPLATES = ['empty', 'laravel', 'wordpress', 'symfony', 'nextjs'];
+const scaffolding = computed(() => template.value !== 'empty');
+
 const unavailable = computed(() => catalog.value?.runtimes?.filter((r) => !r.available) ?? []);
 
 async function load() {
   error.value = null;
   report.value = null;
+  template.value = 'empty';
   form.value = blankForm();
   try {
     catalog.value = await api.catalogGet();
@@ -56,7 +68,14 @@ async function create() {
   busy.value = true;
   error.value = null;
   try {
-    await api.projectCreate(formToSpec(form.value));
+    if (scaffolding.value) {
+      // Install first, adopt second: adoption is the same detection a git
+      // clone gets, so the manifest reflects what the installer wrote.
+      await api.projectScaffold(form.value.name, template.value);
+      await api.projectAdopt(form.value.name);
+    } else {
+      await api.projectCreate(formToSpec(form.value));
+    }
     emit('created');
     emit('update:modelValue', false);
   } catch (e) {
@@ -106,7 +125,31 @@ const canCreate = computed(
   >
     <ErrorAlert :error="error" type="error" class="mb-4" />
 
-    <ProjectFormFields ref="fields" v-model="form" :catalog="catalog" />
+    <!-- What fills the directory: nothing, or a framework's own installer. -->
+    <v-select
+      v-model="template"
+      :items="TEMPLATES.map((k) => ({ value: k, title: t(`newProject.templates.${k}`) }))"
+      :label="t('newProject.template')"
+      :hint="scaffolding ? t('newProject.templateHint') : undefined"
+      persistent-hint
+      density="comfortable"
+      variant="outlined"
+      class="mb-4"
+    />
+
+    <!-- A scaffolded project's runtime, server and document root come from
+         detection over what the installer wrote — the form would only let the
+         two disagree. Only the name is the user's to choose. -->
+    <v-text-field
+      v-if="scaffolding"
+      v-model="form.name"
+      :label="t('newProject.name')"
+      :hint="t('newProject.nameHint')"
+      persistent-hint
+      density="comfortable"
+      variant="outlined"
+    />
+    <ProjectFormFields v-else ref="fields" v-model="form" :catalog="catalog" />
 
     <v-alert v-if="report && !report.valid" type="warning" variant="tonal" class="mt-5">
       <div v-for="(issue, i) in report.errors" :key="i" class="text-caption">
