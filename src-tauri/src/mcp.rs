@@ -109,6 +109,18 @@ pub const TOOLS: &[Tool] = &[
         schema: no_args,
     },
     Tool {
+        name: "stackvo_doctor",
+        command: "doctor",
+        description: "The full diagnosis: every startup requirement, every host port the stack \
+                      will claim and who holds it now (the stack itself, another container by \
+                      name, or a host process by name and pid), project domains missing from \
+                      the hosts file, whether the generated config is older than its inputs, \
+                      and how much disk unused images and volumes hold. Use this to explain a \
+                      failed start — especially \"address already in use\".",
+        writes: false,
+        schema: no_args,
+    },
+    Tool {
         name: "stackvo_projects",
         command: "projects_list",
         description: "Every managed project: domain, runtime, whether it is built and running, \
@@ -313,6 +325,8 @@ pub async fn call(name: &str, args: &Value, allow_writes: bool) -> Result<Value>
                 },
             }))
         }
+
+        "stackvo_doctor" => Ok(json!(crate::doctor::run(Some(&root)).await)),
 
         "stackvo_projects" => Ok(json!(crate::commands::list_projects(&root).await?)),
 

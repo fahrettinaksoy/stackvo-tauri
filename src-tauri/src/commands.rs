@@ -136,6 +136,13 @@ pub async fn docker_system_resources() -> Result<SystemResources> {
     engine::system_resources().await
 }
 
+/// Which stack member holds the bytes — the per-project answer the aggregate
+/// numbers in `docker_system_resources` cannot give.
+#[tauri::command]
+pub async fn docker_disk_usage() -> Result<Vec<engine::DiskOwner>> {
+    engine::disk_attribution().await
+}
+
 // ---------------------------------------------------------------- projects
 
 #[derive(Debug, Clone, Serialize)]
@@ -2044,6 +2051,279 @@ pub async fn preflight() -> crate::preflight::Preflight {
 #[tauri::command]
 pub async fn preflight_fix(id: String) -> Result<()> {
     crate::preflight::fix(&id).await
+}
+
+// ------------------------------------------------------------------ doctor
+
+/// The full diagnosis: the boot gate's rows plus the failures that arrive
+/// later — a port already taken (named), hosts entries missing, generated
+/// config older than its inputs, disk held by unused images and volumes.
+///
+/// Each finding pairs with a repair the app already knows how to do:
+/// `preflight_fix`, `hosts_apply` (behind its reviewed diff), `generate_run`,
+/// `docker_prune`. The report only diagnoses; every repair stays behind its
+/// own command so the confirmation flows are not bypassed.
+#[tauri::command]
+pub async fn doctor(state: State<'_, AppState>) -> Result<crate::doctor::Doctor> {
+    let root = state.root().ok();
+    Ok(crate::doctor::run(root.as_deref()).await)
+}
+
+// ---------------------------------------------------------------- scaffold
+
+/// Fill a new project directory by running the framework's own installer in
+/// a throwaway container, then leave the rest to `project_adopt` — the same
+/// detection whether the code arrived by `git clone` or by this command.
+///
+/// An operation: `composer create-project` downloads a framework, which is
+/// minutes on a slow line and belongs in the operation console.
+#[tauri::command]
+pub async fn project_scaffold(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    template: String,
+) -> Result<String> {
+    let template = crate::scaffold::Template::parse(&template).ok_or_else(|| {
+        Error::new(
+            Code::InvalidInput,
+            format!("{template} is not a scaffold template"),
+        )
+    })?;
+
+    let _busy = state.inflight.acquire(format!("project:{name}"))?;
+    let root = state.root()?;
+    let dir = workspace::project_dir(&root, &name)?;
+
+    // The installer refuses a non-empty target anyway, but with a worse
+    // message and after a pull.
+    if dir.exists()
+        && dir
+            .read_dir()
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(true)
+    {
+        return Err(Error::new(
+            Code::AlreadyExists,
+            format!("projects/{name} already exists and is not empty"),
+        )
+        .with_hint("Use adoption for existing code — scaffolding is for a brand-new project."));
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| Error::io("creating the project directory", e))?;
+
+    let user = crate::scaffold::current_user().await;
+    let args = crate::scaffold::run_args(template, &dir.display().to_string(), user.as_deref());
+
+    let operation_id = events::next_operation_id("scaffold");
+    let outcome = runner::run_operation(
+        &app,
+        runner::Operation {
+            operation_id: &operation_id,
+            subject: &name,
+            progress_event: "scaffold:progress",
+            finished_event: "scaffold:done",
+            program: "docker",
+            args: &args,
+            cwd: &root,
+        },
+    )
+    .await;
+
+    if outcome.is_err() {
+        // A failed install that wrote nothing should not leave a husk that
+        // blocks the retry; a partial write is kept for inspection.
+        let _ = std::fs::remove_dir(&dir);
+    }
+    outcome?;
+    Ok(operation_id)
+}
+
+// ----------------------------------------------------------------- workers
+
+/// Which workers this project can offer, from its files alone: `artisan`
+/// offers queue and scheduler, `laravel/horizon` in composer.json adds
+/// Horizon. A Node project gets an empty list, not an error.
+#[tauri::command]
+pub fn worker_options(state: State<'_, AppState>, name: String) -> Result<Vec<String>> {
+    let root = state.root()?;
+    workspace::project_dir(&root, &name)?;
+    Ok(crate::worker::available(&root, &name)
+        .into_iter()
+        .map(|k| k.as_str().to_string())
+        .collect())
+}
+
+/// Every worker sidecar and its state, restart count included — Docker does
+/// the healing (`--restart unless-stopped`), this makes the healing visible.
+#[tauri::command]
+pub async fn worker_status() -> Result<Vec<crate::worker::WorkerStatus>> {
+    crate::worker::status_all().await
+}
+
+/// Start one worker as a sidecar built from the project's own image — same
+/// PHP, same extensions, same bind mount, same network, so `.env` and the
+/// database resolve exactly as they do for the web container.
+#[tauri::command]
+pub async fn worker_start(state: State<'_, AppState>, name: String, kind: String) -> Result<()> {
+    let kind = crate::worker::Kind::parse(&kind)
+        .ok_or_else(|| Error::new(Code::InvalidInput, format!("{kind} is not a worker kind")))?;
+    let _busy = state
+        .inflight
+        .acquire(format!("worker:{name}:{}", kind.as_str()))?;
+    let root = state.root()?;
+    workspace::project_dir(&root, &name)?;
+
+    if !crate::worker::available(&root, &name).contains(&kind) {
+        return Err(Error::new(
+            Code::Unsupported,
+            format!("{name} does not offer a {} worker", kind.as_str()),
+        )
+        .with_hint("Workers are detected from artisan and composer.json."));
+    }
+
+    // The image comes from the project's web container: the one image that is
+    // guaranteed to carry the right PHP and extensions for this code.
+    let containers = engine::stackvo_containers().await?;
+    let image = containers
+        .get(&name)
+        .and_then(|c| c.image.clone())
+        .ok_or_else(|| {
+            Error::new(Code::Conflict, format!("{name} has no built container"))
+                .with_hint("Build and start the project first — the worker runs its image.")
+        })?;
+
+    let network = Env::load(&root)
+        .ok()
+        .and_then(|env| env.get("DOCKER_DEFAULT_NETWORK").map(str::to_string))
+        .unwrap_or_else(|| "stackvo-net".to_string());
+
+    let args = crate::worker::run_args(&name, kind, &image, &root.display().to_string(), &network);
+
+    let output = tokio::process::Command::new("docker")
+        .args(&args)
+        .output()
+        .await
+        .map_err(|e| Error::io("running docker", e))?;
+    if !output.status.success() {
+        return Err(Error::new(
+            Code::Conflict,
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Stop one worker. Removal, not just stop: `--restart unless-stopped` means
+/// a merely-stopped container is one engine restart away from coming back.
+#[tauri::command]
+pub async fn worker_stop(state: State<'_, AppState>, name: String, kind: String) -> Result<()> {
+    let kind = crate::worker::Kind::parse(&kind)
+        .ok_or_else(|| Error::new(Code::InvalidInput, format!("{kind} is not a worker kind")))?;
+    let _busy = state
+        .inflight
+        .acquire(format!("worker:{name}:{}", kind.as_str()))?;
+
+    let container = format!("stackvo-{}", crate::worker::container_id(&name, kind));
+    let output = tokio::process::Command::new("docker")
+        .args(["rm", "-f", &container])
+        .output()
+        .await
+        .map_err(|e| Error::io("running docker", e))?;
+    if !output.status.success() {
+        return Err(Error::new(
+            Code::NotFound,
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------------ tunnel
+
+/// Every tunnel sidecar and its assigned public URL, where one exists yet.
+///
+/// The URL is read from the sidecar's own log on every call rather than
+/// cached: what the log says is what is actually live, across app restarts
+/// and container crashes alike.
+#[tauri::command]
+pub async fn tunnel_status() -> Result<Vec<crate::tunnel::TunnelStatus>> {
+    crate::tunnel::status_all().await
+}
+
+/// Start a cloudflared quick-tunnel sidecar for one project.
+///
+/// An operation, not a mutation: the first start pulls the cloudflared image,
+/// which can take minutes and belongs in the operation console. The public
+/// URL is not in the return value — Cloudflare assigns it after the container
+/// is up, so the UI polls `tunnel_status` until it appears.
+#[tauri::command]
+pub async fn tunnel_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<String> {
+    // Per-project, not global: two projects may tunnel at once, the same one
+    // must not race itself.
+    let _busy = state.inflight.acquire(format!("tunnel:{name}"))?;
+    let root = state.root()?;
+
+    let manifest = manifest::read(
+        &workspace::project_dir(&root, &name)?.join("stackvo.json"),
+        &name,
+    )?;
+    crate::tunnel::ensure_project_running(&name).await?;
+
+    let network = Env::load(&root)
+        .ok()
+        .and_then(|env| env.get("DOCKER_DEFAULT_NETWORK").map(str::to_string))
+        .unwrap_or_else(|| "stackvo-net".to_string());
+    let args = crate::tunnel::run_args(
+        &name,
+        manifest.domain.as_deref(),
+        crate::tunnel::internal_port(&manifest),
+        &network,
+    );
+
+    let operation_id = events::next_operation_id("tunnel");
+    runner::run_operation(
+        &app,
+        runner::Operation {
+            operation_id: &operation_id,
+            subject: &name,
+            progress_event: "tunnel:progress",
+            finished_event: "tunnel:done",
+            program: "docker",
+            args: &args,
+            cwd: &root,
+        },
+    )
+    .await?;
+    Ok(operation_id)
+}
+
+/// Stop a project's tunnel. The sidecar runs with `--rm`, so stopping is
+/// also removal — nothing is left behind to leak the old URL.
+#[tauri::command]
+pub async fn tunnel_stop(state: State<'_, AppState>, name: String) -> Result<()> {
+    let _busy = state.inflight.acquire(format!("tunnel:{name}"))?;
+    engine::stop_container(&crate::tunnel::container_id(&name)).await
+}
+
+/// Reclaim space from dangling images and — only when explicitly asked —
+/// unused volumes.
+///
+/// Volumes are opt-in per call rather than a default, because the engine's
+/// "unused" means "not currently mounted": the database of a project that
+/// happens to be stopped qualifies. The UI states this before offering it.
+#[tauri::command]
+pub async fn docker_prune(
+    state: State<'_, AppState>,
+    images: bool,
+    volumes: bool,
+) -> Result<engine::PruneReport> {
+    // One prune at a time: two concurrent passes double-report the same bytes.
+    let _busy = state.inflight.acquire("prune")?;
+    engine::prune(images, volumes).await
 }
 
 // ---------------------------------------------------------------- preferences

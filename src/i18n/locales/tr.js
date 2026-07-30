@@ -552,6 +552,7 @@ export default {
   logs: {
     title: 'Loglar',
     live: 'canlı',
+    openInEditor: 'Bu dosyayı editörde aç',
     waiting: 'Log bekleniyor…',
     containerStream: 'Konteyner çıktısı',
     group: {
@@ -585,6 +586,93 @@ export default {
     cancel: 'Vazgeç',
   },
 
+  workers: {
+    title: 'İşçiler',
+    explain:
+      'Kuyruk ve zamanlayıcı süreçleri, bu projenin kendi imajından türetilen konteynerler olarak çalışır — aynı PHP, aynı eklentiler, aynı .env. Çöken işçiyi Docker kendisi yeniden başlatır (unless-stopped), bu uygulama açık olsun ya da olmasın.',
+    none: 'artisan dosyası bulunamadı — işçiler Laravel dosyalarından tespit edilir.',
+    needsRunning: 'Önce projeyi başlatın — işçi, projenin derlenmiş imajını çalıştırır.',
+    queue: 'Kuyruk işçisi',
+    queueDesc: 'php artisan queue:work — kuyruktaki işleri işler; bayat kodla uzun kalmamak için saatte bir yeniden başlar.',
+    scheduler: 'Zamanlayıcı',
+    schedulerDesc: 'php artisan schedule:work — zamanlanmış görevleri ön planda çalıştırır; host cron kaydı gerekmez.',
+    horizon: 'Horizon',
+    horizonDesc: 'php artisan horizon — Laravel Horizon süpervizörü; composer.json gerektirdiği için sunulur.',
+    start: 'Başlat',
+    stop: 'Durdur',
+    restarts: 'Docker bu işçiyi {count} kez yeniden başlattı — artmaya devam ederse loglarına bakın.',
+  },
+
+  tunnel: {
+    title: 'Paylaş',
+    explain:
+      'Bu projeye yönlenen geçici bir genel URL — .loc alan adına erişemeyen webhook gönderenler (Stripe, GitHub) için. Yığın ağında yan konteyner olarak bir Cloudflare hızlı tüneli çalıştırır; hesap gerekmez.',
+    needsRunning: 'Önce projeyi başlatın — tünel projenin konteynerine yönlenir.',
+    start: 'Genel URL al',
+    startHint:
+      'İlk başlatma cloudflared imajını indirir. URL rastgeledir, yalnızca tünel çalışırken yaşar ve her başlatmada değişir.',
+    connecting: 'Bağlanıyor — Cloudflare URL atıyor…',
+    stop: 'Paylaşımı durdur',
+    publicWarning:
+      'Bu URL genel internette canlıdır ve kimlik doğrulaması yoktur. Elinde olan herkes makinenizdeki bu projeye erişir. Test bitince paylaşımı durdurun.',
+  },
+
+  doctor: {
+    title: 'Doktor',
+    sectionDesc: 'Neyin bozuk olduğu, adıyla — ve her bulgunun yanında onarımı.',
+    loading: 'Yığın inceleniyor…',
+
+    requirements: 'Başlangıç gereksinimleri',
+    requirementsDesc: 'İlk ekranı tutan denetimlerin aynısı, buradan yeniden denetlenebilir.',
+
+    portsTitle: 'Ana makine portları',
+    portsDesc: 'Üretilen yığının talep edeceği her port ve şu anda kimde olduğu.',
+    portsNone: 'Üretilen yığın hiç port yayınlamıyor — önce üreticiyi çalıştırın.',
+    portFree: 'Boş.',
+    portOurs: 'Yığının kendisinde ({name}).',
+    portHeld: '{process} kullanıyor.',
+    portHeldPid: '{process} kullanıyor (pid {pid}).',
+    portHeldUnknown: 'Kullanımda, ancak süreç belirlenemedi.',
+    portUnknown: 'Dinleyici tablosu okunamadı.',
+
+    hostsTitle: 'hosts dosyası',
+    hostsDesc: 'hosts kaydı olmayan bir proje alan adı, tarayıcının bulamayacağı bir sitedir.',
+    hostsOk: 'Her proje alan adının kaydı var.',
+    hostsMissing: '{count} alan adının hosts kaydı yok.',
+    hostsRepair: 'İncele ve onar',
+
+    generatedTitle: 'Üretilen yapılandırma',
+    generatedDesc:
+      'Compose dosyaları .env ile proje manifestolarından türetilir. Bir girdiyi değiştirip yeniden üretmezseniz yığın dünün yapılandırmasıyla çalışır.',
+    generatedOk: 'Girdileriyle güncel.',
+    generatedStale: '{file} dosyasından eski — yığın dünün yapılandırmasıyla çalışıyor.',
+    generatedMissing: 'Hiç üretilmemiş.',
+    generatedUnknown: 'Çalışma alanı olmadan denetlenemez.',
+    regenerate: 'Yeniden üret',
+
+    spaceTitle: 'Disk',
+    spaceDesc: 'Her yeniden derleme arkasında sahipsiz bir imaj bırakır ve bu uygulama çok derler.',
+    spaceUnknown: 'Motor kapalıyken okunamaz.',
+    spaceImages: '{count} kullanılmayan imaj',
+    spaceVolumes: '{count} kullanılmayan birim',
+    reclaim: 'Alan kazan…',
+    pruneTitle: 'Disk alanı kazan',
+    pruneImagesLabel: '{count} sahipsiz imajı kaldır — {size}. Tanımı gereği yeniden derlenebilir.',
+    pruneVolumesLabel: '{count} kullanılmayan birimi kaldır — {size}.',
+    pruneVolumesWarning:
+      '“Kullanılmayan”, “şu anda bağlı değil” demektir — durdurulmuş bir projenin verisi de buna girer. Buradan kaldırılan geri gelmez; önce veritabanlarını yedekleyin.',
+    pruneConfirm: 'Kaldır',
+    pruneResult: '{images} imaj ve {volumes} birim kaldırıldı — {size} kazanıldı.',
+
+    ownersTitle: 'Baytlar kimde',
+    ownerCol: 'Üye',
+    ownerImage: 'İmaj',
+    ownerImageSize: 'İmaj boyutu',
+    ownerRw: 'Yazılabilir katman',
+    ownerShared: 'ortak upstream imajı',
+    ownerOrphan: 'sahipsiz derleme',
+  },
+
   newProject: {
     nameHint: 'Harf veya rakamla başlar; tire, alt çizgi ve nokta kullanılabilir (ör. api.myapp).',
     domainHint: 'Boş bırakılırsa proje adından üretilir.',
@@ -595,6 +683,16 @@ export default {
     sectionNode: 'Node yapılandırması',
     title: 'Yeni proje',
     name: 'Proje adı',
+    template: 'Başlangıç',
+    templates: {
+      empty: 'Boş proje (aşağıdan yapılandırın)',
+      laravel: 'Laravel (composer create-project)',
+      wordpress: 'WordPress (wp core download)',
+      symfony: 'Symfony (composer create-project)',
+      nextjs: 'Next.js (create-next-app)',
+    },
+    templateHint:
+      'Çerçevenin kendi kurucusu geçici bir konteynerde çalışır; sonra tespit, yazdıklarından projeyi yapılandırır. İlk çalıştırma kurucu imajını indirir — birkaç dakika verin.',
     domain: 'Alan adı',
     runtime: 'Çalışma ortamı',
     phpVersion: 'PHP sürümü',

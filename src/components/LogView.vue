@@ -3,6 +3,7 @@ import { computed, nextTick, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { listen } from '@tauri-apps/api/event';
 import { useAppearanceStore } from '@/stores/appearance';
+import { useAppStore } from '@/stores/app';
 import { api } from '@/lib/ipc';
 import { LEVELS, countByLevel, filterLines, withLevels } from '@/lib/logs';
 import ErrorAlert from '@/components/ErrorAlert.vue';
@@ -69,6 +70,43 @@ let unlistenLine = null;
 let unlistenClosed = null;
 
 const MAX_LINES = 2000;
+
+const app = useAppStore();
+
+/**
+ * Container paths under the project's bind mount, with an extension — the
+ * shape a stack frame prints. Restricting to `/var/www/html/` keeps this a
+ * substitution the compose file states, never a guess.
+ */
+const CONTAINER_PATH = /\/var\/www\/html\/([A-Za-z0-9_@./-]+\.[A-Za-z0-9]+)/g;
+
+/** Split one line around clickable file paths. Services have no source
+ *  directory, so without a project the line comes back whole. */
+function segments(text) {
+  if (!props.project) return [{ text }];
+  const out = [];
+  let last = 0;
+  for (const m of text.matchAll(CONTAINER_PATH)) {
+    if (m.index > last) out.push({ text: text.slice(last, m.index) });
+    out.push({ text: m[0], file: m[1] });
+    last = m.index + m[0].length;
+  }
+  if (last < text.length || !out.length) out.push({ text: text.slice(last) });
+  return out;
+}
+
+/** The substitution the bind mount states: /var/www/html ↔ projects/<name>.
+ *  `open_in_editor` still confines the result to the workspace on the Rust
+ *  side — this is convenience, not the boundary. */
+async function jump(file) {
+  const root = app.workspace?.root;
+  if (!root) return;
+  try {
+    await api.openInEditor(`${root}/projects/${props.project}/${file}`);
+  } catch (e) {
+    error.value = e;
+  }
+}
 
 /**
  * Levels are resolved once per buffer change rather than per filter change: a
@@ -330,6 +368,9 @@ onUnmounted(close);
             {{ tc('logs.noMatch', { n: lines.length }) }}
           </div>
 
+          <!-- Container paths in a stack frame become clickable: the bind
+               mount states the substitution (/var/www/html ↔ projects/<name>),
+               so a frame is one click from the editor, not a search. -->
           <pre
             v-for="(line, i) in visible"
             :key="i"
@@ -338,7 +379,15 @@ onUnmounted(close);
               { 'log-stderr': line.stream === 'stderr' },
               line.level ? `level-${line.level}` : null,
             ]"
-            >{{ line.text }}</pre>
+            ><template v-for="(seg, j) in segments(line.text)"><span
+                v-if="seg.file"
+                :key="j"
+                class="log-jump"
+                role="link"
+                :title="tc('logs.openInEditor')"
+                @click="jump(seg.file)"
+                >{{ seg.text }}</span
+              ><template v-else>{{ seg.text }}</template></template></pre>
         </div>
 
         <template v-if="filtering && lines.length">
@@ -403,6 +452,20 @@ onUnmounted(close);
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* A stack-frame path, one click from the editor. Underlined only on hover so
+   a dense trace stays readable. */
+.log-jump {
+  cursor: pointer;
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+
+.log-jump:hover {
+  text-decoration-style: solid;
+  color: rgb(var(--v-theme-primary));
 }
 
 .log-foot {

@@ -69,7 +69,116 @@
       },
       "returns": "void",
       "why": "A requirement that reports a problem the app could have fixed itself is a diagnosis pretending to be a product. `fixable` on each Requirement says which ids this accepts.",
-      "notes": "Rejects any id it cannot fix rather than silently succeeding — a no-op that returns Ok would report the requirement as repaired on the next poll and it would still be broken. Declared retroactively."
+      "notes": "Rejects any id it cannot fix rather than silently succeeding — a no-op that returns Ok would report the requirement as repaired on the next poll and it would still be broken. Accepts 'network', 'projects' and 'engine'; the UI reaches engine start through engine_start (it polls for the daemon coming up), the 'engine' arm here is for headless callers. Declared retroactively."
+    },
+    "doctor": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "Doctor",
+      "why": "The boot gate answers \"can the app run\"; this answers the failures that arrive later, one failed compose up at a time. The single most common one — a host port already taken — compose reports as \"address already in use\" with no word on by what. The doctor names the culprit: the stack's own container (fine), someone else's container (named), or a host process (named, with pid).",
+      "notes": "Diagnosis only. Every repair stays behind its own command — preflight_fix, hosts_apply (behind its reviewed diff), generate_run, docker_prune — so no confirmation flow is bypassed. Degrades honestly: no workspace ⇒ port and generated checks read unknown; engine down ⇒ space is null and port owners cannot be named."
+    },
+    "docker_disk_usage": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "DiskOwner[]",
+      "why": "docker_system_resources reports totals; the question a full disk raises is *which project*. Every StackVo container with its image size and writable layer, plus stack-built images whose container is gone — the bytes nobody remembers spending. No native-binary competitor can ship this at all.",
+      "notes": "imageDedicated separates images this stack built (stackvo-<name>, freed by removing the member) from shared upstream images (mysql:8.0, freed by nothing short of docker rmi). Sorted largest first."
+    },
+    "tunnel_status": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "TunnelStatus[]",
+      "why": "Webhook testing (Stripe, GitHub) had no answer: myapp.loc does not exist on the internet. This reports every running tunnel sidecar and its assigned public URL.",
+      "notes": "The URL is read from the sidecar's own log on every call rather than cached — what the log says is what is actually live, across app restarts and container crashes alike. `url` is null while cloudflared is still connecting; the UI polls until it appears."
+    },
+    "tunnel_start": {
+      "new": true,
+      "kind": "operation",
+      "args": {
+        "name": "string"
+      },
+      "returns": "OperationId",
+      "emits": [
+        "tunnel:progress",
+        "tunnel:done"
+      ],
+      "why": "Starts a cloudflared quick-tunnel sidecar on the stack's network, forwarding a random trycloudflare.com URL to the project's container. No account, no token — and no host-binary competitor can attach to the container network at all.",
+      "notes": "An operation because the first start pulls the cloudflared image, which can take minutes. Targets the project container directly (with the local domain as Host header): with SSL on, every Traefik project router is websecure-only, which a public visitor cannot handshake against. Refuses when the project container is not running — a tunnel serving 502s looks like it worked. The URL that results is public and unauthenticated while the tunnel runs; the UI says so."
+    },
+    "tunnel_stop": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string"
+      },
+      "returns": "void",
+      "notes": "The sidecar runs with --rm, so stop is also removal — nothing is left behind to leak the old URL."
+    },
+    "project_scaffold": {
+      "new": true,
+      "kind": "operation",
+      "args": {
+        "name": "string",
+        "template": "'laravel' | 'wordpress' | 'symfony' | 'nextjs'"
+      },
+      "returns": "OperationId",
+      "emits": [
+        "scaffold:progress",
+        "scaffold:done"
+      ],
+      "why": "The create half of P0-1 (detection/adoption shipped first). Runs the framework's own installer in a throwaway container — composer create-project, wp-cli, create-next-app — so nothing is installed on the host and only the bind-mounted project directory survives.",
+      "notes": "Ends where adoption begins: the UI follows with project_adopt, which detects runtime/server/document root from what the installer actually wrote — the same machinery as a git clone. Every installer command is pinned non-interactive (a prompt inside an operation console is a hang, not a question). On unix runs --user uid:gid so files land owned by the user, not root. Refuses a non-empty directory; a failed install that wrote nothing removes the husk so the retry is not blocked."
+    },
+    "worker_options": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "name": "string"
+      },
+      "returns": "string[]",
+      "why": "Which workers this project can offer, from its files alone: artisan offers 'queue' and 'scheduler', laravel/horizon in composer.json adds 'horizon'. A Node project gets an empty list, not an error."
+    },
+    "worker_status": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "WorkerStatus[]",
+      "why": "A Laravel app runs queue:work, the scheduler and Horizon beside the web server; locally they live in a forgotten terminal tab, which is why \"my job never ran\" is a support staple. This reports every worker sidecar with its restart count — the self-heal made visible; a large number is a crash loop, not a success story."
+    },
+    "worker_start": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string",
+        "kind": "'queue' | 'scheduler' | 'horizon'"
+      },
+      "returns": "void",
+      "notes": "The sidecar runs the project's own image (same PHP, extensions, bind mount and network, so .env and the database resolve as the web container sees them) with --restart unless-stopped — self-healing is Docker's own supervisor, not reimplemented. queue:work carries --max-time=3600 on purpose: a worker holds the code it booted with, and an hour caps how long it serves yesterday's code. Refuses when the project has no built container."
+    },
+    "worker_stop": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string",
+        "kind": "'queue' | 'scheduler' | 'horizon'"
+      },
+      "returns": "void",
+      "notes": "Removal, not just stop: with unless-stopped, a merely-stopped container is one engine restart away from coming back."
+    },
+    "docker_prune": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "images": "bool",
+        "volumes": "bool"
+      },
+      "returns": "PruneReport",
+      "why": "SystemResources has reported reclaimable bytes since Phase 1 with no way to act on the number. Dangling images accumulate on every rebuild, and this app rebuilds a lot — every Xdebug toggle, every extension change.",
+      "notes": "Images means dangling images only (the engine's default prune set — rebuildable by definition). Volumes are a separate flag because the engine's \"unused\" means \"not currently mounted\", and the database of a stopped project qualifies; the UI warns before passing volumes:true. Guarded by the 'prune' inflight subject."
     },
     "workspace_get": {
       "new": true,
@@ -1090,6 +1199,24 @@
         "services": "u32"
       }
     },
+    "scaffold:progress": {
+      "new": true,
+      "payload": "ProgressEvent",
+      "why": "composer create-project downloads a framework — minutes on a slow line, and the installer's own lines are the only honest progress there is."
+    },
+    "scaffold:done": {
+      "new": true,
+      "payload": "FinishedEvent"
+    },
+    "tunnel:progress": {
+      "new": true,
+      "payload": "ProgressEvent",
+      "why": "The first tunnel_start pulls the cloudflared image; the pull's own lines belong in the operation console like every other long-running docker invocation."
+    },
+    "tunnel:done": {
+      "new": true,
+      "payload": "FinishedEvent"
+    },
     "terminal:ready": {
       "renamedFrom": "terminal-ready",
       "payload": {
@@ -1304,6 +1431,52 @@
         "unused": "u32",
         "size": "u64"
       }
+    },
+    "Doctor": {
+      "preflight": "Preflight",
+      "ports": [
+        {
+          "port": "u16",
+          "requiredBy": "string",
+          "state": "'ok'|'warn'|'fail'|'unknown'",
+          "process": "string?",
+          "pid": "u32?",
+          "ours": "bool"
+        }
+      ],
+      "hostsMissing": "string[]",
+      "generated": {
+        "state": "'ok'|'warn'|'fail'|'unknown'",
+        "detail": "string?"
+      },
+      "space": "SystemResources?",
+      "note": "ports.requiredBy is the compose service that publishes the port, read from the generated files — which is the enabled set, because the generator only writes enabled services. ports.state: ok = free or held by the stack itself; warn = a docker backend holds it but the engine could not say whose container; fail = a named conflict. generated.state: warn = an input (.env or a manifest) is newer than the oldest generated compose file, detail names it; fail = never generated."
+    },
+    "WorkerStatus": {
+      "project": "string",
+      "kind": "'queue'|'scheduler'|'horizon'",
+      "running": "bool",
+      "restarts": "i64?",
+      "container": "string"
+    },
+    "DiskOwner": {
+      "id": "string",
+      "image": "string?",
+      "imageSize": "u64",
+      "imageDedicated": "bool",
+      "containerRw": "u64",
+      "running": "bool"
+    },
+    "TunnelStatus": {
+      "project": "string",
+      "running": "bool",
+      "url": "string?",
+      "container": "string"
+    },
+    "PruneReport": {
+      "imagesDeleted": "u64",
+      "volumesDeleted": "u64",
+      "spaceReclaimed": "u64"
     },
     "DependencyReport": {
       "service": "string",

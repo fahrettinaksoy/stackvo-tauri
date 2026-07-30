@@ -279,6 +279,10 @@ pub async fn fix(id: &str) -> Result<()> {
             std::fs::create_dir_all(root.join("projects"))
                 .map_err(|e| crate::error::Error::io("creating the projects directory", e))
         }
+        // The UI reaches engine start through `engine_start` (it polls for the
+        // daemon coming up); this arm exists so headless callers of the fix
+        // surface — the diagnose example, an MCP client — get the same repair.
+        "engine" => engine::start(),
         other => Err(crate::error::Error::new(
             crate::error::Code::InvalidInput,
             format!("{other} is not something the app can fix"),

@@ -26,6 +26,7 @@ import ErrorAlert from '@/components/ErrorAlert.vue';
 import PageLayout from '@/components/PageLayout.vue';
 import SettingsSection from '@/components/SettingsSection.vue';
 import SettingsGroup from '@/components/SettingsGroup.vue';
+import DoctorPanel from '@/components/DoctorPanel.vue';
 
 const { t, locale } = useI18n();
 const app = useAppStore();
@@ -114,6 +115,12 @@ const SECTIONS = [
     desc: 'settings.preferencesDesc',
   },
   { key: 'stack', icon: 'mdi-server', label: 'settings.stack', desc: 'settings.stackDesc' },
+  {
+    key: 'doctor',
+    icon: 'mdi-stethoscope',
+    label: 'doctor.title',
+    desc: 'doctor.sectionDesc',
+  },
   {
     key: 'certificates',
     icon: 'mdi-certificate-outline',
@@ -988,6 +995,14 @@ onMounted(async () => {
                 </div>
               </template>
             </SettingsGroup>
+          </template>
+
+          <!-- ---- doctor ----------------------------------------------------- -->
+          <!-- Diagnosis next to its repair. The findings here used to surface
+               one failed compose up at a time, each as an error about itself:
+               "address already in use" with no word on by what. -->
+          <template v-if="tab === 'doctor'">
+            <DoctorPanel />
           </template>
 
           <!-- ---- certificates ---------------------------------------------- -->

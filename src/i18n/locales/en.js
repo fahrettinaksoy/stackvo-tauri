@@ -546,6 +546,7 @@ export default {
   logs: {
     title: 'Logs',
     live: 'live',
+    openInEditor: 'Open this file in the editor',
     waiting: 'Waiting for output…',
     containerStream: 'Container output',
     group: {
@@ -580,6 +581,93 @@ export default {
     cancel: 'Cancel',
   },
 
+  workers: {
+    title: 'Workers',
+    explain:
+      'Queue and scheduler processes, run as containers built from this project’s own image — same PHP, same extensions, same .env. Docker restarts a crashed worker on its own (unless-stopped), whether or not this app is open.',
+    none: 'No artisan file found — workers are detected from Laravel’s files.',
+    needsRunning: 'Start the project first — a worker runs the project’s built image.',
+    queue: 'Queue worker',
+    queueDesc: 'php artisan queue:work — processes queued jobs; restarts hourly so it never serves stale code for long.',
+    scheduler: 'Scheduler',
+    schedulerDesc: 'php artisan schedule:work — runs scheduled tasks in the foreground; no host cron entry needed.',
+    horizon: 'Horizon',
+    horizonDesc: 'php artisan horizon — Laravel Horizon supervisor, offered because composer.json requires it.',
+    start: 'Start',
+    stop: 'Stop',
+    restarts: 'Docker has restarted this worker {count} time(s) — check its logs if this keeps climbing.',
+  },
+
+  tunnel: {
+    title: 'Share',
+    explain:
+      'A temporary public URL that forwards to this project — for webhook senders (Stripe, GitHub) that cannot reach a .loc domain. Runs a Cloudflare quick tunnel as a sidecar container on the stack network; no account needed.',
+    needsRunning: 'Start the project first — the tunnel forwards to its container.',
+    start: 'Get a public URL',
+    startHint:
+      'The first start downloads the cloudflared image. The URL is random, lives only while the tunnel runs, and changes on every start.',
+    connecting: 'Connecting — Cloudflare is assigning the URL…',
+    stop: 'Stop sharing',
+    publicWarning:
+      'This URL is live on the public internet and has no authentication. Anyone who has it reaches this project on your machine. Stop sharing when the test is done.',
+  },
+
+  doctor: {
+    title: 'Doctor',
+    sectionDesc: 'What is wrong, said with names — and the repair beside each finding.',
+    loading: 'Examining the stack…',
+
+    requirements: 'Startup requirements',
+    requirementsDesc: 'The same checks that gate the first screen, re-checkable from here.',
+
+    portsTitle: 'Host ports',
+    portsDesc: 'Every port the generated stack will claim, and who holds it right now.',
+    portsNone: 'The generated stack publishes no host ports — run the generator first.',
+    portFree: 'Free.',
+    portOurs: 'Held by the stack itself ({name}).',
+    portHeld: 'In use by {process}.',
+    portHeldPid: 'In use by {process} (pid {pid}).',
+    portHeldUnknown: 'In use, but the process could not be identified.',
+    portUnknown: 'The listener table could not be read.',
+
+    hostsTitle: 'Hosts file',
+    hostsDesc: 'A project domain without a hosts entry is a site the browser cannot find.',
+    hostsOk: 'Every project domain has an entry.',
+    hostsMissing: '{count} domain(s) have no hosts entry.',
+    hostsRepair: 'Review & repair',
+
+    generatedTitle: 'Generated configuration',
+    generatedDesc:
+      'The compose files are derived from .env and the project manifests. Edit an input without regenerating and the stack runs yesterday’s config.',
+    generatedOk: 'Up to date with its inputs.',
+    generatedStale: 'Older than {file} — the stack is running yesterday’s config.',
+    generatedMissing: 'Never generated.',
+    generatedUnknown: 'Cannot be checked without a workspace.',
+    regenerate: 'Regenerate',
+
+    spaceTitle: 'Disk',
+    spaceDesc: 'Every rebuild leaves a dangling image behind, and this app rebuilds a lot.',
+    spaceUnknown: 'Cannot be read while the engine is down.',
+    spaceImages: '{count} unused image(s)',
+    spaceVolumes: '{count} unused volume(s)',
+    reclaim: 'Reclaim space…',
+    pruneTitle: 'Reclaim disk space',
+    pruneImagesLabel: 'Remove {count} dangling image(s) — {size}. Rebuildable by definition.',
+    pruneVolumesLabel: 'Remove {count} unused volume(s) — {size}.',
+    pruneVolumesWarning:
+      '“Unused” means “not currently mounted” — the data of a stopped project qualifies. Anything removed here is gone; back up databases first.',
+    pruneConfirm: 'Remove',
+    pruneResult: 'Removed {images} image(s) and {volumes} volume(s) — {size} reclaimed.',
+
+    ownersTitle: 'Who holds the bytes',
+    ownerCol: 'Member',
+    ownerImage: 'Image',
+    ownerImageSize: 'Image size',
+    ownerRw: 'Writable layer',
+    ownerShared: 'shared upstream image',
+    ownerOrphan: 'orphaned build',
+  },
+
   newProject: {
     nameHint: 'Starts with a letter or digit; dash, underscore and dot allowed (e.g. api.myapp).',
     domainHint: 'Generated from the project name when left empty.',
@@ -590,6 +678,16 @@ export default {
     sectionNode: 'Node configuration',
     title: 'New project',
     name: 'Project name',
+    template: 'Start from',
+    templates: {
+      empty: 'Empty project (configure below)',
+      laravel: 'Laravel (composer create-project)',
+      wordpress: 'WordPress (wp core download)',
+      symfony: 'Symfony (composer create-project)',
+      nextjs: 'Next.js (create-next-app)',
+    },
+    templateHint:
+      'The framework’s own installer runs in a throwaway container, then detection configures the project from what it wrote. The first run downloads the installer image — give it a few minutes.',
     domain: 'Domain',
     runtime: 'Runtime',
     phpVersion: 'PHP version',
