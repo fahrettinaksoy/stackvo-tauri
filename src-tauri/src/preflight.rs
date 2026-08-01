@@ -211,22 +211,11 @@ pub async fn run() -> Preflight {
         },
     });
 
-    // ---- a shell for the generator -----------------------------------------
-    //
-    // The generator is `core/cli/stackvo.sh`, spawned as `bash`. There is a
-    // Rust port running alongside it, but it does not write build inputs yet —
-    // so on a machine without bash the app can read a stack and not change one.
-    let bash = probe("bash", &["--version"]).await;
-    out.push(Requirement {
-        id: "bash",
-        state: if bash.is_some() {
-            State::Ok
-        } else {
-            State::Fail
-        },
-        detail: bash,
-        fixable: false,
-    });
+    // bash was a requirement here until the generator takeover: the app spawned
+    // `core/cli/stackvo.sh` for every generate. The Rust generator writes the
+    // files itself, certificates call mkcert directly, and nothing else on the
+    // host is a shell script — so the requirement is gone, and with it the WSL
+    // story on Windows.
 
     // ---- mkcert, for trusted HTTPS -----------------------------------------
     //
@@ -316,15 +305,9 @@ mod tests {
         let ids: Vec<&str> = result.requirements.iter().map(|r| r.id).collect();
 
         // The gate is only honest if it is complete: a missing entry is a
-        // prerequisite nobody is told about.
-        const ALWAYS: [&str; 6] = [
-            "workspace",
-            "engine",
-            "compose",
-            "network",
-            "projects",
-            "bash",
-        ];
+        // prerequisite nobody is told about. bash left the list with the
+        // generator takeover — nothing on the host is a shell script now.
+        const ALWAYS: [&str; 5] = ["workspace", "engine", "compose", "network", "projects"];
         assert_eq!(&ids[..ALWAYS.len()], &ALWAYS);
 
         // mkcert is reported only when SSL_ENABLE is on, so the tail varies

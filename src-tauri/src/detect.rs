@@ -53,6 +53,18 @@ pub struct Fingerprint {
     pub node_constraint: Option<String>,
     /// A `dev`/`start` script exists in package.json.
     pub node_scripts: Vec<String>,
+    /// `go.mod` — a marker only a Go module has.
+    pub go_mod: bool,
+    /// `Cargo.toml` — only Rust.
+    pub cargo_toml: bool,
+    /// `Gemfile` — only Ruby.
+    pub gemfile: bool,
+    /// `manage.py` — Django, and nothing else, puts this at the root.
+    pub manage_py: bool,
+    /// `requirements.txt` or `pyproject.toml` — Python, with less certainty
+    /// than the Django marker: other ecosystems' repos occasionally carry one
+    /// for tooling.
+    pub python_deps: bool,
 }
 
 /// How sure the inference is, said plainly.
@@ -211,6 +223,47 @@ pub fn infer(print: &Fingerprint) -> Detected {
         );
     }
 
+    // ---- the lang runtimes, by markers only they have ----------------------
+    //
+    // Placed after the PHP framework markers (which are absolute) and before
+    // the generic composer/package heuristics, because a Go or Rust repository
+    // never carries `artisan` but often carries a `package.json` for tooling —
+    // scored generically, it would adopt as a node project that cannot start.
+    let lang = |runtime: &'static str, confidence: Confidence, evidence: &str| Detected {
+        framework: None,
+        runtime,
+        server: "nginx", // ignored for lang runtimes; kept for the struct
+        document_root: None,
+        php_version: None,
+        node_version: None,
+        node_port: None,
+        node_start: None,
+        confidence,
+        evidence: vec![evidence.to_string()],
+    };
+
+    if print.go_mod {
+        return lang("go", Confidence::Certain, "go.mod");
+    }
+    if print.cargo_toml {
+        return lang("rust", Confidence::Certain, "Cargo.toml");
+    }
+    if print.gemfile {
+        return lang("ruby", Confidence::Certain, "Gemfile");
+    }
+    if print.manage_py {
+        return lang("python", Confidence::Certain, "manage.py");
+    }
+    // Weaker than the Django marker: a composer.json beside it means a PHP
+    // repo that happens to ship a Python tool, and PHP wins below.
+    if print.python_deps && !print.composer_json {
+        return lang(
+            "python",
+            Confidence::Likely,
+            "requirements.txt / pyproject.toml",
+        );
+    }
+
     for (package, name) in [
         ("statamic/cms", "statamic"),
         ("drupal/core", "drupal"),
@@ -361,6 +414,11 @@ pub fn fingerprint(dir: &Path) -> Fingerprint {
         public_dir: dir.join("public").is_dir(),
         web_dir: dir.join("web").is_dir(),
         html_dir: dir.join("html").is_dir(),
+        go_mod: dir.join("go.mod").is_file(),
+        cargo_toml: dir.join("Cargo.toml").is_file(),
+        gemfile: dir.join("Gemfile").is_file(),
+        manage_py: dir.join("manage.py").is_file(),
+        python_deps: dir.join("requirements.txt").is_file() || dir.join("pyproject.toml").is_file(),
         ..Default::default()
     };
 
@@ -489,6 +547,67 @@ mod tests {
 
     fn s(items: &[&str]) -> Vec<String> {
         items.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn the_lang_runtimes_are_recognised_by_their_exclusive_markers() {
+        for (field, runtime) in [
+            ("go_mod", "go"),
+            ("cargo_toml", "rust"),
+            ("gemfile", "ruby"),
+            ("manage_py", "python"),
+        ] {
+            let mut print = Fingerprint {
+                // A package.json for tooling must not drag the repo to node.
+                package_json: true,
+                node_dependencies: s(&["esbuild"]),
+                ..Default::default()
+            };
+            match field {
+                "go_mod" => print.go_mod = true,
+                "cargo_toml" => print.cargo_toml = true,
+                "gemfile" => print.gemfile = true,
+                _ => print.manage_py = true,
+            }
+            let d = infer(&print);
+            assert_eq!(d.runtime, runtime, "{field}");
+            assert_eq!(d.confidence, Confidence::Certain);
+        }
+    }
+
+    #[test]
+    fn a_requirements_txt_beside_a_composer_json_stays_php() {
+        // A PHP repo shipping a Python tool is a PHP repo; the weaker Python
+        // marker only wins when nothing PHP-shaped is present.
+        let php_repo = Fingerprint {
+            python_deps: true,
+            composer_json: true,
+            index_php_public: true,
+            public_dir: true,
+            ..Default::default()
+        };
+        assert_eq!(infer(&php_repo).runtime, "php");
+
+        let python_repo = Fingerprint {
+            python_deps: true,
+            ..Default::default()
+        };
+        let d = infer(&python_repo);
+        assert_eq!(d.runtime, "python");
+        assert_eq!(d.confidence, Confidence::Likely);
+    }
+
+    #[test]
+    fn an_artisan_file_outranks_every_lang_marker() {
+        // Laravel repos can carry a Gemfile (fastlane) or requirements.txt;
+        // the framework marker is absolute.
+        let print = Fingerprint {
+            artisan: true,
+            gemfile: true,
+            python_deps: true,
+            ..Default::default()
+        };
+        assert_eq!(infer(&print).runtime, "php");
     }
 
     #[test]

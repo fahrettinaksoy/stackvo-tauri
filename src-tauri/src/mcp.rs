@@ -86,6 +86,34 @@ fn limit_arg() -> Value {
     })
 }
 
+fn stack_up_args() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "mode": {
+                "type": "string",
+                "enum": ["minimal", "services", "projects", "all"],
+                "description": "Which profiles to bring up. Default minimal (core only)."
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn generate_args() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "scope": {
+                "type": "string",
+                "enum": ["all", "projects", "services"],
+                "description": "What to regenerate. Default all."
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
 fn xdebug_set_args() -> Value {
     json!({
         "type": "object",
@@ -208,6 +236,45 @@ pub const TOOLS: &[Tool] = &[
                       and trust the CA if nothing does yet.",
         writes: true,
         schema: no_args,
+    },
+    Tool {
+        name: "stackvo_project_start",
+        command: "project_start",
+        description: "Start one project's container. Idempotent: starting a running project \
+                      succeeds silently.",
+        writes: true,
+        schema: project_arg,
+    },
+    Tool {
+        name: "stackvo_project_stop",
+        command: "project_stop",
+        description: "Stop one project's container. Idempotent, like start.",
+        writes: true,
+        schema: project_arg,
+    },
+    Tool {
+        name: "stackvo_stack_up",
+        command: "compose_up",
+        description: "Bring the stack up with docker compose — builds missing images, so the \
+                      first run can take minutes. Runs to completion and reports the outcome.",
+        writes: true,
+        schema: stack_up_args,
+    },
+    Tool {
+        name: "stackvo_stack_down",
+        command: "compose_down",
+        description: "Bring the whole stack down: every profile, projects included.",
+        writes: true,
+        schema: no_args,
+    },
+    Tool {
+        name: "stackvo_generate",
+        command: "generate_run",
+        description: "Re-run the generator: derive the compose files, Dockerfiles and configs \
+                      from .env and the project manifests. The doctor's 'generated config is \
+                      stale' finding is repaired by exactly this.",
+        writes: true,
+        schema: generate_args,
     },
 ];
 
@@ -426,6 +493,65 @@ pub async fn call(name: &str, args: &Value, allow_writes: bool) -> Result<Value>
 
         "stackvo_certificates_reissue" => Ok(json!(crate::certs::apply(&root, true).await?)),
 
+        // ---- operations, headless ------------------------------------------
+        //
+        // These were unreachable from this server while the runner was welded
+        // to AppHandle. `Sink::Headless` drops the progress events (there is
+        // no window to receive them); the outcome is the return value, which
+        // is what an MCP client wants anyway. `run_operation` awaits the
+        // process to completion, so a reply here means the work is done, not
+        // merely started.
+        "stackvo_project_start" => {
+            let name = string("name")
+                .ok_or_else(|| Error::new(Code::InvalidInput, "`name` is required"))?;
+            crate::engine::start_container(&name).await?;
+            Ok(json!({ "project": name, "running": true }))
+        }
+
+        "stackvo_project_stop" => {
+            let name = string("name")
+                .ok_or_else(|| Error::new(Code::InvalidInput, "`name` is required"))?;
+            crate::engine::stop_container(&name).await?;
+            Ok(json!({ "project": name, "running": false }))
+        }
+
+        "stackvo_stack_up" => {
+            let mode = string("mode").unwrap_or_else(|| "minimal".into());
+            let mut cmd_args = crate::runner::compose_base_args(&root);
+            cmd_args.extend(crate::runner::profile_args(&mode, &[])?);
+            cmd_args.extend([
+                "up".into(),
+                "-d".into(),
+                "--build".into(),
+                "--pull=missing".into(),
+                "--remove-orphans".into(),
+            ]);
+            run_headless("up", &mode, "docker", &cmd_args, &root).await?;
+            Ok(json!({ "mode": mode, "up": true }))
+        }
+
+        "stackvo_stack_down" => {
+            let mut cmd_args = crate::runner::compose_base_args(&root);
+            cmd_args.extend([
+                "--profile".into(),
+                "core".into(),
+                "--profile".into(),
+                "services".into(),
+                "--profile".into(),
+                "projects".into(),
+                "down".into(),
+            ]);
+            run_headless("down", "stack", "docker", &cmd_args, &root).await?;
+            Ok(json!({ "down": true }))
+        }
+
+        "stackvo_generate" => {
+            // The Rust writer directly — same renderer the app uses, no shell.
+            let scope = string("scope").unwrap_or_else(|| "all".into());
+            let report = crate::commands::write_generated(&root, &scope, |_| {})?;
+            Ok(report)
+        }
+
         // Unreachable while the table and this match agree, which is what the
         // test below is for.
         _ => Err(Error::new(
@@ -433,6 +559,32 @@ pub async fn call(name: &str, args: &Value, allow_writes: bool) -> Result<Value>
             format!("{name} is listed but not implemented"),
         )),
     }
+}
+
+/// One headless operation: same runner, same argv the window path builds, no
+/// events. The operation id keeps log correlation working.
+async fn run_headless(
+    prefix: &str,
+    subject: &str,
+    program: &str,
+    args: &[String],
+    cwd: &std::path::Path,
+) -> Result<()> {
+    let operation_id = crate::events::next_operation_id(prefix);
+    crate::runner::run_operation(
+        &crate::events::Sink::Headless,
+        crate::runner::Operation {
+            operation_id: &operation_id,
+            subject,
+            // Names are still required by the struct; nothing receives them.
+            progress_event: "mcp:progress",
+            finished_event: "mcp:done",
+            program,
+            args,
+            cwd,
+        },
+    )
+    .await
 }
 
 #[cfg(test)]

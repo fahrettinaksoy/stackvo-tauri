@@ -123,18 +123,23 @@ pub struct Verification {
 
 /// Where the application lives inside the image, per runtime.
 pub fn app_path(runtime: &str) -> &'static str {
-    if runtime == "node" {
-        crate::devserver::CONTAINER_PATH
-    } else {
+    if runtime == "php" {
         crate::xdebug::CONTAINER_PATH
+    } else {
+        // node and the lang runtimes all build snapshot images with the
+        // source at /app.
+        crate::devserver::CONTAINER_PATH
     }
 }
 
 pub fn strategy(runtime: &str) -> Strategy {
-    if runtime == "node" {
-        Strategy::Retag
-    } else {
+    // Snapshot images (node and the lang runtimes) already hold the code and
+    // the build — re-tag them. Only PHP's bind-mount image needs the source
+    // layered in.
+    if runtime == "php" {
         Strategy::Layer
+    } else {
+        Strategy::Retag
     }
 }
 
@@ -216,7 +221,7 @@ pub fn interpret(runtime: &str, stdout: &str) -> Verification {
         }
     }
 
-    if runtime == "node" {
+    if runtime != "php" {
         out.xdebug_active = None;
     }
 

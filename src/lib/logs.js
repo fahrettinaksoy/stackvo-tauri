@@ -158,19 +158,76 @@ export function withLevels(lines) {
  * that breaks while you are still typing in it is worse than one that cannot
  * express `\d+`.
  */
-export function filterLines(lines, { query = '', levels = [] } = {}) {
-  const needle = query.trim().toLowerCase();
+export function filterLines(lines, { query = '', levels = [], regex = false } = {}) {
+  const needle = query.trim();
   const wanted = levels.length ? new Set(levels) : null;
+  const matcher = needle ? buildMatcher(needle, regex) : null;
+  // A query that cannot compile matches nothing. Falling through to "no
+  // filter" would flash the entire buffer back on screen at the exact moment
+  // the user is one keystroke into a pattern — the opposite of what they are
+  // doing. Caught by a test that expected the filter to hold.
+  const broken = !!needle && !matcher;
 
   return lines.filter((line) => {
+    if (broken) return false;
     // A line with no level survives a level filter only when nothing above it
     // claimed one — see `withLevels`. Dropping it would hide the head of a file
     // whose format this does not recognise, which is the case where the user
     // most needs to see the raw text.
     if (wanted && line.level && !wanted.has(line.level)) return false;
-    if (needle && !line.text.toLowerCase().includes(needle)) return false;
+    if (matcher && !matcher.test(line.text)) return false;
     return true;
   });
+}
+
+/**
+ * The search as a RegExp, in whichever mode was asked for.
+ *
+ * Returns null for a regex the user is halfway through typing (`(`, `[a-`) —
+ * every keystroke of a pattern passes through here, so an invalid one has to
+ * be an ordinary state rather than a thrown error, and "match nothing while
+ * you finish typing" is the only behaviour that does not flash the whole
+ * buffer back on screen mid-word.
+ */
+export function buildMatcher(query, regex) {
+  const source = regex ? query : escapeRegex(query);
+  try {
+    return new RegExp(source, 'ig');
+  } catch {
+    return null;
+  }
+}
+
+/** So a substring search for `a.b` does not match `axb`. */
+export function escapeRegex(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Split a line around what the search matched, so the UI can mark the hits.
+ *
+ * Returns `[{ text, hit }]`. A zero-width match (`a*` against `bbb`) would
+ * loop forever on `lastIndex`, so it is advanced by hand — the regex is the
+ * user's, and a hang is not an acceptable answer to a legal pattern.
+ */
+export function highlight(text, query, regex = false) {
+  const matcher = query.trim() ? buildMatcher(query.trim(), regex) : null;
+  if (!matcher) return [{ text, hit: false }];
+
+  const parts = [];
+  let last = 0;
+  let match;
+  matcher.lastIndex = 0;
+
+  while ((match = matcher.exec(text)) !== null) {
+    if (match.index > last) parts.push({ text: text.slice(last, match.index), hit: false });
+    if (match[0].length) parts.push({ text: match[0], hit: true });
+    last = match.index + match[0].length;
+    if (match[0].length === 0) matcher.lastIndex += 1;
+  }
+
+  if (last < text.length || !parts.length) parts.push({ text: text.slice(last), hit: false });
+  return parts;
 }
 
 /** How many lines carry each level, for the filter's counts. */

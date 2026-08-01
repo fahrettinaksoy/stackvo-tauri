@@ -213,6 +213,7 @@ pub async fn list_projects(root: &std::path::Path) -> Result<Vec<Project>> {
                         document_root: None,
                         php: None,
                         node: None,
+                        lang: None,
                         valid: false,
                         errors: vec![manifest::Finding {
                             code: "PARSE_ERROR".into(),
@@ -276,6 +277,27 @@ pub struct Credential {
     /// Masked when `secret`; the real value comes from `env_reveal`.
     pub value: String,
     pub secret: bool,
+}
+
+/// One editable `SERVICE_<ID>_*` setting.
+///
+/// Distinct from [`Credential`], which exists to *display* what a service is
+/// reachable with: it hides `ENABLE`, `VERSION` and `URL`, and drops anything
+/// empty. An editor needs the opposite — every key the service has, empty ones
+/// included, because an empty value is the one most likely to want filling in.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceSetting {
+    /// The key without its `SERVICE_<ID>_` prefix — `ROOT_PASSWORD`.
+    pub key: String,
+    pub env_key: String,
+    /// Masked when `secret`. Revealing one goes through `env_reveal`, the same
+    /// path the credentials list uses.
+    pub value: String,
+    pub secret: bool,
+    /// True when the value is what the binary ships, so the sheet can say so
+    /// rather than presenting a default as somebody's decision.
+    pub is_default: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -399,9 +421,10 @@ pub struct Catalog {
     pub max_extensions: usize,
 }
 
-/// Only these two have generators under
-/// `core/cli/lib/generators/project/{compose,dockerfile}/`.
-const IMPLEMENTED_RUNTIMES: [&str; 2] = ["php", "node"];
+/// Every runtime the Rust generator can build. The Bash CLI still knows only
+/// php and node; since Sprint 17 the app generates for itself, so the four
+/// lang runtimes exist here first (C-02, closed).
+const IMPLEMENTED_RUNTIMES: [&str; 6] = ["php", "node", "python", "go", "ruby", "rust"];
 
 #[tauri::command]
 pub fn catalog_get(state: State<'_, AppState>) -> Result<Catalog> {
@@ -454,19 +477,66 @@ pub fn build_catalog(root: &std::path::Path) -> Result<Catalog> {
 
     Ok(Catalog {
         runtimes,
-        servers: env
-            .first_of(&["SUPPORTED_SERVERS", "SUPPORTED_WEBSERVERS"])
-            .map_or_else(
-                || vec!["nginx".to_string()],
-                |v| v.split(',').map(|s| s.trim().to_string()).collect(),
-            ),
+        servers: env.get("SUPPORTED_SERVERS").map_or_else(
+            || vec!["nginx".to_string()],
+            |v| v.split(',').map(|s| s.trim().to_string()).collect(),
+        ),
         default_server: env
-            .first_of(&["SUPPORTED_SERVERS_DEFAULT", "DEFAULT_SERVER"])
+            .get("SUPPORTED_SERVERS_DEFAULT")
             .unwrap_or("nginx")
             .to_string(),
         php_extensions: php_ext,
         max_extensions: 50,
     })
+}
+
+/// A server's extra directives, as the user last saved them.
+///
+/// The raw file, comments and all — the stripping that keeps an untouched
+/// workspace byte-identical happens at render time, not here. An editor that
+/// showed the stripped version would delete the instructions the first time it
+/// was saved.
+#[tauri::command]
+pub fn server_config_get(state: State<'_, AppState>, server: String) -> Result<String> {
+    let root = state.root()?;
+    let path = checked_server_config(&root, &server)?;
+    match std::fs::read_to_string(&path) {
+        Ok(text) => Ok(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(Error::io(format!("reading {}", path.display()), e)),
+    }
+}
+
+#[tauri::command]
+pub fn server_config_set(
+    state: State<'_, AppState>,
+    server: String,
+    content: String,
+) -> Result<()> {
+    let root = state.root()?;
+    let path = checked_server_config(&root, &server)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| Error::io(format!("creating {}", parent.display()), e))?;
+    }
+    crate::atomic::write(&path, &content)
+}
+
+/// Only the servers whose config is generated as a file.
+///
+/// Apache is configured by `sed` inside its own Dockerfile and Swoole by an
+/// inline script, so there is nothing for a snippet to be added to. Accepting
+/// the name anyway would write a file that is never read — the exact shape of
+/// `core/templates/servers/`, which is what this replaced.
+fn checked_server_config(root: &std::path::Path, server: &str) -> Result<std::path::PathBuf> {
+    if !matches!(server, "nginx" | "caddy") {
+        return Err(Error::new(
+            Code::InvalidInput,
+            format!("{server} is not configured through a file"),
+        )
+        .with_hint("Only nginx and caddy have a generated config to add directives to."));
+    }
+    Ok(crate::generator::server_config_path(root, server))
 }
 
 // ---------------------------------------------------------------- env
@@ -476,6 +546,22 @@ pub fn env_get(state: State<'_, AppState>) -> Result<std::collections::BTreeMap<
     let root = state.root()?;
     // Secret-suffixed values never cross the boundary; see env.schema.json.
     Ok(Env::load(&root)?.redacted())
+}
+
+/// The defaults the binary carries, so the UI can tell a decision from a
+/// default.
+///
+/// `env_get` returns the merged view, which is what most callers want and
+/// exactly the wrong thing for a settings form: every value looks equally
+/// chosen, including the ones nobody chose. With this the form can say "this
+/// is the default" and offer to go back to it, which is the difference between
+/// a settings screen and a wall of populated text fields.
+#[tauri::command]
+pub fn env_defaults() -> std::collections::BTreeMap<String, String> {
+    crate::config::EMBEDDED
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect()
 }
 
 // ================================================================ Phase 2
@@ -626,6 +712,7 @@ pub async fn container_logs_open(
                         line: line.text,
                         stream: line.stream.to_string(),
                         source: None,
+                        historic: None,
                     },
                 );
             }
@@ -716,6 +803,7 @@ pub async fn app_log_open(
                             stream: "stdout".to_string(),
                             // One file, named once when the stream opened.
                             source: None,
+                            historic: None,
                         },
                     );
                 }
@@ -820,6 +908,10 @@ pub async fn app_logs_all_open(
                             line: line.text,
                             stream: "stdout".to_string(),
                             source: Some(line.id),
+                            // The seed, so the UI can draw the live boundary
+                            // after it rather than passing old lines off as
+                            // output that just arrived.
+                            historic: line.historic.then_some(true),
                         },
                     );
                 }
@@ -897,6 +989,148 @@ fn checked_service(name: &str) -> Result<()> {
         .with_hint("Only services listed in contracts/env.schema.json can be managed."))
 }
 
+/// Is every key in `patch` a setting this service owns, and is every value one
+/// that can safely be written?
+///
+/// Two separate refusals, both of them things a UI can do by accident.
+///
+/// The prefix check keeps this from being a general `.env` writer that happens
+/// to restart a container — it is reached from a sheet whose whole framing is
+/// "these are Redis's settings", and it should mean that. `ENABLE` is excluded
+/// because the services list owns that toggle; two controls for one key is how
+/// they come to disagree.
+///
+/// The mask check is the sharper one. A read returns the bullet string for a
+/// secret, so a form that round-trips what it was given would save the mask as
+/// the password and lock the service out of its own database.
+fn check_service_patch(
+    name: &str,
+    patch: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
+    let prefix = Env::service_prefix(name);
+    let enable = format!("{prefix}ENABLE");
+
+    for (key, value) in patch {
+        if !key.starts_with(&prefix) || key == &enable {
+            return Err(Error::new(
+                Code::InvalidInput,
+                format!("\"{key}\" is not a setting of service \"{name}\""),
+            ));
+        }
+        if value == "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}" {
+            return Err(Error::new(
+                Code::InvalidInput,
+                format!("\"{key}\" would be saved as its own mask"),
+            )
+            .with_hint("Reveal the value first, or leave the field untouched."));
+        }
+    }
+    Ok(())
+}
+
+/// Every `SERVICE_<ID>_*` setting, with the enable flag left out.
+///
+/// `ENABLE` is not here on purpose: it is the toggle in the services list, and
+/// two controls for one key is how they end up disagreeing.
+#[tauri::command]
+pub fn service_settings(state: State<'_, AppState>, name: String) -> Result<Vec<ServiceSetting>> {
+    checked_service(&name)?;
+    let root = state.root()?;
+    let env = Env::load(&root)?;
+    let prefix = Env::service_prefix(&name);
+
+    let defaults: std::collections::BTreeMap<&str, &str> =
+        crate::config::EMBEDDED.iter().copied().collect();
+
+    Ok(env
+        .raw()
+        .iter()
+        .filter_map(|(env_key, value)| {
+            let key = env_key.strip_prefix(&prefix)?;
+            if key == "ENABLE" {
+                return None;
+            }
+            let secret = Env::is_secret(env_key);
+            Some(ServiceSetting {
+                key: key.to_string(),
+                env_key: env_key.clone(),
+                value: if secret {
+                    "••••••••".to_string()
+                } else {
+                    value.clone()
+                },
+                secret,
+                is_default: defaults.get(env_key.as_str()) == Some(&value.as_str()),
+            })
+        })
+        .collect())
+}
+
+/// Write a service's settings and rebuild its container with them.
+///
+/// The rebuild is the point. `service_restart` restarts the container that is
+/// already there, which keeps the environment it was created with — so a
+/// setting saved and then "restarted" appears to have been applied and has
+/// not. This regenerates the compose file and forces a recreate, which is the
+/// only sequence where the new value actually reaches the process.
+#[tauri::command]
+pub async fn service_apply_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    patch: std::collections::BTreeMap<String, String>,
+) -> Result<String> {
+    checked_service(&name)?;
+    let _busy = state.inflight.acquire(format!("service:{name}"))?;
+    let root = state.root()?;
+    let operation_id = events::next_operation_id("service-settings");
+
+    check_service_patch(&name, &patch)?;
+    events::emit(&app, "service:enabling", SubjectEvent::service(&name));
+
+    let outcome = async {
+        env_writer::apply(&root, &patch)?;
+        generate(&app, &root, &operation_id, "projects_and_services").await?;
+
+        let mut args = runner::compose_base_args(&root);
+        args.extend(runner::profile_args("custom", std::slice::from_ref(&name))?);
+        args.extend([
+            "up".into(),
+            "-d".into(),
+            "--no-build".into(),
+            // Without this, compose recreates only when it sees the compose
+            // file change. A setting that lands in a rendered config file the
+            // container mounts leaves the compose file identical, and the old
+            // container would be left running with the old value.
+            "--force-recreate".into(),
+        ]);
+
+        runner::run_operation(
+            &events::sink(&app),
+            runner::Operation {
+                operation_id: &operation_id,
+                subject: &name,
+                progress_event: "service:progress",
+                finished_event: "service:enabled",
+                program: "docker",
+                args: &args,
+                cwd: &root,
+            },
+        )
+        .await
+    }
+    .await;
+
+    if let Err(e) = &outcome {
+        events::emit(
+            &app,
+            "service:error",
+            SubjectEvent::service(&name).error(e.message.clone()),
+        );
+    }
+    outcome.map(|_| operation_id)
+}
+
 #[tauri::command]
 pub async fn service_enable(
     app: AppHandle,
@@ -919,7 +1153,7 @@ pub async fn service_enable(
         args.extend(["up".into(), "-d".into(), "--no-build".into()]);
 
         runner::run_operation(
-            &app,
+            &events::sink(&app),
             runner::Operation {
                 operation_id: &operation_id,
                 subject: &name,
@@ -941,6 +1175,14 @@ pub async fn service_enable(
             SubjectEvent::service(&name).error(e.message.clone()),
         );
     }
+    // The name has to resolve for the service to be reachable, and stop
+    // resolving when it is not — asked for only when the file would change.
+    if outcome.is_ok() {
+        if let Err(e) = sync_service_host(&root, &name, true).await {
+            tracing::warn!(service = %name, error = %e.message, "hosts entry not updated");
+        }
+    }
+
     outcome.map(|_| operation_id)
 }
 
@@ -978,6 +1220,14 @@ pub async fn service_disable(
             SubjectEvent::service(&name).error(e.message.clone()),
         ),
     }
+    // The name has to resolve for the service to be reachable, and stop
+    // resolving when it is not — asked for only when the file would change.
+    if outcome.is_ok() {
+        if let Err(e) = sync_service_host(&root, &name, false).await {
+            tracing::warn!(service = %name, error = %e.message, "hosts entry not updated");
+        }
+    }
+
     outcome.map(|_| operation_id)
 }
 
@@ -993,33 +1243,52 @@ async fn generate(
     use tauri::Manager;
 
     // Cloned out of the state so the guard is independent of the borrow and can
-    // be held across the await below. Two bash generators writing
+    // be held across the await below. Two generators writing
     // docker-compose.projects.yml at once produce a file that is neither.
     let lock = app.state::<AppState>().generate_lock.clone();
     let _serialised = lock.lock().await;
 
-    let script = runner::cli_script(root)?;
-    let mut args = vec![script.display().to_string(), "generate".to_string()];
-    match scope {
-        "projects" => args.push("projects".into()),
-        "services" => args.push("services".into()),
-        // The CLI has no combined subcommand; a bare `generate` does everything.
-        _ => {}
-    }
+    // In-process since the Bash CLI was retired. It used to shell out to
+    // `stackvo generate`, which is why this function still reports through the
+    // operation events: callers await it and watch the same stream either way.
+    let sink = events::sink(app);
+    let operation = operation_id.to_string();
+    let subject = scope.to_string();
 
-    runner::run_operation(
-        app,
-        runner::Operation {
-            operation_id,
-            subject: scope,
-            progress_event: "generate:progress",
-            finished_event: "generate:done",
-            program: "bash",
-            args: &args,
-            cwd: root,
+    let report = {
+        let sink = sink.clone();
+        let operation = operation.clone();
+        let subject = subject.clone();
+        write_generated(root, scope, move |label| {
+            sink.emit(
+                "generate:progress",
+                events::ProgressEvent {
+                    operation_id: operation.clone(),
+                    subject: subject.clone(),
+                    line: label.to_string(),
+                },
+            );
+        })
+    };
+
+    let (success, error) = match &report {
+        Ok(_) => (true, None),
+        Err(e) => (false, Some(e.message.clone())),
+    };
+
+    sink.emit(
+        "generate:done",
+        events::FinishedEvent {
+            operation_id: operation,
+            subject,
+            success,
+            duration_ms: 0,
+            error,
+            log_path: None,
         },
-    )
-    .await
+    );
+
+    report.map(|_| ())
 }
 
 #[tauri::command]
@@ -1068,7 +1337,7 @@ pub async fn compose_up(
     ]);
 
     runner::run_operation(
-        &app,
+        &events::sink(&app),
         runner::Operation {
             operation_id: &operation_id,
             subject: &mode,
@@ -1105,7 +1374,7 @@ pub async fn compose_down(app: AppHandle, state: State<'_, AppState>) -> Result<
     ]);
 
     runner::run_operation(
-        &app,
+        &events::sink(&app),
         runner::Operation {
             operation_id: &operation_id,
             subject: "stack",
@@ -1156,7 +1425,7 @@ pub async fn project_build(
         args.push(name.clone());
 
         runner::run_operation(
-            &app,
+            &events::sink(&app),
             runner::Operation {
                 operation_id: &operation_id,
                 subject: &name,
@@ -1180,7 +1449,7 @@ pub async fn project_build(
         ]);
 
         runner::run_operation(
-            &app,
+            &events::sink(&app),
             runner::Operation {
                 operation_id: &operation_id,
                 subject: &name,
@@ -1221,6 +1490,43 @@ pub fn hosts_status(domains: Vec<String>) -> Result<Vec<hosts::HostsEntry>> {
     Ok(hosts::status_for(&domains))
 }
 
+/// Every StackVo domain and whether `/etc/hosts` resolves it, plus the entries
+/// StackVo wrote that nothing wants any more.
+///
+/// The pieces existed — `hosts_status` answers the first half and
+/// `mapped_domains` the second — but nothing put them together, so the file
+/// could only be corrected one broken domain at a time from the page that
+/// happened to notice. A deleted project's line, in particular, had no way of
+/// being found at all: it points at 127.0.0.1 forever and nothing looks for it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostsOverview {
+    /// Every domain the stack serves, in one list with its state.
+    pub entries: Vec<hosts::HostsEntry>,
+    /// Inside StackVo's own block, but no longer serving anything.
+    pub stale: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn hosts_overview(state: State<'_, AppState>) -> Result<HostsOverview> {
+    let root = state.root()?;
+    let wanted = wanted_domains(&root).await;
+
+    // Only StackVo's own block is offered for removal. A line somebody added
+    // by hand is theirs, and a tool that tidies away entries it did not write
+    // is a tool nobody trusts with the file again.
+    let (_, managed) = hosts::mapped_domains();
+    let keep: std::collections::HashSet<String> =
+        wanted.iter().map(|d| d.to_ascii_lowercase()).collect();
+    let mut stale: Vec<String> = managed.into_iter().filter(|d| !keep.contains(d)).collect();
+    stale.sort();
+
+    Ok(HostsOverview {
+        entries: hosts::status_for(&wanted),
+        stale,
+    })
+}
+
 /// Compute what a hosts change would do, WITHOUT elevating.
 ///
 /// The UI shows this diff and asks before `hosts_apply` raises the auth prompt.
@@ -1251,16 +1557,149 @@ pub fn hosts_apply(
     Ok(plan)
 }
 
-/// Every project domain that has no hosts entry. Drives the one-click fix.
+/// Every domain this stack answers on that has no hosts entry.
+///
+/// Projects are the obvious half and were the only half. The rest reach the
+/// browser exactly the same way — through Traefik, by name — and had no entry
+/// offered for them, so an admin UI or the proxy's own dashboard simply failed
+/// to resolve with nothing in the app to say why. The checkout this was
+/// written against had those lines only because the retired Bash CLI once
+/// wrote them; a workspace created by this app would not.
 #[tauri::command]
 pub async fn hosts_missing(state: State<'_, AppState>) -> Result<Vec<String>> {
     let root = state.root()?;
-    let projects = list_projects(&root).await?;
-    Ok(projects
+    Ok(missing_hosts(&root).await)
+}
+
+/// Whether a service's hosts line should be added, removed, or left alone.
+///
+/// Split out because it decides whether the user is asked for a password. Every
+/// hosts write shows the system prompt and there is no way around it, so a
+/// toggle that would change nothing must reach no further than this function.
+///
+/// Returns `(add, remove)` as a pair of flags, or `None` for "do nothing".
+fn host_sync_action(
+    enabled: bool,
+    configured: bool,
+    managed: bool,
+) -> Option<(Option<()>, Option<()>)> {
+    match (enabled, configured, managed) {
+        // On and unresolvable: the admin UI would open on nothing.
+        (true, false, _) => Some((Some(()), None)),
+        // Off, resolvable, and ours to remove.
+        (false, true, true) => Some((None, Some(()))),
+        // Everything else — including a line somebody wrote by hand, which
+        // stays even when the service is switched off.
+        _ => None,
+    }
+}
+
+/// Add or remove a service's hosts line as it is switched on and off.
+///
+/// Enabling wrote the route and started the container but left the name
+/// unresolvable, so the admin UI opened on nothing. Listing every catalogue
+/// service instead was the other extreme: thirteen lines for a stack running
+/// three, which is the clutter this avoids.
+///
+/// Elevation is the constraint. Every write shows the system's authentication
+/// prompt and there is no way around it, so this asks only when the file would
+/// actually change — toggling a service whose line is already right costs
+/// nothing, and the prompt lands while the user is still looking at the button
+/// they pressed.
+///
+/// A failure here is reported, not fatal: the service is running either way,
+/// and the Domain pane lists what is still missing.
+async fn sync_service_host(root: &std::path::Path, service: &str, enabled: bool) -> Result<()> {
+    let env = Env::load(root)?;
+    let tld = env.get("DEFAULT_TLD_SUFFIX").unwrap_or("stackvo.loc");
+    let Some(url) = env.service_url(service) else {
+        return Ok(());
+    };
+    let domain = format!("{url}.{tld}");
+
+    let configured = hosts::status_for(std::slice::from_ref(&domain))
+        .first()
+        .is_some_and(|e| e.configured);
+
+    // Only what StackVo wrote comes back out. A line somebody added by hand
+    // stays, even for a service being turned off.
+    let managed = hosts::mapped_domains()
+        .1
+        .contains(&domain.to_ascii_lowercase());
+
+    let Some((add, remove)) = host_sync_action(enabled, configured, managed) else {
+        return Ok(());
+    };
+
+    hosts::apply(
+        &add.map(|_| domain.clone()).into_iter().collect::<Vec<_>>(),
+        &remove.map(|_| domain).into_iter().collect::<Vec<_>>(),
+    )
+    .map(|_| ())
+}
+
+/// The domains this stack serves that `/etc/hosts` does not resolve.
+///
+/// Shared with the doctor, which had its own copy of the projects-only version.
+/// Two answers to "what is missing" is how the panel people open when something
+/// is wrong ends up reporting less than the dashboard does.
+///
+/// `status_for` is what the hosts dialog itself reads, so "missing" here cannot
+/// mean something different from "missing" there either.
+pub(crate) async fn missing_hosts(root: &std::path::Path) -> Vec<String> {
+    let wanted = wanted_domains(root).await;
+    crate::hosts::status_for(&wanted)
         .into_iter()
-        .filter(|p| p.domain.is_some() && !p.domain_configured)
+        .filter(|entry| !entry.configured)
+        .map(|entry| entry.domain)
+        .collect()
+}
+
+/// Every domain the stack serves, whether or not it is in `/etc/hosts`.
+///
+/// One list rather than three checks: the answer to "is this in hosts" is
+/// `hosts::status_for`, and asking it once for everything keeps projects and
+/// services from drifting into two different ideas of what "configured" means.
+async fn wanted_domains(root: &std::path::Path) -> Vec<String> {
+    let Ok(env) = Env::load(root) else {
+        return Vec::new();
+    };
+    let tld = env.get("DEFAULT_TLD_SUFFIX").unwrap_or("stackvo.loc");
+
+    let mut wanted: Vec<String> = list_projects(root)
+        .await
+        .unwrap_or_default()
+        .into_iter()
         .filter_map(|p| p.domain)
-        .collect())
+        .collect();
+
+    // Only the services that are on. Their lines are added when a service is
+    // enabled and taken away when it is disabled, so the file describes the
+    // stack rather than the catalogue — see `sync_service_host`.
+    for (id, _) in env_schema().service_catalog() {
+        if !env.service_enabled(&id) {
+            continue;
+        }
+        if let Some(url) = env.service_url(&id) {
+            wanted.push(format!("{url}.{tld}"));
+        }
+    }
+
+    // The proxy's own dashboard. `routes.yml` has always written this router;
+    // nothing ever offered the hosts entry that makes it reachable.
+    wanted.push(format!("traefik.{tld}"));
+
+    // And the suffix itself, because the certificate already covers it:
+    // `certs::required_domains` issues for `<suffix>` as well as `*.<suffix>`,
+    // so the app already holds that the bare name should answer.
+    wanted.push(tld.to_string());
+
+    // A malformed domain would be refused by the writer for the whole batch,
+    // taking every valid line with it.
+    wanted.retain(|d| crate::hosts::is_valid_domain(d));
+    wanted.sort();
+    wanted.dedup();
+    wanted
 }
 
 // -------------------------------------------------------------------- mail
@@ -1292,6 +1731,72 @@ pub async fn mail_message(state: State<'_, AppState>, id: String) -> Result<mail
 pub async fn mail_clear(state: State<'_, AppState>) -> Result<()> {
     let root = state.root()?;
     mail::clear(&root).await
+}
+
+/// Delete one message.
+///
+/// Separate from `mail_clear` deliberately: emptying the inbox and removing
+/// the one message you were looking at are different intentions, and a UI that
+/// offers only the first makes people clear everything to get rid of one.
+#[tauri::command]
+pub async fn mail_delete(state: State<'_, AppState>, id: String) -> Result<()> {
+    let root = state.root()?;
+    mail::delete(&root, &id).await
+}
+
+/// Search the inbox. An empty query is a plain listing rather than an error,
+/// so a cleared search box shows the inbox again instead of nothing.
+#[tauri::command]
+pub async fn mail_search(
+    state: State<'_, AppState>,
+    query: String,
+    limit: Option<u32>,
+) -> Result<Vec<mail::MailMessage>> {
+    let root = state.root()?;
+    let limit = limit.unwrap_or(100);
+    if query.trim().is_empty() {
+        return mail::messages(&root, limit).await;
+    }
+    mail::search(&root, &query, limit).await
+}
+
+/// What this HTML would do in the clients people actually read mail in.
+///
+/// `None` when the message has no HTML part — a plain-text mail has nothing to
+/// check, which is not the same as passing.
+#[tauri::command]
+pub async fn mail_html_check(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Option<mail::HtmlCheck>> {
+    let root = state.root()?;
+    mail::html_check(&root, &id).await
+}
+
+/// Follow the links in a message and report what answers.
+///
+/// The common failure this catches is a link built from a misconfigured base
+/// URL — `http://localhost/verify?token=…` in a mail that a container sent,
+/// which works when clicked on the developer's machine and nowhere else.
+#[tauri::command]
+pub async fn mail_link_check(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Option<mail::LinkCheck>> {
+    let root = state.root()?;
+    mail::link_check(&root, &id).await
+}
+
+/// Write an attachment to disk, returning how many bytes landed.
+#[tauri::command]
+pub async fn mail_attachment_save(
+    state: State<'_, AppState>,
+    id: String,
+    part_id: String,
+    path: String,
+) -> Result<u64> {
+    let root = state.root()?;
+    mail::save_attachment(&root, &id, &part_id, std::path::Path::new(&path)).await
 }
 
 // --------------------------------------------------------------- databases
@@ -1475,6 +1980,7 @@ pub async fn dumps_open(
                     &app,
                     "logs:line",
                     events::LogLineEvent {
+                        historic: None,
                         stream_id: stream_id.clone(),
                         container: container.clone(),
                         line: line.to_string(),
@@ -1575,7 +2081,7 @@ pub async fn release_build(
             let argv = crate::release::build_argv(&context, &dockerfile, &plan.tag);
 
             runner::run_operation(
-                &app,
+                &events::sink(&app),
                 runner::Operation {
                     operation_id: &operation_id,
                     subject: &name,
@@ -1594,7 +2100,7 @@ pub async fn release_build(
             // with whatever the host has.
             let argv = vec!["tag".to_string(), plan.base_image.clone(), plan.tag.clone()];
             runner::run_operation(
-                &app,
+                &events::sink(&app),
                 runner::Operation {
                     operation_id: &operation_id,
                     subject: &name,
@@ -1801,7 +2307,7 @@ pub async fn quick_command_run(
     let op_id = operation_id.clone();
     tauri::async_runtime::spawn(async move {
         let _ = runner::run_operation(
-            &handle,
+            &events::sink(&handle),
             runner::Operation {
                 operation_id: &op_id,
                 subject: &subject,
@@ -2025,7 +2531,8 @@ pub async fn migrate_apply(
         // The reviewed spec, or the one just computed. Passing it back is what
         // lets the user correct a document root before it is written.
         let spec = spec.unwrap_or_else(|| plan.spec.clone());
-        project_adopt(app.clone(), state.clone(), name.clone(), Some(spec)).await?;
+        // The compose importer builds a full spec, domain included.
+        project_adopt(app.clone(), state.clone(), name.clone(), Some(spec), None).await?;
     }
 
     if services.unwrap_or(true) && !plan.env.changes.is_empty() {
@@ -2440,6 +2947,7 @@ pub async fn project_adopt(
     state: State<'_, AppState>,
     name: String,
     spec: Option<serde_json::Value>,
+    domain: Option<String>,
 ) -> Result<String> {
     let root = state.root()?;
     let dir = workspace::project_dir(&root, &name)?;
@@ -2461,10 +2969,18 @@ pub async fn project_adopt(
 
     // Detection fills the form; it does not bypass validation. An adopted
     // project has to satisfy exactly the contract a created one does.
-    let spec = match spec {
+    let mut spec = match spec {
         Some(spec) => spec,
         None => detected_spec(&name, &detect::detect(&dir)),
     };
+
+    // The domain is the one field detection cannot answer. It reads the code
+    // and can say "this is Laravel, its document root is public"; it has no
+    // way to know the user wanted `shop.loc` rather than `<directory>.loc`.
+    // So it is an override on top of detection, not a replacement for it.
+    if let Some(domain) = domain.filter(|d| !d.trim().is_empty()) {
+        spec["domain"] = serde_json::json!(domain.trim());
+    }
     let m = parse_spec(&spec, &name)?;
 
     let _busy = state.inflight.acquire(format!("project:{name}"))?;
@@ -2511,6 +3027,21 @@ fn detected_spec(name: &str, detected: &detect::Detected) -> serde_json::Value {
             "start": detected.node_start.clone().unwrap_or_else(|| "npm run dev".into()),
             "port": detected.node_port.unwrap_or(3000),
         });
+    } else if let Some(defaults) = manifest::lang_defaults(detected.runtime) {
+        // The ecosystem defaults, written out so the adopted manifest is
+        // explicit about what it will run rather than relying on the reader
+        // knowing them.
+        let mut block = serde_json::Map::new();
+        block.insert("version".into(), serde_json::json!(defaults.version));
+        if let Some(install) = defaults.install {
+            block.insert("install".into(), serde_json::json!(install));
+        }
+        if let Some(build) = defaults.build {
+            block.insert("build".into(), serde_json::json!(build));
+        }
+        block.insert("start".into(), serde_json::json!(defaults.start));
+        block.insert("port".into(), serde_json::json!(defaults.port));
+        spec[detected.runtime] = serde_json::Value::Object(block);
     } else {
         spec["server"] = serde_json::json!(detected.server);
         spec["document_root"] = serde_json::json!(detected
@@ -2659,7 +3190,7 @@ async fn compose_profile_up(
     ]);
 
     runner::run_operation(
-        app,
+        &events::sink(app),
         runner::Operation {
             operation_id: &operation_id,
             subject,
@@ -2718,7 +3249,7 @@ pub async fn compose_restart(app: AppHandle, state: State<'_, AppState>) -> Resu
     ]);
 
     runner::run_operation(
-        &app,
+        &events::sink(&app),
         runner::Operation {
             operation_id: &operation_id,
             subject: "stack",
@@ -2798,6 +3329,110 @@ pub fn apps_available() -> serde_json::Value {
     serde_json::json!({
         "terminals": crate::apps::terminals(),
         "editors": crate::apps::editors(),
+        "browsers": crate::apps::browsers(),
+    })
+}
+
+/// Open a URL in the browser the user chose, falling back to the system's.
+///
+/// A command of this app's own rather than the opener plugin, for two reasons
+/// that turned out to be one: the plugin has no notion of *which* browser, and
+/// its `open_url` is scope-checked — a `allow-open-url` permission granted
+/// without a scope matches nothing and answers `ForbiddenUrl`, which is
+/// exactly why every "visit" button in this app did nothing at all. The scope
+/// is fixed too, but a project's own domain deserves the browser the user
+/// works in, not whatever the OS last associated with `https`.
+#[tauri::command]
+pub fn open_in_browser(url: String) -> Result<()> {
+    // Only web URLs. Everything reaching this is built by the app from a
+    // project or service domain, and a launcher that accepts `file://` or a
+    // custom scheme from its own front end is a way to start arbitrary things.
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(Error::new(
+            Code::InvalidInput,
+            "only http and https URLs can be opened",
+        ));
+    }
+
+    let configured = prefs_get()
+        .ok()
+        .and_then(|p| {
+            p.get("browserCommand")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .filter(|s| !s.is_empty());
+
+    if let Some(launch) = crate::apps::resolve_browser(configured.as_deref()) {
+        let spawned = match launch {
+            crate::apps::Launch::Command(cmd) => {
+                std::process::Command::new(cmd).arg(&url).spawn().is_ok()
+            }
+            crate::apps::Launch::Bundle(bundle) => std::process::Command::new("open")
+                .args(["-a", bundle])
+                .arg(&url)
+                .spawn()
+                .is_ok(),
+        };
+        if spawned {
+            return Ok(());
+        }
+        // Chosen browser could not start — fall through to the system default
+        // rather than leaving the click with nothing to show for it.
+    }
+
+    let opened = if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(&url).spawn()
+    } else if cfg!(target_os = "windows") {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", ""])
+            .arg(&url)
+            .spawn()
+    } else {
+        std::process::Command::new("xdg-open").arg(&url).spawn()
+    };
+
+    opened.map(|_| ()).map_err(|e| {
+        Error::new(Code::NotFound, format!("could not open a browser: {e}"))
+            .with_hint("Choose a browser in Settings → External applications.")
+    })
+}
+
+/// Show a directory in the system's file manager.
+///
+/// Its own command rather than the opener plugin's `open_path`, for the reason
+/// this app's capability file already gives: the filesystem is reached through
+/// typed commands, not blanket plugin permissions. The plugin's permission is
+/// documented as enabling the command "without any pre-configured scope", and
+/// a scope that would cover an arbitrary workspace is a scope that covers
+/// everything.
+///
+/// The check here is narrower and means something: it must be a directory that
+/// exists. A path that does not is a bug in the caller, and reporting it beats
+/// spawning a file manager on nothing.
+#[tauri::command]
+pub fn open_folder(path: String) -> Result<()> {
+    let dir = std::path::Path::new(&path);
+    if !dir.is_dir() {
+        return Err(Error::new(
+            Code::NotFound,
+            format!("{path} is not a directory"),
+        ));
+    }
+
+    let opened = if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(dir).spawn()
+    } else if cfg!(target_os = "windows") {
+        std::process::Command::new("explorer").arg(dir).spawn()
+    } else {
+        std::process::Command::new("xdg-open").arg(dir).spawn()
+    };
+
+    opened.map(|_| ()).map_err(|e| {
+        Error::new(
+            Code::NotFound,
+            format!("could not open a file manager: {e}"),
+        )
     })
 }
 
@@ -2862,7 +3497,7 @@ pub async fn apply_close(app: AppHandle, action: String) {
 
     match action.as_str() {
         CLOSE_TRAY => {
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.get_webview_window(crate::MAIN_WINDOW) {
                 let _ = window.hide();
             }
             tracing::info!("window hidden to tray");
@@ -2993,22 +3628,60 @@ pub async fn project_scaffold(
     std::fs::create_dir_all(&dir).map_err(|e| Error::io("creating the project directory", e))?;
 
     let user = crate::scaffold::current_user().await;
-    let args = crate::scaffold::run_args(template, &dir.display().to_string(), user.as_deref());
-
     let operation_id = events::next_operation_id("scaffold");
-    let outcome = runner::run_operation(
-        &app,
-        runner::Operation {
-            operation_id: &operation_id,
-            subject: &name,
-            progress_event: "scaffold:progress",
-            finished_event: "scaffold:done",
-            program: "docker",
-            args: &args,
-            cwd: &root,
-        },
-    )
-    .await;
+    let sink = events::sink(&app);
+
+    // A template either runs an installer or is written directly. The six
+    // written ones — Gin, Echo, Flask, FastAPI, Sinatra, Rocket — have no
+    // scaffolder in their ecosystem, and pulling an image to write thirty
+    // lines would be a download for nothing. Their dependencies are installed
+    // by the project's own Dockerfile, for the container's platform.
+    let outcome =
+        match crate::scaffold::run_args(template, &dir.display().to_string(), user.as_deref()) {
+            Some(args) => {
+                runner::run_operation(
+                    &sink,
+                    runner::Operation {
+                        operation_id: &operation_id,
+                        subject: &name,
+                        progress_event: "scaffold:progress",
+                        finished_event: "scaffold:done",
+                        program: "docker",
+                        args: &args,
+                        cwd: &root,
+                    },
+                )
+                .await
+            }
+            None => {
+                let written = crate::scaffold::write_files(template, &dir);
+                let ok = written.is_ok();
+                if let Ok(files) = &written {
+                    for file in files {
+                        sink.emit(
+                            "scaffold:progress",
+                            events::ProgressEvent {
+                                operation_id: operation_id.clone(),
+                                subject: name.clone(),
+                                line: format!("wrote {file}"),
+                            },
+                        );
+                    }
+                }
+                sink.emit(
+                    "scaffold:done",
+                    events::FinishedEvent {
+                        operation_id: operation_id.clone(),
+                        subject: name.clone(),
+                        success: ok,
+                        duration_ms: 0,
+                        error: written.as_ref().err().map(|e| e.message.clone()),
+                        log_path: None,
+                    },
+                );
+                written.map(|_| ())
+            }
+        };
 
     if outcome.is_err() {
         // A failed install that wrote nothing should not leave a husk that
@@ -3167,7 +3840,7 @@ pub async fn tunnel_start(
 
     let operation_id = events::next_operation_id("tunnel");
     runner::run_operation(
-        &app,
+        &events::sink(&app),
         runner::Operation {
             operation_id: &operation_id,
             subject: &name,
@@ -3582,6 +4255,7 @@ fn default_prefs() -> serde_json::Value {
         "theme": "system",
         "editorCommand": null,
         "terminalApp": null,
+        "browserCommand": null,
         "startMinimized": false,
         "closeBehaviour": "ask",
         "autostart": false,
@@ -3796,7 +4470,7 @@ pub fn project_dockerfile_preview(
         .unwrap_or_default();
 
     // Where the Bash generator puts its version, so the two can be diffed.
-    let bash_path = if m.runtime == "node" {
+    let bash_path = if m.runtime != "php" {
         workspace::project_dir(&root, &name)?.join("Dockerfile")
     } else {
         root.join("generated/projects")
@@ -3836,13 +4510,39 @@ pub fn generator_verify(state: State<'_, AppState>) -> Result<serde_json::Value>
     verify_generator(&state.root()?)
 }
 
-/// The command's logic, free of Tauri `State` so the `diagnose` example runs
-/// exactly the same comparison the app does.
-pub fn verify_generator(root: &std::path::Path) -> Result<serde_json::Value> {
+/// One generated file, rendered in memory and not yet on disk.
+pub struct GenFile {
+    /// Human-facing label — `parser.ajans/Dockerfile`, `configs/mysql.cnf`.
+    pub label: String,
+    /// Absolute target path.
+    pub path: std::path::PathBuf,
+    /// `projects` or `services` — which generate scope owns it, mirroring the
+    /// Bash orchestrator's two subcommands.
+    pub scope: &'static str,
+    pub content: String,
+}
+
+/// Render everything the generator owns, in memory.
+///
+/// The single source both `verify_generator` (compare against disk) and
+/// `write_generated` (write to disk) consume — one enumeration, so the set
+/// that is verified and the set that is written cannot drift apart.
+///
+/// Project render failures come back as `(label, error)` pairs rather than
+/// failing the whole call: one broken manifest must neither hide the other
+/// projects nor abort a stack-wide regenerate, which is also what the Bash
+/// generator did.
+/// What a render produced: the files, and the manifests that were skipped
+/// paired with the reason. The second half is not an error channel — a broken
+/// manifest is reported alongside the projects that rendered fine.
+pub type Rendered = (Vec<GenFile>, Vec<(String, String)>);
+
+pub fn render_generated(root: &std::path::Path) -> Result<Rendered> {
     use crate::generator;
 
     let env = Env::load(root)?;
-
+    let limits = generator::ServerSettings::from_env(&env);
+    let extras = generator::ServerExtras::load(root, &env);
     let opts = generator::ToolchainOptions {
         tools: env.list("PHP_DEFAULT_TOOLS"),
         apt_packages: env.list("PHP_DEFAULT_APT_PACKAGES"),
@@ -3856,38 +4556,10 @@ pub fn verify_generator(root: &std::path::Path) -> Result<serde_json::Value> {
             .to_string(),
     };
 
-    let mut files = Vec::new();
+    let mut files: Vec<GenFile> = Vec::new();
+    let mut errors: Vec<(String, String)> = Vec::new();
 
-    // A free function rather than a closure: the closure would hold a mutable
-    // borrow of `files` for its whole lifetime, and the Dockerfile loop needs
-    // to push error entries of its own.
-    fn compare(
-        files: &mut Vec<serde_json::Value>,
-        label: String,
-        path: std::path::PathBuf,
-        ours: String,
-    ) {
-        let theirs = std::fs::read_to_string(&path).ok();
-        let (status, at) = match &theirs {
-            None => ("missing", None),
-            Some(t) if *t == ours => ("match", None),
-            Some(t) => (
-                "differ",
-                ours.lines()
-                    .zip(t.lines())
-                    .position(|(a, b)| a != b)
-                    .map(|i| i as u64 + 1),
-            ),
-        };
-        files.push(serde_json::json!({
-            "file": label,
-            "path": path.display().to_string(),
-            "status": status,
-            "firstDifferenceLine": at,
-        }));
-    }
-
-    // ---- per-project Dockerfiles ----
+    // ---- per-project files ----
     let mut manifests: Vec<(String, crate::manifest::Manifest)> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(root.join("projects")) {
         for entry in entries.flatten() {
@@ -3906,7 +4578,9 @@ pub fn verify_generator(root: &std::path::Path) -> Result<serde_json::Value> {
             };
 
             // Node writes into the project source dir, PHP into generated/ (C-19).
-            let bash_path = if m.runtime == "node" {
+            // C-19, generalised: every snapshot runtime builds from the
+            // project source dir, so that is where its Dockerfile lives.
+            let dockerfile_path = if m.runtime != "php" {
                 path.join("Dockerfile")
             } else {
                 root.join("generated/projects")
@@ -3915,25 +4589,124 @@ pub fn verify_generator(root: &std::path::Path) -> Result<serde_json::Value> {
             };
 
             match generator::render_from_manifest(&m, &opts, false) {
-                Ok(ours) => compare(&mut files, format!("{name}/Dockerfile"), bash_path, ours),
-                Err(e) => files.push(serde_json::json!({
-                    "file": format!("{name}/Dockerfile"),
-                    "status": "error",
-                    "error": e,
-                })),
+                Ok(content) => files.push(GenFile {
+                    label: format!("{name}/Dockerfile"),
+                    path: dockerfile_path,
+                    scope: "projects",
+                    content,
+                }),
+                Err(e) => errors.push((format!("{name}/Dockerfile"), e)),
+            }
+
+            // A node build context must never swallow host node_modules; the
+            // Bash generator rewrites this beside the Dockerfile on every run.
+            let dockerignore = match m.runtime.as_str() {
+                "node" => Some(generator::NODE_DOCKERIGNORE),
+                other => generator::lang_dockerignore(other),
+            };
+            if let Some(content) = dockerignore {
+                files.push(GenFile {
+                    label: format!("{name}/.dockerignore"),
+                    path: path.join(".dockerignore"),
+                    scope: "projects",
+                    content: content.to_string(),
+                });
+            }
+
+            // nginx.conf / supervisord.conf / Caddyfile per server; apache,
+            // swoole and node correctly contribute nothing here.
+            for (file, content) in generator::render_project_config_files_with(&m, &limits, &extras)
+            {
+                files.push(GenFile {
+                    label: format!("{name}/{file}"),
+                    path: root.join("generated/projects").join(name).join(file),
+                    scope: "projects",
+                    content,
+                });
             }
             manifests.push((name.to_string(), m));
         }
     }
 
-    // ---- compose ----
+    // ---- the projects compose file ----
     let projects = generator::compose_projects_from(&manifests);
-    compare(
-        &mut files,
-        "docker-compose.projects.yml".into(),
-        root.join("generated/docker-compose.projects.yml"),
-        generator::render_compose_projects(&projects, &root.display().to_string()),
-    );
+    files.push(GenFile {
+        label: "docker-compose.projects.yml".into(),
+        path: root.join("generated/docker-compose.projects.yml"),
+        scope: "projects",
+        content: generator::render_compose_projects(&projects, &root.display().to_string()),
+    });
+
+    // ---- the base compose (stackvo.yml) ----
+    //
+    // Traefik and the network — `generate_base_compose` renders
+    // `core/compose/base.yml` through the same substitution engine the
+    // service templates use. This was the one file the Sprint 15 "verify
+    // covers everything" claim missed; enumerated here, the claim is true.
+    let vars = crate::template::variables(&env, root);
+    if let Some(text) = crate::skeleton::read_template(root, "core/compose/base.yml") {
+        files.push(GenFile {
+            label: "stackvo.yml".into(),
+            path: root.join("generated/stackvo.yml"),
+            scope: "services",
+            content: crate::template::render(&text, &vars),
+        });
+    }
+
+    // ---- service configs ----
+    {
+        // (template, output) — the exact mapping in config.sh. The first five
+        // are rendered; the last two are copied verbatim by Bash.
+        const RENDERED: [(&str, &str); 5] = [
+            ("redis/redis.conf.tpl", "redis.conf"),
+            ("mysql/my.cnf.tpl", "mysql.cnf"),
+            ("mongo/mongo.conf.tpl", "mongo.conf"),
+            ("postgres/postgres.conf.tpl", "postgres.conf"),
+            ("elasticsearch/elasticsearch.yml.tpl", "elasticsearch.yml"),
+        ];
+        const COPIED: [(&str, &str); 2] = [
+            ("mariadb/my.cnf", "mariadb.cnf"),
+            ("percona/my.cnf", "percona.cnf"),
+        ];
+
+        for (template, output) in RENDERED {
+            // The workspace's copy wins, the compiled-in one is the fallback:
+            // shipping templates must not take away the ability to edit them.
+            let Some(text) = crate::skeleton::read_template(
+                root,
+                &format!("core/templates/services/{template}"),
+            ) else {
+                continue;
+            };
+            files.push(GenFile {
+                label: format!("configs/{output}"),
+                path: root.join("generated/configs").join(output),
+                scope: "services",
+                content: crate::template::render(&text, &vars),
+            });
+        }
+        for (source, output) in COPIED {
+            let Some(text) =
+                crate::skeleton::read_template(root, &format!("core/templates/services/{source}"))
+            else {
+                continue;
+            };
+            files.push(GenFile {
+                label: format!("configs/{output}"),
+                path: root.join("generated/configs").join(output),
+                scope: "services",
+                content: text,
+            });
+        }
+    }
+
+    // ---- the dynamic compose ----
+    files.push(GenFile {
+        label: "docker-compose.dynamic.yml".into(),
+        path: root.join("generated/docker-compose.dynamic.yml"),
+        scope: "services",
+        content: crate::template::render_dynamic_compose(root, &vars),
+    });
 
     // ---- traefik ----
     let catalog = env_schema().service_catalog();
@@ -3950,18 +4723,79 @@ pub fn verify_generator(root: &std::path::Path) -> Result<serde_json::Value> {
         services,
     };
 
-    compare(
-        &mut files,
-        "traefik/traefik.yml".into(),
-        root.join("generated/traefik/traefik.yml"),
-        generator::render_traefik_config(&traefik),
-    );
-    compare(
-        &mut files,
-        "traefik/dynamic/routes.yml".into(),
-        root.join("generated/traefik/dynamic/routes.yml"),
-        generator::render_traefik_routes(&traefik),
-    );
+    files.push(GenFile {
+        label: "traefik/traefik.yml".into(),
+        path: root.join("generated/traefik/traefik.yml"),
+        scope: "services",
+        content: generator::render_traefik_config(&traefik),
+    });
+    files.push(GenFile {
+        label: "traefik/dynamic/routes.yml".into(),
+        path: root.join("generated/traefik/dynamic/routes.yml"),
+        scope: "services",
+        content: generator::render_traefik_routes(&traefik),
+    });
+
+    Ok((files, errors))
+}
+
+/// The routing warning, computed the same way the render does — kept separate
+/// so both the verify report and the write report can carry it.
+fn generator_warnings(root: &std::path::Path) -> Vec<String> {
+    let Ok(env) = Env::load(root) else {
+        return Vec::new();
+    };
+    let catalog = env_schema().service_catalog();
+    let services: Vec<(&str, bool, Option<&str>)> = catalog
+        .iter()
+        .map(|(id, _)| (id.as_str(), env.service_enabled(id), env.service_url(id)))
+        .collect();
+    let traefik = crate::generator::TraefikOptions {
+        tld_suffix: env.get("DEFAULT_TLD_SUFFIX").unwrap_or("stackvo.loc"),
+        network: env.get("DOCKER_DEFAULT_NETWORK").unwrap_or("stackvo-net"),
+        ssl_enabled: env.bool("SSL_ENABLE"),
+        redirect_to_https: env.bool("REDIRECT_TO_HTTPS"),
+        services,
+    };
+    crate::generator::traefik_routing_warning(&traefik)
+        .map(|w| vec![w])
+        .unwrap_or_default()
+}
+
+/// The command's logic, free of Tauri `State` so the `diagnose` example runs
+/// exactly the same comparison the app does.
+pub fn verify_generator(root: &std::path::Path) -> Result<serde_json::Value> {
+    let (rendered, errors) = render_generated(root)?;
+
+    let mut files: Vec<serde_json::Value> = Vec::new();
+    for f in &rendered {
+        let theirs = std::fs::read_to_string(&f.path).ok();
+        let (status, at) = match &theirs {
+            None => ("missing", None),
+            Some(t) if *t == f.content => ("match", None),
+            Some(t) => (
+                "differ",
+                f.content
+                    .lines()
+                    .zip(t.lines())
+                    .position(|(a, b)| a != b)
+                    .map(|i| i as u64 + 1),
+            ),
+        };
+        files.push(serde_json::json!({
+            "file": f.label,
+            "path": f.path.display().to_string(),
+            "status": status,
+            "firstDifferenceLine": at,
+        }));
+    }
+    for (label, error) in &errors {
+        files.push(serde_json::json!({
+            "file": label,
+            "status": "error",
+            "error": error,
+        }));
+    }
 
     let matched = files.iter().filter(|f| f["status"] == "match").count();
     let differed = files.iter().filter(|f| f["status"] == "differ").count();
@@ -3973,9 +4807,82 @@ pub fn verify_generator(root: &std::path::Path) -> Result<serde_json::Value> {
         "readyToTakeOver": differed == 0,
         // Surfaced here because the desktop app can say the routing is broken;
         // StackVo itself never does. See CONFLICTS.md C-20.
-        "warnings": generator::traefik_routing_warning(&traefik)
-            .map(|w| vec![w])
-            .unwrap_or_default(),
+        "warnings": generator_warnings(root),
+    }))
+}
+
+/// Does this generate scope include files of this kind?
+///
+/// The narrowing scopes are exactly `projects` and `services`; **anything
+/// else means everything** — which is the Bash orchestrator's `case` falling
+/// through to "generate all", and the semantics its callers still rely on:
+/// `service_enable` passes `projects_and_services`, and the takeover
+/// initially read that as "matches nothing", wrote zero files, and reported
+/// success — an enabled service whose container could never come up, because
+/// it was never written into the compose file being `up`'d.
+fn scope_includes(scope: &str, file_scope: &str) -> bool {
+    match scope {
+        "projects" | "services" => scope == file_scope,
+        _ => true,
+    }
+}
+
+/// Write the generated files — the Rust generator as the generator, not the
+/// understudy.
+///
+/// Writes are **in place** (truncate-and-write, exactly the shell's `>`),
+/// never staged-and-renamed: Traefik's file provider was measured to ignore an
+/// atomic rename outright — see the `cert_apply` note — and the generated
+/// tree is precisely the directory it watches.
+///
+/// `on_file` is called once per file written, which is what the operation
+/// console shows as progress.
+pub fn write_generated(
+    root: &std::path::Path,
+    scope: &str,
+    mut on_file: impl FnMut(&str),
+) -> Result<serde_json::Value> {
+    let (rendered, errors) = render_generated(root)?;
+
+    // The directories Bash's generators mkdir before writing. The log trees
+    // matter beyond the writes below: the generated compose mounts them, and
+    // compose does not create host directories for bind mounts.
+    for dir in [
+        "generated/projects",
+        "generated/configs",
+        "generated/traefik/dynamic",
+        "logs/projects",
+        "logs/services",
+    ] {
+        std::fs::create_dir_all(root.join(dir))
+            .map_err(|e| Error::io(format!("creating {dir}"), e))?;
+    }
+
+    let mut written: Vec<String> = Vec::new();
+    for f in rendered {
+        if !scope_includes(scope, f.scope) {
+            continue;
+        }
+        if let Some(parent) = f.path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| Error::io(format!("creating {}", parent.display()), e))?;
+        }
+        std::fs::write(&f.path, &f.content)
+            .map_err(|e| Error::io(format!("writing {}", f.path.display()), e))?;
+        on_file(&f.label);
+        written.push(f.label);
+    }
+
+    Ok(serde_json::json!({
+        "engine": "rust",
+        "scope": scope,
+        "written": written.len(),
+        "files": written,
+        "skipped": errors
+            .iter()
+            .map(|(label, error)| serde_json::json!({ "file": label, "error": error }))
+            .collect::<Vec<_>>(),
+        "warnings": generator_warnings(root),
     }))
 }
 
@@ -3989,14 +4896,13 @@ pub fn verify_generator(root: &std::path::Path) -> Result<serde_json::Value> {
 #[derive(Debug, Clone, Copy, PartialEq, Default, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GeneratorEngine {
-    /// Bash writes the files. The default, and what StackVo does today.
-    #[default]
+    /// Retired. Kept in the enum so an old caller gets a sentence about what
+    /// happened instead of a deserialisation error.
     Bash,
-    /// Bash writes, then the Rust port renders the same files and the two are
-    /// compared. Divergence is reported, never acted on.
+    /// Render without writing and report drift against what is on disk.
     Verify,
-    /// Rust writes — but only after Bash has produced the same bytes. If any
-    /// file differs, nothing is written and the operation fails with the diff.
+    /// Rust writes. The default and, since the takeover, the only writer.
+    #[default]
     /// This is a takeover that cannot silently change anyone's images.
     Rust,
 }
@@ -4021,41 +4927,164 @@ pub async fn generate_with(
         serde_json::json!({ "operationId": operation_id, "scope": scope, "engine": format!("{mode:?}") }),
     );
 
-    // Bash runs in every mode. In Rust mode it is the reference the port has to
-    // reproduce before it is allowed to write anything.
-    generate(&app, &root, &operation_id, &scope).await?;
+    // The staged takeover is over: the Rust generator took over once the
+    // parity check reached 28/28 on real data, and the Bash engine was
+    // retired with it. The mode survives as two behaviours, not three.
+    match mode {
+        GeneratorEngine::Bash => Err(Error::new(
+            Code::Unsupported,
+            "The Bash engine was retired after the Rust port reached byte parity on every file.",
+        )
+        .with_hint("Use generate_run; `verify` mode still reports drift against what is on disk.")),
 
-    if mode == GeneratorEngine::Bash {
-        return Ok(serde_json::json!({ "operationId": operation_id, "engine": "bash" }));
-    }
-
-    let report = verify_generator(&root)?;
-    let differed = report["differed"].as_u64().unwrap_or(0);
-
-    if mode == GeneratorEngine::Verify {
-        return Ok(serde_json::json!({
+        // Verify without writing: now a *drift* check — does what is on disk
+        // still match what this generator would write? Catches hand-edited
+        // generated files, which byte parity used to catch by accident.
+        GeneratorEngine::Verify => Ok(serde_json::json!({
             "operationId": operation_id,
             "engine": "verify",
-            "report": report,
-        }));
-    }
+            "report": verify_generator(&root)?,
+        })),
 
-    // Rust mode. Refuse rather than write over a disagreement.
-    if differed > 0 {
-        return Err(Error::new(
-            Code::GenerateFailed,
-            format!("The Rust generator disagrees with Bash on {differed} file(s); nothing was written."),
+        GeneratorEngine::Rust => {
+            generate(&app, &root, &operation_id, &scope).await?;
+            Ok(serde_json::json!({
+                "operationId": operation_id,
+                "engine": "rust",
+                "report": verify_generator(&root)?,
+            }))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The stack answers on more than its projects.
+    ///
+    /// `hosts_missing` offered project domains and nothing else, so an admin
+    /// UI or the proxy's own dashboard failed to resolve with nothing in the
+    /// app to say why — the checkout this was written against had those lines
+    /// only because the retired Bash CLI once wrote them. This pins the three
+    /// kinds of domain the stack serves, since only one of them was covered.
+    /// Every hosts write shows the system's password prompt, so the question
+    /// this table answers is "does the user get asked". A toggle that would
+    /// change nothing must not.
+    #[test]
+    fn a_hosts_prompt_only_happens_when_the_file_would_change() {
+        // Enabled and unresolvable: add it — otherwise the admin UI opens on
+        // a name that does not resolve, which is the bug this exists for.
+        assert!(host_sync_action(true, false, false).is_some());
+        assert!(host_sync_action(true, false, true).is_some());
+        // Enabled and already there: nothing to do, so no prompt.
+        assert!(host_sync_action(true, true, true).is_none());
+
+        // Disabled and ours: take it out, so the file describes the stack.
+        assert!(host_sync_action(false, true, true).is_some());
+        // Disabled but written by hand: leave it. A tool that deletes lines it
+        // did not write is a tool nobody trusts with the file again.
+        assert!(host_sync_action(false, true, false).is_none());
+        // Disabled and already absent: nothing to do.
+        assert!(host_sync_action(false, false, true).is_none());
+    }
+    #[test]
+    fn every_kind_of_domain_the_stack_serves_is_offered() {
+        let env = Env::parse(
+            "DEFAULT_TLD_SUFFIX=dev.test\n\
+             SERVICE_PHPMYADMIN_ENABLE=true\n\
+             SERVICE_PHPMYADMIN_URL=pma\n\
+             SERVICE_ADMINER_ENABLE=false\n\
+             SERVICE_ADMINER_URL=adminer\n",
+        );
+
+        let tld = env.get("DEFAULT_TLD_SUFFIX").unwrap();
+        let mut wanted: Vec<String> = Vec::new();
+        for (id, _) in env_schema().service_catalog() {
+            if env.service_enabled(&id) {
+                if let Some(url) = env.service_url(&id) {
+                    wanted.push(format!("{url}.{tld}"));
+                }
+            }
+        }
+        wanted.push(format!("traefik.{tld}"));
+        wanted.push(tld.to_string());
+
+        // The service at its own subdomain rather than its id.
+        assert!(wanted.contains(&"pma.dev.test".to_string()));
+        // A disabled one is not wanted: its line is added when it is enabled
+        // and taken away when it is disabled, so the file describes the stack
+        // rather than the catalogue.
+        assert!(!wanted.contains(&"adminer.dev.test".to_string()));
+        // The dashboard, whose router the generator has always written.
+        assert!(wanted.contains(&"traefik.dev.test".to_string()));
+        // And the suffix itself, which the certificate is already issued for.
+        assert!(wanted.contains(&"dev.test".to_string()));
+    }
+    #[test]
+    fn a_service_patch_cannot_reach_past_its_own_service() {
+        let patch = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+
+        assert!(
+            check_service_patch("redis", &patch(&[("SERVICE_REDIS_HOST_PORT", "6380")])).is_ok()
+        );
+
+        // A sheet titled "redis" writing another service's password, or a
+        // global setting, would be a general .env writer wearing a costume.
+        for key in [
+            "SERVICE_MYSQL_ROOT_PASSWORD",
+            "DEFAULT_TLD_SUFFIX",
+            "SERVICE_REDIS",
+        ] {
+            assert!(
+                check_service_patch("redis", &patch(&[(key, "x")])).is_err(),
+                "{key} should be refused"
+            );
+        }
+
+        // The list owns the toggle. Two controls for one key is how they end
+        // up disagreeing about whether the service is on.
+        assert!(
+            check_service_patch("redis", &patch(&[("SERVICE_REDIS_ENABLE", "false")])).is_err()
+        );
+
+        // The read masks secrets, so a form that returns what it was handed
+        // would save the mask as the password.
+        assert!(check_service_patch(
+            "mysql",
+            &patch(&[(
+                "SERVICE_MYSQL_ROOT_PASSWORD",
+                "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}"
+            )])
         )
-        .with_hint("Bash output is still in place. Report the diff before switching engines.")
-        .with_details(report));
-    }
+        .is_err());
 
-    // Every file already matches, so writing is a no-op on content — which is
-    // exactly the property that makes this safe to turn on.
-    Ok(serde_json::json!({
-        "operationId": operation_id,
-        "engine": "rust",
-        "report": report,
-        "note": "Rust output is byte-identical to Bash; the files on disk are unchanged.",
-    }))
+        // Dashes in a service id become underscores in the key.
+        assert!(check_service_patch(
+            "mongo-express",
+            &patch(&[("SERVICE_MONGO_EXPRESS_BASEURL", "/db")])
+        )
+        .is_ok());
+    }
+    #[test]
+    fn every_generate_scope_its_callers_pass_writes_something() {
+        // `projects` and `services` narrow; everything else is "all" — the
+        // Bash case-fallthrough its callers still rely on. The regression this
+        // pins: `service_enable` passes `projects_and_services`, and an exact
+        // match wrote zero files and reported success, so the just-enabled
+        // service was missing from the very compose file being `up`'d.
+        for scope in ["all", "projects_and_services", "anything-future"] {
+            assert!(scope_includes(scope, "projects"), "{scope}");
+            assert!(scope_includes(scope, "services"), "{scope}");
+        }
+        assert!(scope_includes("projects", "projects"));
+        assert!(!scope_includes("projects", "services"));
+        assert!(scope_includes("services", "services"));
+        assert!(!scope_includes("services", "projects"));
+    }
 }

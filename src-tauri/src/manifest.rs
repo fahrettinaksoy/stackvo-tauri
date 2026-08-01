@@ -55,17 +55,82 @@ pub struct NodeConfig {
     pub port: u16,
 }
 
+/// The runtimes that share one config shape: a container built from the
+/// language's own image, `COPY . .`, an optional install and build step, and a
+/// start command on a port Traefik proxies to. Node predates this list and
+/// keeps its own struct for compatibility; structurally it is the same idea.
+pub const LANG_RUNTIMES: [&str; 4] = ["python", "go", "ruby", "rust"];
+
+/// One non-PHP, non-node runtime block — `python: { … }`, `go: { … }`, ….
+///
+/// `install` and `build` are optional because the interpreted/compiled split
+/// is real: Python and Ruby install dependencies and run source, Go and Rust
+/// compile — and a field that does not apply should be absent, not an empty
+/// string someone has to know to leave alone.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LangConfig {
+    pub version: String,
+    pub install: Option<String>,
+    pub build: Option<String>,
+    pub start: String,
+    pub port: u16,
+}
+
+/// What a runtime's block defaults to when a field is omitted — the working
+/// convention of each ecosystem, not an invention.
+pub fn lang_defaults(runtime: &str) -> Option<LangConfig> {
+    match runtime {
+        "python" => Some(LangConfig {
+            version: "3.13".into(),
+            install: Some("pip install --no-cache-dir -r requirements.txt".into()),
+            build: None,
+            start: "python main.py".into(),
+            port: 8000,
+        }),
+        "go" => Some(LangConfig {
+            version: "1.23".into(),
+            install: None,
+            build: Some("go build -o /app/server .".into()),
+            start: "/app/server".into(),
+            port: 8080,
+        }),
+        "ruby" => Some(LangConfig {
+            version: "3.3".into(),
+            install: Some("bundle install".into()),
+            build: None,
+            start: "bundle exec ruby app.rb".into(),
+            port: 4567,
+        }),
+        // `cargo run --release` reuses what `cargo build --release` produced,
+        // so the CMD does not compile twice — and it works whatever the
+        // binary is called, which a `./target/release/<name>` guess does not.
+        "rust" => Some(LangConfig {
+            version: "1".into(),
+            install: None,
+            build: Some("cargo build --release".into()),
+            start: "cargo run --release".into(),
+            port: 8080,
+        }),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
     pub name: String,
     pub domain: Option<String>,
-    /// Canonical: `php` or `node`. Absent in the file means `php`.
+    /// Canonical: `php`, `node`, `python`, `go`, `ruby` or `rust`. Absent in
+    /// the file means `php`.
     pub runtime: String,
     pub server: Option<String>,
     pub document_root: Option<String>,
     pub php: Option<PhpConfig>,
     pub node: Option<NodeConfig>,
+    /// The block for a `LANG_RUNTIMES` runtime, keyed in the file by the
+    /// runtime's own name (`"python": { … }`).
+    pub lang: Option<LangConfig>,
 
     pub valid: bool,
     pub errors: Vec<Finding>,
@@ -139,8 +204,7 @@ pub fn normalize(json: &serde_json::Value, raw: &str, dir_name: &str) -> Manifes
             });
             "php".to_string()
         }
-        Some("php") => "php".to_string(),
-        Some("node") => "node".to_string(),
+        Some(id @ ("php" | "node" | "python" | "go" | "ruby" | "rust")) => id.to_string(),
         Some(alias @ ("nodejs" | "js")) => {
             error(
                 "C-01",
@@ -149,11 +213,19 @@ pub fn normalize(json: &serde_json::Value, raw: &str, dir_name: &str) -> Manifes
             );
             "node".to_string()
         }
+        Some(alias @ "golang") => {
+            error(
+                "C-02",
+                "runtime",
+                format!("\"{alias}\" is not a runtime id; the canonical id is \"go\""),
+            );
+            "go".to_string()
+        }
         Some(other) => {
             error(
                 "C-02",
                 "runtime",
-                format!("runtime \"{other}\" has no generator — only php and node are implemented"),
+                format!("runtime \"{other}\" has no generator — php, node, python, go, ruby and rust are implemented"),
             );
             other.to_string()
         }
@@ -168,12 +240,14 @@ pub fn normalize(json: &serde_json::Value, raw: &str, dir_name: &str) -> Manifes
             "runtime block is named \"nodejs\"; the canonical key is \"node\". Written by the web UI, this manifest generates as PHP and cannot build".into(),
         );
     }
-    for orphan in ["python", "ruby", "golang", "go", "rust"] {
-        if json.get(orphan).is_some() {
+    // A runtime block that does not belong to the declared runtime is dead
+    // weight at best and a sign the file was hand-merged at worst.
+    for orphan in ["python", "ruby", "golang", "go", "rust", "node"] {
+        if orphan != runtime && json.get(orphan).is_some() {
             error(
                 "C-02",
                 orphan,
-                format!("runtime block \"{orphan}\" has no generator"),
+                format!("runtime block \"{orphan}\" does not match runtime \"{runtime}\""),
             );
         }
     }
@@ -214,14 +288,18 @@ pub fn normalize(json: &serde_json::Value, raw: &str, dir_name: &str) -> Manifes
     let node = (runtime == "node")
         .then(|| read_node(json, &mut errors, &mut warnings))
         .flatten();
+    let lang = LANG_RUNTIMES
+        .contains(&runtime.as_str())
+        .then(|| read_lang(json, &runtime, &mut errors))
+        .flatten();
 
-    if runtime == "node" {
+    if runtime != "php" {
         for k in ["server", "webserver", "document_root", "php"] {
             if json.get(k).is_some() {
                 warnings.push(Finding {
                     code: "NODE_EXTRA_KEY".into(),
                     path: k.into(),
-                    message: format!("`{k}` is ignored when runtime is node"),
+                    message: format!("`{k}` is ignored when runtime is {runtime}"),
                 });
             }
         }
@@ -238,6 +316,7 @@ pub fn normalize(json: &serde_json::Value, raw: &str, dir_name: &str) -> Manifes
         document_root: str_field(json, "document_root"),
         php,
         node,
+        lang,
         valid: errors.is_empty(),
         errors,
         warnings,
@@ -376,6 +455,53 @@ fn read_php(
     Some(PhpConfig {
         version,
         extensions,
+    })
+}
+
+/// Read a `LANG_RUNTIMES` block. Missing fields fall back to the runtime's
+/// ecosystem defaults; a missing *block* is fine for exactly the same reason —
+/// `{"runtime": "python"}` is a complete manifest that runs the defaults.
+fn read_lang(
+    json: &serde_json::Value,
+    runtime: &str,
+    errors: &mut Vec<Finding>,
+) -> Option<LangConfig> {
+    let defaults = lang_defaults(runtime)?;
+    let Some(block) = json.get(runtime) else {
+        return Some(defaults);
+    };
+
+    let port = match block.get("port") {
+        None => defaults.port,
+        Some(v) => match v.as_u64().and_then(|p| u16::try_from(p).ok()) {
+            Some(p) if p > 0 => p,
+            _ => {
+                errors.push(Finding {
+                    code: "INVALID_PORT".into(),
+                    path: format!("{runtime}.port"),
+                    message: format!("`{runtime}.port` must be a port number"),
+                });
+                defaults.port
+            }
+        },
+    };
+
+    Some(LangConfig {
+        version: str_field(block, "version").unwrap_or(defaults.version),
+        // An explicitly empty string means "no step", distinct from absent
+        // (which means "the default step").
+        install: match str_field(block, "install") {
+            Some(s) if s.is_empty() => None,
+            Some(s) => Some(s),
+            None => defaults.install,
+        },
+        build: match str_field(block, "build") {
+            Some(s) if s.is_empty() => None,
+            Some(s) => Some(s),
+            None => defaults.build,
+        },
+        start: str_field(block, "start").unwrap_or(defaults.start),
+        port,
     })
 }
 
@@ -635,6 +761,22 @@ pub fn to_json(manifest: &Manifest) -> String {
         ));
     }
 
+    if let Some(lang) = &manifest.lang {
+        let mut block = format!("  {}: {{\n", quote(&manifest.runtime));
+        let mut fields = vec![format!("    \"version\": {}", quote(&lang.version))];
+        if let Some(install) = &lang.install {
+            fields.push(format!("    \"install\": {}", quote(install)));
+        }
+        if let Some(build) = &lang.build {
+            fields.push(format!("    \"build\": {}", quote(build)));
+        }
+        fields.push(format!("    \"start\": {}", quote(&lang.start)));
+        fields.push(format!("    \"port\": {}", lang.port));
+        block.push_str(&fields.join(",\n"));
+        block.push_str("\n  }");
+        lines.push(block);
+    }
+
     if let Some(node) = &manifest.node {
         let mut block = String::from("  \"node\": {\n");
         let mut fields = vec![
@@ -731,6 +873,7 @@ mod write_tests {
                 extensions: vec!["mbstring".into(), "pdo".into(), "pdo_mysql".into()],
             }),
             node: None,
+            lang: None,
             valid: true,
             errors: vec![],
             warnings: vec![],
@@ -781,6 +924,61 @@ mod write_tests {
     }
 
     #[test]
+    fn a_bare_lang_runtime_is_a_complete_manifest_on_defaults() {
+        // `{"runtime": "go"}` runs the ecosystem defaults — same contract as
+        // node's optional fields, extended to the whole block.
+        let json = serde_json::json!({ "name": "svc", "domain": "svc.loc", "runtime": "go" });
+        let m = normalize(&json, "{}", "svc");
+        assert!(m.valid, "{:?}", m.errors);
+        let lang = m.lang.expect("go gets a lang block");
+        assert_eq!(lang.build.as_deref(), Some("go build -o /app/server ."));
+        assert_eq!(lang.install, None);
+        assert_eq!(lang.port, 8080);
+    }
+
+    #[test]
+    fn lang_block_fields_override_defaults_and_empty_string_means_no_step() {
+        let json = serde_json::json!({
+            "name": "api", "domain": "api.loc", "runtime": "python",
+            "python": { "version": "3.12", "start": "uvicorn app:app --host 0.0.0.0 --port 8000", "install": "" }
+        });
+        let m = normalize(&json, "{}", "api");
+        let lang = m.lang.unwrap();
+        assert_eq!(lang.version, "3.12");
+        assert!(lang.start.starts_with("uvicorn"));
+        // Explicitly empty is "skip the step", distinct from absent-take-default.
+        assert_eq!(lang.install, None);
+    }
+
+    #[test]
+    fn a_runtime_block_that_contradicts_the_runtime_is_an_error() {
+        let json = serde_json::json!({
+            "name": "x", "domain": "x.loc", "runtime": "python",
+            "go": { "version": "1.23" }
+        });
+        let m = normalize(&json, "{}", "x");
+        assert!(m.errors.iter().any(|e| e.path == "go"), "{:?}", m.errors);
+    }
+
+    #[test]
+    fn golang_is_corrected_to_go_and_lang_manifests_round_trip() {
+        let json = serde_json::json!({ "name": "svc", "domain": "svc.loc", "runtime": "golang" });
+        let m = normalize(&json, "{}", "svc");
+        assert_eq!(m.runtime, "go");
+
+        // to_json writes the block under the runtime's own key, and reading
+        // that back yields the same config — the round trip the settings
+        // sheet depends on.
+        let m2 = normalize(
+            &serde_json::from_str(&to_json(&m)).unwrap(),
+            &to_json(&m),
+            "svc",
+        );
+        assert_eq!(m2.runtime, "go");
+        assert_eq!(m2.lang, m.lang);
+    }
+
+    #[test]
     fn node_manifests_omit_php_only_fields() {
         let m = Manifest {
             name: "web".into(),
@@ -796,6 +994,7 @@ mod write_tests {
                 start: "node server.js".into(),
                 port: 3000,
             }),
+            lang: None,
             valid: true,
             errors: vec![],
             warnings: vec![],

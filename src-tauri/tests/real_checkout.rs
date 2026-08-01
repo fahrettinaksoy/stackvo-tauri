@@ -929,15 +929,30 @@ fn the_fanout_covers_the_real_checkout_without_replaying_it() {
         scan.total
     );
 
-    // Nothing already on disk is replayed. This is the claim that matters: the
-    // pane is live-only because interleaved history across these files would be
-    // an ordering nothing here can justify.
-    let replayed = fanout.poll();
+    // The seed is bounded, labelled, and delivered exactly once. Adopting
+    // strictly at end-of-file was the honest answer to "these files cannot be
+    // interleaved by time" and produced a blank page on a stack that had been
+    // quiet for an hour — indistinguishable from broken. So a small tail per
+    // file is shown, flagged `historic`, with the live boundary drawn after it.
+    let seed = fanout.poll();
     assert!(
-        replayed.is_empty(),
-        "{} line(s) of history were replayed, e.g. {:?}",
-        replayed.len(),
-        replayed.first()
+        seed.iter().all(|l| l.historic),
+        "an unflagged line came through with the seed"
+    );
+
+    // Bounded by SEED_BYTES per file, not by "a bit": on this checkout that is
+    // a few lines each, never the whole log.
+    let per_file = seed.len() as f64 / scan.followed.max(1) as f64;
+    assert!(
+        per_file < 60.0,
+        "the seed averaged {per_file:.0} lines per file — that is history, not a tail"
+    );
+
+    // And it is delivered once. A poll that re-sent it would replay the same
+    // block every tick the pane stays open.
+    assert!(
+        fanout.poll().is_empty(),
+        "the seed was replayed on the next poll"
     );
 
     eprintln!(
@@ -996,11 +1011,22 @@ fn the_rust_renderer_reproduces_bash_byte_for_byte() {
         );
     }
 
-    // And the assembled services file — twenty templates, the awk filter, the
-    // UI heredoc and the harvested volumes section.
+    // And the assembled services file — twenty templates, the awk filter and
+    // the harvested volumes section.
     let generated = root.join("generated/docker-compose.dynamic.yml");
     if let Ok(expected) = std::fs::read_to_string(&generated) {
-        let rendered = template::render_dynamic_compose(&templates, &vars);
+        // The workspace root, not the template directory: templates resolve
+        // workspace-first and fall back to the copies compiled into the
+        // binary.
+        let rendered = template::render_dynamic_compose(&root, &vars);
+
+        // One deliberate divergence from what Bash wrote. This file predates
+        // the retirement of the containerised web UI, so a checkout generated
+        // back then still carries a `stackvo-ui` block that nothing emits any
+        // more. Drop it from the expectation rather than keeping dead code
+        // alive to satisfy a stale artifact; everything else must still match
+        // byte for byte, which is what this test is actually guarding.
+        let expected = strip_retired_ui_service(&expected);
         assert_eq!(
             rendered.len(),
             expected.len(),
@@ -1012,4 +1038,40 @@ fn the_rust_renderer_reproduces_bash_byte_for_byte() {
             expected.len()
         );
     }
+}
+
+/// Remove a `stackvo-ui:` service block from a generated compose file, if one
+/// is there. Services are two-space indented and each carries its own trailing
+/// blank line, so a block runs until the next key at that indent — or, if it
+/// is the last service, until the top-level `volumes:` key.
+///
+/// The one subtlety is that boundary. A following service line belongs to the
+/// next block and is kept as-is, but the blank line before `volumes:` is not
+/// part of any service: the renderer emits it separately, right before the
+/// volumes header. Deleting it along with the block would leave the two
+/// sections welded together and cost exactly one byte against the renderer.
+fn strip_retired_ui_service(text: &str) -> String {
+    let Some(start) = text.find("\n  stackvo-ui:\n") else {
+        return text.to_string();
+    };
+    let rest = &text[start + 1..];
+    let end = rest
+        .match_indices('\n')
+        .map(|(i, _)| i + 1)
+        .find_map(|i| {
+            let line = &rest[i..];
+            if line.starts_with("volumes:") {
+                // Back up over the separator newline, which survives.
+                Some(i - 1)
+            } else if line.starts_with("  ")
+                && line[2..].starts_with(|c: char| c.is_ascii_alphanumeric())
+            {
+                Some(i)
+            } else {
+                None
+            }
+        })
+        .map(|i| start + 1 + i)
+        .unwrap_or(text.len());
+    format!("{}{}", &text[..start + 1], &text[end..])
 }

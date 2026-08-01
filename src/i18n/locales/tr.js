@@ -42,6 +42,7 @@ export default {
     projects: 'Projeler',
     services: 'Servisler',
     logs: 'Loglar',
+    mail: 'Mail',
     settings: 'Ayarlar',
     collapse: 'Daralt',
     expand: 'Genişlet',
@@ -158,6 +159,9 @@ export default {
   },
 
   projectDetail: {
+    subtitle: 'Tek bir proje: neyi çalıştırdığı, neyden kurulduğu ve şu an ne yaptığı.',
+    debug: 'Hata ayıklama',
+    runtime: 'Çalışma zamanı ayarları',
     title: 'Proje Detayı',
     back: 'Geri',
     indicator: 'Gösterge',
@@ -196,7 +200,6 @@ export default {
   },
 
   workspace: {
-    title: 'StackVo dizini',
     none: 'Henüz bir StackVo dizini seçilmedi.',
     change: 'Değiştir',
     source: {
@@ -259,6 +262,11 @@ export default {
     unmetDependency: 'Eksik bağımlılık',
   },
 
+  console: {
+    doneToast: '{operation} tamamlandı — {duration}',
+    failedToast: '{operation} başarısız — çıktı konsolda',
+  },
+
   preflight: {
     title: 'StackVo çalışmaya hazır değil',
     subtitle: '{count} gereksinim karşılanmıyor. Uygulama, bunlar tamamlanınca açılacak.',
@@ -267,11 +275,15 @@ export default {
 
     workspace: 'StackVo dizini',
     workspaceHint: {
-      macos: 'core/cli/stackvo.sh ve projects/ klasörlerini içeren dizini seçin.',
-      linux: 'core/cli/stackvo.sh ve projects/ klasörlerini içeren dizini seçin.',
-      windows: 'core/cli/stackvo.sh ve projects/ klasörlerini içeren dizini seçin.',
+      macos:
+        'Boş bir klasör seçin — StackVo ilk kullanımda kurar — ya da hâlihazırda yönettiği bir klasörü.',
+      linux:
+        'Boş bir klasör seçin — StackVo ilk kullanımda kurar — ya da hâlihazırda yönettiği bir klasörü.',
+      windows:
+        'Boş bir klasör seçin — StackVo ilk kullanımda kurar — ya da hâlihazırda yönettiği bir klasörü.',
     },
     workspaceAction: 'Dizin seç',
+    workspaceInstalled: '{path} kuruldu — şablonlar, .env ve proje ağacı hazır.',
 
     engine: 'Docker motoru',
     engineHint: {
@@ -313,14 +325,6 @@ export default {
     },
     projectsAction: 'Oluştur',
 
-    bash: 'Bash',
-    bashHint: {
-      macos: 'Üreteç core/cli/stackvo.sh betiği; bash olmadan yapılandırma üretilemez.',
-      linux: 'Üreteç core/cli/stackvo.sh betiği; bash paketini kurun.',
-      windows:
-        'Üreteç core/cli/stackvo.sh betiği. Windows’ta WSL veya Git Bash kurulu olmalı ve PATH’te bulunmalı.',
-    },
-
     mkcert: 'mkcert',
     mkcertHint: {
       macos:
@@ -359,12 +363,46 @@ export default {
     apply: 'İçe aktar',
   },
   mail: {
+    subtitle: 'Projelerinin gönderdiği postalar, makineden çıkmadan yakalanmış hâlde.',
     inbox: 'Gelen kutusu',
+    title: 'Mail',
+    unread: '{n} okunmamış',
+    select: 'Okumak için bir mesaj seçin.',
+    fromLabel: 'Kimden',
+    toLabel: 'Kime',
+    replyToLabel: 'Yanıt adresi',
+    offHeadline: 'Mail yakalayıcı kapalı',
+    stoppedHeadline: 'Mail yakalayıcı duruyor',
+    emptyHeadline: 'Henüz mail yok',
+    preview: 'Önizleme',
+    text: 'Metin',
+    source: 'Kaynak',
+    headersTab: 'Başlıklar',
+    attachmentsTab: 'Ekler',
+    compatTab: 'Uyumluluk',
+    linksTab: 'Bağlantılar',
+    save: 'Kaydet',
+    searchPlaceholder: 'Ara — from:a@b.c subject:"fatura"',
+    matching: '{n} eşleşme',
+    compatSupported: '{n} mail istemcisi özelliğinde tam destekleniyor',
+    compatLegend: 'Yeşil tam destek · turuncu kısmi · kırmızı desteklenmiyor.',
+    compatWarning: '{category} · {found}× geçiyor',
+    compatClean: 'Bu işaretlemede test edilen hiçbir yerde desteklenmeyen şey yok.',
+    checkLinks: 'Bağlantıları denetle',
+    linksHint: 'Mesajdaki her bağlantıyı çeker — bu işlem makinenizin dışına çıkar.',
+    noLinks: 'Bu mesajda bağlantı yok.',
+    enablePrompt:
+      'Mail servisi etkin değil. Uygulamanız gönderdikçe yakalanan mailler burada görünür — şimdi etkinleştirilsin mi?',
+    enableAction: '{service} etkinleştir',
+    startAction: '{service} başlat',
+    enabling:
+      'Etkinleştiriliyor — .env yazılıyor, yeniden üretiliyor ve konteyner başlatılıyor. İlk çalıştırma imajı indirir, bir dakika verin.',
     count: '{n} mesaj yakalandı',
     empty: 'Henüz hiçbir şey gönderilmedi.',
     noSubject: '(konu yok)',
     notRunning: 'Posta yakalayıcı çalışmıyor, hiçbir şey yakalanmıyor.',
     clear: 'Gelen kutusunu boşalt',
+    deleteOne: 'Bu mesajı sil',
     confirmClear:
       'Yakalanan tüm mesajlar silinecek. Posta yakalayıcı bir çöp kutusudur, yedeği yoktur.',
   },
@@ -400,8 +438,6 @@ export default {
       'Not: komut satırından `stackvo up` bu yapılandırmayı katmanlamaz ve konteyneri onsuz yeniden oluşturur.',
   },
   stackPreset: {
-    title: 'Yığın önayarı',
-    sectionDesc: 'Bu yığının hangi servisleri çalıştırdığını, sırlarını paylaşmadan paylaşın.',
     export: 'Bu yığını dışa aktar',
     exportDesc:
       'Hangi servislerin etkin olduğunu ve sürümlerini küçük bir JSON dosyasına yazar; sürüm kontrolüne eklemek güvenlidir. Parolalar içinde yer almaz — biçimde onları koyacak bir yer yoktur.',
@@ -497,7 +533,6 @@ export default {
       'Bu projede sık çalıştırdığınız komutlar; terminal açıp konteyner adını hatırlamanıza gerek kalmadan. Yalnızca projenin dosyalarının izin verdiği komutlar sunulur.',
     because: '{file} dosyasından',
     opensTerminal: 'terminal açar',
-    run: 'Çalıştır',
     needsRunning: 'Bunlar projenin konteynerinin içinde çalışır. Önce projeyi başlatın.',
     none: 'Burada artisan, composer.json, package.json veya wp-config.php yok; sunulacak bir şey de yok.',
   },
@@ -579,7 +614,132 @@ export default {
     notReloaded:
       'Sertifika yenilendi, ancak proxy hâlâ öncekini sunuyor. Devreye girmesi için stack’i yeniden başlatın veya generate çalıştırın.',
   },
+  serviceSettings: {
+    pick: 'Bir servis seç',
+    title: 'Servisler',
+    sectionDesc: 'Her servisin kendi .env ayarları.',
+    desc: 'Neyle yapılandırıldığını düzenlemek için bir servis seç. Uygulamak konteynerini yeniden kurar, çünkü çalışan bir konteyner kurulduğu ortamı korur.',
+    all: 'Tümü',
+    fields: {
+      VERSION: 'Sürüm',
+      URL: 'Alt alan adı',
+      HOST_PORT: 'Ana makine portu',
+      PORT: 'Port',
+      HOST: 'Sunucu',
+      DATABASE: 'Veritabanı',
+      DB: 'Veritabanı',
+      USER: 'Kullanıcı adı',
+      PASSWORD: 'Parola',
+      ROOT_PASSWORD: 'Root parolası',
+      ADMIN_USER: 'Yönetici kullanıcı adı',
+      ADMIN_USERNAME: 'Yönetici kullanıcı adı',
+      ADMIN_PASSWORD: 'Yönetici parolası',
+      ADMIN_PASS: 'Yönetici parolası',
+      DEFAULT_USER: 'Varsayılan kullanıcı',
+      DEFAULT_PASS: 'Varsayılan parola',
+      DEFAULT_PASSWORD: 'Varsayılan parola',
+      DEFAULT_EMAIL: 'Varsayılan e-posta',
+      BASICAUTH_USERNAME: 'Basic auth kullanıcı adı',
+      BASICAUTH_PASSWORD: 'Basic auth parolası',
+      INITDB_ROOT_USERNAME: 'İlk kurulum root kullanıcısı',
+      INITDB_ROOT_PASSWORD: 'İlk kurulum root parolası',
+      UPLOAD_LIMIT: 'Yükleme sınırı',
+      CLUSTER_NAME: 'Küme adı',
+    },
+    categories: {
+      databases: 'Veritabanları',
+      cache: 'Önbellek',
+      queue: 'Kuyruklar',
+      search: 'Arama',
+      monitoring: 'İzleme',
+      devtools: 'Geliştirici araçları',
+      adminUis: 'Yönetim arayüzleri',
+    },
+    off: 'Kapalı',
+    empty: 'Bu kategoride servis yok.',
+    none: 'Bu servisin kendine ait ayarı yok.',
+    default: 'varsayılan',
+    reveal: 'Göster',
+    hide: 'Gizle',
+    showKey: '.env anahtarını göster ({key})',
+    apply: 'Uygula ve yeniden kur',
+    confirmTitle: 'Konteyner yeniden kurulsun mu?',
+    confirmBody:
+      'Bunları kaydetmek tek başına yetmez: {service} kurulduğu ortamla çalışıyor, bu yüzden konteyneri durdurulup yeni değerlerle yeniden oluşturulacak.',
+    confirmApply: 'Uygula',
+  },
+  about: {
+    tagline: 'Yerel geliştirme ortamları, tek bir stack olarak yönetilir.',
+    system: 'Sistem bilgisi',
+    systemDesc: 'Bir hata bildiriminin ihtiyaç duyduğu bilgiler. Yeniden yazmak yerine kopyala.',
+    appVersion: 'StackVo',
+    os: 'İşletim sistemi',
+    docker: 'Docker',
+    context: 'Docker bağlamı',
+    workspace: 'Çalışma alanı',
+    copy: 'Kopyala',
+    copied: 'Kopyalandı',
+    resources: 'Kaynaklar',
+    resourcesDesc: 'Tarayıcında açılır.',
+    links: {
+      docs: 'Belgeler',
+      source: 'Kaynak kodu',
+      issues: 'Sorun bildir',
+      sponsor: 'Bir kahve ısmarla',
+    },
+    copyright: 'MIT lisanslı · © 2026 Fahrettin Aksoy',
+  },
   settings: {
+    servers: {
+      gzipTypesHint:
+        'Boşlukla ayrılmış MIME türleri. Boş bırakılırsa nginx’in kendi listesi kalır.',
+      field: {
+        SERVER_MAX_BODY_SIZE: 'Azami gövde boyutu',
+        SERVER_CLIENT_BODY_TIMEOUT: 'İstemci gövde zaman aşımı',
+        SERVER_KEEPALIVE_TIMEOUT: 'KeepAlive zaman aşımı',
+        SERVER_FASTCGI_CONNECT_TIMEOUT: 'FastCGI bağlanma zaman aşımı',
+        SERVER_FASTCGI_SEND_TIMEOUT: 'FastCGI gönderme zaman aşımı',
+        SERVER_FASTCGI_TIMEOUT: 'FastCGI okuma zaman aşımı',
+        SERVER_TCP_NODELAY: 'TCP nodelay',
+        SERVER_GZIP: 'Gzip',
+        SERVER_GZIP_COMP_LEVEL: 'Gzip seviyesi',
+        SERVER_GZIP_TYPES: 'Gzip türleri',
+      },
+      extra: 'Ek yönergeler',
+      extraDesc:
+        'Bu sunucu için üretilen her yapılandırmaya eklenir. Yorumlar ve boş satırlar atılır, yani yalnızca not içeren bir dosya hiçbir şeyi değiştirmez.',
+      extraPlaceholder: 'client_body_timeout 120s;',
+      extraHint: '{{ VAR }} .env üzerinden yerine konur. Bir sonraki üretimde etkili olur.',
+      title: 'Web sunucuları',
+      desc: 'PHP’nin önündeki sunucunun neyi kabul edeceği.',
+      limits: 'İstek sınırları',
+      limitsDesc:
+        'Üretilen sunucu yapılandırmasına yazılır. Varsayılanda bırakılırsa hiçbir şey yazılmaz.',
+      sizeInvalid: 'Sayı, ardından isteğe bağlı k, m ya da g.',
+      secondsInvalid: 'Tam saniye.',
+      phpNote:
+        'Bir yükleme, sınırların en düşüğünde reddedilir. PHP’nin kendi sınırları vardır — upload_max_filesize, post_max_size ve memory_limit — ve onlar proje başınadır, projenin PHP ayarlarında.',
+      applies: 'Nerede geçerli',
+      appliesDesc: 'Her sunucu bir dosya üzerinden yapılandırılmıyor.',
+      supportNote:
+        'Apache kendi Dockerfile’ı içinde, Swoole ise satır içi bir betikle yapılandırılıyor; ikisi de bu yönergeleri almıyor.',
+    },
+    defaults: {
+      title: 'Proje varsayılanları',
+      desc: 'Hangi çalışma ortamı olursa olsun, yeni bir projenin başlangıç değerleri.',
+      runtimes: 'Çalışma sürümleri',
+      php: 'PHP ve web sunucusu',
+      phpTools: 'PHP derlemesi',
+    },
+    workspaceAndControl: 'Dizin ve kontrol',
+    workspaceAndControlDesc:
+      'Bu stack’in nerede durduğu, nasıl çalıştırıldığı ve nasıl paylaşıldığı.',
+    groups: {
+      app: 'Uygulama',
+      workspace: 'Çalışma alanı',
+      stack: 'Stack',
+      help: 'Yardım',
+    },
     subtitle: 'Uygulama tercihleri',
 
     // Görünüm bölümü.
@@ -648,12 +808,9 @@ export default {
     rtlHint: 'Tüm bileşenler aynalanır; Arapça ve İbranice yerleşimleri denemek için.',
 
     // Bölüm açıklamaları: her panelin ne işe yaradığı, panele girerken bir kez.
-    workspaceDesc: 'Yönetilen StackVo dizini ve Docker motorunun durumu.',
     preferencesDesc: 'Görünüm, dil, dış uygulamalar ve kapatma davranışı.',
-    stackDesc: 'Compose seviyesinde üretim ve konteyner yönetimi.',
     certificates: 'Sertifikalar',
     certificatesDesc: 'HTTPS sertifikası, kapsadığı alan adları ve arkasındaki CA.',
-    envFileDesc: 'Yığının okuduğu .env değerlerini yerinde düzenle.',
     aboutDesc: 'Sürüm, imzalı güncellemeler ve tanılama.',
 
     // Alt gruplar.
@@ -670,11 +827,82 @@ export default {
 
     theme: 'Tema',
     language: 'Dil',
-    envFile: '.env dosyası',
-    envVars: 'Değişkenler',
     preferences: 'Tercihler',
-    stack: 'Stack kontrolü',
     stackSub: 'Compose seviyesinde: yeniden üretir ve konteynerleri yeniden kurar.',
+    runtimes: {
+      desc: 'Her çalışma ortamında yeni bir projenin başlayacağı sürüm. Hangi sürümlerin var olduğu uygulamanın kendi kataloğudur, ayar değildir.',
+    },
+    php: {
+      versionDesc:
+        'Yeni bir PHP projesinin başlangıç değerleri. Var olan projeler kendi stackvo.json dosyasındaki sürümü korur.',
+      version: 'PHP sürümü',
+      versionHint:
+        'Yeni proje formunda önceden seçili gelir; her proje yine kendi sürümünü seçebilir.',
+      server: 'Web sunucusu',
+      serverHint:
+        'PHP projelerini sunar. Diğer çalışma zamanları kendi geliştirme sunucusunu çalıştırır.',
+      composer: 'Composer sürümü',
+      composerHint: 'PHP imajına kurulur. "latest" derleme anındaki güncel sürümü izler.',
+      nodejs: 'Node.js sürümü',
+      nodejsHint:
+        'PHP konteyneri içindeki varlık derlemeleri için — Node projesi çalışma zamanından ayrıdır.',
+    },
+    shape: {
+      title: 'Alan adı ve ağ',
+      sectionDesc: 'Projelere nereden erişileceği ve nasıl sunulacağı.',
+      suffixRequired: 'Sonek zorunlu; yönlendirmeler bundan kuruluyor.',
+      suffixInvalid: 'Yalnızca harf, rakam, nokta ve tire; başı ve sonu harf veya rakam olmalı.',
+      network: 'Docker ağı',
+      networkHint:
+        'Tüm servislerin katıldığı ağ. Adını değiştirmek sonraki başlatmada konteynerleri yeniden kurar.',
+      networkRequired: 'Ağ adı zorunlu.',
+      networkInvalid: 'Yalnızca harf, rakam, nokta, tire ve alt çizgi.',
+      reset: 'Varsayılana dön',
+      addressTitle: 'Adresler',
+      addressDesc:
+        'Projelerin ve servislerin yanıt verdiği yer. Her ana bilgisayar adı bu soneğin altında toplanır; tek bir sertifikanın hepsini kapsamasını sağlayan da budur.',
+      suffixLabel: 'Ad alanı',
+      suffixLabelHint:
+        'Tüm adresleri tek bir üst alan altında toplar. İsteğe bağlı — boş bırakırsan yalnızca uzantı kullanılır.',
+      suffixTld: 'Uzantı',
+      suffixTldHint:
+        '.test ve .localhost yerel kullanım için ayrılmıştır. .dev gerçek bir TLD’dir ve HTTPS ister.',
+      preview: 'Adresler şöyle olur:',
+      suffixHsts:
+        'Bu uzantı tarayıcıların HSTS ön yükleme listesinde: altındaki hiçbir adres düz HTTP ile açılmaz ve uyarıyı geçme imkânı yoktur. Kullanmadan önce aşağıdan HTTPS’i aç.',
+      networkTitle: 'Ağ ve TLS',
+      networkGroupDesc: 'Servislerin paylaştığı Docker ağı ve HTTPS ile sunulup sunulmadıkları.',
+      thenRegenerate:
+        'Kaydedildi. Yönlendirme etiketlerinin bunu alması için yeniden üret — o ana kadar stack eski etiketlerle yanıt verir.',
+      thenCertificates:
+        'Yeni sonek kendi sertifikasını ister; ardından Sertifikalar bölümüne bak. Var olan projeler kendi stackvo.json dosyasındaki alan adını korur.',
+      regenerate: 'Yeniden üret',
+      ssl: 'HTTPS ile sun',
+      sslHint: 'Yukarıdaki alan adı soneki için yerel sertifika üretir ve bağlar.',
+      sslOffBreaksRouting:
+        'HTTPS kapalıyken HTTPS giriş noktası üretilmiyor, ama bütün yönlendirmeler yine onu hedefliyor — yeniden açılana kadar hiçbir proje veya servis alan adı çözülmez.',
+      proxyTitle: 'Ters proxy',
+      proxyDesc:
+        'Traefik. Her projeye ve yönetim arayüzüne onun üzerinden erişilir, TLS’i de o sonlandırır — yukarıdaki HTTPS anahtarının açtığı şey budur.',
+      proxyPorts: 'Yayınlanan portlar',
+      proxyDashboard: 'Panoyu aç',
+      hostsTitle: 'Hosts dosyası',
+      hostsDesc:
+        'Buradaki her alan adı isimle çözülüyor, yani her biri /etc/hosts’ta bir satır ister. Değiştirmek parolanı sorar.',
+      hostsFix: 'Tümünü düzelt',
+      hostsOk: 'Hepsi çözülüyor',
+      hostsManual: 'elle eklenmiş',
+      hostsStale: 'StackVo’nun yazdığı ama artık gerekmeyenler — aynı düğme kaldırır:',
+      redirect: 'HTTP’yi HTTPS’e yönlendir',
+      redirectHint: 'Düz istekler sitenin kendisi yerine yönlendirmeyle yanıtlanır.',
+      redirectBlocked: 'HTTPS açık olmalı — kapalı bir şemaya yönlendirmek hiçbir yere çıkmaz.',
+      phpDesc:
+        'Yeni bir PHP konteynerinin neyle kurulacağı. Değişiklik bundan sonra üretilen projeleri etkiler.',
+      tools: 'Araçlar',
+      toolsHint: 'PHP ile birlikte kurulur. Eklemek için yaz, kaldırmak için çarpıya tıkla.',
+      apt: 'Sistem paketleri',
+      aptHint: 'Konteyner içinde apt ile kurulur.',
+    },
     about: 'Hakkında',
     diagnostics: 'Tanılama',
     diagnosticsHint: 'Bir sorun bildirirken bu klasörü ekleyin.',
@@ -691,23 +919,20 @@ export default {
     updaterUnconfigured:
       'Bu yapı güncellemeleri doğrulayamaz: içine gömülü bir açık anahtar yok. Yayın imzalama anahtarı tanımlanana kadar güncelleme denetimi kapalı.',
     updateSigned: 'Paket imzası, uygulamaya gömülü anahtarla doğrulanır.',
-    generator: 'Rust generator (paralel doğrulama)',
-    engineMode: 'Üretim motoru',
-    engineBash: 'Bash (mevcut davranış)',
-    engineVerify: 'Bash + Rust doğrulaması',
-    engineRust: 'Rust (uyuşmazlıkta yazmaz)',
-    generatorReady: 'Bash çıktısıyla birebir aynı',
-    generatorDiffers: 'farklılık var — devralmaya hazır değil',
+    generator: 'Üretici (sapma denetimi)',
+    generatorReady: 'disk, üreticinin yazacağıyla aynı',
+    generatorDiffers: 'sapma var — üretilmiş bir dosya elle değişmiş ya da bayat',
     themeSystem: 'Sistem',
     themeLight: 'Açık',
     themeDark: 'Koyu',
     terminalApp: 'Terminal',
     editorApp: 'Kod editörü',
+    browserApp: 'Tarayıcı',
+    browserAppHint:
+      '“Ziyaret et” düğmelerinin tamamı bunu kullanır — proje ve servis alan adları burada açılır.',
     appsHint: 'Kurulu olmayanlar seçilemez.',
     startMinimized: 'Tepsiye küçültülmüş başlat',
     autostart: 'Açılışta başlat',
-    envEditable: 'Düzenlenebilir. Yorumlar ve satır düzeni korunur.',
-    secretHint: 'Gizli değer — buradan düzenlenemez',
     save: '{count} değişikliği kaydet',
     saved: 'Kaydedildi',
   },
@@ -716,6 +941,7 @@ export default {
     copy: 'Panoya kopyala',
     moreActions: 'Diğer işlemler',
     followOutput: 'Çıktıyı takip et',
+    stopFollowing: 'Çıktıyı takip etme',
     toggleConsole: 'Konsolu aç/kapat',
     close: 'Kapat',
   },
@@ -735,8 +961,14 @@ export default {
     live: 'canlı',
     openInEditor: 'Bu dosyayı editörde aç',
     waiting: 'Log bekleniyor…',
+    liveFrom: 'buradan itibaren canlı',
+    regex: 'Düzenli ifade',
+    pause: 'Duraklat',
+    resume: 'Devam et',
+    resumeHint: 'Devam et — {n} satır bekliyor',
+    clear: 'Temizle',
+    clearHint: 'Görünümü temizle — diskten hiçbir şey silinmez',
     containerStream: 'Konteyner çıktısı',
-    all: 'Tüm projeler',
     allDescription:
       'Her projeyi kapsayan canlı bir akış. Burada yalnızca bu andan sonra yazılan çıktı görünür — bir dosyanın geçmişini okumak için projesini açın.',
     allProjects: 'Bütün projeler',
@@ -879,21 +1111,63 @@ export default {
   newProject: {
     nameHint: 'Harf veya rakamla başlar; tire, alt çizgi ve nokta kullanılabilir (ör. api.myapp).',
     domainHint: 'Boş bırakılırsa proje adından üretilir.',
+    domain_https:
+      'Bu uzantı tarayıcıların HSTS ön yükleme listesinde: yalnızca HTTPS ile açılır ve uyarıyı geçme imkânı yoktur. Önce Ayarlar’dan HTTPS’i aç.',
+    domain_certificate:
+      'Yapılandırılmış soneğin dışında, joker sertifika bunu kapsamıyor — projeyi oluşturduktan sonra sertifikaları yeniden üret.',
     documentRootHint: 'Proje köküne göre yol.',
     portHint: 'Uygulamanın konteyner içinde dinlediği port.',
     sectionProject: 'Proje',
     sectionPhp: 'PHP yapılandırması',
     sectionNode: 'Node yapılandırması',
+    sectionLang: '{runtime} yapılandırması',
+    langVersion: 'Sürüm',
+    optionalStep: 'İsteğe bağlı — bu adımı atlamak için boş bırakın.',
+    langBindHint: '0.0.0.0 ve yukarıdaki portu dinlemeli; Traefik ona yönlendirir.',
     title: 'Yeni proje',
     name: 'Proje adı',
     template: 'Başlangıç',
     templates: {
-      empty: 'Boş proje (aşağıdan yapılandırın)',
-      laravel: 'Laravel (composer create-project)',
-      wordpress: 'WordPress (wp core download)',
-      symfony: 'Symfony (composer create-project)',
-      nextjs: 'Next.js (create-next-app)',
+      empty: 'Boş proje',
+      laravel: 'Laravel',
+      wordpress: 'WordPress',
+      symfony: 'Symfony',
+      nextjs: 'Next.js',
+      nuxt: 'Nuxt',
+      vue: 'Vue (Vite)',
+      react: 'React (Vite)',
+      svelte: 'SvelteKit',
+      astro: 'Astro',
+      cakephp: 'CakePHP',
+      yii: 'Yii 2',
+      codeigniter: 'CodeIgniter 4',
+      laminas: 'Laminas (Zend)',
+      drupal: 'Drupal',
+      prestashop: 'PrestaShop',
+      django: 'Django',
+      rails: 'Ruby on Rails',
+      slim: 'Slim',
+      nest: 'NestJS',
+      tina: 'TinaCMS',
+      angular: 'Angular',
+      typo3: 'TYPO3',
+      gin: 'Gin',
+      echo: 'Echo',
+      flask: 'Flask',
+      fastapi: 'FastAPI',
+      sinatra: 'Sinatra',
+      rocket: 'Rocket',
     },
+    templateGroups: {
+      php: 'PHP',
+      node: 'JavaScript',
+      cms: 'CMS & e-ticaret',
+      python: 'Python',
+      go: 'Go',
+      other: 'Ruby & Rust',
+    },
+    detectedHint:
+      'Çalışma ortamı, web sunucusu ve doküman kökü kurucunun yazdığı dosyalardan belirlenir — Laravel public/ üzerinden, WordPress proje kökünden servis eder. Sonrasında proje ayarlarından değiştirilebilir.',
     templateHint:
       'Çerçevenin kendi kurucusu geçici bir konteynerde çalışır; sonra tespit, yazdıklarından projeyi yapılandırır. İlk çalıştırma kurucu imajını indirir — birkaç dakika verin.',
     domain: 'Alan adı',
@@ -934,6 +1208,7 @@ export default {
   },
 
   detail: {
+    openFolder: 'Klasörü aç',
     dockerfileDesc: 'Rust üreteci bu projeyi nasıl render ediyor — dosyaya yazmadan.',
     compatHint: 'Bash bugün ne yazıyorsa onu üretir; kurulamayan eklentiler sessizce atlanır.',
     strictHint: 'Kurulamayan bir eklenti varsa üretmeyi reddeder ve hangisi olduğunu söyler.',

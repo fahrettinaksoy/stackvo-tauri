@@ -27,7 +27,7 @@ const { t } = useI18n();
 <template>
   <PageLayout
     top-icon="mdi-text-box-multiple-outline"
-    :top-title="t('logs.all')"
+    :top-title="t('logs.title')"
     :top-subtitle="t('logs.allDescription')"
     hide-bar
   >

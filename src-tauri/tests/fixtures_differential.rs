@@ -210,11 +210,14 @@ fn traefik_config_matches_without_ssl() {
 
 #[test]
 fn traefik_routes_match_with_ssl() {
+    // These fixtures were frozen from the Bash generator; since the takeover
+    // they document the Rust renderer's own contract, updated when the
+    // routed-service set changes (mailhog -> mailpit, Sprint 19).
     let opts = traefik_opts(
         true,
         vec![
             ("rabbitmq", true),
-            ("mailhog", true),
+            ("mailpit", true),
             ("kibana", true),
             ("grafana", true),
         ],
@@ -231,7 +234,7 @@ fn traefik_routes_match_with_a_subset_and_no_ssl() {
         false,
         vec![
             ("rabbitmq", true),
-            ("mailhog", true),
+            ("mailpit", true),
             ("kibana", false),
             ("grafana", false),
         ],

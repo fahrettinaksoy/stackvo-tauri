@@ -376,7 +376,7 @@ fn is_top_level_key(line: &str) -> bool {
 /// The order is data, not a detail: the generated file is compared byte for
 /// byte against Bash's, and a different order is a different file even when it
 /// describes the same stack. Grouped as the shell groups them.
-pub const DYNAMIC_SERVICES: [(&str, &str); 20] = [
+pub const DYNAMIC_SERVICES: [(&str, &str); 21] = [
     // Databases
     (
         "SERVICE_MYSQL_ENABLE",
@@ -436,6 +436,10 @@ pub const DYNAMIC_SERVICES: [(&str, &str); 20] = [
         "services/mailhog/docker-compose.mailhog.tpl",
     ),
     (
+        "SERVICE_MAILPIT_ENABLE",
+        "services/mailpit/docker-compose.mailpit.tpl",
+    ),
+    (
         "SERVICE_PHPMYADMIN_ENABLE",
         "services/phpmyadmin/docker-compose.phpmyadmin.tpl",
     ),
@@ -470,19 +474,20 @@ pub const DYNAMIC_SERVICES: [(&str, &str); 20] = [
 /// `services:` then a blank line, then each enabled service's body — the shell's
 /// `echo "services:"` followed by `echo ""`, then one `include_module` per
 /// entry. A disabled service contributes nothing at all, not even a blank line.
-pub fn render_dynamic_compose(
-    templates_dir: &std::path::Path,
-    env: &BTreeMap<String, String>,
-) -> String {
+/// `root` is the workspace, not the template directory: each service template
+/// is resolved workspace-first and falls back to the copy compiled into the
+/// binary, so a packaged app needs no checkout and an edited template still
+/// wins.
+pub fn render_dynamic_compose(root: &std::path::Path, env: &BTreeMap<String, String>) -> String {
     let mut out = String::from("services:\n\n");
 
     for (flag, path) in DYNAMIC_SERVICES {
         if env.get(flag).map(String::as_str) != Some("true") {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(templates_dir.join(path)) else {
-            // The shell warns and moves on; a missing template must not take
-            // the whole file down.
+        let Some(text) = crate::skeleton::read_template(root, &format!("core/templates/{path}"))
+        else {
+            // A missing template must not take the whole file down.
             tracing::warn!(template = path, "service template not found");
             continue;
         };
@@ -493,135 +498,49 @@ pub fn render_dynamic_compose(
         out.push('\n');
     }
 
-    if env.get("STACKVO_UI_ENABLE").map(String::as_str) == Some("true") {
-        out.push_str(&stackvo_ui_service(env));
-    }
-
     // `echo ""` then `echo "volumes:"`, then the harvested names.
     out.push('\n');
     out.push_str("volumes:\n");
-    for name in volume_names(templates_dir) {
+    for name in volume_names(root) {
         out.push_str(&format!("  {name}: {{}}\n"));
     }
 
     out
 }
-
-/// The web UI's service block, which is a heredoc rather than a template.
-///
-/// Reproduced verbatim because nothing renders it — `compose.sh` sources
-/// `generators/stackvo-ui.sh` and appends the function's output. The `${PWD}`
-/// is escaped in the shell and stays literal here too: compose resolves it at
-/// run time, and baking in a path would break the mount for anyone whose
-/// checkout is somewhere else.
-fn stackvo_ui_service(env: &BTreeMap<String, String>) -> String {
-    let uid = env.get("HOST_UID").map(String::as_str).unwrap_or("1000");
-    let gid = env.get("HOST_GID").map(String::as_str).unwrap_or("1000");
-    let network = env
-        .get("DOCKER_DEFAULT_NETWORK")
-        .map(String::as_str)
-        .unwrap_or("stackvo-net");
-
-    format!(
-        r#"  stackvo-ui:
-    profiles: ["core"]
-    build:
-      context: ../core/ui
-      dockerfile: Dockerfile
-    image: "stackvo-ui:local"
-    container_name: "stackvo-ui"
-    restart: unless-stopped
-
-    environment:
-      NODE_ENV: production
-      STACKVO_ROOT: /app
-      PROJECTS_DIR: /app/projects
-      GENERATED_DIR: /app/generated
-      HOST_STACKVO_ROOT: ${{PWD}}
-      HOST_UID: {uid}
-      HOST_GID: {gid}
-
-    volumes:
-      - ../:/app:rw
-      - ../.env:/app/.env:rw
-      - ../core:/app/core:rw
-      - ../projects:/app/projects:rw
-      - ../generated:/app/generated:rw
-      - ../logs:/app/logs:rw
-      - /var/run/docker.sock:/var/run/docker.sock
-      # Host's hosts file (read-only) so the UI can detect configured domains
-      - /etc/hosts:/host/etc/hosts:ro
-
-    networks:
-      - {network}
-
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.stackvo-ui.rule=Host(`stackvo.loc`)"
-      - "traefik.http.routers.stackvo-ui.entrypoints=websecure"
-      - "traefik.http.routers.stackvo-ui.tls=true"
-      - "traefik.http.services.stackvo-ui.loadbalancer.server.port=80"
-
-"#
-    )
-}
-
-/// Named volumes, harvested from **every** template on disk.
-///
-/// Not only the enabled ones — the shell `find`s all `*.tpl` and collects each
-/// one's `volumes:` block, so the generated file declares volumes for services
-/// that are switched off. That is arguably wrong, but it is what Bash writes,
-/// and this is a port: "fixing" it here would be a byte difference that fails
-/// the takeover check.
-///
-/// Sorted and de-duplicated, as `sort -u`.
-fn volume_names(templates_dir: &std::path::Path) -> Vec<String> {
+fn volume_names(root: &std::path::Path) -> Vec<String> {
     let mut names = std::collections::BTreeSet::new();
-    collect_volumes(templates_dir, &mut names);
+    for text in crate::skeleton::all_service_templates(root) {
+        harvest_volumes(&text, &mut names);
+    }
     names.into_iter().collect()
 }
 
-fn collect_volumes(dir: &std::path::Path, out: &mut std::collections::BTreeSet<String>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_volumes(&path, out);
+/// The volumes an already-read template declares.
+///
+/// `awk '/^volumes:/,0 { if (/^  [a-z]/) … }'` — from the first `volumes:`
+/// line to the end of the file, take two-space entries beginning with a
+/// lowercase letter.
+fn harvest_volumes(text: &str, out: &mut std::collections::BTreeSet<String>) {
+    let mut started = false;
+    for line in text.lines() {
+        if line.starts_with("volumes:") {
+            started = true;
+        }
+        if !started {
             continue;
         }
-        if path.extension().and_then(|e| e.to_str()) != Some("tpl") {
+        let is_entry = line.starts_with("  ")
+            && line
+                .as_bytes()
+                .get(2)
+                .is_some_and(|b| b.is_ascii_lowercase());
+        if !is_entry {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-
-        // `awk '/^volumes:/,0 { if (/^  [a-z]/) … }'` — from the first
-        // `volumes:` line to the end of the file, take two-space entries
-        // beginning with a lowercase letter.
-        let mut started = false;
-        for line in text.lines() {
-            if line.starts_with("volumes:") {
-                started = true;
-            }
-            if !started {
-                continue;
-            }
-            let is_entry = line.starts_with("  ")
-                && line
-                    .as_bytes()
-                    .get(2)
-                    .is_some_and(|b| b.is_ascii_lowercase());
-            if !is_entry {
-                continue;
-            }
-            // `gsub(/:.*/, "")` then `gsub(/^  /, "")`.
-            let name = line[2..].split(':').next().unwrap_or("");
-            if !name.is_empty() {
-                out.insert(name.to_string());
-            }
+        // `gsub(/:.*/, "")` then `gsub(/^  /, "")`.
+        let name = line[2..].split(':').next().unwrap_or("");
+        if !name.is_empty() {
+            out.insert(name.to_string());
         }
     }
 }

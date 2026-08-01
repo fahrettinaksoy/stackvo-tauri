@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "about",
+  "description": "Capabilities granted to the About window. Its own file rather than adding the label to `default`, which would hand a box that shows a version number the same reach as the window that drives Docker. It needs the core runtime — the same document is loaded, so Vue, the router and `invoke` all have to work — and nothing else: `open_in_browser` is one of this app's own commands, and those are gated by the command registry rather than by a plugin permission.",
+  "windows": ["about"],
+  "permissions": ["core:default"]
+}

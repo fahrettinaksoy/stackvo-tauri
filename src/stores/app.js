@@ -38,6 +38,20 @@ export const useAppStore = defineStore('app', () => {
    */
   const preflight = ref(null);
 
+  /**
+   * The configured domain suffix, from `DEFAULT_TLD_SUFFIX`.
+   *
+   * Here rather than fetched per view because three of them build a hostname
+   * from it and each was inventing its own. The project form was the one that
+   * mattered: it defaulted a new project to `name.loc` while the routing
+   * labels, the certificate and the services list all used the configured
+   * suffix. The project came up, the container ran, and the address in the
+   * card resolved to nothing.
+   */
+  const tld = ref('');
+  /** Whether the stack serves HTTPS — decides what a `.dev` domain costs. */
+  const sslEnabled = ref(false);
+
   const hasWorkspace = computed(() => !!workspace.value?.valid);
   const engineUp = computed(() => !!engine.value?.reachable);
 
@@ -54,8 +68,17 @@ export const useAppStore = defineStore('app', () => {
 
   async function setWorkspace(path) {
     error.value = null;
+    const fresh = !workspace.value || workspace.value.root !== path;
     try {
       workspace.value = await api.workspaceSet(path);
+      // Choosing an empty folder now *creates* the workspace. Saying so is the
+      // difference between "nothing happened" and "thirty-six files were
+      // written into the directory you picked".
+      if (fresh && workspace.value?.root) {
+        const { toastSuccess } = await import('@/lib/toast');
+        const { i18n } = await import('@/i18n');
+        toastSuccess(i18n.global.t('preflight.workspaceInstalled', { path: workspace.value.root }));
+      }
       return true;
     } catch (e) {
       error.value = e;
@@ -126,9 +149,17 @@ export const useAppStore = defineStore('app', () => {
     return checkRequirements();
   }
 
+  /** Best-effort: with no workspace there is no .env, and no suffix to read. */
+  async function refreshTld() {
+    const env = await api.envGet().catch(() => null);
+    tld.value = env?.DEFAULT_TLD_SUFFIX ?? '';
+    sslEnabled.value = env?.SSL_ENABLE === 'true';
+  }
+
   async function boot() {
     booting.value = true;
     await Promise.all([refreshWorkspace(), refreshEngine(), checkRequirements()]);
+    await refreshTld();
     booting.value = false;
   }
 
@@ -136,6 +167,9 @@ export const useAppStore = defineStore('app', () => {
     workspace,
     engine,
     preflight,
+    tld,
+    sslEnabled,
+    refreshTld,
     checkRequirements,
     fixRequirement,
     newProjectOpen,

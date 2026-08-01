@@ -43,7 +43,7 @@ const busy = ref(false);
 /** Set once the manifest is written, and cleared by applying or reopening. */
 const applyPending = ref(false);
 
-const spec = computed(() => (form.value ? formToSpec(form.value) : null));
+const spec = computed(() => (form.value ? formToSpec(form.value, app.tld) : null));
 const dirty = computed(() => !!original.value && specsDiffer(original.value, spec.value));
 
 /**
@@ -75,7 +75,7 @@ async function load() {
     ]);
     catalog.value = cat;
     form.value = formFromManifest(manifest);
-    original.value = formToSpec(form.value);
+    original.value = formToSpec(form.value, app.tld);
   } catch (e) {
     error.value = e;
     form.value = null;

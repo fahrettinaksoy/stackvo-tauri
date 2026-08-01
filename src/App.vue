@@ -13,6 +13,7 @@ import { setLocale } from '@/i18n';
 import { api } from '@/lib/ipc';
 import { listenAll, REFRESH_TRIGGERS } from '@/lib/events';
 import OperationConsole from '@/components/OperationConsole.vue';
+import { toasts } from '@/lib/toast';
 import ErrorAlert from '@/components/ErrorAlert.vue';
 import RequirementsGate from '@/components/RequirementsGate.vue';
 import NewProjectDrawer from '@/components/NewProjectDrawer.vue';
@@ -25,6 +26,15 @@ const ops = useOperationsStore();
 const appearance = useAppearanceStore();
 const theme = useTheme();
 const route = useRoute();
+
+/**
+ * Is this the About window rather than the main one?
+ *
+ * Read from the route, not from the window label: the label needs an async
+ * Tauri call, and the shell would flash on screen for the frame before it
+ * resolved. The route is known before the first render.
+ */
+const isAboutWindow = computed(() => route.name === 'About');
 const router = useRouter();
 const { t, locale } = useI18n();
 
@@ -79,6 +89,7 @@ const NAV = [
     icon: 'mdi-text-box-multiple-outline',
     label: 'nav.logs',
   },
+  { key: 'mail', to: '/mail', icon: 'mdi-email-outline', label: 'nav.mail' },
   { key: 'settings', to: '/settings', icon: 'mdi-cog-outline', label: 'nav.settings' },
 ];
 
@@ -149,6 +160,7 @@ function onFocus() {
 let enginePoll = null;
 let teardown = null;
 let offClose = null;
+let offTray = null;
 
 onMounted(async () => {
   // Before anything else that paints: the saved theme, colours and type size
@@ -168,6 +180,22 @@ onMounted(async () => {
     showCloseDialog.value = true;
   });
 
+  // A project picked from the tray. Routing is decided here rather than in
+  // Rust: the route table and the guard that waits for a workspace both live
+  // on this side, and a second answer to "can this page open yet" is how the
+  // two come to disagree.
+  offTray = await listenAll(['tray:open_project', 'tray:navigate'], (event, payload) => {
+    if (!payload) return;
+    if (event === 'tray:open_project') {
+      router.push({ name: 'ProjectDetail', params: { name: payload } });
+    } else {
+      // The payload is the route's own name, so the tray never has to know
+      // what path a page lives at — that is the router's business and it has
+      // moved before.
+      router.push({ name: payload }).catch(() => {});
+    }
+  });
+
   enginePoll = setInterval(() => {
     if (document.visibilityState === 'visible') app.refreshEngine();
   }, 5000);
@@ -183,12 +211,22 @@ onUnmounted(() => {
   ops.unbind();
   teardown?.();
   offClose?.();
+  offTray?.();
   if (enginePoll) clearInterval(enginePoll);
 });
 </script>
 
 <template>
-  <v-app>
+  <!-- The about window loads the same document as the main one. Rendering the
+       shell around it would put a navigation rail and a stack toolbar in a box
+       whose whole job is to show a version number. -->
+  <v-app v-if="isAboutWindow">
+    <v-main>
+      <router-view />
+    </v-main>
+  </v-app>
+
+  <v-app v-else>
     <!-- App bar ---------------------------------------------------------- -->
     <v-app-bar color="primary" elevation="3">
       <v-toolbar-title class="text-h4 app-title">
@@ -328,7 +366,7 @@ onUnmounted(() => {
       permanent
       :rail="rail"
       rail-width="64"
-      width="220"
+      width="180"
       class="nav-drawer border-0 elevation-6"
       @click="toggleDrawer('nav')"
     >
@@ -416,7 +454,7 @@ onUnmounted(() => {
       permanent
       :rail="railProjects"
       rail-width="66"
-      width="340"
+      width="330"
       class="elevation-6 border-0"
       @click="toggleDrawer('projects')"
     >
@@ -461,10 +499,14 @@ onUnmounted(() => {
           <div class="text-caption">{{ t('projects.empty') }}</div>
         </div>
 
+        <!-- No `rounded="0"` here. That marks a surface running to an edge,
+             where a radius cuts a notch and shows the background through it —
+             but `v-list nav` insets its items by 8px on both sides, so these
+             rows reach no edge and follow the corner setting like everything
+             else. -->
         <v-list-item
           v-for="project in filteredProjects"
           :key="project.name"
-          rounded="0"
           :active="route.path === `/projects/${project.name}`"
           @click.stop="router.push(`/projects/${project.name}`)"
         >
@@ -551,7 +593,7 @@ onUnmounted(() => {
                   prepend-icon="mdi-open-in-new"
                   :title="t('projects.openSite')"
                   base-color="primary"
-                  @click.stop="openUrl(`https://${project.domain}`)"
+                  @click.stop="api.openInBrowser(`https://${project.domain}`)"
                 />
               </v-list>
             </v-menu>
@@ -601,6 +643,11 @@ onUnmounted(() => {
     </v-snackbar>
 
     <OperationConsole />
+
+    <!-- The global toast queue: operations announce their outcome here in one
+         line, while the console reserves itself for output worth reading —
+         which, on success, there is none of. -->
+    <v-snackbar-queue v-model="toasts" closable location="top right" :timeout="4000" />
 
     <CloseDialog v-model="showCloseDialog" />
 

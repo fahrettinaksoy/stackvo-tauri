@@ -1,0 +1,48 @@
+###################################################################
+# STACKVO - CORE BASE COMPOSE
+# This file defines the essential shared services and networks
+# required for all Stackvo projects. Each project will inject
+# its own docker-compose.yml on top of this base configuration.
+###################################################################
+
+name: stackvo
+
+services:
+  ###############################################################
+  # TRAEFIK - GLOBAL REVERSE PROXY FOR ALL PROJECTS
+  ###############################################################
+  traefik:
+    profiles: ["core"] # Core service - starts automatically in minimal setup
+    image: traefik:latest
+    container_name: stackvo-traefik
+    restart: unless-stopped
+
+    command:
+      - "--api.dashboard=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedByDefault=false"
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+
+    ports:
+      - "80:80"
+      - "443:443"
+
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./traefik/traefik.yml:/etc/traefik/traefik.yml:ro"
+      - "./traefik/dynamic:/etc/traefik/dynamic:ro"
+      - "./certs:/certs:ro"
+
+    networks:
+      - stackvo-net
+
+###################################################################
+# GLOBAL NETWORK (SHARED BY ALL PROJECT COMPOSE FILES)
+###################################################################
+networks:
+  stackvo-net:
+    name: stackvo-net
+    external: true

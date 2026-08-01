@@ -54,11 +54,16 @@ impl Workspace {
     }
 }
 
-/// A directory is a StackVo checkout if it has the CLI entrypoint and a
-/// projects directory. Both are required: `core/cli/stackvo.sh` alone could be
-/// a partial clone, and `projects/` alone is far too generic a name to trust.
+/// A directory the app can work in — one it already set up, or an empty one
+/// it can set up now.
+///
+/// This used to ask "is this a StackVo checkout", which only an existing clone
+/// could answer yes to; the templates now ship in the binary, so an empty
+/// folder is a perfectly good answer to "where should StackVo live". The
+/// marker before that was `core/cli/stackvo.sh`, which stopped existing when
+/// the Bash CLI was deleted.
 pub fn looks_like_stackvo(path: &Path) -> bool {
-    path.join("core/cli/stackvo.sh").is_file() && path.join("projects").is_dir()
+    crate::skeleton::fitness(path) != crate::skeleton::Fitness::Occupied
 }
 
 fn describe(root: PathBuf, source: Source) -> Workspace {
@@ -224,9 +229,27 @@ fn discovery_candidates() -> Vec<PathBuf> {
 /// A stored path that no longer validates does NOT silently fall through to
 /// discovery — it returns invalid with the stale root attached, so the UI can
 /// say "this folder is gone" instead of quietly switching checkouts.
+/// Set the directory up if it is empty, and say nothing if it was already
+/// done.
+///
+/// `set()` installs when the user picks a folder, but a workspace can arrive
+/// two other ways — a stored path from a previous run, and `STACKVO_ROOT` —
+/// and neither went through `set()`. An uninstalled one of those had no
+/// `.env`, so the first command that read a setting failed with an IO error
+/// naming a file the user had never heard of. Installing is idempotent and
+/// costs two `is_dir()` calls once the workspace exists.
+fn ensure_installed(path: &Path) {
+    if crate::skeleton::fitness(path) == crate::skeleton::Fitness::Installable {
+        if let Err(e) = crate::skeleton::install(path) {
+            tracing::warn!(path = %path.display(), error = %e, "could not set up the workspace");
+        }
+    }
+}
+
 pub fn resolve() -> Workspace {
     if let Some(stored) = load_stored() {
         return if looks_like_stackvo(&stored) {
+            ensure_installed(&stored);
             describe(stored, Source::Stored)
         } else {
             Workspace {
@@ -246,6 +269,7 @@ pub fn resolve() -> Workspace {
         // against its own working directory, not ours.
         let path = std::fs::canonicalize(&from_env).unwrap_or_else(|_| PathBuf::from(&from_env));
         if looks_like_stackvo(&path) {
+            ensure_installed(&path);
             return describe(path, Source::Env);
         }
     }
@@ -267,20 +291,26 @@ pub fn set(path: impl AsRef<Path>) -> Result<Workspace> {
         .canonicalize()
         .map_err(|e| Error::io(format!("resolving {}", path.display()), e))?;
 
-    if !looks_like_stackvo(&canonical) {
-        return Err(Error::new(
-            Code::NoWorkspace,
-            format!(
-                "{} does not look like a StackVo checkout",
-                canonical.display()
-            ),
-        )
-        .with_hint("Pick the folder that directly contains core/cli/stackvo.sh and projects/.")
-        .with_details(serde_json::json!({
-            "path": canonical.display().to_string(),
-            "hasCli": canonical.join("core/cli/stackvo.sh").is_file(),
-            "hasProjects": canonical.join("projects").is_dir(),
-        })));
+    match crate::skeleton::fitness(&canonical) {
+        // Set up on first use. Never merged into a folder that already holds
+        // something else: scattering a stack through somebody's Documents is
+        // not a thing to do on a mis-click, and it is not undoable.
+        crate::skeleton::Fitness::Installable => {
+            crate::skeleton::install(&canonical)?;
+        }
+        crate::skeleton::Fitness::Existing => {}
+        crate::skeleton::Fitness::Occupied => {
+            return Err(Error::new(
+                Code::InvalidInput,
+                format!("{} already contains other files", canonical.display()),
+            )
+            .with_hint("Choose an empty folder, or one StackVo already set up.")
+            .with_details(serde_json::json!({
+                "path": canonical.display().to_string(),
+                "hasTemplates": canonical.join("core/templates").is_dir(),
+                "hasProjects": canonical.join("projects").is_dir(),
+            })));
+        }
     }
 
     save_stored(&canonical)?;

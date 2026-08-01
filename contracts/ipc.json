@@ -123,7 +123,7 @@
       "kind": "operation",
       "args": {
         "name": "string",
-        "template": "'laravel' | 'wordpress' | 'symfony' | 'nextjs'"
+        "template": "'laravel'|'symfony'|'cakephp'|'yii'|'codeigniter'|'laminas'|'slim'|'wordpress'|'drupal'|'prestashop'|'typo3'|'tina'|'nextjs'|'nuxt'|'vue'|'react'|'svelte'|'astro'|'nest'|'angular'|'django'|'rails'|'gin'|'echo'|'flask'|'fastapi'|'sinatra'|'rocket'"
       },
       "returns": "OperationId",
       "emits": [
@@ -131,7 +131,7 @@
         "scaffold:done"
       ],
       "why": "The create half of P0-1 (detection/adoption shipped first). Runs the framework's own installer in a throwaway container — composer create-project, wp-cli, create-next-app — so nothing is installed on the host and only the bind-mounted project directory survives.",
-      "notes": "Ends where adoption begins: the UI follows with project_adopt, which detects runtime/server/document root from what the installer actually wrote — the same machinery as a git clone. Every installer command is pinned non-interactive (a prompt inside an operation console is a hang, not a question). On unix runs --user uid:gid so files land owned by the user, not root. Refuses a non-empty directory; a failed install that wrote nothing removes the husk so the retry is not blocked."
+      "notes": "Ends where adoption begins: the UI follows with project_adopt, which detects runtime/server/document root from what the installer actually wrote — the same machinery as a git clone. Nine installers, every command pinned non-interactive — each flag measured against a real container rather than read off a README (nuxi needs both --template and --force; sv needs --no-add-ons; astro needs --yes). The JavaScript ones pass --no-install: the node Dockerfile installs for the container's platform, and a host node_modules in the image is the arm64-in-amd64 mistake NODE_DOCKERIGNORE exists to prevent (a prompt inside an operation console is a hang, not a question). On unix runs --user uid:gid so files land owned by the user, not root. Refuses a non-empty directory; a failed install that wrote nothing removes the husk so the retry is not blocked. Seventeen installers now, across PHP, JavaScript, Python and Ruby. Composer projects carry --ignore-platform-reqs because the installer container is not the machine the code runs on (CakePHP wants ext-intl, the composer image has none, and StackVo's PHP image does); Rails needs the full ruby image rather than slim, which cannot compile websocket-driver. Twenty-eight templates in two kinds: an installer container where the ecosystem has a scaffolder, and **written files** where it does not — Gin, Echo, Flask, FastAPI, Sinatra and Rocket are each 'write two files and let the language build them', so pulling an image to write thirty lines would be a download for nothing. Their dependencies are not skipped, they move: the project's own Dockerfile already runs pip/go build/bundle/cargo for the container's platform. Every written template binds 0.0.0.0 on the port lang_defaults gives its runtime — a test asserts it over code lines only, because the comments explaining the loopback trap were tripping the check."
     },
     "worker_options": {
       "new": true,
@@ -378,6 +378,25 @@
       ],
       "notes": "Flips SERVICE_<NAME>_ENABLE in .env, regenerates, then brings the profile up."
     },
+    "service_settings": {
+      "replaces": "none — new in the desktop app",
+      "kind": "query",
+      "args": {
+        "name": "string"
+      },
+      "returns": "ServiceSetting[]",
+      "notes": "Every SERVICE_<ID>_* key except ENABLE, which the services list owns. Secrets are masked; env_reveal is the only way to see one."
+    },
+    "service_apply_settings": {
+      "replaces": "none — new in the desktop app",
+      "kind": "operation",
+      "args": {
+        "name": "string",
+        "patch": "map<string,string>"
+      },
+      "returns": "OperationId",
+      "notes": "MUST reject keys outside the service's prefix, MUST reject ENABLE, and MUST reject a masked value being written back. Regenerates and recreates the container: a restart would keep the environment it was created with, so the setting would appear applied and not be."
+    },
     "service_disable": {
       "replaces": "POST /api/services/:s/disable",
       "kind": "operation",
@@ -536,6 +555,32 @@
       "returns": "map<string,string>",
       "notes": "MUST redact secret-matching keys unless `reveal: true` is passed and the user has confirmed in-session."
     },
+    "server_config_get": {
+      "replaces": "none — new in the desktop app",
+      "kind": "query",
+      "args": {
+        "server": "string"
+      },
+      "returns": "string",
+      "notes": "The raw file including its comments. Only nginx and caddy are accepted; the other servers have no generated config file for a snippet to be added to."
+    },
+    "server_config_set": {
+      "replaces": "none — new in the desktop app",
+      "kind": "mutation",
+      "args": {
+        "server": "string",
+        "content": "string"
+      },
+      "returns": "void",
+      "notes": "Written atomically. Takes effect on the next generate: the directives are rendered into each project's server config, not into a file the server reads directly."
+    },
+    "env_defaults": {
+      "replaces": "none — new in the desktop app",
+      "kind": "query",
+      "args": {},
+      "returns": "map<string,string>",
+      "notes": "The values compiled into the binary. Carries no secret and needs no workspace: it describes the app, not a checkout. The settings form uses it to mark a value as a default and to offer going back to one."
+    },
     "env_reveal": {
       "new": true,
       "kind": "query",
@@ -575,7 +620,8 @@
         "generate:done",
         "generate:error"
       ],
-      "why": "`stackvo generate` was only ever invoked as a side effect of project_create / service_enable, via execAsync on a shell string. Making it a first-class command is what lets the fs-watcher regenerate automatically."
+      "why": "`stackvo generate` was only ever invoked as a side effect of project_create / service_enable, via execAsync on a shell string. Making it a first-class command is what lets the fs-watcher regenerate automatically.",
+      "notes": "Since the takeover, this writes with the Rust generator directly — no shell is spawned, and bash is no longer a generation prerequisite."
     },
     "compose_up": {
       "replaces": "POST /api/start-with-profile",
@@ -721,6 +767,25 @@
       "returns": "void",
       "notes": "Editor command from preferences; default: detect VS Code, fall back to the OS handler."
     },
+    "open_in_browser": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "url": "string"
+      },
+      "returns": "void",
+      "why": "A project's own domain deserves the browser the developer works in, not whatever the OS last associated with https. The opener plugin has no notion of which browser.",
+      "notes": "Also the fix for a real defect: `opener:allow-open-url` was granted without a scope, and open_url answers ForbiddenUrl when nothing matches — so every visit button in the app did nothing at all, silently. http/https only; a launcher that took file:// or a custom scheme from its own front end would be a way to start arbitrary things. Falls back to the system default when the chosen browser cannot start."
+    },
+    "open_folder": {
+      "replaces": "none — new in the desktop app",
+      "kind": "mutation",
+      "args": {
+        "path": "string"
+      },
+      "returns": "void",
+      "notes": "Shows a directory in the system file manager. Its own command rather than the opener plugin's open_path, whose permission is documented as enabling the command with no scope — and a scope wide enough for an arbitrary workspace is a scope over everything. MUST reject a path that is not an existing directory."
+    },
     "pick_directory": {
       "new": true,
       "kind": "frontend-plugin",
@@ -818,6 +883,13 @@
       "returns": "string[]",
       "why": "Every project domain with no hosts entry. Drives the one-click fix; the web UI could detect this but had no way to act on it."
     },
+    "hosts_overview": {
+      "replaces": "none — new in the desktop app",
+      "kind": "query",
+      "args": {},
+      "returns": "HostsOverview",
+      "notes": "Every domain the stack serves with its hosts state, plus entries inside StackVo's own block that nothing wants any more. MUST offer only StackVo-managed lines as stale: a hand-written entry belongs to whoever wrote it."
+    },
     "cert_status": {
       "new": true,
       "kind": "query",
@@ -861,7 +933,8 @@
       "kind": "operation",
       "args": {
         "name": "string",
-        "spec": "ProjectSpec (optional — defaults to what was detected)"
+        "spec": "ProjectSpec (optional — defaults to what was detected)",
+        "domain": "string? — overrides the detected domain only"
       },
       "returns": "OperationId",
       "emits": [
@@ -870,7 +943,7 @@
         "project:error"
       ],
       "why": "Writes stackvo.json for a directory that is already there, then regenerates. The counterpart of project_create, which requires the directory to be absent.",
-      "notes": "Refuses when a manifest already exists — adopting a managed project would silently overwrite settings the user chose. The spec is validated against project.schema.json exactly as project_create's is; detection fills the form, it does not bypass the check."
+      "notes": "Refuses when a manifest already exists — adopting a managed project would silently overwrite settings the user chose. The spec is validated against project.schema.json exactly as project_create's is; detection fills the form, it does not bypass the check. `domain` is an override on top of detection rather than part of the spec: detection reads the code and can say \"this is Laravel, its document root is public\", but it has no way to know the user wanted `shop.loc` instead of `<directory>.loc`. Passing a full spec still bypasses detection entirely; passing only a domain does not."
     },
     "mail_status": {
       "new": true,
@@ -904,6 +977,57 @@
       "args": {},
       "returns": "void",
       "notes": "DESTRUCTIVE in the small: it empties the inbox. The UI MUST confirm, but this needs no backup — a mail catcher is a bin by design."
+    },
+    "mail_delete": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "id": "string"
+      },
+      "returns": "void",
+      "notes": "One message, not the inbox. The servers disagree on the verb's address: MailHog takes the id in the path, Mailpit takes a JSON body of ids on the collection route. No confirmation — a catcher is a bin; only the whole-inbox clear keeps its dialog."
+    },
+    "mail_search": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "query": "string",
+        "limit": "u32?"
+      },
+      "returns": "MailMessage[]",
+      "why": "A catcher with fifty captured mails needs a search box more than it needs another button. The query reaches the catcher verbatim, so Mailpit's own syntax (from:, to:, subject:, quoted phrases) works as documented rather than being reimplemented worse here."
+    },
+    "mail_html_check": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "id": "string"
+      },
+      "returns": "HtmlCheck?",
+      "why": "The report a developer actually opens a catcher for: how this markup fares across 186 real mail-client features. Mailpit only — null on MailHog, which is how the UI knows to hide the tab instead of showing zeroes.",
+      "notes": "Warnings are sorted worst-first; a report whose first row is a construct every client supports buries the one that breaks Outlook."
+    },
+    "mail_link_check": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "id": "string"
+      },
+      "returns": "LinkCheck?",
+      "why": "Dead links in a transactional mail are found by the recipient today.",
+      "notes": "**This leaves the machine** — it fetches every link in the message, so it is never run as part of opening one; the UI asks for it explicitly. 30s timeout, because it waits on third-party servers."
+    },
+    "mail_attachment_save": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "id": "string",
+        "partId": "string",
+        "path": "string"
+      },
+      "returns": "u64",
+      "why": "Reading a captured invoice PDF meant leaving for the browser UI.",
+      "notes": "partId is a handle the catcher issued and path comes from the system save dialog — the front end names neither the source nor the destination."
     },
     "db_targets": {
       "new": true,
@@ -1273,11 +1397,12 @@
       "kind": "operation",
       "args": {
         "scope": "'all'|'projects'|'services'",
-        "engineMode": "'bash'|'verify'|'rust' (default bash)"
+        "engineMode": "'verify'|'rust' (default rust; 'bash' answers Unsupported)"
       },
       "returns": "{ operationId, engine, report?, note? }",
-      "why": "The staged handover. The generator's output is the input to every container the user runs, so 'probably identical' is not a standard worth shipping. Bash runs in every mode; `rust` refuses to write when the two disagree, so the switch cannot silently change anyone's images.",
-      "notes": "`verify` is the mode to leave on during the transition: Bash still writes, and any divergence is reported without being acted on. Replaces generate_run, which is kept for callers that only ever want Bash."
+      "why": "Was the staged handover: Bash ran in every mode and `rust` refused to write on any byte difference. The takeover completed at 28/28 files identical on real data, the Bash engine was retired, and the Rust generator is the only writer.",
+      "notes": "Kept for headless callers; the UI's engine selector is gone because there is no longer an engine to select. `verify` survives as a drift check — does the disk still hold what the generator would write — which catches hand-edited generated files. generate_run is the plain write path.",
+      "rustInternal": true
     }
   },
   "events": {
@@ -2018,15 +2143,22 @@
       "id": "string",
       "from": "string",
       "to": "string[]",
+      "cc": "string[]",
+      "bcc": "string[]",
+      "replyTo": "string[]",
       "subject": "string",
       "date": "string?",
       "snippet": "string?",
       "read": "bool",
-      "note": "`date` is passed through unparsed: the UI formats it in the user's locale, and the two servers disagree about which field it lives in, not about the format. `snippet` is null on MailHog, which does not send one — deriving it from the raw body would render MIME boundaries as preview text."
+      "note": "`date` is passed through unparsed: the UI formats it in the user's locale, and the two servers disagree about which field it lives in, not about the format. `snippet` is null on MailHog, which does not send one — deriving it from the raw body would render MIME boundaries as preview text. `bcc` is populated only by Mailpit, which derives it from the SMTP envelope; MailHog cannot tell a Bcc from a To, so there it is empty rather than guessed. MailHog's `cc`/`replyTo` come from headers as one joined string per entry."
     },
     "MailBody": {
       "text": "string?",
-      "html": "string?"
+      "html": "string?",
+      "headers": "[{ \"name\": \"string\", \"value\": \"string\" }]",
+      "note": "`headers`: every header flattened to one row per value, sorted by name; Mailpit serves them from a dedicated route, MailHog inlines them.",
+      "attachments": "MailAttachment[]",
+      "size": "u64?"
     },
     "DbTarget": {
       "service": "string",
@@ -2242,6 +2374,39 @@
       "differed": "u32",
       "readyToTakeOver": "bool",
       "warnings": "string[] — configuration problems the port can see and StackVo does not report, e.g. C-20"
+    },
+    "MailAttachment": {
+      "partId": "string",
+      "fileName": "string",
+      "contentType": "string",
+      "size": "u64"
+    },
+    "HtmlCheck": {
+      "supported": "f64",
+      "partial": "f64",
+      "unsupported": "f64",
+      "tests": "u32",
+      "warnings": [
+        {
+          "title": "string",
+          "category": "string",
+          "found": "u32",
+          "supported": "f64",
+          "partial": "f64",
+          "unsupported": "f64"
+        }
+      ],
+      "note": "Percentages are of the client/feature combinations Mailpit tests (186 on the version measured against)."
+    },
+    "LinkCheck": {
+      "errors": "u32",
+      "links": [
+        {
+          "url": "string",
+          "status": "string",
+          "statusCode": "u16"
+        }
+      ]
     }
   },
   "coverage": {

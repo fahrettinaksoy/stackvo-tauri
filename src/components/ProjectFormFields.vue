@@ -1,7 +1,16 @@
 <script setup>
 import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { extensionLimit, isIncompatible, overExtensionLimit } from '@/lib/manifest';
+import {
+  LANG_DEFAULTS,
+  LANG_RUNTIMES,
+  extensionLimit,
+  isIncompatible,
+  overExtensionLimit,
+  domainAdvice,
+  domainSuggestions,
+} from '@/lib/manifest';
+import { useAppStore } from '@/stores/app';
 
 /**
  * The manifest fields, shared by the create drawer and the settings sheet.
@@ -30,6 +39,24 @@ const props = defineProps({
 const form = defineModel({ type: Object, required: true });
 
 const { t } = useI18n();
+const app = useAppStore();
+/**
+ * The suffix is a choice, not a fixture. The configured one leads because it
+ * is what the certificate already covers; the rest are offered because a
+ * developer may well want `.test` or `.dev`, and typing a whole hostname to
+ * get one is not offering it.
+ */
+const domainItems = computed(() => domainSuggestions(form.value.name, app.tld));
+const domainHint = computed(() => t('newProject.domainHint'));
+const domainWarning = computed(() => {
+  const effective = form.value.domain || domainItems.value[0] || '';
+  const advice = domainAdvice(effective, app.tld, app.sslEnabled);
+  // Spelled out rather than built from the advice, so the keys stay findable
+  // by a search — and by the test that proves every string is reachable.
+  if (advice === 'https') return t('newProject.domain_https');
+  if (advice === 'certificate') return t('newProject.domain_certificate');
+  return '';
+});
 
 /** Only runtimes with a generator behind them are selectable (C-02). */
 const runtimes = computed(() => props.catalog?.runtimes?.filter((r) => r.available) ?? []);
@@ -40,6 +67,32 @@ const phpVersions = computed(
 const nodeVersions = computed(
   () => props.catalog?.runtimes?.find((r) => r.id === 'node')?.versions ?? []
 );
+
+const isLang = computed(() => LANG_RUNTIMES.includes(form.value.runtime));
+const langVersions = computed(
+  () => props.catalog?.runtimes?.find((r) => r.id === form.value.runtime)?.versions ?? []
+);
+
+/**
+ * Seed the lang fields with the runtime's ecosystem defaults on switch — an
+ * empty required Start field teaches nothing, the convention does. Explicit
+ * handler rather than a watcher for the same reason `onPhpVersion` is: loading
+ * an existing manifest into the form must not overwrite its values.
+ */
+function onRuntime(runtime) {
+  form.value.runtime = runtime;
+  const defaults = LANG_DEFAULTS[runtime];
+  if (defaults) {
+    // The checkout's own default version wins over the ecosystem constant —
+    // .env's SUPPORTED_LANGUAGES_*_DEFAULT is what the catalog serves.
+    form.value.langVersion =
+      props.catalog?.runtimes?.find((r) => r.id === runtime)?.default ?? defaults.version;
+    form.value.langInstall = defaults.install;
+    form.value.langBuild = defaults.build;
+    form.value.langStart = defaults.start;
+    form.value.langPort = defaults.port;
+  }
+}
 
 /**
  * The catalog's extensions, plus any the project already asks for that the
@@ -113,20 +166,23 @@ defineExpose({ focusName: () => nameField.value?.focus() });
       :persistent-hint="true"
       :hint="lockName ? t('projectSettings.nameLocked') : t('newProject.nameHint')"
     />
-    <v-text-field
+    <v-combobox
       v-model="form.domain"
       :label="t('newProject.domain')"
-      :placeholder="form.name ? `${form.name}.loc` : ''"
+      :items="domainItems"
+      :placeholder="form.name ? `${form.name}.${app.tld}` : ''"
       persistent-placeholder
       prepend-inner-icon="mdi-web"
-      :hint="t('newProject.domainHint')"
+      :hint="domainHint"
       persistent-hint
+      :messages="domainWarning ? [domainWarning] : []"
     />
     <v-select
-      v-model="form.runtime"
+      :model-value="form.runtime"
       :items="runtimes.map((r) => ({ value: r.id, title: r.id }))"
       :label="t('newProject.runtime')"
       prepend-inner-icon="mdi-code-braces"
+      @update:model-value="onRuntime"
     />
 
     <template v-if="form.runtime === 'php'">
@@ -187,6 +243,46 @@ defineExpose({ focusName: () => nameField.value?.focus() });
           <span v-if="overLimit">— {{ t('newProject.tooManyExtensions') }}</span>
         </div>
       </div>
+    </template>
+
+    <template v-else-if="isLang">
+      <div class="sheet-group">{{ t('newProject.sectionLang', { runtime: form.runtime }) }}</div>
+
+      <v-select
+        v-model="form.langVersion"
+        :items="langVersions"
+        :label="t('newProject.langVersion')"
+        prepend-inner-icon="mdi-tag-outline"
+      />
+      <v-text-field
+        v-model="form.langPort"
+        type="number"
+        :label="t('newProject.port')"
+        prepend-inner-icon="mdi-lan-connect"
+        :hint="t('newProject.portHint')"
+        persistent-hint
+      />
+      <v-text-field
+        v-model="form.langInstall"
+        :label="t('newProject.install')"
+        prepend-inner-icon="mdi-download-outline"
+        :hint="t('newProject.optionalStep')"
+        persistent-hint
+      />
+      <v-text-field
+        v-model="form.langBuild"
+        :label="t('newProject.build')"
+        prepend-inner-icon="mdi-hammer-wrench"
+        :hint="t('newProject.optionalStep')"
+        persistent-hint
+      />
+      <v-text-field
+        v-model="form.langStart"
+        :label="t('newProject.start')"
+        prepend-inner-icon="mdi-play-outline"
+        :hint="t('newProject.langBindHint')"
+        persistent-hint
+      />
     </template>
 
     <template v-else>

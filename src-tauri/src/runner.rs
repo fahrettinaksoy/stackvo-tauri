@@ -17,7 +17,6 @@ use crate::error::{Code, Error, Result};
 use crate::events::{self, FinishedEvent, ProgressEvent};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use tauri::AppHandle;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
@@ -120,7 +119,7 @@ pub struct Operation<'a> {
 
 /// Run a command and report it as an operation: progress events per line, one
 /// terminal event carrying success or failure.
-pub async fn run_operation(app: &AppHandle, op: Operation<'_>) -> Result<()> {
+pub async fn run_operation(sink: &events::Sink, op: Operation<'_>) -> Result<()> {
     let Operation {
         operation_id,
         subject,
@@ -134,8 +133,7 @@ pub async fn run_operation(app: &AppHandle, op: Operation<'_>) -> Result<()> {
     let started = std::time::Instant::now();
 
     let result = stream(program, args, cwd, |line| {
-        events::emit(
-            app,
+        sink.emit(
             progress_event,
             ProgressEvent {
                 operation_id: operation_id.to_string(),
@@ -157,8 +155,7 @@ pub async fn run_operation(app: &AppHandle, op: Operation<'_>) -> Result<()> {
                 duration_ms,
                 "operation succeeded"
             );
-            events::emit(
-                app,
+            sink.emit(
                 finished_event,
                 FinishedEvent {
                     operation_id: operation_id.to_string(),
@@ -204,8 +201,7 @@ pub async fn run_operation(app: &AppHandle, op: Operation<'_>) -> Result<()> {
                 "operation failed"
             );
 
-            events::emit(
-                app,
+            sink.emit(
                 finished_event,
                 FinishedEvent {
                     operation_id: operation_id.to_string(),
@@ -225,8 +221,7 @@ pub async fn run_operation(app: &AppHandle, op: Operation<'_>) -> Result<()> {
         Err(e) => {
             // Could not even start: a missing binary, a bad cwd, no permission.
             tracing::error!(operation_id, subject, program, error = %e, "operation could not start");
-            events::emit(
-                app,
+            sink.emit(
                 finished_event,
                 FinishedEvent {
                     operation_id: operation_id.to_string(),
@@ -266,11 +261,17 @@ pub fn compose_files(root: &Path) -> Vec<PathBuf> {
 /// cleared it. Rebuilding it costs a few small file reads on a path that is
 /// about to spawn Docker.
 pub fn compose_base_args(root: &Path) -> Vec<String> {
-    let mut args = vec![
-        "compose".to_string(),
-        "--env-file".to_string(),
-        root.join(".env").display().to_string(),
-    ];
+    // `--env-file` is passed only when there is a file: compose exits with
+    // "couldn't find env file" rather than carrying on without it. Nothing is
+    // lost when it is absent — every service value is already written out
+    // literally by the generator, and the one variable left in the output,
+    // `${PWD}`, comes from the process environment.
+    let mut args = vec!["compose".to_string()];
+    let env_file = root.join(".env");
+    if env_file.is_file() {
+        args.push("--env-file".to_string());
+        args.push(env_file.display().to_string());
+    }
     for file in compose_files(root) {
         args.push("-f".to_string());
         args.push(file.display().to_string());
@@ -344,18 +345,6 @@ pub fn profile_args(mode: &str, profiles: &[String]) -> Result<Vec<String>> {
     Ok(args)
 }
 
-/// Path to the CLI entrypoint, verified to exist.
-pub fn cli_script(root: &Path) -> Result<PathBuf> {
-    let path = root.join("core/cli/stackvo.sh");
-    if !path.is_file() {
-        return Err(
-            Error::new(Code::NoWorkspace, format!("{} is missing", path.display()))
-                .with_hint("The selected folder no longer looks like a StackVo checkout."),
-        );
-    }
-    Ok(path)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,7 +387,24 @@ mod tests {
         assert!(args
             .iter()
             .any(|a| a.ends_with("docker-compose.projects.yml")));
+
+        // No `.env` at this path, so none is passed. Naming a file that is not
+        // there is not a harmless extra flag: compose exits with "couldn't
+        // find env file" and the command never runs.
+        assert!(!args.iter().any(|a| a == "--env-file"));
+    }
+
+    #[test]
+    fn the_env_file_is_passed_when_there_is_one() {
+        let dir = std::env::temp_dir().join("stackvo-env-file-arg-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".env"), "SERVICE_REDIS_HOST_PORT=6380\n").unwrap();
+
+        let args = compose_base_args(&dir);
+        assert!(args.iter().any(|a| a == "--env-file"));
         assert!(args.iter().any(|a| a.ends_with("/.env")));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// The overlay has to come after the generated files. Compose merges later
@@ -660,10 +666,5 @@ mod tests {
             !marker.exists(),
             "the argument was executed as a shell command"
         );
-    }
-
-    #[test]
-    fn cli_script_is_verified_to_exist() {
-        assert!(cli_script(Path::new("/definitely/not/a/checkout")).is_err());
     }
 }

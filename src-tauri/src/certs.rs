@@ -1,7 +1,7 @@
 //! The wildcard certificate, and whether anything trusts it.
 //!
 //! HTTPS already worked before this module existed, and was entirely invisible.
-//! `core/cli/utils/generate-ssl-certs.sh` issues an mkcert wildcard covering the
+//! mkcert issues a wildcard certificate covering the
 //! dashboard and every project domain, and `traefik.sh` installs it as the
 //! default certificate — but nothing in the app could say whether mkcert was
 //! present, whether the CA was trusted, whether the certificate had expired, or
