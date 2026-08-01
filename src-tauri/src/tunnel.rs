@@ -208,6 +208,7 @@ mod tests {
             document_root: None,
             php: None,
             node: None,
+            lang: None,
             valid: true,
             errors: vec![],
             warnings: vec![],

@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue';
 import { useAppearanceStore } from '@/stores/appearance';
 import { useI18n } from 'vue-i18n';
 import { useOperationsStore } from '@/stores/operations';
+import { toastError, toastSuccess } from '@/lib/toast';
 
 /**
  * Console surfaces stay dark when the setting says so, whatever the app theme
@@ -17,6 +18,21 @@ const ops = useOperationsStore();
 
 const expanded = ref(false);
 const viewport = ref(null);
+
+/**
+ * Auto-dismiss on success, after a grace period — with a cancel.
+ *
+ * The grace is not polish, it is correctness: one operation id can span
+ * stages (enabling a service is a generate *then* a compose up under the same
+ * id), and the only signal that a `done` was final is that nothing resumed.
+ * So success arms a timer; output arriving re-runs the operation and both
+ * cancels the timer and un-dismisses the card if it fired early. Failure
+ * never auto-dismisses — the console is where the evidence lives.
+ */
+const AUTO_DISMISS_MS = 2000;
+let autoDismiss = null;
+/** Ids already toasted, so a resumed-then-finished stage cannot toast twice. */
+const toasted = new Set();
 
 /**
  * The operation the user dismissed, by id.
@@ -54,6 +70,45 @@ watch(
   () => ops.active.length,
   (n, was) => {
     if (n > 0 && was === 0) expanded.value = true;
+  }
+);
+
+function label(op) {
+  return `${op.kind} · ${op.subject}`;
+}
+
+watch(
+  () => [current.value?.id, current.value?.state],
+  ([id, state]) => {
+    clearTimeout(autoDismiss);
+    if (!id) return;
+    const op = ops.operations[id];
+
+    if (state === 'running') {
+      // A stage resumed after a premature dismiss: bring the card back.
+      if (dismissed.value === id) dismissed.value = null;
+      return;
+    }
+    if (state === 'failed') {
+      if (!toasted.has(id)) {
+        toasted.add(id);
+        toastError(t('console.failedToast', { operation: label(op) }));
+      }
+      // Stays open: the output above this line is the diagnosis.
+      expanded.value = true;
+      return;
+    }
+    if (state === 'done') {
+      autoDismiss = setTimeout(() => {
+        // Re-check: the operation may have resumed during the grace.
+        if (ops.operations[id]?.state !== 'done') return;
+        if (!toasted.has(id)) {
+          toasted.add(id);
+          toastSuccess(t('console.doneToast', { operation: label(op), duration: duration(op) }));
+        }
+        if (current.value?.id === id) dismissed.value = id;
+      }, AUTO_DISMISS_MS);
+    }
   }
 );
 

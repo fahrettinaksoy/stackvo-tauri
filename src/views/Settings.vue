@@ -2,13 +2,13 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useTheme } from 'vuetify';
-import { openPath } from '@tauri-apps/plugin-opener';
 import {
   enable as enableAutostart,
   disable as disableAutostart,
   isEnabled as autostartEnabled,
 } from '@tauri-apps/plugin-autostart';
 import { useAppStore } from '@/stores/app';
+import { useInventoryStore } from '@/stores/inventory';
 import { useAppearanceStore } from '@/stores/appearance';
 import {
   DEFAULT_APPEARANCE,
@@ -18,6 +18,7 @@ import {
   STATUS_PALETTES,
 } from '@/lib/appearance';
 import { api } from '@/lib/ipc';
+import { HTTPS_ONLY_SUFFIXES } from '@/lib/manifest';
 import { bytes } from '@/lib/format';
 import { setLocale } from '@/i18n';
 import { checkForUpdate, updatesConfigured } from '@/lib/updates';
@@ -25,17 +26,18 @@ import { getVersion } from '@tauri-apps/api/app';
 import ErrorAlert from '@/components/ErrorAlert.vue';
 import PageLayout from '@/components/PageLayout.vue';
 import SettingsSection from '@/components/SettingsSection.vue';
+import ServiceSettingsSheet from '@/components/ServiceSettingsSheet.vue';
 import SettingsGroup from '@/components/SettingsGroup.vue';
 import DoctorPanel from '@/components/DoctorPanel.vue';
 
 const { t, locale } = useI18n();
 const app = useAppStore();
+const inventory = useInventoryStore();
 const appearance = useAppearanceStore();
 const theme = useTheme();
 
 const env = ref({});
 const envError = ref(null);
-const search = ref('');
 const edits = ref({});
 const saving = ref(false);
 const saved = ref(false);
@@ -43,8 +45,6 @@ const saved = ref(false);
 const prefs = ref(null);
 const generatorReport = ref(null);
 const verifying = ref(false);
-const engineMode = ref('bash');
-const generateResult = ref(null);
 const stackBusy = ref(false);
 
 // Compose-level control lives here rather than in the sidebar: the sidebar's
@@ -70,7 +70,7 @@ const updateProgress = ref(null);
 /** Null until asked; false means this build has no key to verify against. */
 const updaterReady = ref(null);
 const logs = ref(null);
-const apps = ref({ terminals: [], editors: [] });
+const apps = ref({ terminals: [], editors: [], browsers: [] });
 
 /**
  * The open pane, persisted for the session only.
@@ -89,60 +89,121 @@ const tab = ref('appearance');
  * navigated by name — you come here looking for "the .env file", not for the
  * fourth tab. The list also has room to grow, which a tab strip does not.
  */
+/**
+ * The panes, in four groups.
+ *
+ * Thirteen entries in one column was a list of everything the app can be told,
+ * with no signal about which of them belong together — appearance sat beside
+ * the Docker engine, and the two panes that both configure the stack were
+ * separated by five that do not. The grouping is the answer to "where would I
+ * look for this", which is a different question from "what does this do".
+ *
+ * The order inside each group is deliberate: the thing you set first comes
+ * first. A workspace has to exist before it has a domain, and a domain before
+ * a certificate covers it.
+ */
+const SECTION_GROUPS = [
+  { key: 'app', label: 'settings.groups.app' },
+  { key: 'workspace', label: 'settings.groups.workspace' },
+  { key: 'stack', label: 'settings.groups.stack' },
+  { key: 'help', label: 'settings.groups.help' },
+];
+
 const SECTIONS = [
   {
     key: 'appearance',
+    group: 'app',
     icon: 'mdi-palette-outline',
     label: 'settings.appearance',
     desc: 'settings.appearanceSectionDesc',
   },
   {
     key: 'localisation',
+    group: 'app',
     icon: 'mdi-translate',
     label: 'settings.localisation',
     desc: 'settings.localisationDesc',
   },
   {
-    key: 'workspace',
-    icon: 'mdi-folder-cog',
-    label: 'workspace.title',
-    desc: 'settings.workspaceDesc',
-  },
-  {
     key: 'preferences',
+    group: 'app',
     icon: 'mdi-tune',
     label: 'settings.preferences',
     desc: 'settings.preferencesDesc',
   },
-  { key: 'stack', icon: 'mdi-server', label: 'settings.stack', desc: 'settings.stackDesc' },
-  // Next to the stack section because it is that section, made portable: which
-  // services are on and at which versions, as a file a teammate can be handed.
   {
-    key: 'sharing',
-    icon: 'mdi-share-variant-outline',
-    label: 'stackPreset.title',
-    desc: 'stackPreset.sectionDesc',
+    // The folder, the compose verbs and the preset were three panes for one
+    // subject: this stack, where it lives, how it is run, and how it is handed
+    // to somebody else. They were also three places to look before finding the
+    // button you wanted.
+    key: 'workspace',
+    group: 'workspace',
+    icon: 'mdi-folder-cog',
+    label: 'settings.workspaceAndControl',
+    desc: 'settings.workspaceAndControlDesc',
   },
+  // Addressing and the certificate that covers it are one subject read twice:
+  // the HTTPS switch is here, and what it needs issued is next.
   {
-    key: 'doctor',
-    icon: 'mdi-stethoscope',
-    label: 'doctor.title',
-    desc: 'doctor.sectionDesc',
+    key: 'domain',
+    group: 'workspace',
+    icon: 'mdi-web',
+    label: 'settings.shape.title',
+    desc: 'settings.shape.sectionDesc',
   },
   {
     key: 'certificates',
+    group: 'workspace',
     icon: 'mdi-certificate-outline',
     label: 'settings.certificates',
     desc: 'settings.certificatesDesc',
   },
   {
-    key: 'env',
-    icon: 'mdi-file-document-edit',
-    label: 'settings.envFile',
-    desc: 'settings.envFileDesc',
+    key: 'servers',
+    group: 'stack',
+    icon: 'mdi-web-box',
+    label: 'settings.servers.title',
+    desc: 'settings.servers.desc',
   },
-  { key: 'about', icon: 'mdi-information', label: 'settings.about', desc: 'settings.aboutDesc' },
+  {
+    key: 'services',
+    group: 'stack',
+    icon: 'mdi-cube-outline',
+    label: 'serviceSettings.title',
+    desc: 'serviceSettings.sectionDesc',
+  },
+  // Runtime versions and the PHP build were two panes answering one question:
+  // what does a new project start with. Split, the answer for Python lived in
+  // a different place from the answer for PHP.
+  {
+    key: 'php',
+    group: 'stack',
+    icon: 'mdi-tune-vertical',
+    label: 'settings.defaults.title',
+    desc: 'settings.defaults.desc',
+  },
+  {
+    key: 'doctor',
+    group: 'help',
+    icon: 'mdi-stethoscope',
+    label: 'doctor.title',
+    desc: 'doctor.sectionDesc',
+  },
+  {
+    key: 'about',
+    group: 'help',
+    icon: 'mdi-information',
+    label: 'settings.about',
+    desc: 'settings.aboutDesc',
+  },
 ];
+
+/** Only groups that have panes, so an empty heading can never render. */
+const groupedSections = computed(() =>
+  SECTION_GROUPS.map((g) => ({ ...g, items: SECTIONS.filter((s) => s.group === g.key) })).filter(
+    (g) => g.items.length
+  )
+);
 
 const section = computed(() => SECTIONS.find((s) => s.key === tab.value) ?? SECTIONS[0]);
 
@@ -291,10 +352,9 @@ async function installUpdate() {
 
 async function runGenerate() {
   verifying.value = true;
-  generateResult.value = null;
   envError.value = null;
   try {
-    generateResult.value = await api.generateWith('all', engineMode.value);
+    await api.generateRun('all');
     await verifyGenerator();
   } catch (e) {
     envError.value = e;
@@ -304,17 +364,402 @@ async function runGenerate() {
 }
 const autostart = ref(false);
 
-const rows = computed(() => {
-  const needle = search.value.trim().toUpperCase();
-  return Object.entries(env.value)
-    .filter(([key]) => !needle || key.includes(needle))
-    .sort(([a], [b]) => a.localeCompare(b));
-});
-
 const dirty = computed(() => Object.keys(edits.value).length > 0);
 
-/** Secret values are redacted on read; editing one would write back the mask. */
-const isRedacted = (value) => value === '••••••••';
+/**
+ * The stack-shaping settings, as controls rather than as rows in a key table.
+ *
+ * These were editable before — every key is, in the .env pane — but a boolean
+ * you set by typing the word `true` is an escape hatch, not a setting. What
+ * makes this a form is that the type is known: a switch cannot be set to
+ * `ture`, a list edits as chips, and the domain suffix is checked before it
+ * reaches a routing label nobody would think to look at.
+ */
+const defaults = ref({});
+/**
+ * The proxy, which the app never named.
+ *
+ * Traefik is not in the service catalog and should not be — it is not a thing
+ * you switch on, it is how every project and admin UI is reached at all. But
+ * that left the one container the whole stack depends on with no presence in
+ * the app: no version, no state, and no route to its own dashboard, which the
+ * generator has been writing a router for the entire time.
+ */
+/**
+ * The hosts file, as one list rather than one broken domain at a time.
+ *
+ * Every domain here reaches the browser by name through the proxy, so every
+ * one of them needs a line in `/etc/hosts` — and the app only ever offered to
+ * add them from whichever page happened to notice one missing. A deleted
+ * project's line had no route at all: it points at 127.0.0.1 forever and
+ * nothing was looking for it.
+ */
+const hosts = ref(null);
+const hostsFixing = ref(false);
+const hostsMissing = computed(() => (hosts.value?.entries ?? []).filter((e) => !e.configured));
+
+async function loadHosts() {
+  hosts.value = await api.hostsOverview().catch(() => null);
+}
+
+/** Both directions in one elevation prompt: asking twice for one tidy-up is
+ *  how people stop half way. */
+async function fixHosts() {
+  hostsFixing.value = true;
+  envError.value = null;
+  try {
+    await api.hostsApply(
+      hostsMissing.value.map((e) => e.domain),
+      hosts.value?.stale ?? []
+    );
+    await loadHosts();
+  } catch (e) {
+    envError.value = e;
+  } finally {
+    hostsFixing.value = false;
+  }
+}
+
+const proxy = ref(null);
+const proxyDashboard = computed(() => (app.tld ? `https://traefik.${app.tld}/dashboard/` : null));
+
+async function loadProxy() {
+  // Its own container name, not a catalog id: `container_inspect` prefixes
+  // `stackvo-` itself, and Traefik has no catalog entry to look up.
+  proxy.value = await api.containerInspect('traefik').catch(() => null);
+}
+
+/**
+ * The services pane: every service grouped by the category the catalog already
+ * assigns, with its `.env` settings behind a sheet.
+ *
+ * Grouped rather than listed flat because twenty services in one column is a
+ * scroll, not a choice — and the categories are already in the data, so
+ * inventing a grouping here would be a second opinion about the same thing.
+ */
+const serviceTab = ref('all');
+const sheetService = ref(null);
+const sheetOpen = ref(false);
+
+const serviceCategories = computed(() => {
+  const seen = [...new Set((inventory.services ?? []).map((s) => s.category).filter(Boolean))];
+  return ['all', ...seen.sort()];
+});
+
+const servicesInTab = computed(() => {
+  const list = [...(inventory.services ?? [])].sort((a, b) => a.id.localeCompare(b.id));
+  return serviceTab.value === 'all' ? list : list.filter((s) => s.category === serviceTab.value);
+});
+
+/**
+ * A category's name in the reader's language.
+ *
+ * Spelled out rather than assembled from the slug, because the i18n check only
+ * sees literal `t('…')` calls — a key built by interpolation reads as
+ * unreachable there and as a missing translation here. The default returns the
+ * slug itself, so a category added to the contract upstream shows its own name
+ * instead of a blank chip.
+ */
+function categoryLabel(category) {
+  switch (category) {
+    case 'all':
+      return t('serviceSettings.all');
+    case 'databases':
+      return t('serviceSettings.categories.databases');
+    case 'cache':
+      return t('serviceSettings.categories.cache');
+    case 'queue':
+      return t('serviceSettings.categories.queue');
+    case 'search':
+      return t('serviceSettings.categories.search');
+    case 'monitoring':
+      return t('serviceSettings.categories.monitoring');
+    case 'devtools':
+      return t('serviceSettings.categories.devtools');
+    case 'adminUis':
+      return t('serviceSettings.categories.adminUis');
+    default:
+      return category;
+  }
+}
+
+function openService(service) {
+  sheetService.value = service;
+  sheetOpen.value = true;
+}
+
+function onServiceApplied() {
+  inventory.loadServices();
+}
+
+const catalog = ref(null);
+
+/**
+ * The choices come from the catalog rather than from a list typed here, so a
+ * PHP release added to the binary shows up without a second edit. Falling back
+ * to the current value keeps the select from rendering blank if the catalog
+ * call failed — a select whose only item is missing looks like data loss.
+ */
+const itemsFor = (key, versions) => {
+  const current = effective(key);
+  const list = versions?.length ? [...versions] : [];
+  if (current && !list.includes(current)) list.unshift(current);
+  return list;
+};
+const runtimeVersions = (id) => catalog.value?.runtimes?.find((r) => r.id === id)?.versions ?? [];
+const phpVersionItems = computed(() =>
+  itemsFor('SUPPORTED_LANGUAGES_PHP_DEFAULT', runtimeVersions('php'))
+);
+const nodeVersionItems = computed(() =>
+  itemsFor('PHP_TOOL_NODEJS_VERSION', runtimeVersions('node'))
+);
+const serverItems = computed(() => itemsFor('SUPPORTED_SERVERS_DEFAULT', catalog.value?.servers));
+/**
+ * The version a new project of each runtime starts on.
+ *
+ * The catalogs beside these — which versions exist, which servers there are —
+ * are not settings and have no control here. They describe what the app can
+ * build, so editing one could only ever select something it cannot: a
+ * generator either exists for a runtime or it does not.
+ */
+/**
+ * The About pane's own state.
+ *
+ * The one thing an About screen is actually asked for is the paragraph
+ * somebody pastes into a bug report, so that is built here rather than left to
+ * the reader to assemble from four separate cards. Everything in it is already
+ * on screen; the button only saves the transcription.
+ */
+const RESOURCES = [
+  { key: 'docs', icon: 'mdi-book-open-variant', url: 'https://stackvo.github.io/stackvo' },
+  { key: 'source', icon: 'mdi-github', url: 'https://github.com/stackvo/stackvo' },
+  { key: 'issues', icon: 'mdi-bug-outline', url: 'https://github.com/stackvo/stackvo/issues' },
+  { key: 'sponsor', icon: 'mdi-coffee-outline', url: 'https://buymeacoffee.com/fahrettinaksoy' },
+];
+
+const OS_NAMES = { macos: 'macOS', windows: 'Windows', linux: 'Linux' };
+
+const systemRows = computed(() => {
+  const e = app.engine;
+  return [
+    { label: t('about.appVersion'), value: appVersion.value || '—' },
+    { label: t('about.os'), value: OS_NAMES[app.preflight?.os] ?? app.preflight?.os ?? '—' },
+    {
+      label: t('about.docker'),
+      value: e?.version ? `${e.version} (API ${e.apiVersion || '—'})` : t('engine.down'),
+    },
+    { label: t('about.context'), value: e?.context || '—' },
+    { label: t('about.workspace'), value: app.workspace?.root || t('workspace.none') },
+  ];
+});
+
+const copied = ref(false);
+async function copySystemInfo() {
+  const text = systemRows.value.map((r) => `${r.label}: ${r.value}`).join('\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    copied.value = true;
+    setTimeout(() => (copied.value = false), 2000);
+  } catch (e) {
+    // Not fatal and not worth an error card: the same text is on screen and
+    // can be selected. Reported so a silent no-op is not mistaken for success.
+    envError.value = e;
+  }
+}
+
+/**
+ * Which servers these limits reach.
+ *
+ * nginx and caddy are generated as config files, so a directive can be written
+ * into them. Apache is configured by `sed` inside its own Dockerfile and
+ * swoole by an inline script, so neither has a file to add a line to — shown
+ * rather than hidden, because a setting that silently does nothing for two of
+ * five choices is worse than one that says so.
+ */
+/**
+ * The per-server directive file, edited here rather than only on disk.
+ *
+ * A text area and not a set of fields: what goes in is nginx's own grammar,
+ * and pretending otherwise would mean a form that can express a fraction of it
+ * and silently drops the rest.
+ */
+const CONFIGURABLE_SERVERS = ['nginx', 'caddy'];
+const serverTab = ref('nginx');
+const serverConfig = ref('');
+const serverConfigSaved = ref('');
+const serverConfigBusy = ref(false);
+const serverConfigDirty = computed(() => serverConfig.value !== serverConfigSaved.value);
+
+async function loadServerConfig() {
+  serverConfigBusy.value = true;
+  envError.value = null;
+  try {
+    serverConfig.value = await api.serverConfigGet(serverTab.value);
+    serverConfigSaved.value = serverConfig.value;
+  } catch (e) {
+    envError.value = e;
+  } finally {
+    serverConfigBusy.value = false;
+  }
+}
+
+async function saveServerConfig() {
+  serverConfigBusy.value = true;
+  envError.value = null;
+  try {
+    await api.serverConfigSet(serverTab.value, serverConfig.value);
+    serverConfigSaved.value = serverConfig.value;
+    // Directives reach a container only through a regenerate, the same as the
+    // limits above — saying so is the difference between a feature that worked
+    // and one the user believes did nothing.
+    lastSaved.value = ['SERVER_CONFIG'];
+  } catch (e) {
+    envError.value = e;
+  } finally {
+    serverConfigBusy.value = false;
+  }
+}
+
+watch(serverTab, loadServerConfig);
+
+/**
+ * The nginx directives the form offers, mirroring the table in the generator.
+ *
+ * Ports are absent on purpose and it is worth saying why: the container
+ * listens on 80 and Traefik terminates TLS, so a port field here would
+ * contradict the routing label pointing at it. Modules and the server root are
+ * likewise the image's and the container's, not settings.
+ */
+const NGINX_FIELDS = [
+  { key: 'SERVER_MAX_BODY_SIZE', kind: 'size', icon: 'mdi-upload' },
+  { key: 'SERVER_CLIENT_BODY_TIMEOUT', kind: 'seconds', icon: 'mdi-timer-sand' },
+  { key: 'SERVER_KEEPALIVE_TIMEOUT', kind: 'seconds', icon: 'mdi-lan-connect' },
+  { key: 'SERVER_FASTCGI_CONNECT_TIMEOUT', kind: 'seconds', icon: 'mdi-transit-connection' },
+  { key: 'SERVER_FASTCGI_SEND_TIMEOUT', kind: 'seconds', icon: 'mdi-upload-network' },
+  { key: 'SERVER_FASTCGI_TIMEOUT', kind: 'seconds', icon: 'mdi-timer-outline' },
+];
+const NGINX_SWITCHES = [
+  { key: 'SERVER_TCP_NODELAY', on: 'on', off: 'off' },
+  { key: 'SERVER_GZIP', on: 'on', off: 'off' },
+];
+
+const onOff = (key) => effective(key) === 'on';
+const setOnOff = (key, value) => edit(key, value ? 'on' : 'off');
+const gzipOn = computed(() => onOff('SERVER_GZIP'));
+
+const SERVER_SUPPORT = {
+  nginx: true,
+  caddy: true,
+  frankenphp: false,
+  apache: false,
+  swoole: false,
+};
+
+const sizeRules = [
+  (v) =>
+    !String(v ?? '').trim() ||
+    /^\d+[kKmMgG]?$/.test(String(v).trim()) ||
+    t('settings.servers.sizeInvalid'),
+];
+const secondsRules = [
+  (v) =>
+    !String(v ?? '').trim() ||
+    /^\d+$/.test(String(v).trim()) ||
+    t('settings.servers.secondsInvalid'),
+];
+
+const RUNTIME_DEFAULTS = [
+  { id: 'python', key: 'SUPPORTED_LANGUAGES_PYTHON_DEFAULT', icon: 'mdi-language-python' },
+  { id: 'go', key: 'SUPPORTED_LANGUAGES_GO_DEFAULT', icon: 'mdi-language-go' },
+  { id: 'ruby', key: 'SUPPORTED_LANGUAGES_RUBY_DEFAULT', icon: 'mdi-language-ruby' },
+  { id: 'rust', key: 'SUPPORTED_LANGUAGES_RUST_DEFAULT', icon: 'mdi-language-rust' },
+  { id: 'node', key: 'SUPPORTED_LANGUAGES_NODEJS_DEFAULT', icon: 'mdi-nodejs' },
+];
+const runtimeItems = (runtime) => itemsFor(runtime.key, runtimeVersions(runtime.id));
+
+const effective = (key) => edits.value[key] ?? env.value[key] ?? defaults.value[key] ?? '';
+const isDefault = (key) => effective(key) === defaults.value[key];
+const resetToDefault = (key) => edit(key, defaults.value[key] ?? '');
+
+const boolOf = (key) => effective(key) === 'true';
+const setBool = (key, on) => edit(key, on ? 'true' : 'false');
+
+const listOf = (key) =>
+  effective(key)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+const setList = (key, items) =>
+  edit(
+    key,
+    items
+      .map((s) => String(s).trim())
+      .filter(Boolean)
+      .join(',')
+  );
+
+/**
+ * A suffix, not a URL. It is concatenated straight into `Host(\`x.SUFFIX\`)`,
+ * so a leading dot or a scheme produces a route that silently never matches —
+ * the stack comes up and nothing resolves.
+ */
+const suffixRules = [
+  (v) => !!String(v ?? '').trim() || t('settings.shape.suffixRequired'),
+  (v) =>
+    /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(String(v ?? '').trim()) ||
+    t('settings.shape.suffixInvalid'),
+];
+
+/**
+ * The suffix, split where people actually think about it.
+ *
+ * `stackvo.loc` is a namespace and a TLD, and only the second half is what
+ * someone means by "can I use .dev instead". Split on the last dot: everything
+ * before it is the label, which may itself contain dots.
+ */
+const TLD_CHOICES = ['loc', 'test', 'localhost', 'dev'];
+const splitSuffix = (value) => {
+  const text = String(value ?? '').trim();
+  const at = text.lastIndexOf('.');
+  return at === -1
+    ? { label: '', tld: text }
+    : { label: text.slice(0, at), tld: text.slice(at + 1) };
+};
+const suffixLabel = computed(() => splitSuffix(effective('DEFAULT_TLD_SUFFIX')).label);
+const suffixTld = computed(() => splitSuffix(effective('DEFAULT_TLD_SUFFIX')).tld);
+const setSuffix = (label, tld) => {
+  const parts = [String(label ?? '').trim(), String(tld ?? '').trim()].filter(Boolean);
+  edit('DEFAULT_TLD_SUFFIX', parts.join('.'));
+};
+
+const PART = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
+const suffixLabelRules = [
+  (v) =>
+    !String(v ?? '').trim() || PART.test(String(v).trim()) || t('settings.shape.suffixInvalid'),
+];
+const suffixTldRules = [
+  (v) => !!String(v ?? '').trim() || t('settings.shape.suffixRequired'),
+  (v) => PART.test(String(v ?? '').trim()) || t('settings.shape.suffixInvalid'),
+];
+
+/**
+ * Choosing an HSTS-preloaded TLD for the whole stack with HTTPS off breaks
+ * every address at once, not just one project's — so it is said here too.
+ */
+const suffixNeedsHttps = computed(
+  () => HTTPS_ONLY_SUFFIXES.includes(suffixTld.value.toLowerCase()) && !boolOf('SSL_ENABLE')
+);
+const networkRules = [
+  (v) => !!String(v ?? '').trim() || t('settings.shape.networkRequired'),
+  (v) =>
+    /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(String(v ?? '').trim()) ||
+    t('settings.shape.networkInvalid'),
+];
+const shapeValid = computed(
+  () =>
+    suffixRules.every((r) => r(effective('DEFAULT_TLD_SUFFIX')) === true) &&
+    networkRules.every((r) => r(effective('DOCKER_DEFAULT_NETWORK')) === true)
+);
 
 const engineRows = computed(() => {
   const e = app.engine;
@@ -339,6 +784,11 @@ async function pickWorkspace() {
   }
 }
 
+async function loadDefaults() {
+  defaults.value = await api.envDefaults().catch(() => ({}));
+  catalog.value = await api.catalogGet().catch(() => null);
+}
+
 async function loadEnv() {
   envError.value = null;
   edits.value = {};
@@ -355,13 +805,40 @@ function edit(key, value) {
   else edits.value[key] = value;
 }
 
+/**
+ * Keys the last save wrote, so the pane can say what has to happen next.
+ *
+ * Changing the suffix rewrites every routing label and moves what the
+ * certificate has to cover, but none of that reaches the running stack until
+ * the files are regenerated. Saving and staying silent is how a setting looks
+ * like it did nothing.
+ */
+const lastSaved = ref([]);
+const ROUTING_KEYS = [
+  'DEFAULT_TLD_SUFFIX',
+  'DOCKER_DEFAULT_NETWORK',
+  'SSL_ENABLE',
+  'REDIRECT_TO_HTTPS',
+];
+const routingChanged = computed(() => lastSaved.value.some((k) => ROUTING_KEYS.includes(k)));
+/** Clears the notice only if the regenerate actually succeeded. */
+async function regenerateAfterChange() {
+  await stackAction(() => api.generateRun('all'));
+  if (!envError.value) lastSaved.value = [];
+}
+
+const suffixChanged = computed(() => lastSaved.value.includes('DEFAULT_TLD_SUFFIX'));
+
 async function save() {
   saving.value = true;
   envError.value = null;
   saved.value = false;
   try {
+    const keys = Object.keys(edits.value);
     await api.envSet({ ...edits.value });
+    lastSaved.value = keys;
     await loadEnv();
+    await app.refreshTld();
     saved.value = true;
     setTimeout(() => (saved.value = false), 2500);
   } catch (e) {
@@ -479,6 +956,10 @@ const certExpiry = computed(() => {
 
 onMounted(async () => {
   loadEnv();
+  loadDefaults();
+  loadProxy();
+  loadHosts();
+  loadServerConfig();
   loadPrefs();
   loadCerts();
   verifyGenerator();
@@ -841,65 +1322,6 @@ onMounted(async () => {
           </template>
 
           <!-- ---- workspace ------------------------------------------------ -->
-          <template v-if="tab === 'workspace'">
-            <SettingsGroup
-              icon="mdi-folder-open-outline"
-              :title="t('settings.workspaceGroup')"
-              :description="t('settings.workspaceGroupDesc')"
-            >
-              <div class="text-body-2 break">{{ app.workspace?.root || t('workspace.none') }}</div>
-              <div v-if="app.workspace" class="text-caption text-medium-emphasis mt-1">
-                {{ t(`workspace.source.${app.workspace.source}`) }}
-                <template v-if="app.workspace.stackvoVersion">
-                  · {{ t('workspace.version') }} {{ app.workspace.stackvoVersion }}
-                </template>
-              </div>
-
-              <div class="d-flex ga-2 flex-wrap mt-3">
-                <v-btn
-                  size="small"
-                  variant="tonal"
-                  prepend-icon="mdi-folder-open-outline"
-                  @click="pickWorkspace"
-                >
-                  {{ t('workspace.change') }}
-                </v-btn>
-                <v-btn
-                  v-if="app.workspace?.root"
-                  size="small"
-                  variant="text"
-                  prepend-icon="mdi-open-in-new"
-                  @click="openPath(app.workspace.root)"
-                >
-                  {{ t('projects.openFolder') }}
-                </v-btn>
-              </div>
-            </SettingsGroup>
-
-            <SettingsGroup
-              icon="mdi-docker"
-              :title="t('engine.title')"
-              :description="t('settings.engineGroupDesc')"
-            >
-              <template #append>
-                <v-chip size="small" :color="app.engineUp ? 'success' : 'error'">
-                  {{ app.engineUp ? t('engine.running') : t('engine.down') }}
-                </v-chip>
-              </template>
-
-              <div
-                v-for="row in engineRows"
-                :key="row.label"
-                class="d-flex justify-space-between py-1 ga-4"
-              >
-                <span class="text-caption text-medium-emphasis">{{ row.label }}</span>
-                <span class="text-caption text-right break">{{ row.value }}</span>
-              </div>
-              <div v-if="app.engine?.error" class="text-caption text-error mt-2">
-                {{ app.engine.error }}
-              </div>
-            </SettingsGroup>
-          </template>
 
           <!-- ---- preferences ---------------------------------------------- -->
           <template v-if="tab === 'preferences'">
@@ -935,6 +1357,21 @@ onMounted(async () => {
                   :label="t('settings.editorApp')"
                   clearable
                   @update:model-value="(v) => setPref({ editorCommand: v || null })"
+                />
+                <!-- Every "visit" button in the app goes through this. Cleared
+                     means the system default, which is why the list carries an
+                     explicit entry for it rather than only an empty state. -->
+                <v-select
+                  :model-value="prefs?.browserCommand ?? null"
+                  :items="apps.browsers"
+                  item-title="name"
+                  item-value="id"
+                  :item-props="(a) => ({ prependIcon: a.icon, disabled: !a.available })"
+                  :label="t('settings.browserApp')"
+                  :hint="t('settings.browserAppHint')"
+                  persistent-hint
+                  clearable
+                  @update:model-value="(v) => setPref({ browserCommand: v || null })"
                 />
               </div>
             </SettingsGroup>
@@ -977,7 +1414,754 @@ onMounted(async () => {
           </template>
 
           <!-- ---- stack ----------------------------------------------------- -->
-          <template v-if="tab === 'stack'">
+          <!-- These shape every generated file. They live in the binary as
+               defaults, so a fresh .env has none of them; changing one here
+               writes the key, which is what makes a line in that file mean
+               something. -->
+          <template v-if="tab === 'domain'">
+            <SettingsGroup
+              icon="mdi-web"
+              :title="t('settings.shape.addressTitle')"
+              :description="t('settings.shape.addressDesc')"
+            >
+              <template #append>
+                <v-btn
+                  v-if="dirty"
+                  size="small"
+                  variant="tonal"
+                  color="primary"
+                  prepend-icon="mdi-content-save-outline"
+                  :loading="saving"
+                  :disabled="!shapeValid"
+                  @click="save"
+                >
+                  {{ t('settings.save', { count: Object.keys(edits).length }) }}
+                </v-btn>
+                <v-chip v-else-if="saved" color="success" size="small">
+                  {{ t('settings.saved') }}
+                </v-chip>
+              </template>
+
+              <!-- Two fields for one key. The suffix is a namespace and a TLD
+                   glued together, and only the TLD is the part people mean
+                   when they ask to swap .loc for .dev — as one input the two
+                   are indistinguishable from a raw .env row. -->
+              <v-row dense align="start">
+                <v-col cols="12" sm="6">
+                  <v-text-field
+                    :model-value="suffixLabel"
+                    :label="t('settings.shape.suffixLabel')"
+                    :hint="t('settings.shape.suffixLabelHint')"
+                    :rules="suffixLabelRules"
+                    prepend-inner-icon="mdi-tag-outline"
+                    persistent-hint
+                    density="comfortable"
+                    variant="outlined"
+                    @update:model-value="(v) => setSuffix(v, suffixTld)"
+                  />
+                </v-col>
+                <v-col cols="12" sm="6">
+                  <v-combobox
+                    :model-value="suffixTld"
+                    :items="TLD_CHOICES"
+                    :label="t('settings.shape.suffixTld')"
+                    :hint="t('settings.shape.suffixTldHint')"
+                    :rules="suffixTldRules"
+                    prepend-inner-icon="mdi-web"
+                    persistent-hint
+                    density="comfortable"
+                    variant="outlined"
+                    @update:model-value="(v) => setSuffix(suffixLabel, v ?? '')"
+                  />
+                </v-col>
+              </v-row>
+
+              <!-- What the two fields actually produce. The suffix is never
+                   seen on its own: it is always something dot this. -->
+              <div class="d-flex align-center ga-2 mt-2 flex-wrap">
+                <span class="text-caption text-medium-emphasis">
+                  {{ t('settings.shape.preview') }}
+                </span>
+                <v-chip size="small" variant="tonal" prepend-icon="mdi-folder-outline">
+                  shop.{{ effective('DEFAULT_TLD_SUFFIX') }}
+                </v-chip>
+                <v-chip size="small" variant="tonal" prepend-icon="mdi-database-outline">
+                  phpmyadmin.{{ effective('DEFAULT_TLD_SUFFIX') }}
+                </v-chip>
+                <v-btn
+                  v-if="!isDefault('DEFAULT_TLD_SUFFIX')"
+                  size="x-small"
+                  variant="text"
+                  prepend-icon="mdi-restore"
+                  @click="resetToDefault('DEFAULT_TLD_SUFFIX')"
+                >
+                  {{ t('settings.shape.reset') }}
+                </v-btn>
+              </div>
+
+              <v-alert
+                v-if="suffixNeedsHttps"
+                type="warning"
+                variant="tonal"
+                density="comfortable"
+                class="mt-3"
+                :text="t('settings.shape.suffixHsts')"
+              />
+            </SettingsGroup>
+
+            <SettingsGroup
+              icon="mdi-file-document-outline"
+              :title="t('settings.shape.hostsTitle')"
+              :description="t('settings.shape.hostsDesc')"
+            >
+              <template #append>
+                <v-btn
+                  v-if="hostsMissing.length || hosts?.stale.length"
+                  size="small"
+                  variant="tonal"
+                  color="primary"
+                  prepend-icon="mdi-wrench-outline"
+                  :loading="hostsFixing"
+                  @click="fixHosts"
+                >
+                  {{ t('settings.shape.hostsFix') }}
+                </v-btn>
+                <v-chip v-else size="small" color="success" variant="tonal">
+                  {{ t('settings.shape.hostsOk') }}
+                </v-chip>
+              </template>
+
+              <div v-if="!hosts" class="text-caption text-medium-emphasis">
+                {{ t('app.loading') }}
+              </div>
+
+              <template v-else>
+                <div
+                  v-for="entry in hosts.entries"
+                  :key="entry.domain"
+                  class="d-flex align-center ga-2 py-1"
+                >
+                  <v-icon
+                    size="small"
+                    :color="entry.configured ? 'success' : 'warning'"
+                    :icon="entry.configured ? 'mdi-check-circle' : 'mdi-alert-circle'"
+                  />
+                  <span class="text-caption break">{{ entry.domain }}</span>
+                  <!-- Whose line it is decides whether this app may remove it. -->
+                  <v-chip
+                    v-if="!entry.managedByStackvo && entry.configured"
+                    size="x-small"
+                    variant="tonal"
+                  >
+                    {{ t('settings.shape.hostsManual') }}
+                  </v-chip>
+                </div>
+
+                <template v-if="hosts.stale.length">
+                  <v-divider class="my-3" />
+                  <div class="text-caption text-medium-emphasis mb-1">
+                    {{ t('settings.shape.hostsStale') }}
+                  </div>
+                  <v-chip
+                    v-for="d in hosts.stale"
+                    :key="d"
+                    size="x-small"
+                    variant="tonal"
+                    class="mr-1 mb-1"
+                  >
+                    {{ d }}
+                  </v-chip>
+                </template>
+              </template>
+            </SettingsGroup>
+
+            <SettingsGroup
+              icon="mdi-transit-connection-variant"
+              :title="t('settings.shape.proxyTitle')"
+              :description="t('settings.shape.proxyDesc')"
+            >
+              <template #append>
+                <v-chip size="small" :color="proxy?.running ? 'success' : 'error'">
+                  {{ proxy?.running ? t('engine.running') : t('engine.down') }}
+                </v-chip>
+              </template>
+
+              <div class="d-flex justify-space-between py-1 ga-4">
+                <span class="text-caption text-medium-emphasis">{{ t('about.docker') }}</span>
+                <span class="text-caption text-right break">{{ proxy?.image || '—' }}</span>
+              </div>
+              <div class="d-flex justify-space-between py-1 ga-4">
+                <span class="text-caption text-medium-emphasis">
+                  {{ t('settings.shape.proxyPorts') }}
+                </span>
+                <span class="text-caption text-right break">
+                  {{ (proxy?.ports ?? []).map((p) => p.host ?? p.container).join(', ') || '—' }}
+                </span>
+              </div>
+
+              <!-- The dashboard needs a hosts entry like any other domain, and
+                   until recently nothing offered one — which is why it is worth
+                   a button rather than a sentence telling you the address. -->
+              <v-btn
+                v-if="proxyDashboard"
+                size="small"
+                variant="tonal"
+                prepend-icon="mdi-view-dashboard-outline"
+                class="mt-3"
+                :disabled="!proxy?.running"
+                @click="api.openInBrowser(proxyDashboard)"
+              >
+                {{ t('settings.shape.proxyDashboard') }}
+              </v-btn>
+            </SettingsGroup>
+
+            <SettingsGroup
+              icon="mdi-lan"
+              :title="t('settings.shape.networkTitle')"
+              :description="t('settings.shape.networkGroupDesc')"
+            >
+              <v-row dense>
+                <v-col cols="12" md="6">
+                  <v-text-field
+                    :model-value="effective('DOCKER_DEFAULT_NETWORK')"
+                    :label="t('settings.shape.network')"
+                    :hint="t('settings.shape.networkHint')"
+                    :rules="networkRules"
+                    prepend-inner-icon="mdi-lan"
+                    persistent-hint
+                    density="comfortable"
+                    variant="outlined"
+                    @update:model-value="(v) => edit('DOCKER_DEFAULT_NETWORK', v)"
+                  >
+                    <template #append-inner>
+                      <v-tooltip
+                        v-if="!isDefault('DOCKER_DEFAULT_NETWORK')"
+                        :text="t('settings.shape.reset')"
+                        location="top"
+                      >
+                        <template #activator="{ props: tip }">
+                          <v-btn
+                            v-bind="tip"
+                            size="x-small"
+                            variant="text"
+                            icon="mdi-restore"
+                            :aria-label="t('settings.shape.reset')"
+                            @click="resetToDefault('DOCKER_DEFAULT_NETWORK')"
+                          />
+                        </template>
+                      </v-tooltip>
+                    </template>
+                  </v-text-field>
+                </v-col>
+              </v-row>
+
+              <v-divider class="my-3" />
+
+              <v-switch
+                :model-value="boolOf('SSL_ENABLE')"
+                :label="t('settings.shape.ssl')"
+                :messages="t('settings.shape.sslHint')"
+                color="primary"
+                density="comfortable"
+                hide-details="auto"
+                @update:model-value="(v) => setBool('SSL_ENABLE', v)"
+              />
+
+              <!-- The generator already reports this — `traefik_routing_warning`
+                   returns it and it lands in the generate report — but the
+                   report is not where the decision is made. Every router the
+                   generator writes targets the `websecure` entry point, and
+                   that entry point is only written when this is on, so turning
+                   it off produces a pair of files that disagree and a stack
+                   where nothing resolves. Said beside the switch that causes
+                   it. -->
+              <v-alert
+                v-if="!boolOf('SSL_ENABLE')"
+                type="warning"
+                variant="tonal"
+                density="comfortable"
+                class="mt-3"
+                :text="t('settings.shape.sslOffBreaksRouting')"
+              />
+
+              <!-- Saved, but not yet true of the running stack. The routing
+                   labels are baked into generated files, so until those are
+                   rewritten the old suffix is still what Traefik matches on. -->
+              <v-alert
+                v-if="routingChanged"
+                type="info"
+                variant="tonal"
+                density="comfortable"
+                class="mt-4"
+              >
+                <div class="text-body-2">{{ t('settings.shape.thenRegenerate') }}</div>
+                <div v-if="suffixChanged" class="text-caption text-medium-emphasis mt-1">
+                  {{ t('settings.shape.thenCertificates') }}
+                </div>
+                <template #append>
+                  <v-btn
+                    size="small"
+                    variant="tonal"
+                    prepend-icon="mdi-cog-sync-outline"
+                    :loading="stackBusy"
+                    @click="regenerateAfterChange"
+                  >
+                    {{ t('settings.shape.regenerate') }}
+                  </v-btn>
+                </template>
+              </v-alert>
+
+              <!-- Redirecting to a scheme that is switched off is a dead end,
+                   so the dependent control cannot be left on by itself. -->
+              <v-switch
+                :model-value="boolOf('SSL_ENABLE') && boolOf('REDIRECT_TO_HTTPS')"
+                :disabled="!boolOf('SSL_ENABLE')"
+                :label="t('settings.shape.redirect')"
+                :messages="
+                  boolOf('SSL_ENABLE')
+                    ? t('settings.shape.redirectHint')
+                    : t('settings.shape.redirectBlocked')
+                "
+                color="primary"
+                density="comfortable"
+                hide-details="auto"
+                @update:model-value="(v) => setBool('REDIRECT_TO_HTTPS', v)"
+              />
+            </SettingsGroup>
+          </template>
+
+          <template v-if="tab === 'php'">
+            <SettingsGroup
+              icon="mdi-code-braces"
+              :title="t('settings.defaults.runtimes')"
+              :description="t('settings.runtimes.desc')"
+            >
+              <template #append>
+                <v-btn
+                  v-if="dirty"
+                  size="small"
+                  variant="tonal"
+                  color="primary"
+                  prepend-icon="mdi-content-save-outline"
+                  :loading="saving"
+                  @click="save"
+                >
+                  {{ t('settings.save', { count: Object.keys(edits).length }) }}
+                </v-btn>
+                <v-chip v-else-if="saved" color="success" size="small">
+                  {{ t('settings.saved') }}
+                </v-chip>
+              </template>
+
+              <v-row dense>
+                <v-col v-for="r in RUNTIME_DEFAULTS" :key="r.id" cols="12" sm="6">
+                  <v-select
+                    :model-value="effective(r.key)"
+                    :items="runtimeItems(r)"
+                    :label="r.id"
+                    :prepend-inner-icon="r.icon"
+                    density="comfortable"
+                    variant="outlined"
+                    hide-details
+                    @update:model-value="(v) => edit(r.key, v)"
+                  />
+                </v-col>
+              </v-row>
+            </SettingsGroup>
+
+            <SettingsGroup
+              icon="mdi-tag-outline"
+              :title="t('settings.defaults.php')"
+              :description="t('settings.php.versionDesc')"
+            >
+              <template #append>
+                <v-btn
+                  v-if="dirty"
+                  size="small"
+                  variant="tonal"
+                  color="primary"
+                  prepend-icon="mdi-content-save-outline"
+                  :loading="saving"
+                  @click="save"
+                >
+                  {{ t('settings.save', { count: Object.keys(edits).length }) }}
+                </v-btn>
+                <v-chip v-else-if="saved" color="success" size="small">
+                  {{ t('settings.saved') }}
+                </v-chip>
+              </template>
+
+              <v-row dense>
+                <v-col cols="12" md="6">
+                  <v-select
+                    :model-value="effective('SUPPORTED_LANGUAGES_PHP_DEFAULT')"
+                    :items="phpVersionItems"
+                    :label="t('settings.php.version')"
+                    :hint="t('settings.php.versionHint')"
+                    persistent-hint
+                    density="comfortable"
+                    variant="outlined"
+                    prepend-inner-icon="mdi-language-php"
+                    @update:model-value="(v) => edit('SUPPORTED_LANGUAGES_PHP_DEFAULT', v)"
+                  />
+                </v-col>
+                <v-col cols="12" md="6">
+                  <v-select
+                    :model-value="effective('SUPPORTED_SERVERS_DEFAULT')"
+                    :items="serverItems"
+                    :label="t('settings.php.server')"
+                    :hint="t('settings.php.serverHint')"
+                    persistent-hint
+                    density="comfortable"
+                    variant="outlined"
+                    prepend-inner-icon="mdi-server"
+                    @update:model-value="(v) => edit('SUPPORTED_SERVERS_DEFAULT', v)"
+                  />
+                </v-col>
+              </v-row>
+            </SettingsGroup>
+
+            <SettingsGroup
+              icon="mdi-hammer-wrench"
+              :title="t('settings.defaults.phpTools')"
+              :description="t('settings.shape.phpDesc')"
+            >
+              <v-row dense class="mb-1">
+                <v-col cols="12" md="6">
+                  <v-combobox
+                    :model-value="effective('PHP_TOOL_COMPOSER_VERSION')"
+                    :items="['latest']"
+                    :label="t('settings.php.composer')"
+                    :hint="t('settings.php.composerHint')"
+                    persistent-hint
+                    density="comfortable"
+                    variant="outlined"
+                    prepend-inner-icon="mdi-package-variant"
+                    @update:model-value="(v) => edit('PHP_TOOL_COMPOSER_VERSION', v ?? '')"
+                  />
+                </v-col>
+                <v-col cols="12" md="6">
+                  <v-select
+                    :model-value="effective('PHP_TOOL_NODEJS_VERSION')"
+                    :items="nodeVersionItems"
+                    :label="t('settings.php.nodejs')"
+                    :hint="t('settings.php.nodejsHint')"
+                    persistent-hint
+                    density="comfortable"
+                    variant="outlined"
+                    prepend-inner-icon="mdi-nodejs"
+                    @update:model-value="(v) => edit('PHP_TOOL_NODEJS_VERSION', v)"
+                  />
+                </v-col>
+              </v-row>
+
+              <v-combobox
+                :model-value="listOf('PHP_DEFAULT_TOOLS')"
+                :label="t('settings.shape.tools')"
+                :hint="t('settings.shape.toolsHint')"
+                multiple
+                chips
+                closable-chips
+                persistent-hint
+                density="comfortable"
+                variant="outlined"
+                class="mb-3"
+                @update:model-value="(v) => setList('PHP_DEFAULT_TOOLS', v)"
+              />
+              <v-combobox
+                :model-value="listOf('PHP_DEFAULT_APT_PACKAGES')"
+                :label="t('settings.shape.apt')"
+                :hint="t('settings.shape.aptHint')"
+                multiple
+                chips
+                closable-chips
+                persistent-hint
+                density="comfortable"
+                variant="outlined"
+                @update:model-value="(v) => setList('PHP_DEFAULT_APT_PACKAGES', v)"
+              />
+            </SettingsGroup>
+          </template>
+
+          <!-- ---- stack preset ----------------------------------------------- -->
+          <!-- The stack, made portable. `stackvo.json` is already in the
+               teammate's clone; which services are on and at which versions is
+               not, because that lives in .env and .env is where the passwords
+               are. A preset carries the first half and, by construction, has
+               nowhere to put the second. -->
+
+          <!-- ---- runtimes --------------------------------------------------- -->
+
+          <!-- ---- servers ---------------------------------------------------- -->
+          <template v-if="tab === 'servers'">
+            <SettingsGroup
+              icon="mdi-web-box"
+              :title="t('settings.servers.limits')"
+              :description="t('settings.servers.limitsDesc')"
+            >
+              <template #append>
+                <v-btn
+                  v-if="dirty"
+                  size="small"
+                  variant="tonal"
+                  color="primary"
+                  prepend-icon="mdi-content-save-outline"
+                  :loading="saving"
+                  @click="save"
+                >
+                  {{ t('settings.save', { count: Object.keys(edits).length }) }}
+                </v-btn>
+                <v-chip v-else-if="saved" color="success" size="small">
+                  {{ t('settings.saved') }}
+                </v-chip>
+              </template>
+
+              <v-row dense>
+                <v-col v-for="f in NGINX_FIELDS" :key="f.key" cols="12" sm="6" md="4">
+                  <v-text-field
+                    :model-value="effective(f.key)"
+                    :label="t(`settings.servers.field.${f.key}`)"
+                    :rules="f.kind === 'size' ? sizeRules : secondsRules"
+                    :suffix="f.kind === 'seconds' ? 's' : undefined"
+                    :prepend-inner-icon="f.icon"
+                    density="comfortable"
+                    variant="outlined"
+                    hide-details="auto"
+                    @update:model-value="(v) => edit(f.key, v)"
+                  />
+                </v-col>
+              </v-row>
+
+              <v-divider class="my-4" />
+
+              <div class="d-flex ga-6 flex-wrap">
+                <v-switch
+                  v-for="sw in NGINX_SWITCHES"
+                  :key="sw.key"
+                  :model-value="onOff(sw.key)"
+                  :label="t(`settings.servers.field.${sw.key}`)"
+                  color="primary"
+                  density="comfortable"
+                  hide-details
+                  @update:model-value="(v) => setOnOff(sw.key, v)"
+                />
+              </div>
+
+              <!-- Only meaningful once compression is on, so it appears with
+                   it rather than sitting greyed out asking to be understood. -->
+              <v-row v-if="gzipOn" dense class="mt-2">
+                <v-col cols="12" sm="4">
+                  <v-text-field
+                    :model-value="effective('SERVER_GZIP_COMP_LEVEL')"
+                    :label="t('settings.servers.field.SERVER_GZIP_COMP_LEVEL')"
+                    type="number"
+                    min="1"
+                    max="9"
+                    density="comfortable"
+                    variant="outlined"
+                    hide-details="auto"
+                    @update:model-value="(v) => edit('SERVER_GZIP_COMP_LEVEL', v)"
+                  />
+                </v-col>
+                <v-col cols="12" sm="8">
+                  <v-text-field
+                    :model-value="effective('SERVER_GZIP_TYPES')"
+                    :label="t('settings.servers.field.SERVER_GZIP_TYPES')"
+                    :hint="t('settings.servers.gzipTypesHint')"
+                    persistent-hint
+                    density="comfortable"
+                    variant="outlined"
+                    @update:model-value="(v) => edit('SERVER_GZIP_TYPES', v)"
+                  />
+                </v-col>
+              </v-row>
+
+              <!-- The half people find last. An upload dies at whichever limit
+                   is lowest, and PHP's are per project — raising one here and
+                   not the other is the failure this note exists to prevent. -->
+              <v-alert
+                type="info"
+                variant="tonal"
+                density="comfortable"
+                class="mt-3"
+                :text="t('settings.servers.phpNote')"
+              />
+            </SettingsGroup>
+
+            <SettingsGroup
+              icon="mdi-file-code-outline"
+              :title="t('settings.servers.extra')"
+              :description="t('settings.servers.extraDesc')"
+            >
+              <template #append>
+                <v-btn
+                  size="small"
+                  variant="tonal"
+                  color="primary"
+                  prepend-icon="mdi-content-save-outline"
+                  :disabled="!serverConfigDirty"
+                  :loading="serverConfigBusy"
+                  @click="saveServerConfig"
+                >
+                  {{ t('settings.save', { count: 1 }) }}
+                </v-btn>
+              </template>
+
+              <v-tabs v-model="serverTab" density="compact" bg-color="transparent" class="mb-3">
+                <v-tab v-for="srv in CONFIGURABLE_SERVERS" :key="srv" :value="srv">{{ srv }}</v-tab>
+              </v-tabs>
+
+              <v-textarea
+                v-model="serverConfig"
+                :placeholder="t('settings.servers.extraPlaceholder')"
+                :hint="t('settings.servers.extraHint')"
+                persistent-hint
+                rows="12"
+                variant="outlined"
+                density="comfortable"
+                class="server-config"
+                spellcheck="false"
+              />
+            </SettingsGroup>
+
+            <SettingsGroup
+              icon="mdi-server-network"
+              :title="t('settings.servers.applies')"
+              :description="t('settings.servers.appliesDesc')"
+            >
+              <div class="d-flex ga-2 flex-wrap">
+                <v-chip
+                  v-for="srv in catalog?.servers ?? []"
+                  :key="srv"
+                  size="small"
+                  variant="tonal"
+                  :prepend-icon="SERVER_SUPPORT[srv] ? 'mdi-check' : 'mdi-minus'"
+                  :color="SERVER_SUPPORT[srv] ? 'primary' : undefined"
+                >
+                  {{ srv }}
+                </v-chip>
+              </div>
+              <div class="text-caption text-medium-emphasis mt-2">
+                {{ t('settings.servers.supportNote') }}
+              </div>
+            </SettingsGroup>
+          </template>
+
+          <!-- ---- services --------------------------------------------------- -->
+          <template v-if="tab === 'services'">
+            <SettingsGroup
+              icon="mdi-cube-outline"
+              :title="t('serviceSettings.pick')"
+              :description="t('serviceSettings.desc')"
+            >
+              <div class="d-flex flex-column flex-md-row ga-4 align-start">
+                <div class="services-main">
+                  <v-list
+                    v-if="servicesInTab.length"
+                    density="comfortable"
+                    class="pa-0 service-list"
+                    bg-color="transparent"
+                  >
+                    <v-list-item
+                      v-for="s in servicesInTab"
+                      :key="s.id"
+                      :title="s.id"
+                      :subtitle="
+                        s.version
+                          ? `${categoryLabel(s.category)} · ${s.version}`
+                          : categoryLabel(s.category)
+                      "
+                      rounded="lg"
+                      class="mb-1"
+                      @click="openService(s)"
+                    >
+                      <template #prepend>
+                        <v-avatar
+                          rounded="lg"
+                          size="32"
+                          :color="s.running ? 'success' : s.enabled ? 'warning' : 'surface-variant'"
+                        >
+                          <v-icon size="18" icon="mdi-cube-outline" />
+                        </v-avatar>
+                      </template>
+                      <template #append>
+                        <v-chip v-if="!s.enabled" size="x-small" variant="tonal" class="mr-2">
+                          {{ t('serviceSettings.off') }}
+                        </v-chip>
+                        <v-icon icon="mdi-chevron-right" />
+                      </template>
+                    </v-list-item>
+                  </v-list>
+
+                  <v-alert
+                    v-else
+                    type="info"
+                    variant="tonal"
+                    density="comfortable"
+                    :text="t('serviceSettings.empty')"
+                  />
+                </div>
+
+                <!-- The filter reads as a sidebar to the thing it filters, so
+                     it sits beside the list rather than above it. Sized to the
+                     labels rather than to a share of the row: they are seven
+                     short words, and a grid fraction gave them a third of the
+                     pane to sit in. -->
+                <v-tabs
+                  v-model="serviceTab"
+                  :direction="$vuetify.display.mdAndUp ? 'vertical' : 'horizontal'"
+                  density="compact"
+                  bg-color="transparent"
+                  class="service-tabs"
+                >
+                  <v-tab v-for="c in serviceCategories" :key="c" :value="c">
+                    {{ categoryLabel(c) }}
+                  </v-tab>
+                </v-tabs>
+              </div>
+            </SettingsGroup>
+          </template>
+
+          <!-- ---- doctor ----------------------------------------------------- -->
+          <!-- Diagnosis next to its repair. The findings here used to surface
+               one failed compose up at a time, each as an error about itself:
+               "address already in use" with no word on by what. -->
+          <!-- ---- workspace and stack control ------------------------------- -->
+          <template v-if="tab === 'workspace'">
+            <SettingsGroup
+              icon="mdi-folder-open-outline"
+              :title="t('settings.workspaceGroup')"
+              :description="t('settings.workspaceGroupDesc')"
+            >
+              <div class="text-body-2 break">{{ app.workspace?.root || t('workspace.none') }}</div>
+              <div v-if="app.workspace" class="text-caption text-medium-emphasis mt-1">
+                {{ t(`workspace.source.${app.workspace.source}`) }}
+                <template v-if="app.workspace.stackvoVersion">
+                  · {{ t('workspace.version') }} {{ app.workspace.stackvoVersion }}
+                </template>
+              </div>
+
+              <div class="d-flex ga-2 flex-wrap mt-3">
+                <v-btn
+                  size="small"
+                  variant="tonal"
+                  prepend-icon="mdi-folder-open-outline"
+                  @click="pickWorkspace"
+                >
+                  {{ t('workspace.change') }}
+                </v-btn>
+                <v-btn
+                  v-if="app.workspace?.root"
+                  size="small"
+                  variant="text"
+                  prepend-icon="mdi-open-in-new"
+                  @click="api.openFolder(app.workspace.root)"
+                >
+                  {{ t('projects.openFolder') }}
+                </v-btn>
+              </div>
+            </SettingsGroup>
+
             <SettingsGroup
               icon="mdi-play-box-multiple-outline"
               :title="t('settings.compose')"
@@ -1076,44 +2260,16 @@ onMounted(async () => {
 
                 <v-divider class="my-3" />
 
-                <!-- Bash runs in every mode. `rust` refuses to write when the
-                     two disagree, so switching cannot silently change an
-                     image. -->
-                <v-select
-                  v-model="engineMode"
-                  :items="[
-                    { value: 'bash', title: t('settings.engineBash') },
-                    { value: 'verify', title: t('settings.engineVerify') },
-                    { value: 'rust', title: t('settings.engineRust') },
-                  ]"
-                  :label="t('settings.engineMode')"
-                  hide-details
-                  class="mb-2"
-                />
-                <v-btn
-                  size="small"
-                  variant="tonal"
-                  block
-                  :loading="verifying"
-                  :disabled="engineMode === 'rust' && !generatorReport.readyToTakeOver"
-                  @click="runGenerate"
-                >
+                <!-- One generator, no selector: the Rust engine took over
+                     after reaching byte parity on every file, and the report
+                     above is now a drift check — does the disk still hold
+                     what this generator would write? -->
+                <v-btn size="small" variant="tonal" block :loading="verifying" @click="runGenerate">
                   {{ t('actions.generate') }}
                 </v-btn>
-                <div v-if="generateResult" class="text-caption text-success mt-2">
-                  {{ generateResult.note || generateResult.engine }}
-                </div>
               </template>
             </SettingsGroup>
-          </template>
 
-          <!-- ---- stack preset ----------------------------------------------- -->
-          <!-- The stack, made portable. `stackvo.json` is already in the
-               teammate's clone; which services are on and at which versions is
-               not, because that lives in .env and .env is where the passwords
-               are. A preset carries the first half and, by construction, has
-               nowhere to put the second. -->
-          <template v-if="tab === 'sharing'">
             <SettingsGroup
               icon="mdi-export-variant"
               :title="t('stackPreset.export')"
@@ -1266,12 +2422,63 @@ onMounted(async () => {
             </SettingsGroup>
           </template>
 
-          <!-- ---- doctor ----------------------------------------------------- -->
-          <!-- Diagnosis next to its repair. The findings here used to surface
-               one failed compose up at a time, each as an error about itself:
-               "address already in use" with no word on by what. -->
           <template v-if="tab === 'doctor'">
+            <SettingsGroup
+              icon="mdi-docker"
+              :title="t('engine.title')"
+              :description="t('settings.engineGroupDesc')"
+            >
+              <template #append>
+                <v-chip size="small" :color="app.engineUp ? 'success' : 'error'">
+                  {{ app.engineUp ? t('engine.running') : t('engine.down') }}
+                </v-chip>
+              </template>
+
+              <div
+                v-for="row in engineRows"
+                :key="row.label"
+                class="d-flex justify-space-between py-1 ga-4"
+              >
+                <span class="text-caption text-medium-emphasis">{{ row.label }}</span>
+                <span class="text-caption text-right break">{{ row.value }}</span>
+              </div>
+              <div v-if="app.engine?.error" class="text-caption text-error mt-2">
+                {{ app.engine.error }}
+              </div>
+            </SettingsGroup>
+
             <DoctorPanel />
+
+            <SettingsGroup
+              icon="mdi-bug-outline"
+              :title="t('settings.diagnostics')"
+              :description="t('settings.diagnosticsHint')"
+            >
+              <div v-if="!logs?.directory" class="text-caption text-medium-emphasis">
+                {{ t('settings.logsUnavailable') }}
+              </div>
+              <template v-else>
+                <div class="d-flex align-center ga-2 flex-wrap">
+                  <code class="text-caption log-path">{{ logs.directory }}</code>
+                  <v-spacer />
+                  <v-chip size="x-small" variant="tonal">{{ bytes(logs.totalBytes) }}</v-chip>
+                  <v-btn
+                    size="small"
+                    variant="tonal"
+                    prepend-icon="mdi-folder-open"
+                    @click="api.openFolder(logs.directory)"
+                  >
+                    {{ t('settings.openLogs') }}
+                  </v-btn>
+                </div>
+                <!-- Said out loud because the alternative is a user who assumes
+                     the opposite and attaches nothing, or one who assumes it is
+                     safe when it is not. -->
+                <div class="text-caption text-medium-emphasis mt-2">
+                  {{ t('settings.logsRedacted') }}
+                </div>
+              </template>
+            </SettingsGroup>
           </template>
 
           <!-- ---- certificates ---------------------------------------------- -->
@@ -1436,59 +2643,32 @@ onMounted(async () => {
           </template>
 
           <!-- ---- .env ------------------------------------------------------ -->
-          <template v-if="tab === 'env'">
-            <!-- Writes patch lines in place: comments, section banners, trailing
-                 notes and blank lines all survive. A .env is a hand-maintained
-                 file, not a serialised map. -->
-            <SettingsGroup
-              icon="mdi-file-document-edit-outline"
-              :title="t('settings.envVars')"
-              :description="t('settings.envEditable')"
-            >
-              <template #append>
-                <v-btn
-                  v-if="dirty"
-                  color="primary"
-                  variant="flat"
-                  size="small"
-                  :loading="saving"
-                  @click="save"
-                >
-                  {{ t('settings.save', { count: Object.keys(edits).length }) }}
-                </v-btn>
-                <v-chip v-else-if="saved" color="success" size="small">
-                  {{ t('settings.saved') }}
-                </v-chip>
-              </template>
-
-              <v-text-field
-                v-model="search"
-                prepend-inner-icon="mdi-magnify"
-                hide-details
-                clearable
-                class="mb-3"
-              />
-
-              <div class="env-table">
-                <div v-for="[key, value] in rows" :key="key" class="env-row">
-                  <span class="text-caption font-weight-medium break">{{ key }}</span>
-                  <v-text-field
-                    :model-value="edits[key] ?? value"
-                    :disabled="isRedacted(value)"
-                    :hint="isRedacted(value) ? t('settings.secretHint') : undefined"
-                    persistent-hint
-                    variant="plain"
-                    hide-details="auto"
-                    class="env-value"
-                    @update:model-value="(v) => edit(key, v)"
-                  />
-                </div>
-              </div>
-            </SettingsGroup>
-          </template>
 
           <!-- ---- about ----------------------------------------------------- -->
           <template v-if="tab === 'about'">
+            <!-- Identity first, and once. The version was a chip inside the
+                 update card, which is the one place it is least likely to be
+                 looked for — the question "what am I running" is asked far
+                 more often than "is there a newer one". -->
+            <v-card variant="flat" class="about-hero mb-4">
+              <div class="d-flex align-center ga-4 pa-5 flex-wrap">
+                <v-avatar rounded="lg" size="56" color="primary">
+                  <v-icon size="32" icon="mdi-cube-outline" />
+                </v-avatar>
+                <div class="min-w-0">
+                  <div class="text-h6">StackVo</div>
+                  <div class="text-body-2 text-medium-emphasis">{{ t('about.tagline') }}</div>
+                </div>
+                <v-spacer />
+                <div class="d-flex align-center ga-2">
+                  <v-chip v-if="appVersion" size="small" variant="tonal" prepend-icon="mdi-tag">
+                    {{ appVersion }}
+                  </v-chip>
+                  <v-chip size="small" variant="tonal" prepend-icon="mdi-scale-balance">MIT</v-chip>
+                </div>
+              </div>
+            </v-card>
+
             <SettingsGroup
               icon="mdi-update"
               :title="t('settings.updates')"
@@ -1555,37 +2735,60 @@ onMounted(async () => {
                 </div>
               </div>
             </SettingsGroup>
+            <!-- What a bug report needs, in the order somebody reading one
+                 wants it, and copyable in a single action. Assembling this by
+                 hand from four cards is the step that gets skipped, and a
+                 report without it costs a round trip. -->
+            <SettingsGroup
+              icon="mdi-information-outline"
+              :title="t('about.system')"
+              :description="t('about.systemDesc')"
+            >
+              <template #append>
+                <v-btn
+                  size="small"
+                  variant="tonal"
+                  :prepend-icon="copied ? 'mdi-check' : 'mdi-content-copy'"
+                  @click="copySystemInfo"
+                >
+                  {{ copied ? t('about.copied') : t('about.copy') }}
+                </v-btn>
+              </template>
+
+              <div
+                v-for="row in systemRows"
+                :key="row.label"
+                class="d-flex justify-space-between py-1 ga-4"
+              >
+                <span class="text-caption text-medium-emphasis">{{ row.label }}</span>
+                <span class="text-caption text-right break">{{ row.value }}</span>
+              </div>
+            </SettingsGroup>
 
             <SettingsGroup
-              icon="mdi-bug-outline"
-              :title="t('settings.diagnostics')"
-              :description="t('settings.diagnosticsHint')"
+              icon="mdi-link-variant"
+              :title="t('about.resources')"
+              :description="t('about.resourcesDesc')"
             >
-              <div v-if="!logs?.directory" class="text-caption text-medium-emphasis">
-                {{ t('settings.logsUnavailable') }}
-              </div>
-              <template v-else>
-                <div class="d-flex align-center ga-2 flex-wrap">
-                  <code class="text-caption log-path">{{ logs.directory }}</code>
-                  <v-spacer />
-                  <v-chip size="x-small" variant="tonal">{{ bytes(logs.totalBytes) }}</v-chip>
-                  <v-btn
-                    size="small"
-                    variant="tonal"
-                    prepend-icon="mdi-folder-open"
-                    @click="openPath(logs.directory)"
-                  >
-                    {{ t('settings.openLogs') }}
-                  </v-btn>
-                </div>
-                <!-- Said out loud because the alternative is a user who assumes
-                     the opposite and attaches nothing, or one who assumes it is
-                     safe when it is not. -->
-                <div class="text-caption text-medium-emphasis mt-2">
-                  {{ t('settings.logsRedacted') }}
-                </div>
-              </template>
+              <v-list density="comfortable" bg-color="transparent" class="pa-0 about-links">
+                <v-list-item
+                  v-for="r in RESOURCES"
+                  :key="r.key"
+                  :prepend-icon="r.icon"
+                  :title="t(`about.links.${r.key}`)"
+                  rounded="lg"
+                  @click="api.openInBrowser(r.url)"
+                >
+                  <template #append>
+                    <v-icon size="x-small" icon="mdi-open-in-new" />
+                  </template>
+                </v-list-item>
+              </v-list>
             </SettingsGroup>
+
+            <div class="text-caption text-medium-emphasis text-center py-2">
+              {{ t('about.copyright') }}
+            </div>
           </template>
         </SettingsSection>
       </div>
@@ -1595,35 +2798,99 @@ onMounted(async () => {
            navigation between the window edge and the thing being configured. -->
       <nav class="settings-nav">
         <v-list nav class="pa-2">
-          <v-list-item
-            v-for="s in SECTIONS"
-            :key="s.key"
-            rounded="lg"
-            color="primary"
-            :prepend-icon="s.icon"
-            :title="t(s.label)"
-            :active="tab === s.key"
-            @click="tab = s.key"
-          >
-            <!-- The certificate going stale is silent otherwise: the first
+          <template v-for="(g, i) in groupedSections" :key="g.key">
+            <v-list-subheader :class="i ? 'mt-3' : ''">{{ t(g.label) }}</v-list-subheader>
+            <v-list-item
+              v-for="s in g.items"
+              :key="s.key"
+              rounded="lg"
+              color="primary"
+              :prepend-icon="s.icon"
+              :title="t(s.label)"
+              :active="tab === s.key"
+              @click="tab = s.key"
+            >
+              <!-- The certificate going stale is silent otherwise: the first
                  sign is a browser warning on a project that worked yesterday,
                  and nothing connects that to a settings pane. -->
-            <template v-if="s.key === 'certificates' && certStale" #append>
-              <v-icon
-                size="x-small"
-                color="warning"
-                icon="mdi-alert-circle"
-                :aria-label="t('certs.stale')"
-              />
-            </template>
-          </v-list-item>
+              <template v-if="s.key === 'certificates' && certStale" #append>
+                <v-icon
+                  size="x-small"
+                  color="warning"
+                  icon="mdi-alert-circle"
+                  :aria-label="t('certs.stale')"
+                />
+              </template>
+            </v-list-item>
+          </template>
         </v-list>
       </nav>
     </div>
   </PageLayout>
+  <ServiceSettingsSheet v-model="sheetOpen" :service="sheetService" @applied="onServiceApplied" />
 </template>
 
 <style scoped>
+/* Config is read in columns — an alignment that a proportional face destroys. */
+.server-config :deep(textarea) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+/* The identity card reads as the page's masthead, so it sits on the surface
+   rather than in a group card — a heading inside a bordered box would look
+   like one more setting. */
+.about-hero {
+  background: rgba(var(--v-theme-primary), 0.06);
+  border-radius: 12px;
+}
+
+.about-links :deep(.v-list-item) {
+  background: transparent;
+}
+.about-links :deep(.v-list-item:hover) {
+  background: rgba(var(--v-theme-on-surface), 0.06);
+}
+
+/* One layer, not two.
+   `v-list` paints `surface` by default, and these rows sit on a group card
+   already filled with a translucent `surface-bright`. In the light theme the
+   two are close enough to read as one; in the dark theme the list's opaque
+   fill sat visibly on top of the card's, so every row looked like a second
+   panel. The list is transparent now and the row earns a background only
+   under the pointer — which is also the only time it means anything. */
+.service-list :deep(.v-list-item) {
+  background: transparent;
+}
+.service-list :deep(.v-list-item:hover) {
+  background: rgba(var(--v-theme-on-surface), 0.06);
+}
+
+/* The list takes the room; the rail takes what its labels need. */
+.services-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The rail is a filter, not navigation: left-aligned labels, sized to the
+   text. Categories come from the catalog, so they are content — uppercasing
+   them turns `adminUis` into `ADMINUIS`, which is not what the row beneath
+   calls it. */
+.service-tabs :deep(.v-tab) {
+  justify-content: flex-start;
+  min-width: 0;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+@media (min-width: 960px) {
+  .service-tabs {
+    flex: 0 0 auto;
+    width: 160px;
+  }
+}
+
 .settings-layout {
   flex: 1 1 auto;
   min-height: 0;

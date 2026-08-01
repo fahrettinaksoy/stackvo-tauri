@@ -2,7 +2,6 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
-import { openUrl } from '@tauri-apps/plugin-opener';
 import { useOperationsStore } from '@/stores/operations';
 import { useAppStore } from '@/stores/app';
 import { api } from '@/lib/ipc';
@@ -38,46 +37,27 @@ const preview = ref(null);
 
 const SECTIONS = [
   { key: 'indicator', icon: 'mdi-chart-line', label: 'projectDetail.indicator' },
+  // What the project *is*: its settings, the manifest they are written to, and
+  // the Dockerfile they produce. Three views of one subject that were three
+  // tabs, so seeing what a setting did meant leaving the page you set it on.
   { key: 'configuration', icon: 'mdi-folder-cog', label: 'projectDetail.configuration' },
+  // What is running: the container's own facts, the workers inside it, and the
+  // tunnel that exposes it. All three are about the process, not the project.
   { key: 'container', icon: 'mdi-docker', label: 'projectDetail.container' },
   // A section rather than a dialog over the page: logs are something you read
   // while looking at the rest, and a modal on top of a detail page hides the
   // thing it is about.
   { key: 'logs', icon: 'mdi-text-box-outline', label: 'logs.title' },
-  // The daily loop. Above the divider with the other act-on-a-running-project
-  // panes, because that is what these are — they exec into the container.
-  { key: 'commands', icon: 'mdi-console-line', label: 'quickCmd.title' },
-  // Next to the logs, because that is what it is: output the application
-  // produced, arriving out of band instead of in the page.
-  { key: 'dumps', icon: 'mdi-bug-check-outline', label: 'dumps.title', php: true },
-  // Above the divider with the other read-and-act panes: turning Xdebug on is
-  // a thing you do to a running project, not a file you edit. PHP only — see
-  // `sections` below.
-  { key: 'xdebug', icon: 'mdi-bug-outline', label: 'xdebug.title', php: true },
-  // Next to Xdebug because it is the same kind of thing: a PHP setting that
-  // reaches the container through a compose overlay this app layers, not
-  // through the manifest. PHP only, for the same reason.
-  // Beside Xdebug because it *is* Xdebug — profiling is a mode of the same
-  // extension, not a second thing to switch on.
-  { key: 'profiler', icon: 'mdi-speedometer', label: 'profiler.title', php: true },
-  { key: 'phpini', icon: 'mdi-language-php', label: 'phpIni.title', php: true },
-  // The node counterpart of the two above: a setting that reaches the container
-  // through a compose overlay this app layers. Node only, and for the sharper
-  // reason — a PHP project has no /app to mount over.
-  { key: 'devserver', icon: 'mdi-lightning-bolt-outline', label: 'devServer.title', node: true },
-  // Sharing is something you do to a running project too: a public URL for
-  // the webhook sender that cannot reach myapp.loc.
-  { key: 'share', icon: 'mdi-earth', label: 'tunnel.title' },
-  // PHP only in the rail, and empty-list-aware inside: workers are detected
-  // from artisan, so a plain PHP project without Laravel gets an explanation.
-  { key: 'workers', icon: 'mdi-cog-sync-outline', label: 'workers.title', php: true },
-  // The one artefact here that leaves the machine, so it sits at the end of
-  // the act-on-the-project group rather than among the editing surfaces.
+  // Xdebug, its profiler and the dump catcher. The first two are one extension
+  // in two modes and were never two decisions; the third is where the output
+  // lands. PHP only.
+  { key: 'debug', icon: 'mdi-bug-outline', label: 'projectDetail.debug', php: true },
+  // Settings that reach the container through a compose overlay this app
+  // layers rather than through the manifest: php.ini for PHP, the dev server
+  // for Node. A project is one or the other, so the tab is whichever applies.
+  { key: 'runtime', icon: 'mdi-tune', label: 'projectDetail.runtime', runtime: true },
+  // The one artefact here that leaves the machine.
   { key: 'release', icon: 'mdi-package-variant-closed', label: 'release.title' },
-  // Below the divider: the editing surfaces the screenshots do not show, kept
-  // because retiring the dialog must not retire what it could do.
-  { key: 'manifest', icon: 'mdi-code-json', label: 'detail.manifest', divide: true },
-  { key: 'dockerfile', icon: 'mdi-file-document-outline', label: 'detail.dockerfile' },
 ];
 const section = ref('indicator');
 
@@ -89,12 +69,28 @@ const section = ref('indicator');
  * whose only content is a reason it does not apply — the navigation itself
  * should carry that.
  */
-const sections = computed(() =>
-  SECTIONS.filter(
+const sections = computed(() => {
+  const runtime = project.value?.runtime;
+  return SECTIONS.filter(
     (s) =>
-      (!s.php || project.value?.runtime === 'php') && (!s.node || project.value?.runtime === 'node')
-  )
-);
+      (!s.php || runtime === 'php') &&
+      (!s.node || runtime === 'node') &&
+      // The runtime pane holds php.ini or the dev server; a Go project has
+      // neither, and an empty tab is a promise the page cannot keep.
+      (!s.runtime || runtime === 'php' || runtime === 'node')
+  );
+});
+
+/**
+ * Is this pane the one on screen, and is there anything to show yet?
+ *
+ * The panes were a v-else-if chain, which is what kept each of them its own
+ * tab: only the first matching branch renders, so two panes could never share
+ * one. They are independent conditions now and several answer to the same tab,
+ * which also means each has to exclude the loading state itself — the chain
+ * used to do that for them.
+ */
+const shows = (key) => !loading.value && section.value === key;
 
 const STATS_INTERVAL = 2000;
 let statsTimer = null;
@@ -221,6 +217,16 @@ async function openInEditor() {
  * version of this returned 400 unconditionally in the shipped container
  * configuration — it could never succeed.
  */
+/** The project directory in the system's own file manager. */
+async function openProjectFolder() {
+  error.value = null;
+  try {
+    await api.openFolder(project.value.path);
+  } catch (e) {
+    error.value = e;
+  }
+}
+
 async function openExternalTerminal() {
   error.value = null;
   try {
@@ -925,7 +931,12 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <PageLayout top-icon="mdi-information" :top-title="t('projectDetail.title')" hide-bar>
+  <PageLayout
+    top-icon="mdi-information"
+    :top-title="t('projectDetail.title')"
+    :top-subtitle="t('projectDetail.subtitle')"
+    hide-bar
+  >
     <template #top-append>
       <!-- aria-label as well as the tooltip: a tooltip renders
            aria-describedby, which is a description, not a name. A screen reader
@@ -960,7 +971,7 @@ onUnmounted(() => {
         color="primary"
         class="mr-2"
         :aria-label="t('projectsView.colOpen')"
-        @click="openUrl(httpsUrl)"
+        @click="api.openInBrowser(httpsUrl)"
       >
         <v-icon>mdi-open-in-new</v-icon>
         <v-tooltip activator="parent" location="bottom">{{ t('projectsView.colOpen') }}</v-tooltip>
@@ -981,6 +992,83 @@ onUnmounted(() => {
           t('detail.externalTerminal')
         }}</v-tooltip>
       </v-btn>
+      <!-- The commands the project's own files imply — artisan, composer,
+           npm — in the bar rather than in a pane you had to navigate to. They
+           are things you run while looking at the project, not things you go
+           somewhere to read about. -->
+      <v-menu location="bottom end">
+        <template #activator="{ props: menu }">
+          <v-btn
+            v-bind="menu"
+            icon
+            variant="tonal"
+            size="small"
+            elevation="0"
+            class="mr-2"
+            :loading="!!quickCommandBusy"
+            :aria-label="t('quickCmd.title')"
+          >
+            <v-icon>mdi-console-line</v-icon>
+            <v-tooltip activator="parent" location="bottom">{{ t('quickCmd.title') }}</v-tooltip>
+          </v-btn>
+        </template>
+
+        <v-list density="compact" class="cmd-menu">
+          <v-list-subheader>{{ t('quickCmd.title') }}</v-list-subheader>
+          <div class="px-4 pb-2 text-caption text-medium-emphasis">
+            {{ t('quickCmd.explain') }}
+          </div>
+
+          <!-- They exec into the container, so there has to be one. Said here
+               rather than left to a disabled item with no reason on it. -->
+          <v-list-item v-if="!running" :subtitle="t('quickCmd.needsRunning')" />
+
+          <!-- The button stays even with nothing to offer: hiding it would
+               leave someone expecting artisan with no button and no reason. -->
+          <v-list-item v-else-if="!quickCommands.length" :subtitle="t('quickCmd.none')" />
+
+          <!-- A rule where the source file changes: artisan, then composer,
+               then npm. The catalog already returns them in that order, so the
+               break is where one tool's commands end rather than a grouping
+               invented here. -->
+          <template v-for="(command, i) in quickCommands" :key="command.id">
+            <v-divider v-if="i && command.because !== quickCommands[i - 1].because" class="my-1" />
+
+            <v-list-item
+              :disabled="!running || !!quickCommandBusy"
+              @click="runQuickCommand(command)"
+            >
+              <template #prepend>
+                <v-icon
+                  size="small"
+                  :icon="command.interactive ? 'mdi-console' : 'mdi-play'"
+                  class="mr-2"
+                />
+              </template>
+              <v-list-item-title class="mono">{{ command.display }}</v-list-item-title>
+              <v-list-item-subtitle>{{ command.about }}</v-list-item-subtitle>
+              <v-list-item-subtitle class="text-disabled">
+                {{ t('quickCmd.because', { file: command.because }) }}
+              </v-list-item-subtitle>
+              <template #append>
+                <!-- Said on the row, not discovered by pressing it: one of these
+                   opens a terminal window and the other prints into the
+                   console below, and they look identical otherwise. -->
+                <v-chip v-if="command.interactive" size="x-small" variant="tonal">
+                  {{ t('quickCmd.opensTerminal') }}
+                </v-chip>
+                <v-progress-circular
+                  v-else-if="quickCommandBusy === command.id"
+                  size="14"
+                  width="2"
+                  indeterminate
+                />
+              </template>
+            </v-list-item>
+          </template>
+        </v-list>
+      </v-menu>
+
       <v-btn
         icon
         variant="tonal"
@@ -990,8 +1078,25 @@ onUnmounted(() => {
         :aria-label="t('detail.openInEditor')"
         @click="openInEditor"
       >
-        <v-icon>mdi-folder-open</v-icon>
+        <v-icon>mdi-code-tags</v-icon>
         <v-tooltip activator="parent" location="bottom">{{ t('detail.openInEditor') }}</v-tooltip>
+      </v-btn>
+
+      <!-- The folder icon now means the folder. It read as "open in editor"
+           before, which is a different application and a different intention:
+           one is where you write the code, the other is where you look at what
+           is on disk beside it. -->
+      <v-btn
+        icon
+        variant="tonal"
+        size="small"
+        elevation="0"
+        class="mr-2"
+        :aria-label="t('detail.openFolder')"
+        @click="openProjectFolder"
+      >
+        <v-icon>mdi-folder-open</v-icon>
+        <v-tooltip activator="parent" location="bottom">{{ t('detail.openFolder') }}</v-tooltip>
       </v-btn>
       <v-btn
         v-if="running"
@@ -1089,471 +1194,480 @@ onUnmounted(() => {
         </div>
 
         <!-- INDICATOR ---------------------------------------------------- -->
-        <template v-else-if="section === 'indicator'">
-          <v-alert
-            type="success"
-            variant="tonal"
-            class="mb-4"
-            :icon="running ? 'mdi-pulse' : 'mdi-pause'"
-          >
-            {{ running ? t('projectDetail.live') : t('projects.stopped') }}
-          </v-alert>
+        <template v-if="shows('indicator')">
+          <v-card variant="flat" class="pane">
+            <v-alert
+              type="success"
+              variant="tonal"
+              class="mb-4"
+              :icon="running ? 'mdi-pulse' : 'mdi-pause'"
+            >
+              {{ running ? t('projectDetail.live') : t('projects.stopped') }}
+            </v-alert>
 
-          <v-row>
-            <v-col cols="12" sm="6" lg="3">
-              <v-card rounded="lg" class="pa-4 metric-tile">
-                <div class="d-flex align-center mb-2">
-                  <v-icon size="18" color="info" class="mr-2">mdi-cpu-64-bit</v-icon>
-                  <span class="tile-label">{{ t('stats.cpu') }}</span>
-                  <v-spacer />
-                  <span class="text-h6 text-success">{{ percent(stats?.cpuPercent, 0) }}</span>
-                </div>
-                <v-sparkline
-                  :model-value="cpuSeries.length > 1 ? cpuSeries : [0, 0]"
-                  :gradient="['#1976D2', '#4CAF50']"
-                  line-width="3"
-                  smooth="8"
-                  height="46"
-                />
-                <div class="tile-foot">{{ stats?.onlineCpus ?? '—' }} {{ t('stats.cores') }}</div>
-              </v-card>
-            </v-col>
+            <v-row>
+              <v-col cols="12" sm="6" lg="3">
+                <v-card rounded="lg" class="pa-4 metric-tile">
+                  <div class="d-flex align-center mb-2">
+                    <v-icon size="18" color="info" class="mr-2">mdi-cpu-64-bit</v-icon>
+                    <span class="tile-label">{{ t('stats.cpu') }}</span>
+                    <v-spacer />
+                    <span class="text-h6 text-success">{{ percent(stats?.cpuPercent, 0) }}</span>
+                  </div>
+                  <v-sparkline
+                    :model-value="cpuSeries.length > 1 ? cpuSeries : [0, 0]"
+                    :gradient="['#1976D2', '#4CAF50']"
+                    line-width="3"
+                    smooth="8"
+                    height="46"
+                  />
+                  <div class="tile-foot">{{ stats?.onlineCpus ?? '—' }} {{ t('stats.cores') }}</div>
+                </v-card>
+              </v-col>
 
-            <v-col cols="12" sm="6" lg="3">
-              <v-card rounded="lg" class="pa-4 metric-tile">
-                <div class="d-flex align-center mb-2">
-                  <v-icon size="18" color="info" class="mr-2">mdi-memory</v-icon>
-                  <span class="tile-label">{{ t('stats.memory') }}</span>
-                  <v-spacer />
-                  <span class="text-h6 text-success">{{ percent(stats?.memoryPercent) }}</span>
-                </div>
-                <v-progress-linear
-                  :model-value="stats?.memoryPercent ?? 0"
-                  color="success"
-                  height="6"
-                  rounded
-                  class="my-4"
-                />
-                <div class="tile-foot">
-                  {{ bytes(stats?.memoryUsed) }} / {{ bytes(stats?.memoryLimit) }}
-                </div>
-              </v-card>
-            </v-col>
+              <v-col cols="12" sm="6" lg="3">
+                <v-card rounded="lg" class="pa-4 metric-tile">
+                  <div class="d-flex align-center mb-2">
+                    <v-icon size="18" color="info" class="mr-2">mdi-memory</v-icon>
+                    <span class="tile-label">{{ t('stats.memory') }}</span>
+                    <v-spacer />
+                    <span class="text-h6 text-success">{{ percent(stats?.memoryPercent) }}</span>
+                  </div>
+                  <v-progress-linear
+                    :model-value="stats?.memoryPercent ?? 0"
+                    color="success"
+                    height="6"
+                    rounded
+                    class="my-4"
+                  />
+                  <div class="tile-foot">
+                    {{ bytes(stats?.memoryUsed) }} / {{ bytes(stats?.memoryLimit) }}
+                  </div>
+                </v-card>
+              </v-col>
 
-            <v-col cols="12" sm="6" lg="3">
-              <v-card rounded="lg" class="pa-4 metric-tile">
-                <div class="d-flex align-center mb-2">
-                  <v-icon size="18" color="info" class="mr-2">mdi-harddisk</v-icon>
-                  <span class="tile-label">{{ t('projectDetail.disk') }}</span>
-                  <v-spacer />
-                  <span class="text-h6">{{ bytes(stats?.blockRead) }}</span>
-                </div>
-                <v-progress-linear
-                  model-value="12"
-                  color="purple"
-                  height="6"
-                  rounded
-                  class="my-4"
-                />
-                <div class="tile-foot">
-                  R {{ bytes(stats?.blockRead) }} / W {{ bytes(stats?.blockWrite) }}
-                </div>
-              </v-card>
-            </v-col>
+              <v-col cols="12" sm="6" lg="3">
+                <v-card rounded="lg" class="pa-4 metric-tile">
+                  <div class="d-flex align-center mb-2">
+                    <v-icon size="18" color="info" class="mr-2">mdi-harddisk</v-icon>
+                    <span class="tile-label">{{ t('projectDetail.disk') }}</span>
+                    <v-spacer />
+                    <span class="text-h6">{{ bytes(stats?.blockRead) }}</span>
+                  </div>
+                  <v-progress-linear
+                    model-value="12"
+                    color="purple"
+                    height="6"
+                    rounded
+                    class="my-4"
+                  />
+                  <div class="tile-foot">
+                    R {{ bytes(stats?.blockRead) }} / W {{ bytes(stats?.blockWrite) }}
+                  </div>
+                </v-card>
+              </v-col>
 
-            <v-col cols="12" sm="6" lg="3">
-              <v-card rounded="lg" class="pa-4 metric-tile">
-                <div class="d-flex align-center mb-2">
-                  <v-icon size="18" color="info" class="mr-2">mdi-lan</v-icon>
-                  <span class="tile-label">{{ t('stats.network') }}</span>
-                  <v-spacer />
-                  <span class="text-body-2">
-                    <span class="text-success">↓{{ bytes(stats?.netRx) }}</span>
-                    <span class="text-warning ml-1">↑{{ bytes(stats?.netTx) }}</span>
-                  </span>
-                </div>
-                <v-divider color="success" thickness="2" class="my-4" />
-                <div class="tile-foot">
-                  {{ stats?.pids ?? '—' }} pids · ↓{{ bytes(stats?.netRx) }} ↑{{
-                    bytes(stats?.netTx)
-                  }}
-                </div>
-              </v-card>
-            </v-col>
-          </v-row>
-
-          <v-card rounded="lg" class="pa-4 mt-4">
-            <div class="section-head">
-              <v-icon size="18" class="mr-2">mdi-chart-donut</v-icon
-              >{{ t('projectDetail.composition') }}
-            </div>
-
-            <v-row v-if="stats" class="mt-2">
-              <v-col
-                v-for="c in [
-                  {
-                    key: 'mem',
-                    title: t('stats.memory'),
-                    items: memoryPie,
-                    foot: `${percent(stats.memoryPercent, 0)} ${t('projectDetail.usedShort')}`,
-                  },
-                  {
-                    key: 'net',
-                    title: t('stats.network'),
-                    items: networkPie,
-                    foot: `↓${bytes(stats.netRx)} / ↑${bytes(stats.netTx)}`,
-                  },
-                  {
-                    key: 'disk',
-                    title: t('dashboard.diskIo'),
-                    items: diskPie,
-                    foot: `R${bytes(stats.blockRead)} / W${bytes(stats.blockWrite)}`,
-                  },
-                ]"
-                :key="c.key"
-                cols="12"
-                md="4"
-                class="text-center"
-              >
-                <div class="text-body-2 mb-2">{{ c.title }}</div>
-                <v-pie
-                  :items="c.items"
-                  :size="150"
-                  inner-cut="55"
-                  gap="1"
-                  :legend="false"
-                  animation
-                  class="justify-center"
-                />
-                <div class="tile-foot mt-2">{{ c.foot }}</div>
+              <v-col cols="12" sm="6" lg="3">
+                <v-card rounded="lg" class="pa-4 metric-tile">
+                  <div class="d-flex align-center mb-2">
+                    <v-icon size="18" color="info" class="mr-2">mdi-lan</v-icon>
+                    <span class="tile-label">{{ t('stats.network') }}</span>
+                    <v-spacer />
+                    <span class="text-body-2">
+                      <span class="text-success">↓{{ bytes(stats?.netRx) }}</span>
+                      <span class="text-warning ml-1">↑{{ bytes(stats?.netTx) }}</span>
+                    </span>
+                  </div>
+                  <v-divider color="success" thickness="2" class="my-4" />
+                  <div class="tile-foot">
+                    {{ stats?.pids ?? '—' }} pids · ↓{{ bytes(stats?.netRx) }} ↑{{
+                      bytes(stats?.netTx)
+                    }}
+                  </div>
+                </v-card>
               </v-col>
             </v-row>
 
-            <div v-else class="text-caption text-medium-emphasis py-8 text-center">
-              {{ t('projects.stopped') }}
-            </div>
-          </v-card>
-
-          <v-card rounded="lg" class="pa-4 mt-4">
-            <div class="section-head">
-              <v-icon size="18" class="mr-2">mdi-calendar</v-icon
-              >{{ t('projectDetail.cpuActivity') }}
-            </div>
-
-            <div v-if="!heatmap.length" class="text-caption text-medium-emphasis py-6 text-center">
-              {{ t('projectDetail.noHistory') }}
-            </div>
-
-            <div v-else class="heatmap mt-3">
-              <div class="heat-hours">
-                <span
-                  v-for="h in [0, 6, 12, 18]"
-                  :key="h"
-                  :style="{ left: `${(h / 24) * 100}%` }"
-                  >{{ h }}</span
-                >
+            <v-card rounded="lg" class="pa-4 mt-4">
+              <div class="section-head">
+                <v-icon size="18" class="mr-2">mdi-chart-donut</v-icon
+                >{{ t('projectDetail.composition') }}
               </div>
-              <div v-for="day in heatmap" :key="day.label.toDateString()" class="heat-row">
-                <span class="heat-day">
-                  {{
-                    day.label.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })
-                  }}
-                </span>
-                <div class="heat-cells">
-                  <v-tooltip v-for="(value, hour) in day.hours" :key="hour" location="top">
-                    <template #activator="{ props: tip }">
-                      <span v-bind="tip" class="heat-cell" :class="heatLevel(value)" />
-                    </template>
-                    <span class="text-caption">
-                      {{ hour }}:00 —
-                      {{ value === null ? t('projectDetail.noSample') : percent(value) }}
-                    </span>
-                  </v-tooltip>
+
+              <v-row v-if="stats" class="mt-2">
+                <v-col
+                  v-for="c in [
+                    {
+                      key: 'mem',
+                      title: t('stats.memory'),
+                      items: memoryPie,
+                      foot: `${percent(stats.memoryPercent, 0)} ${t('projectDetail.usedShort')}`,
+                    },
+                    {
+                      key: 'net',
+                      title: t('stats.network'),
+                      items: networkPie,
+                      foot: `↓${bytes(stats.netRx)} / ↑${bytes(stats.netTx)}`,
+                    },
+                    {
+                      key: 'disk',
+                      title: t('dashboard.diskIo'),
+                      items: diskPie,
+                      foot: `R${bytes(stats.blockRead)} / W${bytes(stats.blockWrite)}`,
+                    },
+                  ]"
+                  :key="c.key"
+                  cols="12"
+                  md="4"
+                  class="text-center"
+                >
+                  <div class="text-body-2 mb-2">{{ c.title }}</div>
+                  <v-pie
+                    :items="c.items"
+                    :size="150"
+                    inner-cut="55"
+                    gap="1"
+                    :legend="false"
+                    animation
+                    class="justify-center"
+                  />
+                  <div class="tile-foot mt-2">{{ c.foot }}</div>
+                </v-col>
+              </v-row>
+
+              <div v-else class="text-caption text-medium-emphasis py-8 text-center">
+                {{ t('projects.stopped') }}
+              </div>
+            </v-card>
+
+            <v-card rounded="lg" class="pa-4 mt-4">
+              <div class="section-head">
+                <v-icon size="18" class="mr-2">mdi-calendar</v-icon
+                >{{ t('projectDetail.cpuActivity') }}
+              </div>
+
+              <div
+                v-if="!heatmap.length"
+                class="text-caption text-medium-emphasis py-6 text-center"
+              >
+                {{ t('projectDetail.noHistory') }}
+              </div>
+
+              <div v-else class="heatmap mt-3">
+                <div class="heat-hours">
+                  <span
+                    v-for="h in [0, 6, 12, 18]"
+                    :key="h"
+                    :style="{ left: `${(h / 24) * 100}%` }"
+                    >{{ h }}</span
+                  >
+                </div>
+                <div v-for="day in heatmap" :key="day.label.toDateString()" class="heat-row">
+                  <span class="heat-day">
+                    {{
+                      day.label.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })
+                    }}
+                  </span>
+                  <div class="heat-cells">
+                    <v-tooltip v-for="(value, hour) in day.hours" :key="hour" location="top">
+                      <template #activator="{ props: tip }">
+                        <span v-bind="tip" class="heat-cell" :class="heatLevel(value)" />
+                      </template>
+                      <span class="text-caption">
+                        {{ hour }}:00 —
+                        {{ value === null ? t('projectDetail.noSample') : percent(value) }}
+                      </span>
+                    </v-tooltip>
+                  </div>
+                </div>
+                <div class="heat-legend">
+                  <span class="text-caption">{{ t('projectDetail.less') }}</span>
+                  <span
+                    v-for="l in ['l0', 'l1', 'l2', 'l3', 'l4']"
+                    :key="l"
+                    class="heat-cell"
+                    :class="l"
+                  />
+                  <span class="text-caption">{{ t('projectDetail.more') }}</span>
                 </div>
               </div>
-              <div class="heat-legend">
-                <span class="text-caption">{{ t('projectDetail.less') }}</span>
-                <span
-                  v-for="l in ['l0', 'l1', 'l2', 'l3', 'l4']"
-                  :key="l"
-                  class="heat-cell"
-                  :class="l"
-                />
-                <span class="text-caption">{{ t('projectDetail.more') }}</span>
-              </div>
-            </div>
+            </v-card>
           </v-card>
         </template>
 
         <!-- CONFIGURATION ------------------------------------------------ -->
-        <template v-else-if="section === 'configuration'">
-          <div class="d-flex align-center ga-2 mb-4">
-            <div class="section-head">
-              <v-icon size="18" class="mr-2">mdi-folder-cog</v-icon
-              >{{ t('projectDetail.configuration') }}
-            </div>
-            <v-spacer />
-            <!-- Every value read below is a field in stackvo.json, so the way
-                 to change one belongs beside them rather than only in the raw
-                 JSON pane further down the rail. -->
-            <v-btn
-              size="small"
-              variant="tonal"
-              prepend-icon="mdi-tune-variant"
-              @click="showSettings = true"
-              >{{ t('projectSettings.open') }}</v-btn
-            >
-          </div>
-
-          <v-row>
-            <v-col cols="12" md="4">
-              <div class="field">
-                <span class="field-key">{{ t('projectsView.colDomain') }}</span>
-                <a
-                  v-if="httpUrl"
-                  class="field-link"
-                  @click="project.domainConfigured && openUrl(httpsUrl)"
-                >
-                  {{ project.domain }}
-                </a>
-                <span v-else class="field-val">—</span>
+        <template v-if="shows('configuration')">
+          <v-card variant="flat" class="pane">
+            <div class="d-flex align-center ga-2 mb-4">
+              <div class="section-head">
+                <v-icon size="18" class="mr-2">mdi-folder-cog</v-icon
+                >{{ t('projectDetail.configuration') }}
               </div>
-              <div v-if="manifest?.php" class="field">
-                <span class="field-key">{{ t('newProject.phpVersion') }}</span>
-                <span class="field-val">PHP {{ manifest.php.version }}</span>
-              </div>
-              <div v-if="manifest?.node" class="field">
-                <span class="field-key">{{ t('newProject.nodeVersion') }}</span>
-                <span class="field-val">Node {{ manifest.node.version }}</span>
-              </div>
-              <div class="field">
-                <span class="field-key">{{ t('projectDetail.containerPath') }}</span>
-                <code class="field-mono">/var/www/html</code>
-                <v-btn
-                  icon
-                  :aria-label="t('a11y.copy')"
-                  size="x-small"
-                  variant="text"
-                  @click="copy('/var/www/html', 'cpath')"
-                >
-                  <v-icon>mdi-content-copy</v-icon>
-                  <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
-                </v-btn>
-              </div>
-              <div class="field">
-                <span class="field-key">{{ t('projectDetail.accessHttp') }}</span>
-                <a
-                  v-if="httpUrl"
-                  class="field-link"
-                  @click="project.domainConfigured && openUrl(httpUrl)"
-                  >{{ httpUrl }}</a
-                >
-                <span v-else class="field-val">—</span>
-              </div>
-            </v-col>
-
-            <v-col cols="12" md="4">
-              <div class="field">
-                <span class="field-key">{{ t('projectDetail.sslStatus') }}</span>
-                <span class="field-val text-success">
-                  <v-icon size="14" color="success">mdi-lock</v-icon>
-                  {{ t('projectDetail.sslEnabled') }}
-                </span>
-              </div>
-              <div class="field">
-                <span class="field-key">{{ t('projectsView.colServer') }}</span>
-                <span class="field-val">{{ manifest?.server || '—' }}</span>
-              </div>
-              <div class="field">
-                <span class="field-key">{{ t('projectDetail.hostPath') }}</span>
-                <code class="field-mono">{{ project.path }}</code>
-                <v-btn
-                  icon
-                  :aria-label="t('a11y.copy')"
-                  size="x-small"
-                  variant="text"
-                  @click="copy(project.path, 'hpath')"
-                >
-                  <v-icon>mdi-content-copy</v-icon>
-                  <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
-                </v-btn>
-              </div>
-            </v-col>
-
-            <v-col cols="12" md="4">
-              <div class="field">
-                <span class="field-key">{{ t('projectDetail.type') }}</span>
-                <span class="field-val">
-                  <v-icon size="14">mdi-cog</v-icon> {{ t('projectsView.default') }}
-                </span>
-              </div>
-              <div v-if="manifest?.documentRoot" class="field">
-                <span class="field-key">{{ t('newProject.documentRoot') }}</span>
-                <code class="field-mono">{{ manifest.documentRoot }}</code>
-                <v-btn
-                  icon
-                  :aria-label="t('a11y.copy')"
-                  size="x-small"
-                  variant="text"
-                  @click="copy(manifest.documentRoot, 'droot')"
-                >
-                  <v-icon>mdi-content-copy</v-icon>
-                  <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
-                </v-btn>
-              </div>
-              <div class="field">
-                <span class="field-key">{{ t('projectDetail.accessHttps') }}</span>
-                <a
-                  v-if="httpsUrl"
-                  class="field-link"
-                  @click="project.domainConfigured && openUrl(httpsUrl)"
-                  >{{ httpsUrl }}</a
-                >
-                <span v-else class="field-val">—</span>
-              </div>
-            </v-col>
-          </v-row>
-
-          <!-- The domain is unreachable without a hosts entry, and the fix is
-               one elevated write away — so offer it here rather than only
-               reporting the problem. -->
-          <v-alert
-            v-if="project.domain && !project.domainConfigured"
-            type="warning"
-            variant="tonal"
-            class="mt-2"
-          >
-            <div class="d-flex align-center ga-2">
-              <span class="text-caption">{{ t('projects.domainMissingHint') }}</span>
               <v-spacer />
-              <v-btn size="x-small" variant="tonal" @click="showHostsFix = true">{{
-                t('hosts.fix')
-              }}</v-btn>
-            </div>
-          </v-alert>
-
-          <template v-if="manifest?.php?.extensions?.length">
-            <div class="section-head mt-8 mb-3">
-              <v-icon size="18" class="mr-2">mdi-puzzle</v-icon
-              >{{ t('projectDetail.phpExtensions') }}
-              <v-chip size="x-small" class="ml-2">{{ manifest.php.extensions.length }}</v-chip>
-            </div>
-            <div class="d-flex flex-wrap ga-2">
-              <v-chip
-                v-for="ext in manifest.php.extensions"
-                :key="ext"
+              <!-- Every value read below is a field in stackvo.json, so the way
+                   to change one belongs beside them rather than only in the raw
+                   JSON pane further down the rail. -->
+              <v-btn
                 size="small"
-                label
                 variant="tonal"
+                prepend-icon="mdi-tune-variant"
+                @click="showSettings = true"
+                >{{ t('projectSettings.open') }}</v-btn
               >
-                {{ ext }}
-              </v-chip>
             </div>
-          </template>
 
-          <!-- Contract violations, shown rather than swallowed: the Bash
-               generator skips such projects without a word. -->
-          <template v-if="manifest?.errors?.length || manifest?.warnings?.length">
-            <div class="section-head mt-8 mb-3">
-              <v-icon size="18" class="mr-2">mdi-file-alert</v-icon>{{ t('projects.problems') }}
-            </div>
-            <v-alert v-if="manifest.errors.length" type="error" variant="tonal" class="mb-2">
-              <div v-for="(i, k) in manifest.errors" :key="k" class="text-caption">
-                <strong>{{ i.code }}</strong> {{ i.path }} — {{ i.message }}
+            <v-row>
+              <v-col cols="12" md="4">
+                <div class="field">
+                  <span class="field-key">{{ t('projectsView.colDomain') }}</span>
+                  <a
+                    v-if="httpUrl"
+                    class="field-link"
+                    @click="project.domainConfigured && api.openInBrowser(httpsUrl)"
+                  >
+                    {{ project.domain }}
+                  </a>
+                  <span v-else class="field-val">—</span>
+                </div>
+                <div v-if="manifest?.php" class="field">
+                  <span class="field-key">{{ t('newProject.phpVersion') }}</span>
+                  <span class="field-val">PHP {{ manifest.php.version }}</span>
+                </div>
+                <div v-if="manifest?.node" class="field">
+                  <span class="field-key">{{ t('newProject.nodeVersion') }}</span>
+                  <span class="field-val">Node {{ manifest.node.version }}</span>
+                </div>
+                <div class="field">
+                  <span class="field-key">{{ t('projectDetail.containerPath') }}</span>
+                  <code class="field-mono">/var/www/html</code>
+                  <v-btn
+                    icon
+                    :aria-label="t('a11y.copy')"
+                    size="x-small"
+                    variant="text"
+                    @click="copy('/var/www/html', 'cpath')"
+                  >
+                    <v-icon>mdi-content-copy</v-icon>
+                    <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
+                  </v-btn>
+                </div>
+                <div class="field">
+                  <span class="field-key">{{ t('projectDetail.accessHttp') }}</span>
+                  <a
+                    v-if="httpUrl"
+                    class="field-link"
+                    @click="project.domainConfigured && api.openInBrowser(httpUrl)"
+                    >{{ httpUrl }}</a
+                  >
+                  <span v-else class="field-val">—</span>
+                </div>
+              </v-col>
+
+              <v-col cols="12" md="4">
+                <div class="field">
+                  <span class="field-key">{{ t('projectDetail.sslStatus') }}</span>
+                  <span class="field-val text-success">
+                    <v-icon size="14" color="success">mdi-lock</v-icon>
+                    {{ t('projectDetail.sslEnabled') }}
+                  </span>
+                </div>
+                <div class="field">
+                  <span class="field-key">{{ t('projectsView.colServer') }}</span>
+                  <span class="field-val">{{ manifest?.server || '—' }}</span>
+                </div>
+                <div class="field">
+                  <span class="field-key">{{ t('projectDetail.hostPath') }}</span>
+                  <code class="field-mono">{{ project.path }}</code>
+                  <v-btn
+                    icon
+                    :aria-label="t('a11y.copy')"
+                    size="x-small"
+                    variant="text"
+                    @click="copy(project.path, 'hpath')"
+                  >
+                    <v-icon>mdi-content-copy</v-icon>
+                    <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
+                  </v-btn>
+                </div>
+              </v-col>
+
+              <v-col cols="12" md="4">
+                <div class="field">
+                  <span class="field-key">{{ t('projectDetail.type') }}</span>
+                  <span class="field-val">
+                    <v-icon size="14">mdi-cog</v-icon> {{ t('projectsView.default') }}
+                  </span>
+                </div>
+                <div v-if="manifest?.documentRoot" class="field">
+                  <span class="field-key">{{ t('newProject.documentRoot') }}</span>
+                  <code class="field-mono">{{ manifest.documentRoot }}</code>
+                  <v-btn
+                    icon
+                    :aria-label="t('a11y.copy')"
+                    size="x-small"
+                    variant="text"
+                    @click="copy(manifest.documentRoot, 'droot')"
+                  >
+                    <v-icon>mdi-content-copy</v-icon>
+                    <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
+                  </v-btn>
+                </div>
+                <div class="field">
+                  <span class="field-key">{{ t('projectDetail.accessHttps') }}</span>
+                  <a
+                    v-if="httpsUrl"
+                    class="field-link"
+                    @click="project.domainConfigured && api.openInBrowser(httpsUrl)"
+                    >{{ httpsUrl }}</a
+                  >
+                  <span v-else class="field-val">—</span>
+                </div>
+              </v-col>
+            </v-row>
+
+            <!-- The domain is unreachable without a hosts entry, and the fix is
+                 one elevated write away — so offer it here rather than only
+                 reporting the problem. -->
+            <v-alert
+              v-if="project.domain && !project.domainConfigured"
+              type="warning"
+              variant="tonal"
+              class="mt-2"
+            >
+              <div class="d-flex align-center ga-2">
+                <span class="text-caption">{{ t('projects.domainMissingHint') }}</span>
+                <v-spacer />
+                <v-btn size="x-small" variant="tonal" @click="showHostsFix = true">{{
+                  t('hosts.fix')
+                }}</v-btn>
               </div>
             </v-alert>
-            <v-alert v-if="manifest.warnings.length" type="warning" variant="tonal">
-              <div v-for="(i, k) in manifest.warnings" :key="k" class="text-caption">
-                <strong>{{ i.code }}</strong> {{ i.path }} — {{ i.message }}
+
+            <template v-if="manifest?.php?.extensions?.length">
+              <div class="section-head mt-8 mb-3">
+                <v-icon size="18" class="mr-2">mdi-puzzle</v-icon
+                >{{ t('projectDetail.phpExtensions') }}
+                <v-chip size="x-small" class="ml-2">{{ manifest.php.extensions.length }}</v-chip>
               </div>
-            </v-alert>
-          </template>
+              <div class="d-flex flex-wrap ga-2">
+                <v-chip
+                  v-for="ext in manifest.php.extensions"
+                  :key="ext"
+                  size="small"
+                  label
+                  variant="tonal"
+                >
+                  {{ ext }}
+                </v-chip>
+              </div>
+            </template>
+
+            <!-- Contract violations, shown rather than swallowed: the Bash
+                 generator skips such projects without a word. -->
+            <template v-if="manifest?.errors?.length || manifest?.warnings?.length">
+              <div class="section-head mt-8 mb-3">
+                <v-icon size="18" class="mr-2">mdi-file-alert</v-icon>{{ t('projects.problems') }}
+              </div>
+              <v-alert v-if="manifest.errors.length" type="error" variant="tonal" class="mb-2">
+                <div v-for="(i, k) in manifest.errors" :key="k" class="text-caption">
+                  <strong>{{ i.code }}</strong> {{ i.path }} — {{ i.message }}
+                </div>
+              </v-alert>
+              <v-alert v-if="manifest.warnings.length" type="warning" variant="tonal">
+                <div v-for="(i, k) in manifest.warnings" :key="k" class="text-caption">
+                  <strong>{{ i.code }}</strong> {{ i.path }} — {{ i.message }}
+                </div>
+              </v-alert>
+            </template>
+          </v-card>
         </template>
 
         <!-- XDEBUG --------------------------------------------------------- -->
         <!-- Three layers reported separately. Collapsing them into one "on"
              would put a switch in the UI that reads as done while nothing has
              been compiled in, which is worse than no switch. -->
-        <template v-else-if="section === 'xdebug'">
-          <div class="d-flex align-center ga-2 mb-3">
-            <div class="section-head">
-              <v-icon size="18" class="mr-2">mdi-bug-outline</v-icon>{{ t('xdebug.title') }}
+        <template v-if="shows('debug')">
+          <v-card variant="flat" class="pane">
+            <div class="d-flex align-center ga-2 mb-3">
+              <div class="section-head">
+                <v-icon size="18" class="mr-2">mdi-bug-outline</v-icon>{{ t('xdebug.title') }}
+              </div>
+              <span class="text-caption text-medium-emphasis">{{ t('xdebug.subtitle') }}</span>
             </div>
-            <span class="text-caption text-medium-emphasis">{{ t('xdebug.subtitle') }}</span>
-          </div>
 
-          <template v-if="xdebug">
-            <v-switch
-              :model-value="xdebug.enabled"
-              :loading="xdebugBusy"
-              :disabled="xdebugBusy"
-              color="primary"
-              hide-details
-              density="comfortable"
-              :label="xdebug.enabled ? t('xdebug.on') : t('xdebug.off')"
-              @update:model-value="toggleXdebug($event)"
-            />
+            <template v-if="xdebug">
+              <v-switch
+                :model-value="xdebug.enabled"
+                :loading="xdebugBusy"
+                :disabled="xdebugBusy"
+                color="primary"
+                hide-details
+                density="comfortable"
+                :label="xdebug.enabled ? t('xdebug.on') : t('xdebug.off')"
+                @update:model-value="toggleXdebug($event)"
+              />
 
-            <!-- The extension is compiled in, so the manifest can be ahead of
-                 the image. Saying nothing here is how a toggle becomes a lie. -->
-            <v-alert v-if="xdebug.needsRebuild" type="warning" variant="tonal" class="mt-3">
-              <div class="text-caption">{{ t('xdebug.needsRebuild') }}</div>
-            </v-alert>
-            <v-alert
-              v-else-if="xdebug.enabled && xdebug.running && xdebug.active === false"
-              type="warning"
-              variant="tonal"
-              class="mt-3"
-            >
-              <div class="text-caption">{{ t('xdebug.notActive') }}</div>
-            </v-alert>
-            <v-alert
-              v-else-if="xdebug.enabled && xdebug.active === true"
-              type="success"
-              variant="tonal"
-              class="mt-3"
-            >
-              <div class="text-caption">{{ t('xdebug.active') }}</div>
-            </v-alert>
+              <!-- The extension is compiled in, so the manifest can be ahead of
+                   the image. Saying nothing here is how a toggle becomes a lie. -->
+              <v-alert v-if="xdebug.needsRebuild" type="warning" variant="tonal" class="mt-3">
+                <div class="text-caption">{{ t('xdebug.needsRebuild') }}</div>
+              </v-alert>
+              <v-alert
+                v-else-if="xdebug.enabled && xdebug.running && xdebug.active === false"
+                type="warning"
+                variant="tonal"
+                class="mt-3"
+              >
+                <div class="text-caption">{{ t('xdebug.notActive') }}</div>
+              </v-alert>
+              <v-alert
+                v-else-if="xdebug.enabled && xdebug.active === true"
+                type="success"
+                variant="tonal"
+                class="mt-3"
+              >
+                <div class="text-caption">{{ t('xdebug.active') }}</div>
+              </v-alert>
 
-            <!-- The path mapping is the step people get wrong, and both halves
-                 are already known here. -->
-            <template v-if="xdebug.enabled">
-              <div class="section-head mt-5 mb-2">
-                <v-icon size="18" class="mr-2">mdi-tune</v-icon>{{ t('xdebug.ideSettings') }}
-              </div>
-              <v-table density="compact">
-                <tbody>
-                  <tr>
-                    <td class="text-medium-emphasis">{{ t('xdebug.port') }}</td>
-                    <td class="mono">{{ xdebug.port }}</td>
-                  </tr>
-                  <tr>
-                    <td class="text-medium-emphasis">{{ t('xdebug.ideKey') }}</td>
-                    <td class="mono">{{ xdebug.ideKey }}</td>
-                  </tr>
-                  <tr v-if="xdebug.serverName">
-                    <td class="text-medium-emphasis">{{ t('xdebug.serverName') }}</td>
-                    <td class="mono">{{ xdebug.serverName }}</td>
-                  </tr>
-                  <tr>
-                    <td class="text-medium-emphasis">{{ t('xdebug.pathMapping') }}</td>
-                    <td class="mono">{{ xdebug.hostPath }} → {{ xdebug.containerPath }}</td>
-                  </tr>
-                  <tr v-if="xdebug.peclVersion">
-                    <td class="text-medium-emphasis">{{ t('xdebug.version') }}</td>
-                    <td class="mono">{{ xdebug.peclVersion }} (PHP {{ xdebug.phpVersion }})</td>
-                  </tr>
-                </tbody>
-              </v-table>
+              <!-- The path mapping is the step people get wrong, and both halves
+                   are already known here. -->
+              <template v-if="xdebug.enabled">
+                <div class="section-head mt-5 mb-2">
+                  <v-icon size="18" class="mr-2">mdi-tune</v-icon>{{ t('xdebug.ideSettings') }}
+                </div>
+                <v-table density="compact">
+                  <tbody>
+                    <tr>
+                      <td class="text-medium-emphasis">{{ t('xdebug.port') }}</td>
+                      <td class="mono">{{ xdebug.port }}</td>
+                    </tr>
+                    <tr>
+                      <td class="text-medium-emphasis">{{ t('xdebug.ideKey') }}</td>
+                      <td class="mono">{{ xdebug.ideKey }}</td>
+                    </tr>
+                    <tr v-if="xdebug.serverName">
+                      <td class="text-medium-emphasis">{{ t('xdebug.serverName') }}</td>
+                      <td class="mono">{{ xdebug.serverName }}</td>
+                    </tr>
+                    <tr>
+                      <td class="text-medium-emphasis">{{ t('xdebug.pathMapping') }}</td>
+                      <td class="mono">{{ xdebug.hostPath }} → {{ xdebug.containerPath }}</td>
+                    </tr>
+                    <tr v-if="xdebug.peclVersion">
+                      <td class="text-medium-emphasis">{{ t('xdebug.version') }}</td>
+                      <td class="mono">{{ xdebug.peclVersion }} (PHP {{ xdebug.phpVersion }})</td>
+                    </tr>
+                  </tbody>
+                </v-table>
 
-              <!-- The one thing this design cannot fix, said where it will be
-                   read rather than left for someone to discover. -->
-              <div class="text-caption text-medium-emphasis mt-3">
-                {{ t('xdebug.cliCaveat') }}
-              </div>
+                <!-- The one thing this design cannot fix, said where it will be
+                     read rather than left for someone to discover. -->
+                <div class="text-caption text-medium-emphasis mt-3">
+                  {{ t('xdebug.cliCaveat') }}
+                </div>
+              </template>
             </template>
-          </template>
+          </v-card>
         </template>
 
         <!-- COMMANDS ------------------------------------------------------- -->
@@ -1561,221 +1675,372 @@ onUnmounted(() => {
              Offering `artisan migrate` to a project with no artisan produces
              `not found` in the console, which reads as a broken app rather
              than as a button that never applied. -->
-        <template v-else-if="section === 'commands'">
-          <div class="section-head mb-1">
-            <v-icon size="18" class="mr-2">mdi-console-line</v-icon>{{ t('quickCmd.title') }}
-          </div>
-          <p class="text-caption text-medium-emphasis mb-4">{{ t('quickCmd.explain') }}</p>
-
-          <!-- They exec into the container, so there has to be one. -->
-          <v-alert v-if="!running" type="info" variant="tonal" class="mb-4">
-            <div class="text-caption">{{ t('quickCmd.needsRunning') }}</div>
-          </v-alert>
-
-          <div v-if="!quickCommands.length" class="text-caption text-medium-emphasis">
-            {{ t('quickCmd.none') }}
-          </div>
-
-          <div v-for="command in quickCommands" :key="command.id" class="cmd-row">
-            <div class="flex-grow-1 min-width-0">
-              <div class="mono text-body-2">{{ command.display }}</div>
-              <div class="text-caption text-medium-emphasis">
-                {{ command.about }}
-                <span class="ml-1">· {{ t('quickCmd.because', { file: command.because }) }}</span>
-              </div>
-            </div>
-
-            <!-- Said on the button, not discovered by pressing it: one of these
-                 opens a terminal window and the other prints into the console
-                 below, and they look identical otherwise. -->
-            <v-chip v-if="command.interactive" size="x-small" variant="tonal">
-              {{ t('quickCmd.opensTerminal') }}
-            </v-chip>
-
-            <v-btn
-              size="small"
-              variant="tonal"
-              :prepend-icon="command.interactive ? 'mdi-console' : 'mdi-play'"
-              :loading="quickCommandBusy === command.id"
-              :disabled="!running || !!quickCommandBusy"
-              @click="runQuickCommand(command)"
-            >
-              {{ t('quickCmd.run') }}
-            </v-btn>
-          </div>
-        </template>
 
         <!-- DEV SERVER ----------------------------------------------------- -->
         <!-- Three requirements, kept apart because they fail separately: the
              source has to be mounted, the dev server has to be what is running,
              and the dev server has to accept a request for this domain. Only
              the first two are this app's to fix. -->
-        <template v-else-if="section === 'devserver'">
-          <div class="section-head mb-1">
-            <v-icon size="18" class="mr-2">mdi-lightning-bolt-outline</v-icon>
-            {{ t('devServer.title') }}
-          </div>
-          <p class="text-caption text-medium-emphasis mb-4">{{ t('devServer.explain') }}</p>
+        <template v-if="shows('runtime')">
+          <v-card variant="flat" class="pane">
+            <div class="section-head mb-1">
+              <v-icon size="18" class="mr-2">mdi-lightning-bolt-outline</v-icon>
+              {{ t('devServer.title') }}
+            </div>
+            <p class="text-caption text-medium-emphasis mb-4">{{ t('devServer.explain') }}</p>
 
-          <template v-if="devServer">
-            <v-switch
-              :model-value="devServer.enabled"
-              :loading="devServerBusy"
-              :disabled="devServerBusy"
-              color="primary"
-              hide-details
-              density="comfortable"
-              :label="devServer.enabled ? t('devServer.on') : t('devServer.off')"
-              @update:model-value="toggleDevServer($event)"
-            />
+            <template v-if="devServer">
+              <v-switch
+                :model-value="devServer.enabled"
+                :loading="devServerBusy"
+                :disabled="devServerBusy"
+                color="primary"
+                hide-details
+                density="comfortable"
+                :label="devServer.enabled ? t('devServer.on') : t('devServer.off')"
+                @update:model-value="toggleDevServer($event)"
+              />
 
-            <v-text-field
-              v-model="devServerCommand"
-              :label="t('devServer.command')"
-              :hint="
-                devServer.productionCommand
-                  ? t('devServer.commandHint', { production: devServer.productionCommand })
-                  : ''
-              "
-              persistent-hint
-              density="compact"
-              variant="outlined"
-              class="mt-4"
-              :disabled="devServerBusy"
-              @keyup.enter="devServer.enabled && toggleDevServer(true)"
-            />
+              <v-text-field
+                v-model="devServerCommand"
+                :label="t('devServer.command')"
+                :hint="
+                  devServer.productionCommand
+                    ? t('devServer.commandHint', { production: devServer.productionCommand })
+                    : ''
+                "
+                persistent-hint
+                density="comfortable"
+                variant="outlined"
+                class="mt-4"
+                :disabled="devServerBusy"
+                @keyup.enter="devServer.enabled && toggleDevServer(true)"
+              />
 
-            <!-- On, but the container predates it — the source is not mounted
-                 in the thing that is actually running. -->
-            <v-alert v-if="devServer.needsRecreate" type="warning" variant="tonal" class="mt-4">
-              <div class="text-caption">{{ t('devServer.needsRecreate') }}</div>
-            </v-alert>
-            <v-alert
-              v-else-if="devServer.enabled && devServer.mounted"
-              type="success"
-              variant="tonal"
-              class="mt-4"
-            >
-              <div class="text-caption">{{ t('devServer.live') }}</div>
-            </v-alert>
-
-            <!-- The half that is not ours. A .loc domain gets a flat 403 from
-                 Vite unless its own config names it, which reads as "the site
-                 is up and broken" with nothing pointing at the dev server. -->
-            <template v-if="devServer.snippet">
-              <div class="section-head mt-5 mb-1">
-                <v-icon size="18" class="mr-2">mdi-file-code-outline</v-icon>
-                {{ t('devServer.projectConfig') }}
-              </div>
-              <p class="text-caption text-medium-emphasis mb-2">
-                {{ t('devServer.projectConfigWhy') }}
-              </p>
-
-              <v-alert
-                v-if="devServerBlocked"
-                type="warning"
-                variant="tonal"
-                density="compact"
-                class="mb-2"
-              >
-                <div class="text-caption">
-                  {{ t('devServer.notAllowed', { file: devServer.configFile }) }}
-                </div>
+              <!-- On, but the container predates it — the source is not mounted
+                   in the thing that is actually running. -->
+              <v-alert v-if="devServer.needsRecreate" type="warning" variant="tonal" class="mt-4">
+                <div class="text-caption">{{ t('devServer.needsRecreate') }}</div>
               </v-alert>
               <v-alert
-                v-else-if="devServer.hostAllowed"
+                v-else-if="devServer.enabled && devServer.mounted"
                 type="success"
                 variant="tonal"
-                density="compact"
-                class="mb-2"
+                class="mt-4"
               >
-                <div class="text-caption">{{ t('devServer.configured') }}</div>
+                <div class="text-caption">{{ t('devServer.live') }}</div>
               </v-alert>
 
-              <div class="d-flex align-start ga-2">
-                <pre class="snippet flex-grow-1">{{ devServer.snippet }}</pre>
-                <v-btn
-                  icon
-                  size="small"
-                  variant="text"
-                  :aria-label="t('a11y.copy')"
-                  @click="copySnippet"
+              <!-- The half that is not ours. A .loc domain gets a flat 403 from
+                   Vite unless its own config names it, which reads as "the site
+                   is up and broken" with nothing pointing at the dev server. -->
+              <template v-if="devServer.snippet">
+                <div class="section-head mt-5 mb-1">
+                  <v-icon size="18" class="mr-2">mdi-file-code-outline</v-icon>
+                  {{ t('devServer.projectConfig') }}
+                </div>
+                <p class="text-caption text-medium-emphasis mb-2">
+                  {{ t('devServer.projectConfigWhy') }}
+                </p>
+
+                <v-alert
+                  v-if="devServerBlocked"
+                  type="warning"
+                  variant="tonal"
+                  density="compact"
+                  class="mb-2"
                 >
-                  <v-icon>{{ snippetCopied ? 'mdi-check' : 'mdi-content-copy' }}</v-icon>
-                  <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
-                </v-btn>
+                  <div class="text-caption">
+                    {{ t('devServer.notAllowed', { file: devServer.configFile }) }}
+                  </div>
+                </v-alert>
+                <v-alert
+                  v-else-if="devServer.hostAllowed"
+                  type="success"
+                  variant="tonal"
+                  density="compact"
+                  class="mb-2"
+                >
+                  <div class="text-caption">{{ t('devServer.configured') }}</div>
+                </v-alert>
+
+                <div class="d-flex align-start ga-2">
+                  <pre class="snippet flex-grow-1">{{ devServer.snippet }}</pre>
+                  <v-btn
+                    icon
+                    size="small"
+                    variant="text"
+                    :aria-label="t('a11y.copy')"
+                    @click="copySnippet"
+                  >
+                    <v-icon>{{ snippetCopied ? 'mdi-check' : 'mdi-content-copy' }}</v-icon>
+                    <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
+                  </v-btn>
+                </div>
+              </template>
+              <div v-else class="text-caption text-medium-emphasis mt-4">
+                {{ t('devServer.noAdvice') }}
+              </div>
+
+              <div class="text-caption text-medium-emphasis mt-4">
+                {{ t('devServer.modulesNote') }}
+              </div>
+              <div class="text-caption text-medium-emphasis mt-2">
+                {{ t('devServer.cliCaveat') }}
               </div>
             </template>
-            <div v-else class="text-caption text-medium-emphasis mt-4">
-              {{ t('devServer.noAdvice') }}
-            </div>
+          </v-card>
+        </template>
 
-            <div class="text-caption text-medium-emphasis mt-4">
-              {{ t('devServer.modulesNote') }}
+        <!-- PROFILER ------------------------------------------------------- -->
+        <!-- Xdebug's own profiler. Blackfire needs an account and SPX is not
+             in the extension contract; this needs neither. -->
+        <template v-if="shows('debug')">
+          <v-card variant="flat" class="pane">
+            <div class="section-head mb-1">
+              <v-icon size="18" class="mr-2">mdi-speedometer</v-icon>{{ t('profiler.title') }}
             </div>
-            <div class="text-caption text-medium-emphasis mt-2">
-              {{ t('devServer.cliCaveat') }}
-            </div>
-          </template>
+            <p class="text-caption text-medium-emphasis mb-4">{{ t('profiler.explain') }}</p>
+
+            <template v-if="profiler">
+              <!-- Compiled in first. Without the extension there is nothing to
+                   switch a mode on. -->
+              <v-alert v-if="!profiler.xdebug.enabled" type="info" variant="tonal" class="mb-4">
+                <div class="text-caption">{{ t('profiler.needsXdebug') }}</div>
+              </v-alert>
+
+              <template v-else>
+                <v-btn-toggle
+                  :model-value="profiler.mode"
+                  mandatory
+                  density="comfortable"
+                  variant="outlined"
+                  divided
+                  @update:model-value="setProfilerMode($event)"
+                >
+                  <v-btn value="debug" :disabled="!!profilerBusy" prepend-icon="mdi-bug-outline">
+                    {{ t('profiler.modeDebug') }}
+                  </v-btn>
+                  <v-btn value="profile" :disabled="!!profilerBusy" prepend-icon="mdi-speedometer">
+                    {{ t('profiler.modeProfile') }}
+                  </v-btn>
+                </v-btn-toggle>
+                <div class="text-caption text-medium-emphasis mt-2">
+                  {{ t('profiler.modesExclusive') }}
+                </div>
+
+                <!-- The step people miss. Profiling waits for a trigger, so
+                     loading the page changes nothing until it carries one. -->
+                <v-alert
+                  v-if="profiler.mode === 'profile'"
+                  type="info"
+                  variant="tonal"
+                  class="mt-4"
+                >
+                  <div class="text-caption">
+                    {{ t('profiler.howToRecord', { trigger: profiler.trigger }) }}
+                  </div>
+                </v-alert>
+                <v-alert
+                  v-if="profiler.mode === 'profile' && profiler.xdebug.active === false"
+                  type="warning"
+                  variant="tonal"
+                  class="mt-3"
+                >
+                  <div class="text-caption">{{ t('profiler.needsRestart') }}</div>
+                </v-alert>
+              </template>
+
+              <div class="section-head mt-5 mb-2 d-flex align-center">
+                <v-icon size="18" class="mr-2">mdi-file-chart-outline</v-icon>
+                {{ t('profiler.recorded', { n: profiler.profiles.length }) }}
+                <v-spacer />
+                <!-- One run of a tight loop produced 10 MB. Sixty delete buttons
+                     is not a disk-hygiene story. -->
+                <v-btn
+                  v-if="profiler.profiles.length"
+                  size="x-small"
+                  variant="text"
+                  color="error"
+                  :loading="profilerBusy === 'clear'"
+                  @click="clearProfiles"
+                >
+                  {{ t('profiler.clear', { size: bytes(profiler.bytes) }) }}
+                </v-btn>
+              </div>
+
+              <div v-if="!profiler.profiles.length" class="text-caption text-medium-emphasis">
+                {{ t('profiler.noneYet') }}
+              </div>
+
+              <div v-for="file in profiler.profiles" :key="file.id" class="cmd-row">
+                <div class="flex-grow-1 min-width-0">
+                  <div class="mono text-body-2">{{ file.id }}</div>
+                  <div class="text-caption text-medium-emphasis">
+                    {{ bytes(file.bytes) }}
+                    <span v-if="file.modified">
+                      · {{ new Date(file.modified * 1000).toLocaleString() }}</span
+                    >
+                  </div>
+                </div>
+                <v-chip v-if="file.compressed" size="x-small" color="warning" variant="tonal">
+                  {{ t('profiler.compressed') }}
+                </v-chip>
+                <v-btn
+                  size="small"
+                  variant="tonal"
+                  :loading="profilerBusy === file.id"
+                  :disabled="file.compressed || !!profilerBusy"
+                  @click="openProfile(file)"
+                >
+                  {{ t('profiler.open') }}
+                </v-btn>
+                <!-- No confirmation: a profile is a recording you can make again
+                     by reloading the page, not something to lose. -->
+                <v-btn
+                  icon
+                  size="x-small"
+                  variant="text"
+                  :aria-label="t('profiler.deleteOne')"
+                  :disabled="!!profilerBusy"
+                  @click="deleteProfile(file)"
+                >
+                  <v-icon>mdi-delete-outline</v-icon>
+                  <v-tooltip activator="parent">{{ t('profiler.deleteOne') }}</v-tooltip>
+                </v-btn>
+              </div>
+
+              <!-- The report. Self cost, because it is the one this parser can
+                   state exactly and the one that answers "what is slow". -->
+              <template v-if="profileReport">
+                <div class="section-head mt-5 mb-1">
+                  <v-icon size="18" class="mr-2">mdi-podium</v-icon>{{ profileOpenId }}
+                </div>
+                <div class="text-caption text-medium-emphasis mb-2">
+                  {{
+                    t('profiler.summary', {
+                      n: profileReport.functionCount,
+                      total: profileCost(profileReport.selfTotal),
+                      creator: profileReport.creator,
+                    })
+                  }}
+                </div>
+                <v-alert
+                  v-if="profileReport.truncated"
+                  type="warning"
+                  variant="tonal"
+                  density="compact"
+                  class="mb-2"
+                >
+                  <div class="text-caption">{{ t('profiler.truncated') }}</div>
+                </v-alert>
+
+                <v-table density="compact">
+                  <thead>
+                    <tr>
+                      <th>{{ t('profiler.colFunction') }}</th>
+                      <th class="text-right">{{ t('profiler.colSelf') }}</th>
+                      <th class="text-right">{{ t('profiler.colInclusive') }}</th>
+                      <th class="text-right">{{ t('profiler.colCalls') }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="fn in profileReport.functions" :key="fn.name">
+                      <td class="min-width-0">
+                        <div class="mono text-truncate">{{ fn.name }}</div>
+                        <!-- The bar is the percentage, so the eye finds the hot
+                             row before it reads a single number. -->
+                        <v-progress-linear
+                          :model-value="fn.percent"
+                          height="3"
+                          color="primary"
+                          class="mt-1"
+                        />
+                      </td>
+                      <td class="text-right mono">
+                        {{ profileCost(fn.selfTime) }}
+                        <div class="text-caption text-medium-emphasis">
+                          {{ fn.percent.toFixed(1) }}%
+                        </div>
+                      </td>
+                      <td class="text-right mono">{{ profileCost(fn.inclusiveTime) }}</td>
+                      <td class="text-right mono">{{ fn.calls }}</td>
+                    </tr>
+                  </tbody>
+                </v-table>
+              </template>
+            </template>
+          </v-card>
         </template>
 
         <!-- DUMPS ---------------------------------------------------------- -->
         <!-- Symfony's own dump server, running in the project's container and
              rendering its own output. Nothing here parses its internals, so
              nothing here breaks when they change. -->
-        <template v-else-if="section === 'dumps'">
-          <div class="section-head mb-1">
-            <v-icon size="18" class="mr-2">mdi-bug-check-outline</v-icon>{{ t('dumps.title') }}
-          </div>
-          <p class="text-caption text-medium-emphasis mb-4">{{ t('dumps.explain') }}</p>
+        <template v-if="shows('debug')">
+          <v-card variant="flat" class="pane">
+            <div class="section-head mb-1">
+              <v-icon size="18" class="mr-2">mdi-bug-check-outline</v-icon>{{ t('dumps.title') }}
+            </div>
+            <p class="text-caption text-medium-emphasis mb-4">{{ t('dumps.explain') }}</p>
 
-          <template v-if="dumps">
-            <v-alert v-if="!dumps.available" type="info" variant="tonal" class="mb-4">
-              <div class="text-caption">{{ t('dumps.unavailable', { binary: dumps.binary }) }}</div>
-            </v-alert>
-
-            <template v-else>
-              <!-- Read from the running container: `stackvo up` from the CLI
-                   layers three compose files, not seven. -->
-              <v-alert v-if="!dumps.configured" type="warning" variant="tonal" class="mb-4">
-                <div class="text-caption">{{ t('dumps.needsRestart') }}</div>
+            <template v-if="dumps">
+              <v-alert v-if="!dumps.available" type="info" variant="tonal" class="mb-4">
+                <div class="text-caption">
+                  {{ t('dumps.unavailable', { binary: dumps.binary }) }}
+                </div>
               </v-alert>
 
-              <div class="d-flex ga-2 align-center">
-                <v-btn
-                  v-if="!dumpStreamId"
-                  color="primary"
-                  variant="flat"
-                  prepend-icon="mdi-play"
-                  :loading="dumpsBusy"
-                  :disabled="!running"
-                  @click="openDumps"
-                >
-                  {{ t('dumps.start') }}
-                </v-btn>
-                <v-btn v-else variant="tonal" prepend-icon="mdi-stop" @click="closeDumps">
-                  {{ t('dumps.stop') }}
-                </v-btn>
+              <template v-else>
+                <!-- Read from the running container: `stackvo up` from the CLI
+                     layers three compose files, not seven. -->
+                <v-alert v-if="!dumps.configured" type="warning" variant="tonal" class="mb-4">
+                  <div class="text-caption">{{ t('dumps.needsRestart') }}</div>
+                </v-alert>
 
-                <v-chip v-if="dumpStreamId" size="small" color="success" variant="tonal">
-                  <v-icon start size="small">mdi-pulse</v-icon>{{ t('dumps.listening') }}
-                </v-chip>
-                <v-spacer />
-                <v-btn v-if="dumpLines.length" size="small" variant="text" @click="dumpLines = []">
-                  {{ t('dumps.clear') }}
-                </v-btn>
-              </div>
+                <div class="d-flex ga-2 align-center">
+                  <v-btn
+                    v-if="!dumpStreamId"
+                    color="primary"
+                    variant="flat"
+                    prepend-icon="mdi-play"
+                    :loading="dumpsBusy"
+                    :disabled="!running"
+                    @click="openDumps"
+                  >
+                    {{ t('dumps.start') }}
+                  </v-btn>
+                  <v-btn v-else variant="tonal" prepend-icon="mdi-stop" @click="closeDumps">
+                    {{ t('dumps.stop') }}
+                  </v-btn>
 
-              <div v-if="!running" class="text-caption text-medium-emphasis mt-2">
-                {{ t('dumps.needsRunning') }}
-              </div>
+                  <v-chip v-if="dumpStreamId" size="small" color="success" variant="tonal">
+                    <v-icon start size="small">mdi-pulse</v-icon>{{ t('dumps.listening') }}
+                  </v-chip>
+                  <v-spacer />
+                  <v-btn
+                    v-if="dumpLines.length"
+                    size="small"
+                    variant="text"
+                    @click="dumpLines = []"
+                  >
+                    {{ t('dumps.clear') }}
+                  </v-btn>
+                </div>
 
-              <pre v-if="dumpLines.length" class="dump-stream mt-4">{{ dumpLines.join('\n') }}</pre>
-              <div v-else-if="dumpStreamId" class="text-caption text-medium-emphasis mt-4">
-                {{ t('dumps.waiting') }}
-              </div>
+                <div v-if="!running" class="text-caption text-medium-emphasis mt-2">
+                  {{ t('dumps.needsRunning') }}
+                </div>
+
+                <pre v-if="dumpLines.length" class="dump-stream mt-4">{{
+                  dumpLines.join('\n')
+                }}</pre>
+                <div v-else-if="dumpStreamId" class="text-caption text-medium-emphasis mt-4">
+                  {{ t('dumps.waiting') }}
+                </div>
+              </template>
             </template>
-          </template>
+          </v-card>
         </template>
 
         <!-- RELEASE -------------------------------------------------------- -->
@@ -1783,289 +2048,117 @@ onUnmounted(() => {
              application code at all (the source is bind-mounted) and it carries
              Xdebug. So this is a build, and the result is checked rather than
              trusted. -->
-        <template v-else-if="section === 'release'">
-          <div class="section-head mb-1">
-            <v-icon size="18" class="mr-2">mdi-package-variant-closed</v-icon>
-            {{ t('release.title') }}
-          </div>
-          <p class="text-caption text-medium-emphasis mb-4">{{ t('release.explain') }}</p>
-
-          <template v-if="release">
-            <div class="d-flex ga-2 align-start">
-              <v-text-field
-                v-model="releaseTag"
-                :label="t('release.tag')"
-                :hint="t('release.tagHint', { base: release.baseImage })"
-                persistent-hint
-                density="compact"
-                variant="outlined"
-                :disabled="!!releaseBusy"
-              />
-              <v-btn
-                color="primary"
-                variant="flat"
-                :loading="releaseBusy === 'build'"
-                :disabled="!releaseTag.trim() || !!releaseBusy"
-                @click="buildRelease"
-              >
-                {{ t('release.build') }}
-              </v-btn>
+        <template v-if="shows('release')">
+          <v-card variant="flat" class="pane">
+            <div class="section-head mb-1">
+              <v-icon size="18" class="mr-2">mdi-package-variant-closed</v-icon>
+              {{ t('release.title') }}
             </div>
+            <p class="text-caption text-medium-emphasis mb-4">{{ t('release.explain') }}</p>
 
-            <!-- Everything the result will be true of, before the build rather
-                 than after. None of these is a decision to make silently. -->
-            <v-alert type="info" variant="tonal" class="mt-4">
-              <div v-for="line in release.warnings" :key="line" class="text-caption">
-                • {{ line }}
+            <template v-if="release">
+              <div class="d-flex ga-2 align-start">
+                <v-text-field
+                  v-model="releaseTag"
+                  :label="t('release.tag')"
+                  :hint="t('release.tagHint', { base: release.baseImage })"
+                  persistent-hint
+                  density="comfortable"
+                  variant="outlined"
+                  :disabled="!!releaseBusy"
+                />
+                <v-btn
+                  color="primary"
+                  variant="flat"
+                  :loading="releaseBusy === 'build'"
+                  :disabled="!releaseTag.trim() || !!releaseBusy"
+                  @click="buildRelease"
+                >
+                  {{ t('release.build') }}
+                </v-btn>
               </div>
-            </v-alert>
 
-            <div class="section-head mt-5 mb-2">
-              <v-icon size="18" class="mr-2">mdi-eye-off-outline</v-icon>
-              {{ t('release.excluded') }}
-            </div>
-            <v-table density="compact">
-              <tbody>
-                <tr v-for="[pattern, reason] in release.excluded" :key="pattern">
-                  <td class="mono">{{ pattern }}</td>
-                  <td class="text-medium-emphasis text-caption">{{ reason }}</td>
-                </tr>
-              </tbody>
-            </v-table>
+              <!-- Everything the result will be true of, before the build rather
+                   than after. None of these is a decision to make silently. -->
+              <v-alert type="info" variant="tonal" class="mt-4">
+                <div v-for="line in release.warnings" :key="line" class="text-caption">
+                  • {{ line }}
+                </div>
+              </v-alert>
 
-            <v-expansion-panels v-if="release.dockerfile" variant="accordion" class="mt-4">
-              <v-expansion-panel :title="t('release.dockerfile')">
-                <v-expansion-panel-text>
-                  <pre class="snippet">{{ release.dockerfile }}</pre>
-                </v-expansion-panel-text>
-              </v-expansion-panel>
-            </v-expansion-panels>
-
-            <!-- Read out of the built image, not inferred from the Dockerfile:
-                 this guarantee is easy to state and easy to get wrong. -->
-            <template v-if="releaseResult">
               <div class="section-head mt-5 mb-2">
-                <v-icon size="18" class="mr-2">mdi-shield-check-outline</v-icon>
-                {{ t('release.checked') }}
+                <v-icon size="18" class="mr-2">mdi-eye-off-outline</v-icon>
+                {{ t('release.excluded') }}
               </div>
-
-              <v-alert
-                :type="releaseResult.verification.clean ? 'success' : 'error'"
-                variant="tonal"
-              >
-                <div class="text-caption">
-                  {{
-                    releaseResult.verification.clean
-                      ? t('release.clean', { tag: releaseResult.plan.tag })
-                      : t('release.notClean')
-                  }}
-                </div>
-                <ul class="text-caption mt-2 pl-4">
-                  <li v-if="releaseResult.verification.envFiles.length">
-                    {{
-                      t('release.leaked', {
-                        files: releaseResult.verification.envFiles.join(', '),
-                      })
-                    }}
-                  </li>
-                  <li v-else>{{ t('release.noEnv') }}</li>
-                  <li v-if="releaseResult.verification.xdebugActive === true">
-                    {{ t('release.xdebugOn') }}
-                  </li>
-                  <li v-else-if="releaseResult.verification.xdebugActive === false">
-                    {{ t('release.xdebugOff') }}
-                  </li>
-                  <li v-if="!releaseResult.verification.hasApp">{{ t('release.noApp') }}</li>
-                </ul>
-              </v-alert>
-
-              <v-btn
-                v-if="releaseResult.verification.clean"
-                class="mt-3"
-                variant="tonal"
-                prepend-icon="mdi-download-outline"
-                :loading="releaseBusy === 'save'"
-                :disabled="!!releaseBusy"
-                @click="saveRelease"
-              >
-                {{ t('release.save') }}
-              </v-btn>
-            </template>
-          </template>
-        </template>
-
-        <!-- PROFILER ------------------------------------------------------- -->
-        <!-- Xdebug's own profiler. Blackfire needs an account and SPX is not
-             in the extension contract; this needs neither. -->
-        <template v-else-if="section === 'profiler'">
-          <div class="section-head mb-1">
-            <v-icon size="18" class="mr-2">mdi-speedometer</v-icon>{{ t('profiler.title') }}
-          </div>
-          <p class="text-caption text-medium-emphasis mb-4">{{ t('profiler.explain') }}</p>
-
-          <template v-if="profiler">
-            <!-- Compiled in first. Without the extension there is nothing to
-                 switch a mode on. -->
-            <v-alert v-if="!profiler.xdebug.enabled" type="info" variant="tonal" class="mb-4">
-              <div class="text-caption">{{ t('profiler.needsXdebug') }}</div>
-            </v-alert>
-
-            <template v-else>
-              <v-btn-toggle
-                :model-value="profiler.mode"
-                mandatory
-                density="comfortable"
-                variant="outlined"
-                divided
-                @update:model-value="setProfilerMode($event)"
-              >
-                <v-btn value="debug" :disabled="!!profilerBusy" prepend-icon="mdi-bug-outline">
-                  {{ t('profiler.modeDebug') }}
-                </v-btn>
-                <v-btn value="profile" :disabled="!!profilerBusy" prepend-icon="mdi-speedometer">
-                  {{ t('profiler.modeProfile') }}
-                </v-btn>
-              </v-btn-toggle>
-              <div class="text-caption text-medium-emphasis mt-2">
-                {{ t('profiler.modesExclusive') }}
-              </div>
-
-              <!-- The step people miss. Profiling waits for a trigger, so
-                   loading the page changes nothing until it carries one. -->
-              <v-alert v-if="profiler.mode === 'profile'" type="info" variant="tonal" class="mt-4">
-                <div class="text-caption">
-                  {{ t('profiler.howToRecord', { trigger: profiler.trigger }) }}
-                </div>
-              </v-alert>
-              <v-alert
-                v-if="profiler.mode === 'profile' && profiler.xdebug.active === false"
-                type="warning"
-                variant="tonal"
-                class="mt-3"
-              >
-                <div class="text-caption">{{ t('profiler.needsRestart') }}</div>
-              </v-alert>
-            </template>
-
-            <div class="section-head mt-5 mb-2 d-flex align-center">
-              <v-icon size="18" class="mr-2">mdi-file-chart-outline</v-icon>
-              {{ t('profiler.recorded', { n: profiler.profiles.length }) }}
-              <v-spacer />
-              <!-- One run of a tight loop produced 10 MB. Sixty delete buttons
-                   is not a disk-hygiene story. -->
-              <v-btn
-                v-if="profiler.profiles.length"
-                size="x-small"
-                variant="text"
-                color="error"
-                :loading="profilerBusy === 'clear'"
-                @click="clearProfiles"
-              >
-                {{ t('profiler.clear', { size: bytes(profiler.bytes) }) }}
-              </v-btn>
-            </div>
-
-            <div v-if="!profiler.profiles.length" class="text-caption text-medium-emphasis">
-              {{ t('profiler.noneYet') }}
-            </div>
-
-            <div v-for="file in profiler.profiles" :key="file.id" class="cmd-row">
-              <div class="flex-grow-1 min-width-0">
-                <div class="mono text-body-2">{{ file.id }}</div>
-                <div class="text-caption text-medium-emphasis">
-                  {{ bytes(file.bytes) }}
-                  <span v-if="file.modified">
-                    · {{ new Date(file.modified * 1000).toLocaleString() }}</span
-                  >
-                </div>
-              </div>
-              <v-chip v-if="file.compressed" size="x-small" color="warning" variant="tonal">
-                {{ t('profiler.compressed') }}
-              </v-chip>
-              <v-btn
-                size="small"
-                variant="tonal"
-                :loading="profilerBusy === file.id"
-                :disabled="file.compressed || !!profilerBusy"
-                @click="openProfile(file)"
-              >
-                {{ t('profiler.open') }}
-              </v-btn>
-              <!-- No confirmation: a profile is a recording you can make again
-                   by reloading the page, not something to lose. -->
-              <v-btn
-                icon
-                size="x-small"
-                variant="text"
-                :aria-label="t('profiler.deleteOne')"
-                :disabled="!!profilerBusy"
-                @click="deleteProfile(file)"
-              >
-                <v-icon>mdi-delete-outline</v-icon>
-                <v-tooltip activator="parent">{{ t('profiler.deleteOne') }}</v-tooltip>
-              </v-btn>
-            </div>
-
-            <!-- The report. Self cost, because it is the one this parser can
-                 state exactly and the one that answers "what is slow". -->
-            <template v-if="profileReport">
-              <div class="section-head mt-5 mb-1">
-                <v-icon size="18" class="mr-2">mdi-podium</v-icon>{{ profileOpenId }}
-              </div>
-              <div class="text-caption text-medium-emphasis mb-2">
-                {{
-                  t('profiler.summary', {
-                    n: profileReport.functionCount,
-                    total: profileCost(profileReport.selfTotal),
-                    creator: profileReport.creator,
-                  })
-                }}
-              </div>
-              <v-alert
-                v-if="profileReport.truncated"
-                type="warning"
-                variant="tonal"
-                density="compact"
-                class="mb-2"
-              >
-                <div class="text-caption">{{ t('profiler.truncated') }}</div>
-              </v-alert>
-
               <v-table density="compact">
-                <thead>
-                  <tr>
-                    <th>{{ t('profiler.colFunction') }}</th>
-                    <th class="text-right">{{ t('profiler.colSelf') }}</th>
-                    <th class="text-right">{{ t('profiler.colInclusive') }}</th>
-                    <th class="text-right">{{ t('profiler.colCalls') }}</th>
-                  </tr>
-                </thead>
                 <tbody>
-                  <tr v-for="fn in profileReport.functions" :key="fn.name">
-                    <td class="min-width-0">
-                      <div class="mono text-truncate">{{ fn.name }}</div>
-                      <!-- The bar is the percentage, so the eye finds the hot
-                           row before it reads a single number. -->
-                      <v-progress-linear
-                        :model-value="fn.percent"
-                        height="3"
-                        color="primary"
-                        class="mt-1"
-                      />
-                    </td>
-                    <td class="text-right mono">
-                      {{ profileCost(fn.selfTime) }}
-                      <div class="text-caption text-medium-emphasis">
-                        {{ fn.percent.toFixed(1) }}%
-                      </div>
-                    </td>
-                    <td class="text-right mono">{{ profileCost(fn.inclusiveTime) }}</td>
-                    <td class="text-right mono">{{ fn.calls }}</td>
+                  <tr v-for="[pattern, reason] in release.excluded" :key="pattern">
+                    <td class="mono">{{ pattern }}</td>
+                    <td class="text-medium-emphasis text-caption">{{ reason }}</td>
                   </tr>
                 </tbody>
               </v-table>
+
+              <v-expansion-panels v-if="release.dockerfile" variant="accordion" class="mt-4">
+                <v-expansion-panel :title="t('release.dockerfile')">
+                  <v-expansion-panel-text>
+                    <pre class="snippet">{{ release.dockerfile }}</pre>
+                  </v-expansion-panel-text>
+                </v-expansion-panel>
+              </v-expansion-panels>
+
+              <!-- Read out of the built image, not inferred from the Dockerfile:
+                   this guarantee is easy to state and easy to get wrong. -->
+              <template v-if="releaseResult">
+                <div class="section-head mt-5 mb-2">
+                  <v-icon size="18" class="mr-2">mdi-shield-check-outline</v-icon>
+                  {{ t('release.checked') }}
+                </div>
+
+                <v-alert
+                  :type="releaseResult.verification.clean ? 'success' : 'error'"
+                  variant="tonal"
+                >
+                  <div class="text-caption">
+                    {{
+                      releaseResult.verification.clean
+                        ? t('release.clean', { tag: releaseResult.plan.tag })
+                        : t('release.notClean')
+                    }}
+                  </div>
+                  <ul class="text-caption mt-2 pl-4">
+                    <li v-if="releaseResult.verification.envFiles.length">
+                      {{
+                        t('release.leaked', {
+                          files: releaseResult.verification.envFiles.join(', '),
+                        })
+                      }}
+                    </li>
+                    <li v-else>{{ t('release.noEnv') }}</li>
+                    <li v-if="releaseResult.verification.xdebugActive === true">
+                      {{ t('release.xdebugOn') }}
+                    </li>
+                    <li v-else-if="releaseResult.verification.xdebugActive === false">
+                      {{ t('release.xdebugOff') }}
+                    </li>
+                    <li v-if="!releaseResult.verification.hasApp">{{ t('release.noApp') }}</li>
+                  </ul>
+                </v-alert>
+
+                <v-btn
+                  v-if="releaseResult.verification.clean"
+                  class="mt-3"
+                  variant="tonal"
+                  prepend-icon="mdi-download-outline"
+                  :loading="releaseBusy === 'save'"
+                  :disabled="!!releaseBusy"
+                  @click="saveRelease"
+                >
+                  {{ t('release.save') }}
+                </v-btn>
+              </template>
             </template>
-          </template>
+          </v-card>
         </template>
 
         <!-- PHP.INI -------------------------------------------------------- -->
@@ -2075,147 +2168,314 @@ onUnmounted(() => {
              compose files, not five, and recreates the container without the
              mount — so collapsing them would produce a form that saves happily
              and changes nothing. -->
-        <template v-else-if="section === 'phpini'">
-          <div class="section-head mb-1">
-            <v-icon size="18" class="mr-2">mdi-language-php</v-icon>{{ t('phpIni.title') }}
-          </div>
-          <p class="text-caption text-medium-emphasis mb-4">{{ t('phpIni.explain') }}</p>
-
-          <template v-if="phpIni">
-            <v-row dense>
-              <v-col v-for="key in PHP_INI_FIELDS" :key="key" cols="12" sm="6">
-                <!-- The placeholder is what PHP in the container reports right
-                     now, not a documented default. Measured, because assuming
-                     was wrong: these images ship no php.ini at all, and
-                     max_execution_time is 0 under FPM rather than the 30 the
-                     manual lists. Falls back to the field name when nothing is
-                     running — inventing a number would be worse. -->
-                <v-text-field
-                  v-model="phpIniDraft[key]"
-                  :label="t(`phpIni.field.${key}`)"
-                  :placeholder="phpIni.effective?.[key] || t('phpIni.notMeasured')"
-                  :hint="t(`phpIni.hint.${key}`)"
-                  persistent-placeholder
-                  persistent-hint
-                  density="compact"
-                  variant="outlined"
-                  :disabled="phpIniBusy"
-                />
-              </v-col>
-            </v-row>
-
-            <!-- Legal, and almost always a mistake: the upload fails at the
-                 smaller of the two, which is a number the user can see they
-                 have already raised. -->
-            <v-alert v-if="phpIni.warning" type="warning" variant="tonal" class="mt-3">
-              <div class="text-caption">{{ phpIni.warning }}</div>
-            </v-alert>
-
-            <div class="d-flex align-center ga-2 mt-4">
-              <v-btn
-                color="primary"
-                variant="flat"
-                size="small"
-                :loading="phpIniBusy"
-                :disabled="!phpIniDirty"
-                @click="savePhpIni"
-              >
-                {{
-                  phpIniWouldRemoveFile && phpIniDirty ? t('phpIni.removeFile') : t('phpIni.save')
-                }}
-              </v-btn>
-              <v-btn
-                variant="text"
-                size="small"
-                :disabled="!phpIniDirty || phpIniBusy"
-                @click="resetPhpIniDraft"
-              >
-                {{ t('app.cancel') }}
-              </v-btn>
-              <span class="text-caption text-medium-emphasis">{{ t('phpIni.emptyRemoves') }}</span>
+        <template v-if="shows('runtime')">
+          <v-card variant="flat" class="pane">
+            <div class="section-head mb-1">
+              <v-icon size="18" class="mr-2">mdi-language-php</v-icon>{{ t('phpIni.title') }}
             </div>
+            <p class="text-caption text-medium-emphasis mb-4">{{ t('phpIni.explain') }}</p>
 
-            <div v-if="phpIni.effective" class="text-caption text-medium-emphasis mt-2">
-              {{ t('phpIni.measured') }}
-            </div>
+            <template v-if="phpIni">
+              <v-row dense>
+                <v-col v-for="key in PHP_INI_FIELDS" :key="key" cols="12" sm="6">
+                  <!-- The placeholder is what PHP in the container reports right
+                       now, not a documented default. Measured, because assuming
+                       was wrong: these images ship no php.ini at all, and
+                       max_execution_time is 0 under FPM rather than the 30 the
+                       manual lists. Falls back to the field name when nothing is
+                       running — inventing a number would be worse. -->
+                  <v-text-field
+                    v-model="phpIniDraft[key]"
+                    :label="t(`phpIni.field.${key}`)"
+                    :placeholder="phpIni.effective?.[key] || t('phpIni.notMeasured')"
+                    :hint="t(`phpIni.hint.${key}`)"
+                    persistent-placeholder
+                    persistent-hint
+                    density="comfortable"
+                    variant="outlined"
+                    :disabled="phpIniBusy"
+                  />
+                </v-col>
+              </v-row>
 
-            <!-- What is true after a save, which is not the same as saved. PHP
-                 reads its ini at process start, so a bind-mounted edit is on
-                 disk and not yet in the process. -->
-            <v-alert v-if="phpIni.needsRecreate" type="warning" variant="tonal" class="mt-4">
-              <div class="text-caption">{{ t('phpIni.needsRecreate') }}</div>
-            </v-alert>
-            <v-alert
-              v-else-if="phpIni.exists && phpIni.running"
-              type="info"
-              variant="tonal"
-              class="mt-4"
-            >
-              <div class="text-caption">{{ t('phpIni.needsRestart') }}</div>
-            </v-alert>
+              <!-- Legal, and almost always a mistake: the upload fails at the
+                   smaller of the two, which is a number the user can see they
+                   have already raised. -->
+              <v-alert v-if="phpIni.warning" type="warning" variant="tonal" class="mt-3">
+                <div class="text-caption">{{ phpIni.warning }}</div>
+              </v-alert>
 
-            <!-- Directives the form does not manage, shown because they are
-                 preserved on every write and a form that hid them would look
-                 like it had lost them. -->
-            <template v-if="Object.keys(phpIni.unmanaged).length">
-              <div class="section-head mt-5 mb-2">
-                <v-icon size="18" class="mr-2">mdi-file-document-edit-outline</v-icon>
-                {{ t('phpIni.unmanaged') }}
+              <div class="d-flex align-center ga-2 mt-4">
+                <v-btn
+                  color="primary"
+                  variant="flat"
+                  size="small"
+                  :loading="phpIniBusy"
+                  :disabled="!phpIniDirty"
+                  @click="savePhpIni"
+                >
+                  {{
+                    phpIniWouldRemoveFile && phpIniDirty ? t('phpIni.removeFile') : t('phpIni.save')
+                  }}
+                </v-btn>
+                <v-btn
+                  variant="text"
+                  size="small"
+                  :disabled="!phpIniDirty || phpIniBusy"
+                  @click="resetPhpIniDraft"
+                >
+                  {{ t('app.cancel') }}
+                </v-btn>
+                <span class="text-caption text-medium-emphasis">{{
+                  t('phpIni.emptyRemoves')
+                }}</span>
               </div>
-              <v-table density="compact">
+
+              <div v-if="phpIni.effective" class="text-caption text-medium-emphasis mt-2">
+                {{ t('phpIni.measured') }}
+              </div>
+
+              <!-- What is true after a save, which is not the same as saved. PHP
+                   reads its ini at process start, so a bind-mounted edit is on
+                   disk and not yet in the process. -->
+              <v-alert v-if="phpIni.needsRecreate" type="warning" variant="tonal" class="mt-4">
+                <div class="text-caption">{{ t('phpIni.needsRecreate') }}</div>
+              </v-alert>
+              <v-alert
+                v-else-if="phpIni.exists && phpIni.running"
+                type="info"
+                variant="tonal"
+                class="mt-4"
+              >
+                <div class="text-caption">{{ t('phpIni.needsRestart') }}</div>
+              </v-alert>
+
+              <!-- Directives the form does not manage, shown because they are
+                   preserved on every write and a form that hid them would look
+                   like it had lost them. -->
+              <template v-if="Object.keys(phpIni.unmanaged).length">
+                <div class="section-head mt-5 mb-2">
+                  <v-icon size="18" class="mr-2">mdi-file-document-edit-outline</v-icon>
+                  {{ t('phpIni.unmanaged') }}
+                </div>
+                <v-table density="compact">
+                  <tbody>
+                    <tr v-for="(value, key) in phpIni.unmanaged" :key="key">
+                      <td class="text-medium-emphasis mono">{{ key }}</td>
+                      <td class="mono">{{ value }}</td>
+                    </tr>
+                  </tbody>
+                </v-table>
+              </template>
+
+              <v-table density="compact" class="mt-5">
                 <tbody>
-                  <tr v-for="(value, key) in phpIni.unmanaged" :key="key">
-                    <td class="text-medium-emphasis mono">{{ key }}</td>
-                    <td class="mono">{{ value }}</td>
+                  <tr>
+                    <td class="text-medium-emphasis">{{ t('phpIni.file') }}</td>
+                    <td class="mono">{{ phpIni.path }}</td>
+                  </tr>
+                  <tr>
+                    <td class="text-medium-emphasis">{{ t('phpIni.mountedAt') }}</td>
+                    <td class="mono">{{ phpIni.containerPath }}</td>
                   </tr>
                 </tbody>
               </v-table>
+
+              <div class="text-caption text-medium-emphasis mt-3">{{ t('phpIni.cliCaveat') }}</div>
             </template>
-
-            <v-table density="compact" class="mt-5">
-              <tbody>
-                <tr>
-                  <td class="text-medium-emphasis">{{ t('phpIni.file') }}</td>
-                  <td class="mono">{{ phpIni.path }}</td>
-                </tr>
-                <tr>
-                  <td class="text-medium-emphasis">{{ t('phpIni.mountedAt') }}</td>
-                  <td class="mono">{{ phpIni.containerPath }}</td>
-                </tr>
-              </tbody>
-            </v-table>
-
-            <div class="text-caption text-medium-emphasis mt-3">{{ t('phpIni.cliCaveat') }}</div>
-          </template>
+          </v-card>
         </template>
 
+        <!-- CONTAINER ----------------------------------------------------- -->
+        <template v-if="shows('container')">
+          <v-card variant="flat" class="pane">
+            <div class="section-head mb-4">
+              <v-icon size="18" class="mr-2">mdi-docker</v-icon>{{ t('projectDetail.container') }}
+            </div>
+
+            <div v-if="!details" class="text-caption text-medium-emphasis py-8 text-center">
+              {{ t('projects.notBuilt') }}
+            </div>
+
+            <template v-else>
+              <v-row>
+                <v-col cols="12" md="4">
+                  <div class="field">
+                    <span class="field-key">{{ t('projectDetail.name') }}</span>
+                    <code class="field-mono">{{ details.name }}</code>
+                    <v-btn
+                      icon
+                      :aria-label="t('a11y.copy')"
+                      size="x-small"
+                      variant="text"
+                      @click="copy(details.name, 'cname')"
+                    >
+                      <v-icon>mdi-content-copy</v-icon>
+                      <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
+                    </v-btn>
+                  </div>
+                  <div class="field">
+                    <span class="field-key">{{ t('projectDetail.uptime') }}</span>
+                    <span class="field-val">{{
+                      details.startedAt ? new Date(details.startedAt).toLocaleString() : '—'
+                    }}</span>
+                  </div>
+                  <div class="field">
+                    <span class="field-key">{{ t('projectDetail.restartPolicy') }}</span>
+                    <span class="field-val">{{ details.restartPolicy || '—' }}</span>
+                  </div>
+                  <div class="field">
+                    <span class="field-key">{{ t('projectDetail.dnsHosts') }}</span>
+                    <span
+                      class="field-val"
+                      :class="project.domainConfigured ? 'text-success' : 'text-warning'"
+                    >
+                      <v-icon size="14">{{
+                        project.domainConfigured ? 'mdi-check-circle' : 'mdi-alert-circle'
+                      }}</v-icon>
+                      {{
+                        project.domainConfigured
+                          ? t('projectDetail.configured')
+                          : t('projectsView.noDnsRecord')
+                      }}
+                    </span>
+                  </div>
+                </v-col>
+
+                <v-col cols="12" md="4">
+                  <div class="field">
+                    <span class="field-key">{{ t('detail.state') }}</span>
+                    <span class="field-val" :class="details.running ? 'text-success' : ''">
+                      <v-icon size="10">mdi-circle</v-icon> {{ details.state }}
+                    </span>
+                  </div>
+                  <div class="field">
+                    <span class="field-key">{{ t('projectDetail.created') }}</span>
+                    <span class="field-val">{{
+                      details.created ? new Date(details.created).toLocaleString() : '—'
+                    }}</span>
+                  </div>
+                  <div class="field">
+                    <span class="field-key">{{ t('projectDetail.containerId') }}</span>
+                    <code class="field-mono">{{ details.id?.slice(0, 12) }}</code>
+                    <v-btn
+                      icon
+                      :aria-label="t('a11y.copy')"
+                      size="x-small"
+                      variant="text"
+                      @click="copy(details.id, 'cid')"
+                    >
+                      <v-icon>mdi-content-copy</v-icon>
+                      <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
+                    </v-btn>
+                  </div>
+                </v-col>
+
+                <v-col cols="12" md="4">
+                  <div class="field">
+                    <span class="field-key">{{ t('detail.image') }}</span>
+                    <code class="field-mono">{{ details.image }}</code>
+                    <v-btn
+                      icon
+                      :aria-label="t('a11y.copy')"
+                      size="x-small"
+                      variant="text"
+                      @click="copy(details.image, 'img')"
+                    >
+                      <v-icon>mdi-content-copy</v-icon>
+                      <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
+                    </v-btn>
+                  </div>
+                  <div class="field">
+                    <span class="field-key">{{ t('projectDetail.restartCount') }}</span>
+                    <span class="field-val">{{ details.restartCount }}</span>
+                  </div>
+                  <div class="field">
+                    <span class="field-key">{{ t('projectDetail.imageSize') }}</span>
+                    <span class="field-val">{{
+                      details.imageSize ? bytes(details.imageSize) : '—'
+                    }}</span>
+                  </div>
+                </v-col>
+              </v-row>
+
+              <div class="section-head mt-8 mb-3">
+                <v-icon size="18" class="mr-2">mdi-lan</v-icon>{{ t('stats.network') }}
+              </div>
+
+              <v-row>
+                <v-col cols="12" md="4">
+                  <div class="field">
+                    <span class="field-key">{{ t('projectDetail.gateway') }}</span>
+                    <span class="field-val">{{ details.gateway || '—' }}</span>
+                  </div>
+                  <div class="field">
+                    <span class="field-key">{{ t('projectDetail.portMappings') }}</span>
+                    <span v-if="!details.ports.length" class="field-val">—</span>
+                    <span v-else class="field-val">
+                      <template v-for="p in details.ports" :key="p.container">
+                        <code class="field-mono">{{ p.container }}/{{ p.protocol }}</code>
+                        <span v-if="p.host" class="text-success ml-1">→ {{ p.host }}</span>
+                        <span v-else class="text-warning ml-1">{{
+                          t('projectDetail.notPublished')
+                        }}</span>
+                      </template>
+                    </span>
+                  </div>
+                </v-col>
+                <v-col cols="12" md="4">
+                  <div class="field">
+                    <span class="field-key">{{ t('stats.network') }}</span>
+                    <span class="field-val">{{ details.networks.join(', ') || '—' }}</span>
+                  </div>
+                </v-col>
+              </v-row>
+            </template>
+          </v-card>
+        </template>
         <!-- SHARE ---------------------------------------------------------- -->
-        <template v-else-if="section === 'share'">
-          <div class="section-head mb-1">
-            <v-icon size="18" class="mr-2">mdi-earth</v-icon>{{ t('tunnel.title') }}
-          </div>
-          <p class="text-caption text-medium-emphasis mb-4">{{ t('tunnel.explain') }}</p>
+        <template v-if="shows('container')">
+          <v-card variant="flat" class="pane">
+            <div class="section-head mb-1">
+              <v-icon size="18" class="mr-2">mdi-earth</v-icon>{{ t('tunnel.title') }}
+            </div>
+            <p class="text-caption text-medium-emphasis mb-4">{{ t('tunnel.explain') }}</p>
 
-          <!-- The tunnel forwards to the container; a stopped container would
-               serve 502s from a URL that looks like it worked. -->
-          <v-alert v-if="!running" type="info" variant="tonal">
-            <div class="text-caption">{{ t('tunnel.needsRunning') }}</div>
-          </v-alert>
+            <!-- The tunnel forwards to the container; a stopped container would
+                 serve 502s from a URL that looks like it worked. -->
+            <v-alert v-if="!running" type="info" variant="tonal">
+              <div class="text-caption">{{ t('tunnel.needsRunning') }}</div>
+            </v-alert>
 
-          <template v-else-if="tunnel?.running">
-            <v-alert v-if="tunnel.url" type="success" variant="tonal" class="mb-3">
-              <div class="d-flex align-center ga-2 flex-wrap">
-                <a class="field-link" @click="openUrl(tunnel.url)">{{ tunnel.url }}</a>
-                <v-btn
-                  icon
-                  :aria-label="t('a11y.copy')"
-                  size="x-small"
-                  variant="text"
-                  @click="copy(tunnel.url, 'tunnel')"
-                >
-                  <v-icon>{{ copied === 'tunnel' ? 'mdi-check' : 'mdi-content-copy' }}</v-icon>
-                  <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
-                </v-btn>
+            <template v-else-if="tunnel?.running">
+              <v-alert v-if="tunnel.url" type="success" variant="tonal" class="mb-3">
+                <div class="d-flex align-center ga-2 flex-wrap">
+                  <a class="field-link" @click="api.openInBrowser(tunnel.url)">{{ tunnel.url }}</a>
+                  <v-btn
+                    icon
+                    :aria-label="t('a11y.copy')"
+                    size="x-small"
+                    variant="text"
+                    @click="copy(tunnel.url, 'tunnel')"
+                  >
+                    <v-icon>{{ copied === 'tunnel' ? 'mdi-check' : 'mdi-content-copy' }}</v-icon>
+                    <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
+                  </v-btn>
+                  <v-spacer />
+                  <v-btn
+                    size="small"
+                    color="error"
+                    variant="tonal"
+                    :loading="tunnelBusy"
+                    @click="stopTunnel"
+                  >
+                    {{ t('tunnel.stop') }}
+                  </v-btn>
+                </div>
+              </v-alert>
+              <div v-else class="d-flex align-center ga-3">
+                <v-progress-circular indeterminate size="18" width="2" color="primary" />
+                <span class="text-caption text-medium-emphasis">{{ t('tunnel.connecting') }}</span>
                 <v-spacer />
                 <v-btn
                   size="small"
@@ -2227,132 +2487,122 @@ onUnmounted(() => {
                   {{ t('tunnel.stop') }}
                 </v-btn>
               </div>
-            </v-alert>
-            <div v-else class="d-flex align-center ga-3">
-              <v-progress-circular indeterminate size="18" width="2" color="primary" />
-              <span class="text-caption text-medium-emphasis">{{ t('tunnel.connecting') }}</span>
-              <v-spacer />
+
+              <!-- Said before anyone pastes the URL into a public issue: the
+                   link is live, unauthenticated, and reaches this machine. -->
+              <v-alert type="warning" variant="tonal" class="mt-3">
+                <div class="text-caption">{{ t('tunnel.publicWarning') }}</div>
+              </v-alert>
+            </template>
+
+            <template v-else>
               <v-btn
-                size="small"
-                color="error"
-                variant="tonal"
+                color="primary"
+                variant="flat"
+                prepend-icon="mdi-earth"
                 :loading="tunnelBusy"
-                @click="stopTunnel"
+                @click="startTunnel"
               >
-                {{ t('tunnel.stop') }}
+                {{ t('tunnel.start') }}
               </v-btn>
-            </div>
-
-            <!-- Said before anyone pastes the URL into a public issue: the
-                 link is live, unauthenticated, and reaches this machine. -->
-            <v-alert type="warning" variant="tonal" class="mt-3">
-              <div class="text-caption">{{ t('tunnel.publicWarning') }}</div>
-            </v-alert>
-          </template>
-
-          <template v-else>
-            <v-btn
-              color="primary"
-              variant="flat"
-              prepend-icon="mdi-earth"
-              :loading="tunnelBusy"
-              @click="startTunnel"
-            >
-              {{ t('tunnel.start') }}
-            </v-btn>
-            <div class="text-caption text-medium-emphasis mt-3">
-              {{ t('tunnel.startHint') }}
-            </div>
-          </template>
+              <div class="text-caption text-medium-emphasis mt-3">
+                {{ t('tunnel.startHint') }}
+              </div>
+            </template>
+          </v-card>
         </template>
 
         <!-- WORKERS --------------------------------------------------------- -->
-        <template v-else-if="section === 'workers'">
-          <div class="section-head mb-1">
-            <v-icon size="18" class="mr-2">mdi-cog-sync-outline</v-icon>{{ t('workers.title') }}
-          </div>
-          <p class="text-caption text-medium-emphasis mb-4">{{ t('workers.explain') }}</p>
-
-          <v-alert v-if="!workerKinds.length" type="info" variant="tonal">
-            <div class="text-caption">{{ t('workers.none') }}</div>
-          </v-alert>
-
-          <v-alert v-else-if="!running" type="info" variant="tonal" class="mb-3">
-            <div class="text-caption">{{ t('workers.needsRunning') }}</div>
-          </v-alert>
-
-          <div v-for="kind in workerKinds" :key="kind" class="worker-row">
-            <v-icon :color="workerFor(kind)?.running ? 'success' : 'grey'" size="18">
-              {{ workerFor(kind)?.running ? 'mdi-check-circle' : 'mdi-stop-circle-outline' }}
-            </v-icon>
-            <div class="min-w-0">
-              <span class="text-body-2 font-weight-medium">{{ t(`workers.${kind}`) }}</span>
-              <div class="text-caption text-medium-emphasis">
-                {{ t(`workers.${kind}Desc`) }}
-              </div>
-              <!-- The healing made visible: 0 is healthy, a big number is a
-                   crash loop wearing a green chip. -->
-              <div
-                v-if="workerFor(kind)?.restarts"
-                class="text-caption"
-                :class="workerFor(kind).restarts > 3 ? 'text-error' : 'text-warning'"
-              >
-                {{ t('workers.restarts', { count: workerFor(kind).restarts }) }}
-              </div>
+        <template v-if="shows('container')">
+          <v-card variant="flat" class="pane">
+            <div class="section-head mb-1">
+              <v-icon size="18" class="mr-2">mdi-cog-sync-outline</v-icon>{{ t('workers.title') }}
             </div>
-            <v-spacer />
-            <v-btn
-              size="small"
-              :color="workerFor(kind) ? 'error' : 'primary'"
-              variant="tonal"
-              :loading="workerBusy === kind"
-              :disabled="!workerFor(kind) && !running"
-              @click="toggleWorker(kind)"
-            >
-              {{ workerFor(kind) ? t('workers.stop') : t('workers.start') }}
-            </v-btn>
-          </div>
+            <p class="text-caption text-medium-emphasis mb-4">{{ t('workers.explain') }}</p>
+
+            <v-alert v-if="!workerKinds.length" type="info" variant="tonal">
+              <div class="text-caption">{{ t('workers.none') }}</div>
+            </v-alert>
+
+            <v-alert v-else-if="!running" type="info" variant="tonal" class="mb-3">
+              <div class="text-caption">{{ t('workers.needsRunning') }}</div>
+            </v-alert>
+
+            <div v-for="kind in workerKinds" :key="kind" class="worker-row">
+              <v-icon :color="workerFor(kind)?.running ? 'success' : 'grey'" size="18">
+                {{ workerFor(kind)?.running ? 'mdi-check-circle' : 'mdi-stop-circle-outline' }}
+              </v-icon>
+              <div class="min-w-0">
+                <span class="text-body-2 font-weight-medium">{{ t(`workers.${kind}`) }}</span>
+                <div class="text-caption text-medium-emphasis">
+                  {{ t(`workers.${kind}Desc`) }}
+                </div>
+                <!-- The healing made visible: 0 is healthy, a big number is a
+                     crash loop wearing a green chip. -->
+                <div
+                  v-if="workerFor(kind)?.restarts"
+                  class="text-caption"
+                  :class="workerFor(kind).restarts > 3 ? 'text-error' : 'text-warning'"
+                >
+                  {{ t('workers.restarts', { count: workerFor(kind).restarts }) }}
+                </div>
+              </div>
+              <v-spacer />
+              <v-btn
+                size="small"
+                :color="workerFor(kind) ? 'error' : 'primary'"
+                variant="tonal"
+                :loading="workerBusy === kind"
+                :disabled="!workerFor(kind) && !running"
+                @click="toggleWorker(kind)"
+              >
+                {{ workerFor(kind) ? t('workers.stop') : t('workers.start') }}
+              </v-btn>
+            </div>
+          </v-card>
         </template>
 
         <!-- MANIFEST ------------------------------------------------------ -->
-        <template v-else-if="section === 'manifest'">
-          <div class="d-flex align-center ga-2 mb-3">
-            <div class="section-head">
-              <v-icon size="18" class="mr-2">mdi-code-json</v-icon>{{ t('detail.manifest') }}
+        <template v-if="shows('configuration')">
+          <v-card variant="flat" class="pane">
+            <div class="d-flex align-center ga-2 mb-3">
+              <div class="section-head">
+                <v-icon size="18" class="mr-2">mdi-code-json</v-icon>{{ t('detail.manifest') }}
+              </div>
+              <span class="text-caption text-medium-emphasis">{{ t('detail.manifestHint') }}</span>
+              <v-spacer />
+              <v-btn
+                size="small"
+                variant="text"
+                prepend-icon="mdi-play-box-outline"
+                :loading="ops.isBusy(name)"
+                @click="bringUp"
+                >{{ t('detail.bringUp') }}</v-btn
+              >
+              <v-btn
+                size="small"
+                color="primary"
+                variant="flat"
+                :disabled="!manifestDirty"
+                :loading="manifestSaving"
+                @click="saveManifest"
+                >{{ t('detail.save') }}</v-btn
+              >
             </div>
-            <span class="text-caption text-medium-emphasis">{{ t('detail.manifestHint') }}</span>
-            <v-spacer />
-            <v-btn
-              size="small"
-              variant="text"
-              prepend-icon="mdi-play-box-outline"
-              :loading="ops.isBusy(name)"
-              @click="bringUp"
-              >{{ t('detail.bringUp') }}</v-btn
-            >
-            <v-btn
-              size="small"
-              color="primary"
-              variant="flat"
-              :disabled="!manifestDirty"
-              :loading="manifestSaving"
-              @click="saveManifest"
-              >{{ t('detail.save') }}</v-btn
-            >
-          </div>
 
-          <v-textarea
-            v-model="manifestText"
-            variant="outlined"
-            rows="24"
-            class="mono-input"
-            hide-details
-            @update:model-value="manifestDirty = true"
-          />
+            <v-textarea
+              v-model="manifestText"
+              variant="outlined"
+              rows="24"
+              class="mono-input"
+              hide-details
+              @update:model-value="manifestDirty = true"
+            />
+          </v-card>
         </template>
 
         <!-- LOGS ------------------------------------------------------------ -->
-        <template v-else-if="section === 'logs'">
+        <template v-if="shows('logs')">
           <!-- `project` is what unlocks the file sources: the container stream
                carries stdout, and nothing an application logs goes there. -->
           <LogView
@@ -2367,236 +2617,94 @@ onUnmounted(() => {
         </template>
 
         <!-- DOCKERFILE ---------------------------------------------------- -->
-        <template v-else-if="section === 'dockerfile'">
-          <div class="section-head mb-1">
-            <v-icon size="18" class="mr-2">mdi-file-document-outline</v-icon>
-            {{ t('detail.dockerfile') }}
-          </div>
-          <div class="text-caption text-medium-emphasis mb-3">{{ t('detail.dockerfileDesc') }}</div>
-
-          <div class="d-flex align-center ga-3 flex-wrap mb-2">
-            <v-btn-toggle
-              :model-value="previewMode"
-              mandatory
-              divided
-              color="primary"
-              variant="flat"
-              class="bg-surface-light"
-              @update:model-value="loadPreview"
-            >
-              <v-btn value="compat" size="small">{{ t('detail.compat') }}</v-btn>
-              <v-btn value="strict" size="small">{{ t('detail.strict') }}</v-btn>
-            </v-btn-toggle>
-
-            <!-- What the chip means depends on the mode above it, so they sit
-                 together rather than at opposite ends of a bar. -->
-            <v-chip
-              v-if="preview"
-              size="small"
-              :color="preview.matchesBashOutput ? 'success' : 'warning'"
-              :prepend-icon="preview.matchesBashOutput ? 'mdi-check-circle' : 'mdi-alert'"
-            >
-              {{
-                preview.matchesBashOutput ? t('detail.matchesBash') : t('detail.differsFromBash')
-              }}
-            </v-chip>
-
-            <v-spacer />
-
-            <v-btn
-              v-if="preview"
-              icon
-              size="small"
-              variant="text"
-              :aria-label="t('a11y.copy')"
-              @click="copy(preview.dockerfile)"
-            >
-              <v-icon>mdi-content-copy</v-icon>
-              <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
-            </v-btn>
-            <v-btn
-              icon
-              size="small"
-              variant="text"
-              :loading="previewLoading"
-              :aria-label="t('app.refresh')"
-              @click="loadPreview()"
-            >
-              <v-icon>mdi-refresh</v-icon>
-              <v-tooltip activator="parent">{{ t('app.refresh') }}</v-tooltip>
-            </v-btn>
-          </div>
-
-          <div class="text-caption text-medium-emphasis mb-3">
-            {{ previewMode === 'strict' ? t('detail.strictHint') : t('detail.compatHint') }}
-          </div>
-
-          <!-- Bash drops an unbuildable extension without a word; strict mode
-               exists so the reason is visible instead. -->
-          <v-alert v-if="preview?.skipped?.length" type="warning" variant="tonal" class="mb-3">
-            <div class="text-caption font-weight-medium mb-1">
-              {{ t('detail.silentlySkipped') }}
+        <template v-if="shows('configuration')">
+          <v-card variant="flat" class="pane">
+            <div class="section-head mb-1">
+              <v-icon size="18" class="mr-2">mdi-file-document-outline</v-icon>
+              {{ t('detail.dockerfile') }}
             </div>
-            <div v-for="s in preview.skipped" :key="s.extension" class="text-caption">
-              <strong>{{ s.extension }}</strong> — {{ s.reason }}
-            </div>
-          </v-alert>
-
-          <div v-if="preview" class="dockerfile">
-            <div v-for="(line, i) in dockerfileLines" :key="i" class="df-line">
-              <span class="df-no">{{ i + 1 }}</span>
-              <code class="df-code">{{ line }}</code>
-            </div>
-          </div>
-          <div v-else-if="previewLoading" class="d-flex justify-center py-8">
-            <v-progress-circular indeterminate color="primary" />
-          </div>
-        </template>
-
-        <!-- CONTAINER ----------------------------------------------------- -->
-        <template v-else>
-          <div class="section-head mb-4">
-            <v-icon size="18" class="mr-2">mdi-docker</v-icon>{{ t('projectDetail.container') }}
-          </div>
-
-          <div v-if="!details" class="text-caption text-medium-emphasis py-8 text-center">
-            {{ t('projects.notBuilt') }}
-          </div>
-
-          <template v-else>
-            <v-row>
-              <v-col cols="12" md="4">
-                <div class="field">
-                  <span class="field-key">{{ t('projectDetail.name') }}</span>
-                  <code class="field-mono">{{ details.name }}</code>
-                  <v-btn
-                    icon
-                    :aria-label="t('a11y.copy')"
-                    size="x-small"
-                    variant="text"
-                    @click="copy(details.name, 'cname')"
-                  >
-                    <v-icon>mdi-content-copy</v-icon>
-                    <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
-                  </v-btn>
-                </div>
-                <div class="field">
-                  <span class="field-key">{{ t('projectDetail.uptime') }}</span>
-                  <span class="field-val">{{
-                    details.startedAt ? new Date(details.startedAt).toLocaleString() : '—'
-                  }}</span>
-                </div>
-                <div class="field">
-                  <span class="field-key">{{ t('projectDetail.restartPolicy') }}</span>
-                  <span class="field-val">{{ details.restartPolicy || '—' }}</span>
-                </div>
-                <div class="field">
-                  <span class="field-key">{{ t('projectDetail.dnsHosts') }}</span>
-                  <span
-                    class="field-val"
-                    :class="project.domainConfigured ? 'text-success' : 'text-warning'"
-                  >
-                    <v-icon size="14">{{
-                      project.domainConfigured ? 'mdi-check-circle' : 'mdi-alert-circle'
-                    }}</v-icon>
-                    {{
-                      project.domainConfigured
-                        ? t('projectDetail.configured')
-                        : t('projectsView.noDnsRecord')
-                    }}
-                  </span>
-                </div>
-              </v-col>
-
-              <v-col cols="12" md="4">
-                <div class="field">
-                  <span class="field-key">{{ t('detail.state') }}</span>
-                  <span class="field-val" :class="details.running ? 'text-success' : ''">
-                    <v-icon size="10">mdi-circle</v-icon> {{ details.state }}
-                  </span>
-                </div>
-                <div class="field">
-                  <span class="field-key">{{ t('projectDetail.created') }}</span>
-                  <span class="field-val">{{
-                    details.created ? new Date(details.created).toLocaleString() : '—'
-                  }}</span>
-                </div>
-                <div class="field">
-                  <span class="field-key">{{ t('projectDetail.containerId') }}</span>
-                  <code class="field-mono">{{ details.id?.slice(0, 12) }}</code>
-                  <v-btn
-                    icon
-                    :aria-label="t('a11y.copy')"
-                    size="x-small"
-                    variant="text"
-                    @click="copy(details.id, 'cid')"
-                  >
-                    <v-icon>mdi-content-copy</v-icon>
-                    <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
-                  </v-btn>
-                </div>
-              </v-col>
-
-              <v-col cols="12" md="4">
-                <div class="field">
-                  <span class="field-key">{{ t('detail.image') }}</span>
-                  <code class="field-mono">{{ details.image }}</code>
-                  <v-btn
-                    icon
-                    :aria-label="t('a11y.copy')"
-                    size="x-small"
-                    variant="text"
-                    @click="copy(details.image, 'img')"
-                  >
-                    <v-icon>mdi-content-copy</v-icon>
-                    <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
-                  </v-btn>
-                </div>
-                <div class="field">
-                  <span class="field-key">{{ t('projectDetail.restartCount') }}</span>
-                  <span class="field-val">{{ details.restartCount }}</span>
-                </div>
-                <div class="field">
-                  <span class="field-key">{{ t('projectDetail.imageSize') }}</span>
-                  <span class="field-val">{{
-                    details.imageSize ? bytes(details.imageSize) : '—'
-                  }}</span>
-                </div>
-              </v-col>
-            </v-row>
-
-            <div class="section-head mt-8 mb-3">
-              <v-icon size="18" class="mr-2">mdi-lan</v-icon>{{ t('stats.network') }}
+            <div class="text-caption text-medium-emphasis mb-3">
+              {{ t('detail.dockerfileDesc') }}
             </div>
 
-            <v-row>
-              <v-col cols="12" md="4">
-                <div class="field">
-                  <span class="field-key">{{ t('projectDetail.gateway') }}</span>
-                  <span class="field-val">{{ details.gateway || '—' }}</span>
-                </div>
-                <div class="field">
-                  <span class="field-key">{{ t('projectDetail.portMappings') }}</span>
-                  <span v-if="!details.ports.length" class="field-val">—</span>
-                  <span v-else class="field-val">
-                    <template v-for="p in details.ports" :key="p.container">
-                      <code class="field-mono">{{ p.container }}/{{ p.protocol }}</code>
-                      <span v-if="p.host" class="text-success ml-1">→ {{ p.host }}</span>
-                      <span v-else class="text-warning ml-1">{{
-                        t('projectDetail.notPublished')
-                      }}</span>
-                    </template>
-                  </span>
-                </div>
-              </v-col>
-              <v-col cols="12" md="4">
-                <div class="field">
-                  <span class="field-key">{{ t('stats.network') }}</span>
-                  <span class="field-val">{{ details.networks.join(', ') || '—' }}</span>
-                </div>
-              </v-col>
-            </v-row>
-          </template>
+            <div class="d-flex align-center ga-3 flex-wrap mb-2">
+              <v-btn-toggle
+                :model-value="previewMode"
+                mandatory
+                divided
+                color="primary"
+                variant="flat"
+                class="bg-surface-light"
+                @update:model-value="loadPreview"
+              >
+                <v-btn value="compat" size="small">{{ t('detail.compat') }}</v-btn>
+                <v-btn value="strict" size="small">{{ t('detail.strict') }}</v-btn>
+              </v-btn-toggle>
+
+              <!-- What the chip means depends on the mode above it, so they sit
+                   together rather than at opposite ends of a bar. -->
+              <v-chip
+                v-if="preview"
+                size="small"
+                :color="preview.matchesBashOutput ? 'success' : 'warning'"
+                :prepend-icon="preview.matchesBashOutput ? 'mdi-check-circle' : 'mdi-alert'"
+              >
+                {{
+                  preview.matchesBashOutput ? t('detail.matchesBash') : t('detail.differsFromBash')
+                }}
+              </v-chip>
+
+              <v-spacer />
+
+              <v-btn
+                v-if="preview"
+                icon
+                size="small"
+                variant="text"
+                :aria-label="t('a11y.copy')"
+                @click="copy(preview.dockerfile)"
+              >
+                <v-icon>mdi-content-copy</v-icon>
+                <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
+              </v-btn>
+              <v-btn
+                icon
+                size="small"
+                variant="text"
+                :loading="previewLoading"
+                :aria-label="t('app.refresh')"
+                @click="loadPreview()"
+              >
+                <v-icon>mdi-refresh</v-icon>
+                <v-tooltip activator="parent">{{ t('app.refresh') }}</v-tooltip>
+              </v-btn>
+            </div>
+
+            <div class="text-caption text-medium-emphasis mb-3">
+              {{ previewMode === 'strict' ? t('detail.strictHint') : t('detail.compatHint') }}
+            </div>
+
+            <!-- Bash drops an unbuildable extension without a word; strict mode
+                 exists so the reason is visible instead. -->
+            <v-alert v-if="preview?.skipped?.length" type="warning" variant="tonal" class="mb-3">
+              <div class="text-caption font-weight-medium mb-1">
+                {{ t('detail.silentlySkipped') }}
+              </div>
+              <div v-for="s in preview.skipped" :key="s.extension" class="text-caption">
+                <strong>{{ s.extension }}</strong> — {{ s.reason }}
+              </div>
+            </v-alert>
+
+            <div v-if="preview" class="dockerfile">
+              <div v-for="(line, i) in dockerfileLines" :key="i" class="df-line">
+                <span class="df-no">{{ i + 1 }}</span>
+                <code class="df-code">{{ line }}</code>
+              </div>
+            </div>
+            <div v-else-if="previewLoading" class="d-flex justify-center py-8">
+              <v-progress-circular indeterminate color="primary" />
+            </div>
+          </v-card>
         </template>
       </div>
 
@@ -2654,6 +2762,33 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* The card Settings uses, for the same reason it uses it: several groups now
+   share one tab, and without a surface between them three subjects run
+   together under one heading. Filled rather than outlined — the fill does the
+   separating and the hairline only has to close the shape, which is what keeps
+   a dark surface from reading as a white box around every group. */
+.pane {
+  background: rgba(var(--v-theme-surface-bright), 0.55);
+  border: thin solid rgba(var(--v-border-color), calc(var(--v-border-opacity) / 2));
+  padding: 16px;
+}
+
+.pane + .pane {
+  margin-top: 16px;
+}
+
+/* A menu, not a page. Its width was whatever the longest description came to,
+   which put a 1000px panel over the window; the text wraps inside a fixed
+   width instead. */
+.cmd-menu {
+  width: 340px;
+}
+
+.cmd-menu :deep(.v-list-item-subtitle) {
+  white-space: normal;
+  line-height: 1.35;
+}
+
 .detail-toolbar {
   flex: 0 0 auto;
 }

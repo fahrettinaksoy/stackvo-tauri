@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount } from '@vue/test-utils';
 import { createPinia } from 'pinia';
@@ -168,5 +170,23 @@ describe('the two left drawers', () => {
     expect(left.length, 'the shell has two left drawers').toBe(2);
     const rails = left.filter((d) => d.classes().includes('v-navigation-drawer--rail'));
     expect(rails.length, 'both drawers should open in rail mode').toBe(left.length);
+  });
+});
+
+describe('tray navigation', () => {
+  // The tray sends a route name and the front end pushes it. A name here that
+  // the router does not declare is a menu item that raises the window and then
+  // does nothing — visible only by trying it.
+  it('names only routes the router declares', () => {
+    const rust = readFileSync(resolve(import.meta.dirname, '../src-tauri/src/tray.rs'), 'utf8');
+    const block = rust.match(/const NAV_ITEMS[^=]*=\s*\[([\s\S]*?)\];/);
+    expect(block, 'NAV_ITEMS not found in tray.rs').toBeTruthy();
+    const named = [...block[1].matchAll(/\("([A-Za-z]+)",/g)].map((m) => m[1]);
+    expect(named.length).toBeGreaterThan(0);
+
+    const router = readFileSync(resolve(import.meta.dirname, '../src/router/index.js'), 'utf8');
+    const declared = new Set([...router.matchAll(/name: '([A-Za-z]+)'/g)].map((m) => m[1]));
+
+    expect(named.filter((n) => !declared.has(n))).toEqual([]);
   });
 });

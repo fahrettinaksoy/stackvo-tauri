@@ -12,11 +12,11 @@ http:
         - websecure
       service: rabbitmq
       tls: {}
-    mailhog:
-      rule: "Host(`mailhog.stackvo.loc`)"
+    mailpit:
+      rule: "Host(`mailpit.stackvo.loc`)"
       entryPoints:
         - websecure
-      service: mailhog
+      service: mailpit
       tls: {}
 
   services:
@@ -24,7 +24,7 @@ http:
       loadBalancer:
         servers:
           - url: "http://stackvo-rabbitmq:15672"
-    mailhog:
+    mailpit:
       loadBalancer:
         servers:
-          - url: "http://stackvo-mailhog:8025"
+          - url: "http://stackvo-mailpit:8025"

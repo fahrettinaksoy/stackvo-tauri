@@ -1,7 +1,6 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { openUrl } from '@tauri-apps/plugin-opener';
 import { useInventoryStore } from '@/stores/inventory';
 import { useOperationsStore } from '@/stores/operations';
 import { useAppStore } from '@/stores/app';
@@ -70,7 +69,13 @@ const items = computed(() =>
   })
 );
 
-const tld = ref('stackvo.loc');
+// From the store, which reads DEFAULT_TLD_SUFFIX once — the same key the
+// Traefik generator uses, so a changed suffix moves the links and the routes
+// together. It used to be fetched here with `stackvo.loc` as the starting
+// value, which meant a workspace configured for anything else showed and
+// linked to the wrong host until the fetch landed, and kept showing it if the
+// fetch failed.
+const tld = computed(() => app.tld);
 
 function domainOf(service) {
   return service.url ? `${service.url}.${tld.value}` : null;
@@ -91,15 +96,6 @@ let teardown = null;
 
 onMounted(async () => {
   inventory.loadServices();
-
-  // The service domains are built from DEFAULT_TLD_SUFFIX, the same key the
-  // Traefik generator uses — so a changed TLD moves both together.
-  api
-    .envGet()
-    .then((env) => {
-      if (env.DEFAULT_TLD_SUFFIX) tld.value = env.DEFAULT_TLD_SUFFIX;
-    })
-    .catch(() => {});
 
   teardown = await listenAll(REFRESH_TRIGGERS, () => inventory.loadServices());
 });
@@ -238,7 +234,7 @@ onUnmounted(() => teardown?.());
             size="small"
             color="primary"
             variant="tonal"
-            @click="openUrl(`https://${domainOf(item)}`)"
+            @click="api.openInBrowser(`https://${domainOf(item)}`)"
           >
             <v-icon>mdi-open-in-new</v-icon>
           </v-btn>

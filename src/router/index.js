@@ -58,7 +58,13 @@ const routes = [
   // Belongs to no project, which is the point: it is where you look before you
   // know which project to open.
   { path: '/logs', name: 'Logs', component: view(() => import('@/views/Logs.vue')) },
+  // The inbox as a destination, not a service-sheet tab: "my app just sent a
+  // mail — show me" names a place, the way Herd's Mail page does.
+  { path: '/mail', name: 'Mail', component: view(() => import('@/views/Mail.vue')) },
   { path: '/settings', name: 'Settings', component: view(() => import('@/views/Settings.vue')) },
+  // Its own window, opened from the menu bar. App.vue renders it without the
+  // shell — an about box with a sidebar and an app bar is not an about box.
+  { path: '/about', name: 'About', component: view(() => import('@/views/About.vue')) },
 ];
 
 export default createRouter({

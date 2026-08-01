@@ -421,6 +421,10 @@ pub struct FanoutLine {
     /// The `LogFile.id` the line was read from — an opaque handle, not a path.
     pub id: String,
     pub text: String,
+    /// True for the seed: lines that were already in the file when the tail
+    /// started. Ordering across files is by file, not by time, and the UI says
+    /// so rather than letting them pass as live output.
+    pub historic: bool,
 }
 
 /// What one discovery pass found.
@@ -438,16 +442,25 @@ struct Tracked {
     offset: u64,
 }
 
+/// How much of each file the first pass rewinds over. Small on purpose: this
+/// is "where does this file end", not "what happened today" — that question
+/// belongs to the per-project viewer, which reads one file and can answer it.
+const SEED_BYTES: u64 = 2_048;
+
 /// A live tail across every project at once.
 ///
-/// **It is live only, with no history.** That is a decision, not an omission:
-/// interleaving the existing tails of sixty files would present an ordering
-/// this code cannot justify. Nothing here parses a timestamp — Laravel, nginx
-/// and supervisord do not agree on a format — so the only chronology available
-/// across files is the order bytes arrive in, which is real for new output and
-/// fiction for old. So each file is adopted at its current end and only what is
-/// written afterwards is shown. Per-file history stays where it is honest: the
-/// per-project viewer, which reads one file and can show all of it.
+/// **Live, over a labelled seed.** The ordering problem is real — nothing here
+/// parses a timestamp (Laravel, nginx and supervisord do not agree on a
+/// format), so across files the only chronology available is the order bytes
+/// arrive in: true for new output, fiction for old. Adopting every file at its
+/// current end solved that honestly and produced a page that is *empty* on any
+/// stack that has been quiet for an hour — which reads as broken, not as calm.
+///
+/// So the first pass seeds a small tail per file and marks those lines
+/// `historic`. They are grouped by file, never interleaved, and the UI draws
+/// the live boundary after them — the claim is "here is where each file
+/// currently ends", which is true, rather than "here is what happened", which
+/// would not be. Everything after the boundary is genuinely live.
 ///
 /// Re-discovery is the other half. A daily channel rolls over at midnight into
 /// a filename that did not exist when the tail started, so a fixed file set
@@ -457,8 +470,10 @@ struct Tracked {
 pub struct Fanout {
     root: PathBuf,
     tracked: HashMap<(String, String), Tracked>,
-    /// The first scan adopts at end-of-file; later scans adopt at the top.
+    /// The first scan seeds a tail; later scans adopt at the top.
     seeded: bool,
+    /// Has the seed been delivered? Only the first poll is historic.
+    drained: bool,
 }
 
 impl Fanout {
@@ -467,6 +482,7 @@ impl Fanout {
             root: root.into(),
             tracked: HashMap::new(),
             seeded: false,
+            drained: false,
         }
     }
 
@@ -518,7 +534,14 @@ impl Fanout {
             // First scan: start at the end, because everything already in the
             // file predates the request to watch. Later scans: start at zero,
             // because the file itself postdates it.
-            let offset = if self.seeded { 0 } else { file.bytes };
+            // First pass: rewind a little so each file shows where it
+            // currently ends. Later passes adopt at zero — a file that
+            // appeared after the tail started was written while we watched.
+            let offset = if self.seeded {
+                0
+            } else {
+                file.bytes.saturating_sub(SEED_BYTES)
+            };
             keep.insert(key, Tracked { path, offset });
         }
 
@@ -536,7 +559,13 @@ impl Fanout {
     }
 
     /// Everything written since the last call, tagged with its origin.
+    ///
+    /// The first call after a scan returns the seed, marked `historic`; every
+    /// call after that is live output.
     pub fn poll(&mut self) -> Vec<FanoutLine> {
+        let historic = !self.drained;
+        self.drained = true;
+
         let mut out = Vec::new();
         let mut gone = Vec::new();
 
@@ -549,6 +578,7 @@ impl Fanout {
                             project: key.0.clone(),
                             id: key.1.clone(),
                             text: line.to_string(),
+                            historic,
                         });
                     }
                 }
@@ -758,18 +788,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// Live only. What was in the file before the tail started is history the
-    /// fanout cannot order against the other fifty-nine files, so it is not
-    /// shown — and the first poll after adoption must be silent, not a dump.
+    /// The seed comes first and says so; everything after it is live.
+    ///
+    /// Adopting strictly at end-of-file was honest and produced a blank page on
+    /// any stack that had been quiet for an hour — indistinguishable from
+    /// broken. The seed is small, grouped by file, and flagged, so the UI can
+    /// draw the boundary rather than pass old lines off as new output.
     #[test]
-    fn the_fanout_starts_at_the_end_and_shows_only_what_follows() {
+    fn the_fanout_seeds_a_labelled_tail_then_goes_live() {
         let root = workspace("fanout-live", &["alpha", "beta"]);
         let mut fanout = Fanout::new(&root);
 
         let scan = fanout.scan(&[]);
         assert_eq!(scan.followed, 2);
         assert_eq!(scan.projects, 2);
-        assert!(fanout.poll().is_empty(), "existing content was replayed");
+
+        let seed = fanout.poll();
+        assert!(!seed.is_empty(), "the page would open blank");
+        assert!(seed.iter().all(|l| l.historic), "the seed must be flagged");
+        // A second poll with nothing written is silent — the seed is delivered
+        // once, not replayed on every tick.
+        assert!(fanout.poll().is_empty());
 
         std::fs::write(
             root.join("projects/alpha/storage/logs/laravel.log"),
@@ -782,6 +821,7 @@ mod tests {
         assert_eq!(lines[0].project, "alpha");
         assert_eq!(lines[0].text, "fresh");
         assert_eq!(lines[0].id, "app:storage/logs/laravel.log");
+        assert!(!lines[0].historic, "output after the seed is live");
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -795,7 +835,7 @@ mod tests {
         let root = workspace("fanout-rollover", &["alpha"]);
         let mut fanout = Fanout::new(&root);
         fanout.scan(&[]);
-        assert!(fanout.poll().is_empty());
+        fanout.poll(); // drain the seed
 
         std::fs::write(
             root.join("projects/alpha/storage/logs/laravel-2026-07-31.log"),
@@ -860,6 +900,9 @@ mod tests {
         let scan = fanout.scan(&["beta".to_string()]);
         assert_eq!(scan.followed, 1);
         assert_eq!(scan.projects, 1);
+
+        // The seed only ever covers the selected project.
+        assert!(fanout.poll().iter().all(|l| l.project == "beta"));
 
         std::fs::write(
             root.join("projects/alpha/storage/logs/laravel.log"),

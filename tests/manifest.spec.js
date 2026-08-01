@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   blankForm,
+  domainAdvice,
+  domainSuggestions,
+  humaniseField,
+  parentDomain,
   compareVersions,
   formFromManifest,
   formToSpec,
@@ -69,10 +73,23 @@ describe('formToSpec', () => {
   });
 
   it('derives the domain from the name only when one was not given', () => {
-    expect(formToSpec({ ...blankForm(), name: 'shop' }).domain).toBe('shop.loc');
-    expect(formToSpec({ ...blankForm(), name: 'shop', domain: 'buy.test' }).domain).toBe(
-      'buy.test'
+    expect(formToSpec({ ...blankForm(), name: 'shop' }, 'stackvo.loc').domain).toBe(
+      'shop.stackvo.loc'
     );
+    expect(
+      formToSpec({ ...blankForm(), name: 'shop', domain: 'buy.test' }, 'stackvo.loc').domain
+    ).toBe('buy.test');
+  });
+
+  // It used to hardcode `.loc` while the stack was configured for
+  // `stackvo.loc`, so a project created without a typed domain answered at an
+  // address nothing routed to. The suffix now comes from the configured value.
+  it('uses the configured suffix, and refuses to guess one', () => {
+    expect(formToSpec({ ...blankForm(), name: 'shop' }, 'dev.test').domain).toBe('shop.dev.test');
+    // No suffix means no domain — the schema rejects that, which is the point.
+    // Inventing one would put the project at a hostname nobody serves.
+    expect(formToSpec({ ...blankForm(), name: 'shop' }).domain).toBe('');
+    expect(formToSpec({ ...blankForm(), name: 'shop' }, '  ').domain).toBe('');
   });
 
   it('omits an empty build command rather than writing a blank one', () => {
@@ -183,5 +200,123 @@ describe('specsDiffer', () => {
   it('sees a real edit', () => {
     const form = { ...blankForm(), name: 'shop', phpVersion: '8.2' };
     expect(specsDiffer(formToSpec(form), formToSpec({ ...form, phpVersion: '8.3' }))).toBe(true);
+  });
+});
+
+describe('domain suggestions', () => {
+  it('leads with the configured suffix and never repeats one', () => {
+    // The configured suffix is `loc`-based here, which also appears in the
+    // built-in list — offering `shop.loc` twice would look like a bug.
+    expect(domainSuggestions('shop', 'loc')).toEqual([
+      'shop.loc',
+      'shop.test',
+      'shop.localhost',
+      'shop.dev',
+    ]);
+    expect(domainSuggestions('shop', 'stackvo.loc')[0]).toBe('shop.stackvo.loc');
+  });
+
+  it('offers nothing before there is a name to build on', () => {
+    expect(domainSuggestions('', 'loc')).toEqual([]);
+  });
+});
+
+describe('domainAdvice', () => {
+  // `.dev` is a real Google-owned TLD, preloaded into every browser's HSTS
+  // list. A plain-HTTP project there does not warn, it refuses — so the form
+  // has to say so before the project exists, not after.
+  it('flags an HSTS-preloaded TLD only while HTTPS is off', () => {
+    expect(domainAdvice('shop.dev', 'stackvo.loc', false)).toBe('https');
+    expect(domainAdvice('shop.dev', 'stackvo.loc', true)).toBe('certificate');
+  });
+
+  it('flags a domain the wildcard certificate cannot cover', () => {
+    expect(domainAdvice('shop.test', 'stackvo.loc', true)).toBe('certificate');
+    expect(domainAdvice('shop.stackvo.loc', 'stackvo.loc', true)).toBe(null);
+  });
+
+  it('says nothing about an empty domain', () => {
+    expect(domainAdvice('', 'stackvo.loc', true)).toBe(null);
+  });
+});
+
+describe('humaniseField', () => {
+  it('reads a shouted identifier as a sentence', () => {
+    expect(humaniseField('BOOTSTRAP_SERVERS')).toBe('Bootstrap servers');
+    expect(humaniseField('PORT')).toBe('Port');
+  });
+
+  it('survives the empty case rather than producing a stray capital', () => {
+    expect(humaniseField('')).toBe('');
+    expect(humaniseField(null)).toBe('');
+  });
+});
+
+describe('parentDomain', () => {
+  // The real set from a working checkout: three siblings, one three-label
+  // domain that is alone, and four plain ones.
+  const SUFFIX = 'stackvo.loc';
+
+  it('files a subdomain under its parent', () => {
+    expect(parentDomain('parser.ajans.loc', SUFFIX)).toBe('ajans.loc');
+    expect(parentDomain('tracking.ajans.loc', SUFFIX)).toBe('ajans.loc');
+  });
+
+  it('does not file a second-level domain under its TLD', () => {
+    // `l00kout.loc` grouped under `loc` would put every project in one bucket
+    // named after the TLD, which says nothing about any of them.
+    expect(parentDomain('l00kout.loc', SUFFIX)).toBe(null);
+    expect(parentDomain('vue-builder.loc', SUFFIX)).toBe(null);
+  });
+
+  it('refuses the workspace suffix, which every project shares', () => {
+    // Grouping on it produces one group holding everything: no grouping, plus
+    // a row. This is the case a workspace that follows its own suffix hits.
+    expect(parentDomain('shop.stackvo.loc', SUFFIX)).toBe(null);
+    expect(parentDomain('parser.ajans.stackvo.loc', SUFFIX)).toBe('ajans.stackvo.loc');
+  });
+
+  it('survives a missing or malformed domain', () => {
+    expect(parentDomain(undefined, SUFFIX)).toBe(null);
+    expect(parentDomain('', SUFFIX)).toBe(null);
+    expect(parentDomain('shop..loc', SUFFIX)).toBe(null);
+  });
+});
+
+describe('grouping the projects table', () => {
+  /** The key each row hands v-data-table, mirroring what the view computes. */
+  function groupKeys(domains, suffix) {
+    const counts = new Map();
+    for (const d of domains) {
+      const parent = parentDomain(d, suffix);
+      if (parent) counts.set(parent, (counts.get(parent) ?? 0) + 1);
+    }
+    return domains.map((d) => {
+      const parent = parentDomain(d, suffix);
+      return parent && counts.get(parent) > 1 ? parent : null;
+    });
+  }
+
+  it('leaves a project with no siblings ungrouped', () => {
+    // null is the table's own passthrough: it skips the header for a
+    // null-valued group and always flattens its rows. Handing each standalone
+    // project its own key instead made a group of one — and groups start
+    // closed, so with the header suppressed nothing was left to open it and
+    // the row disappeared from the page entirely.
+    const domains = [
+      'api.oxoeashop.loc',
+      'l00kout.loc',
+      'parser.ajans.loc',
+      'tracking.ajans.loc',
+      'vue-builder.loc',
+    ];
+    expect(groupKeys(domains, 'stackvo.loc')).toEqual([null, null, 'ajans.loc', 'ajans.loc', null]);
+  });
+
+  it('shows every project, grouped or not', () => {
+    const domains = ['a.shared.loc', 'b.shared.loc', 'alone.loc', 'x.solo.loc'];
+    const keys = groupKeys(domains, 'stackvo.loc');
+    expect(keys.filter((k) => k === null)).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
   });
 });

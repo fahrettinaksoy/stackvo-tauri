@@ -21,6 +21,7 @@ pub mod logging;
 pub mod mail;
 pub mod manifest;
 pub mod mcp;
+pub mod menu;
 pub mod migrate;
 pub mod paths;
 pub mod phpini;
@@ -32,6 +33,7 @@ pub mod quickcmd;
 pub mod release;
 pub mod runner;
 pub mod scaffold;
+pub mod skeleton;
 pub mod stats;
 pub mod template;
 pub mod tray;
@@ -42,6 +44,13 @@ pub mod workspace;
 pub mod xdebug;
 
 use commands::AppState;
+
+/// The label Tauri gives the window declared in `tauri.conf.json`.
+///
+/// Public because the window event handler compares against it and three other
+/// modules look the window up by it; a second spelling somewhere would make
+/// the guard below quietly stop guarding.
+pub const MAIN_WINDOW: &str = "main";
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -56,7 +65,7 @@ pub fn run() {
         // rival instance: two apps driving the same Docker stack and the same
         // .env would race each other.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
                 let _ = window.show();
                 let _ = window.unminimize();
                 let _ = window.set_focus();
@@ -78,11 +87,41 @@ pub fn run() {
 
             tray::build(&handle)?;
 
+            // Localised from the same preference the tray reads, so the menu
+            // bar does not sit in English beside a Turkish window.
+            let turkish = commands::prefs_get()
+                .ok()
+                .and_then(|p| p.get("language").and_then(|v| v.as_str().map(String::from)))
+                .is_some_and(|l| l == "tr");
+            let labels = if turkish {
+                menu::Labels {
+                    about: "StackVo Hakkında".into(),
+                    docs: "Belgeler".into(),
+                    source: "Kaynak kodu".into(),
+                    issues: "Sorun bildir".into(),
+                }
+            } else {
+                menu::Labels {
+                    about: "About StackVo".into(),
+                    docs: "Documentation".into(),
+                    source: "Source code".into(),
+                    issues: "Report an issue".into(),
+                }
+            };
+            // From the config rather than spelled again here: the menu bar showing a
+            // different name from the bundle is how `stackvo-desktop` ended up in it.
+            let product = app
+                .config()
+                .product_name
+                .clone()
+                .unwrap_or_else(|| "StackVo".to_string());
+            app.set_menu(menu::build(&handle, &labels, &product)?)?;
+
             // `startMinimized` has been in the preference defaults all along
             // and was never read. With a tray that survives a window close, it
             // finally has somewhere to start minimised *to*.
             if commands::start_minimized() {
-                if let Some(window) = app.get_webview_window("main") {
+                if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
                     let _ = window.hide();
                 }
             }
@@ -172,8 +211,23 @@ pub fn run() {
 
             Ok(())
         })
-        .on_menu_event(tray::handle_menu_event)
+        // The app menu and the tray share one callback, so About is offered
+        // the event first and the tray handles what is left.
+        .on_menu_event(|app, event| {
+            if !menu::handle_menu_event(app, &event) {
+                tray::handle_menu_event(app, event);
+            }
+        })
         .on_window_event(|window, event| {
+            // Only the main window. Both arms below act on state that belongs
+            // to it — the close-behaviour flow and the shells it opened — and
+            // both were running for every window: closing the About box asked
+            // whether to stop the stack, and killed the user's terminals on
+            // the way out.
+            if window.label() != MAIN_WINDOW {
+                return;
+            }
+
             match event {
                 // Closing the window used to end the process, which made the
                 // tray pointless: the app built a glanceable status icon and
@@ -219,13 +273,21 @@ pub fn run() {
             commands::preflight,
             commands::preflight_fix,
             commands::doctor,
+            commands::server_config_get,
+            commands::server_config_set,
             commands::env_get,
+            commands::env_defaults,
             commands::env_reveal,
             commands::tunnel_status,
             commands::worker_options,
             commands::worker_status,
             // Phase 2 — mutations
             commands::docker_prune,
+            commands::mail_delete,
+            commands::mail_search,
+            commands::mail_html_check,
+            commands::mail_link_check,
+            commands::mail_attachment_save,
             commands::tunnel_start,
             commands::tunnel_stop,
             commands::worker_start,
@@ -238,6 +300,8 @@ pub fn run() {
             commands::service_start,
             commands::service_stop,
             commands::service_restart,
+            commands::service_settings,
+            commands::service_apply_settings,
             commands::service_enable,
             commands::service_disable,
             commands::container_inspect,
@@ -257,6 +321,7 @@ pub fn run() {
             commands::hosts_plan,
             commands::hosts_apply,
             commands::hosts_missing,
+            commands::hosts_overview,
             // Certificates — the trusted-HTTPS surface the Bash helper had and
             // the app could not see.
             commands::mail_status,
@@ -319,6 +384,8 @@ pub fn run() {
             commands::compose_up_project,
             commands::compose_restart,
             commands::open_in_editor,
+            commands::open_in_browser,
+            commands::open_folder,
             commands::updater_status,
             commands::system_accent,
             commands::logs_info,

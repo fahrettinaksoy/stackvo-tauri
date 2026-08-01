@@ -2,7 +2,6 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useDisplay } from 'vuetify';
-import { openUrl } from '@tauri-apps/plugin-opener';
 import { api } from '@/lib/ipc';
 import { listenAll } from '@/lib/events';
 import SideSheet from '@/components/SideSheet.vue';
@@ -25,7 +24,7 @@ const props = defineProps({
    * The suffix `.env` gives domains. Passed in rather than read again here:
    * the table already resolved it, and two readers of one setting drift.
    */
-  tld: { type: String, default: 'stackvo.loc' },
+  tld: { type: String, default: '' },
   modelValue: { type: Boolean, default: false },
 });
 const emit = defineEmits(['update:modelValue']);
@@ -469,7 +468,7 @@ onUnmounted(() => stopDbEvents?.());
           variant="tonal"
           color="primary"
           class="path-chip"
-          @click="openUrl(`https://${domain}`)"
+          @click="api.openInBrowser(`https://${domain}`)"
         >
           <v-icon start size="small">mdi-web</v-icon>{{ domain }}
         </v-chip>

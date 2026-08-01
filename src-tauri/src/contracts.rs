@@ -167,15 +167,16 @@ mod tests {
     fn the_catalog_is_the_whole_set_of_manageable_services() {
         let schema = env_schema();
 
-        // Sampled from the categories in env.schema.json.
-        for known in ["redis", "mongo-express", "mailhog", "postgres"] {
+        // Sampled from the categories in env.schema.json. Both catchers are
+        // real services — Mailpit the default, MailHog kept by decision.
+        for known in ["redis", "mongo-express", "mailhog", "mailpit", "postgres"] {
             assert!(schema.knows_service(known), "{known} is in the catalog");
         }
 
         // Near-misses are the realistic failure — each of these is the name a
         // caller would plausibly use, and each would write a
         // SERVICE_<JUNK>_ENABLE key into the user's .env that nothing reads.
-        for unknown in ["postgresql", "mailpit", "mongodb", "", "_note", "redis "] {
+        for unknown in ["postgresql", "mailspit", "mongodb", "", "_note", "redis "] {
             assert!(
                 !schema.knows_service(unknown),
                 "{unknown:?} must not be treated as a service"
@@ -210,9 +211,12 @@ mod tests {
     }
 
     #[test]
-    fn service_catalog_has_twenty_entries() {
-        // 20 templates on disk; README's "40+" and "14" are both wrong (C-17).
-        assert_eq!(env_schema().service_catalog().len(), 20);
+    fn service_catalog_has_twenty_one_entries() {
+        // 21 templates on disk: both mail catchers ship — Mailpit as the
+        // default, MailHog kept by explicit decision for stacks that already
+        // run it. (The original count's README claims of "40+" and "14" were
+        // both wrong, C-17.)
+        assert_eq!(env_schema().service_catalog().len(), 21);
     }
 
     #[test]

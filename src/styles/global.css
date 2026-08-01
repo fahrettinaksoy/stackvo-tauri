@@ -82,6 +82,15 @@
 :root .v-field--variant-outlined .v-field__outline__start {
   border-start-start-radius: var(--app-radius) !important;
   border-end-start-radius: var(--app-radius) !important;
+
+  /* And the cap has to be wide enough to draw it. Vuetify sizes the two ends
+     differently — `flex: 0 0 12px` for this one, `flex: 1` for the other — so
+     the same radius reads as a gentle corner on the right and eats the whole
+     width on the left, which is the "the left side is rounder" this rule
+     exists to fix. Vuetify does the same widening for its own `rounded-*`
+     classes; overriding the radius without it is what left the two mismatched.
+     `max` so a small radius never makes the cap narrower than Vuetify's own. */
+  flex-basis: max(12px, var(--app-radius)) !important;
 }
 
 :root .v-field--variant-outlined .v-field__outline__end {
@@ -137,6 +146,21 @@
 :root .v-btn-group--vertical .v-btn:last-child {
   border-end-start-radius: inherit !important;
   border-end-end-radius: inherit !important;
+}
+
+/* Expansion panels asked to be rounded.
+ *
+ * `rounded` is the component's own prop and it reaches each panel as a
+ * `rounded-*` class — but the accordion variant then squares everything
+ * between the ends with
+ * `> :not(:first-child):not(:last-child) { border-radius: 0 !important }`,
+ * which outranks the class. The newer `gap` prop is the upstream answer and is
+ * not in the installed version, so this restores what `rounded` asked for and
+ * nothing else: a group with no `rounded` keeps Vuetify's joined stack.
+ *
+ * The title inherits, so the panel carries its whole header. */
+:root .v-expansion-panels--variant-accordion > .v-expansion-panel[class*='rounded-'] {
+  border-radius: var(--app-radius) !important;
 }
 
 /* An explicit shape outranks the setting.

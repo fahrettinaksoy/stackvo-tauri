@@ -13,6 +13,13 @@ defineProps({
   topSubtitle: { type: String, default: '' },
   barTitle: { type: String, default: '' },
   hideBar: { type: Boolean, default: false },
+  /**
+   * Blend the bar into the card: transparent background AND no divider under
+   * it. One prop for both because they are one decision — a transparent bar
+   * over a hairline reads as a floating line, which is the opposite of the
+   * borderless look the flag exists for.
+   */
+  barTransparent: { type: Boolean, default: false },
 });
 </script>
 
@@ -22,8 +29,15 @@ defineProps({
       <!-- Pinned to the default density: the card below is pulled up over this
            toolbar by a fixed amount, so letting the interface-density setting
            shrink it slides the title under the card. Density belongs to the
-           controls, not to the page's own geometry. -->
-      <v-toolbar color="primary" height="100" extended flat density="default">
+           controls, not to the page's own geometry.
+           
+           `extension-height` matches the card's `mt-n16` (64px) on purpose.
+           The title is centred in the 100px band, so the blue above it is
+           `(100 - title) / 2`; below it that same gap is reduced by however
+           much the card is pulled up past the extension. At Vuetify's default
+           48 the card ate 16px more than the extension gave back, and the
+           header sat visibly low in its own band. -->
+      <v-toolbar color="primary" height="100" extended extension-height="64" flat density="default">
         <v-toolbar-title class="page-title">
           <v-icon size="40" class="mr-3">{{ topIcon }}</v-icon>
           <div class="d-flex flex-column justify-center">
@@ -42,7 +56,7 @@ defineProps({
 
       <v-card elevation="2" class="inner-card d-flex flex-column mx-5 mt-n16 mb-4">
         <template v-if="!hideBar">
-          <v-toolbar>
+          <v-toolbar :color="barTransparent ? 'transparent' : undefined">
             <!-- A view with tabs puts them here instead of a title. The page
                  name is already in the toolbar above, so repeating it and then
                  stacking a tab strip underneath costs a row to say nothing. -->
@@ -53,7 +67,7 @@ defineProps({
               <slot name="bar-append" />
             </template>
           </v-toolbar>
-          <v-divider />
+          <v-divider v-if="!barTransparent" />
         </template>
 
         <div class="layout-body d-flex flex-column">

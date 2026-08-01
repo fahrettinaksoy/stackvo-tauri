@@ -81,9 +81,7 @@ const IMAGE_TO_SERVICE: [(&str, &str); 20] = [
     ("kibana", "kibana"),
     ("grafana", "grafana"),
     ("mailhog", "mailhog"),
-    // Mailpit is what most projects have moved to; StackVo's catalog entry is
-    // still called mailhog, and the in-app inbox already speaks both APIs.
-    ("mailpit", "mailhog"),
+    ("mailpit", "mailpit"),
     ("phpmyadmin", "phpmyadmin"),
     ("adminer", "adminer"),
     ("pgadmin4", "pgadmin"),

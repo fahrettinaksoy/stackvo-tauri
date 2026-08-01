@@ -107,8 +107,13 @@ pub fn apply(root: &Path, patch: &BTreeMap<String, String>) -> Result<()> {
     let _serialised = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let path = root.join(".env");
-    let original = std::fs::read_to_string(&path)
-        .map_err(|e| Error::io(format!("reading {}", path.display()), e))?;
+    // Absent means nothing has been overridden yet, so the patch starts from
+    // an empty file and this write is what brings it into existence.
+    let original = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(Error::io(format!("reading {}", path.display()), e)),
+    };
 
     let updated = patch_text(&original, patch);
     if updated == original {

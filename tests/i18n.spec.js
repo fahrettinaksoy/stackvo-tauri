@@ -133,12 +133,15 @@ describe('unused translations', () => {
     const defined = flatten(en);
 
     // Reached through a template literal: the whole prefix stays live. `tc` is
-    // included for the same reason as above — a key reached as
+    // included for the same reason as above, and `te` because asking whether a
+    // translation exists is how a namespace with a fallback is read — the
+    // fields under `serviceSettings.fields` are looked up that way, and
+    // without it every one of them reads as dead. A key reached as
     // ``tc(`logs.level.${level}`)`` is reached, and the literal form of that
     // same call was already being counted through `indirect` below, so leaving
     // the template form out reported live keys as dead.
     const prefixes = [
-      ...allSource.matchAll(/(?<![\w$.])\$?tc?\(\s*`([a-zA-Z0-9_.]+)\.\$\{/g),
+      ...allSource.matchAll(/(?<![\w$.])\$?t[ce]?\(\s*`([a-zA-Z0-9_.]+)\.\$\{/g),
     ].map((m) => m[1]);
 
     // Held as a plain string and passed to t() later.

@@ -78,7 +78,10 @@ export const api = {
   servicesList: () => call('services_list'),
 
   catalogGet: () => call('catalog_get'),
+  serverConfigGet: (server) => call('server_config_get', { server }),
+  serverConfigSet: (server, content) => call('server_config_set', { server, content }),
   envGet: () => call('env_get'),
+  envDefaults: () => call('env_defaults'),
   /** One secret, unmasked, on explicit request. See `env_reveal` in Rust. */
   envReveal: (key) => call('env_reveal', { key }),
 
@@ -92,6 +95,8 @@ export const api = {
   serviceStart: (name) => call('service_start', { name }),
   serviceStop: (name) => call('service_stop', { name }),
   serviceRestart: (name) => call('service_restart', { name }),
+  serviceSettings: (name) => call('service_settings', { name }),
+  serviceApplySettings: (name, patch) => call('service_apply_settings', { name, patch }),
   serviceEnable: (name) => call('service_enable', { name }),
   serviceDisable: (name) => call('service_disable', { name }),
 
@@ -131,6 +136,7 @@ export const api = {
   hostsPlan: (add = [], remove = []) => call('hosts_plan', { add, remove }),
   hostsApply: (add = [], remove = []) => call('hosts_apply', { add, remove }),
   hostsMissing: () => call('hosts_missing'),
+  hostsOverview: () => call('hosts_overview'),
 
   // --- Mail -----------------------------------------------------------------
   // Read in Rust, not here: the CSP allows `connect-src 'self' ipc:`, and
@@ -139,6 +145,14 @@ export const api = {
   mailMessages: (limit = 50) => call('mail_messages', { limit }),
   mailMessage: (id) => call('mail_message', { id }),
   mailClear: () => call('mail_clear'),
+  mailDelete: (id) => call('mail_delete', { id }),
+  /** Server-side search; Mailpit's own query syntax reaches it verbatim. */
+  mailSearch: (query, limit = 100) => call('mail_search', { query, limit }),
+  /** Client-compatibility report for the message's HTML. Null on MailHog. */
+  mailHtmlCheck: (id) => call('mail_html_check', { id }),
+  /** Follows every link — this one leaves the machine, so it is on demand. */
+  mailLinkCheck: (id) => call('mail_link_check', { id }),
+  mailAttachmentSave: (id, partId, path) => call('mail_attachment_save', { id, partId, path }),
 
   // --- Databases ------------------------------------------------------------
   dbTargets: () => call('db_targets'),
@@ -257,7 +271,9 @@ export const api = {
   /** Folders under projects/ with no stackvo.json — real code, unmanaged. */
   projectAdoptable: () => call('project_adoptable'),
   /** Writes the manifest for a directory that is already there. */
-  projectAdopt: (name, spec = null) => call('project_adopt', { name, spec }),
+  /** `domain` overrides only the domain; everything else still comes from
+   *  detection over what is on disk. */
+  projectAdopt: (name, spec = null, domain = null) => call('project_adopt', { name, spec, domain }),
   projectManifestRead: (name) => call('project_manifest_read', { name }),
   projectManifestWrite: (name, manifest) => call('project_manifest_write', { name, manifest }),
 
@@ -280,20 +296,15 @@ export const api = {
   composeRestart: () => call('compose_restart'),
 
   openInEditor: (path) => call('open_in_editor', { path }),
+  /** Opens in the browser chosen in Settings, or the system default. */
+  openInBrowser: (url) => call('open_in_browser', { url }),
+  openFolder: (path) => call('open_folder', { path }),
   prefsGet: () => call('prefs_get'),
   prefsSet: (patch) => call('prefs_set', { patch }),
-  /** Renders every generated file with the Rust port and diffs it against the
-   *  Bash output. readyToTakeOver is the gate for the migration. */
+  /** Renders every generated file and diffs it against the disk — a drift
+   *  check, now that the Rust generator is the only writer. */
   generatorVerify: () => call('generator_verify'),
-  /**
-   * Generate with a chosen engine.
-   *   'bash'   — what StackVo does today (default)
-   *   'verify' — bash writes, the Rust port is compared against it
-   *   'rust'   — refuses to write unless the two agree byte-for-byte
-   */
-  generateWith: (scope = 'all', engineMode = 'bash') =>
-    call('generate_with', { scope, engineMode }),
-  /** Runs the Rust generator port; matchesBashOutput is the live differential. */
+  /** Renders one project's Dockerfile without writing it. */
   projectDockerfilePreview: (name, strict = true) =>
     call('project_dockerfile_preview', { name, strict }),
 

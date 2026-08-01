@@ -67,5 +67,5 @@ those files are user-authored source.
 - **Whether the Bash generator becomes a bundled sidecar or gets ported to Rust.** The contract is
   written so either choice works; that is the point. The manifests and `.env` mean the same thing
   regardless of which binary reads them.
-- **Whether the containerised UI keeps shipping.** `STACKVO_UI_ENABLE` stays in the contract so both
-  front ends can coexist during the transition.
+- **Whether the containerised UI keeps shipping.** Settled: it does not. `STACKVO_UI_ENABLE` is
+  recorded as dead — the desktop app is the only front end, and the skeleton ships no `core/ui`.

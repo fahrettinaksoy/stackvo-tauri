@@ -29,6 +29,38 @@ pub fn emit<P: Serialize + Clone>(app: &AppHandle, event: &str, payload: P) {
     let _ = app.emit(event, payload);
 }
 
+/// Where an operation's progress goes.
+///
+/// Operations were welded to `AppHandle`, which made every one of them
+/// unreachable from anything without a window — the MCP stdio server above
+/// all. The split is the observation that events were only ever *progress
+/// reporting*: `run_operation` awaits the process to completion and returns a
+/// `Result`, so a caller with no window loses nothing by dropping the
+/// play-by-play — it reads the outcome from the return value, exactly as an
+/// MCP client wants to.
+#[derive(Clone)]
+pub enum Sink {
+    /// The desktop window: progress reaches the webview as before.
+    App(AppHandle),
+    /// No window — the MCP server or a headless example. Progress is dropped;
+    /// the operation's `Result` is the report.
+    Headless,
+}
+
+impl Sink {
+    pub fn emit<P: Serialize + Clone>(&self, event: &str, payload: P) {
+        if let Sink::App(app) = self {
+            let _ = app.emit(event, payload);
+        }
+    }
+}
+
+/// The window-backed sink, spelled as a helper so thirteen call sites read
+/// `&events::sink(app)` rather than each constructing the variant.
+pub fn sink(app: &AppHandle) -> Sink {
+    Sink::App(app.clone())
+}
+
 // ---------------------------------------------------------------- payloads
 
 #[derive(Debug, Clone, Serialize)]
@@ -106,6 +138,10 @@ pub struct LogLineEvent {
     /// what it emitted before the fanout existed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// True for the fanout's seed — lines already in the file when the tail
+    /// started. Omitted elsewhere, for the same byte-identity reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub historic: Option<bool>,
 }
 
 /// Which side of a container/service lifecycle transition an event describes.

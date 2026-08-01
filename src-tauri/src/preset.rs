@@ -80,12 +80,17 @@ pub const VERSION: u32 = 1;
 /// Ports and paths are excluded on purpose; they are properties of one
 /// developer's machine, and importing somebody else's is how two people end up
 /// fighting over 3306.
+///
+/// Spelled with the names the code actually reads. Three of these were the
+/// older spellings — `DEFAULT_PHP_VERSION` and two that no `.env` has carried
+/// for some time — so a preset carried values the receiving app then ignored.
+/// A preset that quietly does less than it says is worse than a smaller one.
 pub const SHAREABLE: [&str; 5] = [
     "DEFAULT_TLD_SUFFIX",
     "SSL_ENABLE",
-    "DEFAULT_PHP_VERSION",
-    "DEFAULT_NODE_VERSION",
-    "DEFAULT_WEBSERVER",
+    "SUPPORTED_LANGUAGES_PHP_DEFAULT",
+    "SUPPORTED_LANGUAGES_NODEJS_DEFAULT",
+    "SUPPORTED_SERVERS_DEFAULT",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -464,7 +469,23 @@ GRAFANA_ADMIN_TOKEN=tok_live_abcdef
         let keys: Vec<&str> = preset.settings.keys().map(String::as_str).collect();
         assert_eq!(
             keys,
-            ["DEFAULT_PHP_VERSION", "DEFAULT_TLD_SUFFIX", "SSL_ENABLE"]
+            [
+                "DEFAULT_TLD_SUFFIX",
+                "SSL_ENABLE",
+                "SUPPORTED_LANGUAGES_NODEJS_DEFAULT",
+                "SUPPORTED_LANGUAGES_PHP_DEFAULT",
+                "SUPPORTED_SERVERS_DEFAULT",
+            ]
+        );
+
+        // All five travel even when the sender never wrote them down, because
+        // they now have defaults in the binary. That is the useful behaviour
+        // for a preset: it reproduces the stack the sender actually ran, not
+        // whatever the receiving build happens to default to — which is the
+        // difference the preset exists to close.
+        assert_eq!(
+            preset.settings["SUPPORTED_LANGUAGES_PHP_DEFAULT"], "8.2",
+            "the legacy spelling in the fixture should carry forward"
         );
     }
 

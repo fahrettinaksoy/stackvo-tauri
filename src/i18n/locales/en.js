@@ -41,6 +41,7 @@ export default {
     projects: 'Projects',
     services: 'Services',
     logs: 'Logs',
+    mail: 'Mail',
     settings: 'Settings',
     collapse: 'Collapse',
     expand: 'Expand',
@@ -157,6 +158,9 @@ export default {
   },
 
   projectDetail: {
+    subtitle: 'One project: what it is running, what it is built from, and what it is doing now.',
+    debug: 'Debugging',
+    runtime: 'Runtime settings',
     title: 'Project Details',
     back: 'Back',
     indicator: 'Indicator',
@@ -195,7 +199,6 @@ export default {
   },
 
   workspace: {
-    title: 'StackVo directory',
     none: 'No StackVo directory selected yet.',
     change: 'Change',
     source: {
@@ -258,6 +261,11 @@ export default {
     unmetDependency: 'Unmet dependency',
   },
 
+  console: {
+    doneToast: '{operation} finished — {duration}',
+    failedToast: '{operation} failed — the console has the output',
+  },
+
   preflight: {
     title: 'StackVo is not ready to run',
     subtitle: '{count} requirements are not met. The app opens once they are.',
@@ -266,11 +274,15 @@ export default {
 
     workspace: 'StackVo directory',
     workspaceHint: {
-      macos: 'Choose the folder that contains core/cli/stackvo.sh and projects/.',
-      linux: 'Choose the folder that contains core/cli/stackvo.sh and projects/.',
-      windows: 'Choose the folder that contains core/cli/stackvo.sh and projects/.',
+      macos:
+        'Choose an empty folder — StackVo sets it up on first use — or one it already manages.',
+      linux:
+        'Choose an empty folder — StackVo sets it up on first use — or one it already manages.',
+      windows:
+        'Choose an empty folder — StackVo sets it up on first use — or one it already manages.',
     },
     workspaceAction: 'Choose folder',
+    workspaceInstalled: 'Set up {path} — templates, .env and the project tree are in place.',
 
     engine: 'Docker engine',
     engineHint: {
@@ -305,15 +317,6 @@ export default {
       windows: 'Projects live under this folder; it is not there yet.',
     },
     projectsAction: 'Create',
-
-    bash: 'Bash',
-    bashHint: {
-      macos:
-        'The generator is the core/cli/stackvo.sh script; without bash nothing can be generated.',
-      linux: 'The generator is the core/cli/stackvo.sh script; install the bash package.',
-      windows:
-        'The generator is the core/cli/stackvo.sh script. Windows needs WSL or Git Bash on the PATH.',
-    },
 
     mkcert: 'mkcert',
     mkcertHint: {
@@ -353,12 +356,46 @@ export default {
     apply: 'Import',
   },
   mail: {
+    subtitle: 'Mail your projects sent, caught before it left the machine.',
     inbox: 'Inbox',
+    title: 'Mail',
+    unread: '{n} unread',
+    select: 'Select a message to read it.',
+    fromLabel: 'From',
+    toLabel: 'To',
+    replyToLabel: 'Reply-To',
+    offHeadline: 'The mail catcher is off',
+    stoppedHeadline: 'The mail catcher is stopped',
+    emptyHeadline: 'No mail yet',
+    preview: 'Preview',
+    text: 'Text',
+    source: 'Source',
+    headersTab: 'Headers',
+    attachmentsTab: 'Attachments',
+    compatTab: 'Compatibility',
+    linksTab: 'Links',
+    save: 'Save',
+    searchPlaceholder: 'Search — from:a@b.c subject:"invoice"',
+    matching: '{n} matching',
+    compatSupported: 'fully supported across {n} mail-client features',
+    compatLegend: 'Green fully supported · amber partial · red unsupported.',
+    compatWarning: '{category} · appears {found}×',
+    compatClean: 'Nothing in this markup is unsupported anywhere tested.',
+    checkLinks: 'Check links',
+    linksHint: 'Fetches every link in the message — this leaves your machine.',
+    noLinks: 'No links in this message.',
+    enablePrompt:
+      'The mail service is not enabled. Captured mail appears here as your app sends it — enable it now?',
+    enableAction: 'Enable {service}',
+    startAction: 'Start {service}',
+    enabling:
+      'Enabling — writing .env, regenerating, and starting the container. The first run downloads the image, so give it a minute.',
     count: '{n} captured',
     empty: 'Nothing has been sent yet.',
     noSubject: '(no subject)',
     notRunning: 'The mail catcher is not running, so nothing is being captured.',
     clear: 'Empty inbox',
+    deleteOne: 'Delete this message',
     confirmClear:
       'This deletes every captured message. A mail catcher is a bin, so there is no backup.',
   },
@@ -394,8 +431,6 @@ export default {
       'Note: `stackvo up` from the command line does not layer this configuration, and will recreate the container without it.',
   },
   stackPreset: {
-    title: 'Stack preset',
-    sectionDesc: 'Share which services this stack runs, without sharing its secrets.',
     export: 'Export this stack',
     exportDesc:
       'Writes which services are enabled and at which versions to a small JSON file, safe to commit. Passwords are not in it — the format has nowhere to put them.',
@@ -491,7 +526,6 @@ export default {
       'The commands you run in this project, without opening a terminal and remembering the container name. Only what the project has the files for is offered.',
     because: 'from {file}',
     opensTerminal: 'opens a terminal',
-    run: 'Run',
     needsRunning: 'These run inside the project’s container. Start it first.',
     none: 'No artisan, composer.json, package.json or wp-config.php here, so there is nothing to offer.',
   },
@@ -576,7 +610,130 @@ export default {
     notReloaded:
       'The certificate was reissued, but the proxy is still serving the previous one. Restart the stack, or run generate, to pick it up.',
   },
+  serviceSettings: {
+    pick: 'Pick a service',
+    title: 'Services',
+    sectionDesc: 'Each service’s own .env settings.',
+    desc: 'Pick a service to edit what it is configured with. Applying rebuilds its container, because a running one keeps the environment it was created with.',
+    all: 'All',
+    fields: {
+      VERSION: 'Version',
+      URL: 'Subdomain',
+      HOST_PORT: 'Host port',
+      PORT: 'Port',
+      HOST: 'Host',
+      DATABASE: 'Database',
+      DB: 'Database',
+      USER: 'Username',
+      PASSWORD: 'Password',
+      ROOT_PASSWORD: 'Root password',
+      ADMIN_USER: 'Admin username',
+      ADMIN_USERNAME: 'Admin username',
+      ADMIN_PASSWORD: 'Admin password',
+      ADMIN_PASS: 'Admin password',
+      DEFAULT_USER: 'Default user',
+      DEFAULT_PASS: 'Default password',
+      DEFAULT_PASSWORD: 'Default password',
+      DEFAULT_EMAIL: 'Default email',
+      BASICAUTH_USERNAME: 'Basic auth username',
+      BASICAUTH_PASSWORD: 'Basic auth password',
+      INITDB_ROOT_USERNAME: 'Initial root username',
+      INITDB_ROOT_PASSWORD: 'Initial root password',
+      UPLOAD_LIMIT: 'Upload limit',
+      CLUSTER_NAME: 'Cluster name',
+    },
+    categories: {
+      databases: 'Databases',
+      cache: 'Cache',
+      queue: 'Queues',
+      search: 'Search',
+      monitoring: 'Monitoring',
+      devtools: 'Developer tools',
+      adminUis: 'Admin UIs',
+    },
+    off: 'Off',
+    empty: 'No services in this category.',
+    none: 'This service has no settings of its own.',
+    default: 'default',
+    reveal: 'Reveal',
+    hide: 'Hide',
+    showKey: 'Show the .env key ({key})',
+    apply: 'Apply and rebuild',
+    confirmTitle: 'Rebuild the container?',
+    confirmBody:
+      'Saving these is not enough on its own: {service} is running with the environment it was created with, so its container will be stopped and recreated with the new values.',
+    confirmApply: 'Apply',
+  },
+  about: {
+    tagline: 'Local development environments, managed as a stack.',
+    system: 'System information',
+    systemDesc: 'What a bug report needs. Copy it rather than retyping it.',
+    appVersion: 'StackVo',
+    os: 'Operating system',
+    docker: 'Docker',
+    context: 'Docker context',
+    workspace: 'Workspace',
+    copy: 'Copy',
+    copied: 'Copied',
+    resources: 'Resources',
+    resourcesDesc: 'Opens in your browser.',
+    links: {
+      docs: 'Documentation',
+      source: 'Source code',
+      issues: 'Report an issue',
+      sponsor: 'Buy me a coffee',
+    },
+    copyright: 'MIT licensed · © 2026 Fahrettin Aksoy',
+  },
   settings: {
+    servers: {
+      gzipTypesHint: 'Space-separated MIME types. Empty leaves nginx’s own list.',
+      field: {
+        SERVER_MAX_BODY_SIZE: 'Max body size',
+        SERVER_CLIENT_BODY_TIMEOUT: 'Client body timeout',
+        SERVER_KEEPALIVE_TIMEOUT: 'KeepAlive timeout',
+        SERVER_FASTCGI_CONNECT_TIMEOUT: 'FastCGI connect timeout',
+        SERVER_FASTCGI_SEND_TIMEOUT: 'FastCGI send timeout',
+        SERVER_FASTCGI_TIMEOUT: 'FastCGI read timeout',
+        SERVER_TCP_NODELAY: 'TCP nodelay',
+        SERVER_GZIP: 'Gzip',
+        SERVER_GZIP_COMP_LEVEL: 'Gzip level',
+        SERVER_GZIP_TYPES: 'Gzip types',
+      },
+      extra: 'Extra directives',
+      extraDesc:
+        'Added to every generated config for this server. Comments and blank lines are dropped, so a file of nothing but notes changes nothing.',
+      extraPlaceholder: 'client_body_timeout 120s;',
+      extraHint: '{{ VAR }} is substituted from .env. Takes effect on the next generate.',
+      title: 'Web servers',
+      desc: 'What the server in front of PHP will accept.',
+      limits: 'Request limits',
+      limitsDesc:
+        'Written into the generated server config. Left at the default, nothing is written at all.',
+      sizeInvalid: 'A number, optionally followed by k, m or g.',
+      secondsInvalid: 'Whole seconds.',
+      phpNote:
+        'An upload is refused by whichever limit is lowest. PHP has its own — upload_max_filesize, post_max_size and memory_limit — and those are per project, under the project’s PHP settings.',
+      applies: 'Where this applies',
+      appliesDesc: 'Not every server is configured through a file.',
+      supportNote:
+        'Apache is configured inside its own Dockerfile and Swoole by an inline script, so neither takes these directives.',
+    },
+    defaults: {
+      title: 'Project defaults',
+      desc: 'What a new project starts with, whichever runtime it uses.',
+      runtimes: 'Runtime versions',
+      php: 'PHP and web server',
+      phpTools: 'PHP build',
+    },
+    workspaceAndControl: 'Directory and control',
+    workspaceAndControlDesc: 'Where this stack lives, how it is run, and how it is shared.',
+    groups: {
+      app: 'Application',
+      workspace: 'Workspace',
+      stack: 'Stack',
+      help: 'Help',
+    },
     subtitle: 'Application preferences',
 
     // Appearance section.
@@ -645,12 +802,9 @@ export default {
     rtlHint: 'Mirrors every component; for trying Arabic and Hebrew layouts.',
 
     // Section descriptions: what each pane is for, said once on entry.
-    workspaceDesc: 'The StackVo checkout being managed, and the Docker engine behind it.',
     preferencesDesc: 'Appearance, language, external apps and close behaviour.',
-    stackDesc: 'Generation and container management at the compose level.',
     certificates: 'Certificates',
     certificatesDesc: 'The HTTPS certificate, the domains it covers and the CA behind it.',
-    envFileDesc: 'Edit the .env values the stack reads, in place.',
     aboutDesc: 'Version, signed updates and diagnostics.',
 
     // Groups.
@@ -667,11 +821,82 @@ export default {
 
     theme: 'Theme',
     language: 'Language',
-    envFile: '.env file',
-    envVars: 'Variables',
     preferences: 'Preferences',
-    stack: 'Stack control',
     stackSub: 'Compose level: regenerates and recreates containers.',
+    runtimes: {
+      desc: 'The version a new project starts on, per runtime. Which versions exist is the app’s own catalog, not a setting.',
+    },
+    php: {
+      versionDesc:
+        'What a new PHP project starts with. Existing projects keep the version recorded in their own stackvo.json.',
+      version: 'PHP version',
+      versionHint: 'Preselected in the new-project form; each project can still choose its own.',
+      server: 'Web server',
+      serverHint: 'Serves PHP projects. Other runtimes run their own dev server instead.',
+      composer: 'Composer version',
+      composerHint:
+        'Installed into the PHP image. "latest" tracks the current release at build time.',
+      nodejs: 'Node.js version',
+      nodejsHint:
+        'For asset builds inside the PHP container — separate from a Node project runtime.',
+    },
+    shape: {
+      title: 'Domain and network',
+      sectionDesc: 'Where projects are addressed and how they are served.',
+      suffixRequired: 'A suffix is required; routes are built from it.',
+      suffixInvalid: 'Letters, digits, dots and hyphens only, starting and ending with one.',
+      network: 'Docker network',
+      networkHint:
+        'The network every service joins. Renaming it recreates containers on the next up.',
+      networkRequired: 'A network name is required.',
+      networkInvalid: 'Letters, digits, dots, hyphens and underscores only.',
+      reset: 'Back to the default',
+      addressTitle: 'Addresses',
+      addressDesc:
+        'Where projects and services answer. Every hostname sits under this suffix, which is what lets one certificate cover them all.',
+      suffixLabel: 'Namespace',
+      suffixLabelHint:
+        'Groups every address under one parent. Optional — leave it empty to use the TLD alone.',
+      suffixTld: 'Extension',
+      suffixTldHint:
+        '.test and .localhost are reserved for local use. .dev is a real TLD and needs HTTPS.',
+      preview: 'Addresses become:',
+      suffixHsts:
+        'This extension is on the browsers’ HSTS preload list: nothing under it loads over plain HTTP, with no way to click through. Turn on HTTPS below before using it.',
+      networkTitle: 'Network and TLS',
+      networkGroupDesc:
+        'Which Docker network services share, and whether they are served over HTTPS.',
+      thenRegenerate:
+        'Saved. Regenerate so the routing labels pick this up — until then the stack still answers on the old ones.',
+      thenCertificates:
+        'A new suffix needs its own certificate; check the Certificates pane afterwards. Existing projects keep the domain recorded in their own stackvo.json.',
+      regenerate: 'Regenerate',
+      ssl: 'Serve over HTTPS',
+      sslHint: 'Issues and mounts local certificates for the domain suffix above.',
+      sslOffBreaksRouting:
+        'With HTTPS off, no HTTPS entry point is generated — but every route still targets it, so no project or service domain will resolve until it is back on.',
+      proxyTitle: 'Reverse proxy',
+      proxyDesc:
+        'Traefik. Every project and admin UI is reached through it, and it terminates TLS — which is what the HTTPS switch above turns on.',
+      proxyPorts: 'Published ports',
+      proxyDashboard: 'Open the dashboard',
+      hostsTitle: 'Hosts file',
+      hostsDesc:
+        'Every domain here is resolved by name, so each needs a line in /etc/hosts. Changing it asks for your password.',
+      hostsFix: 'Fix all',
+      hostsOk: 'All resolved',
+      hostsManual: 'added by hand',
+      hostsStale: 'Written by StackVo and no longer needed — removed by the same button:',
+      redirect: 'Redirect HTTP to HTTPS',
+      redirectHint: 'Plain requests are answered with a redirect instead of the site.',
+      redirectBlocked: 'Needs HTTPS on — redirecting to a scheme that is off leads nowhere.',
+      phpDesc:
+        'What a new PHP container is built with. Changing these affects projects generated from now on.',
+      tools: 'Tools',
+      toolsHint: 'Installed alongside PHP. Type to add, click the cross to remove.',
+      apt: 'System packages',
+      aptHint: 'Installed with apt inside the container.',
+    },
     about: 'About',
     diagnostics: 'Diagnostics',
     diagnosticsHint: 'Attach this folder when reporting a problem.',
@@ -688,23 +913,19 @@ export default {
     updaterUnconfigured:
       'This build cannot verify updates: it has no public key compiled in. Update checks stay off until the release signing key is configured.',
     updateSigned: 'The bundle signature is verified against the key compiled into this build.',
-    generator: 'Rust generator (running alongside)',
-    engineMode: 'Generator engine',
-    engineBash: 'Bash (what StackVo does today)',
-    engineVerify: 'Bash, verified against Rust',
-    engineRust: 'Rust (refuses to write on a mismatch)',
-    generatorReady: 'identical to the Bash output',
-    generatorDiffers: 'diverges — not ready to take over',
+    generator: 'Generator (drift check)',
+    generatorReady: 'the disk matches what the generator writes',
+    generatorDiffers: 'drift — a generated file was changed by hand or is stale',
     themeSystem: 'System',
     themeLight: 'Light',
     themeDark: 'Dark',
     terminalApp: 'Terminal',
     editorApp: 'Code editor',
+    browserApp: 'Browser',
+    browserAppHint: 'Used by every “visit” button — project and service domains open here.',
     appsHint: 'Applications that are not installed cannot be selected.',
     startMinimized: 'Start minimized to tray',
     autostart: 'Start at login',
-    envEditable: 'Editable. Comments and layout are preserved.',
-    secretHint: 'Secret value — not editable here',
     save: 'Save {count} change(s)',
     saved: 'Saved',
   },
@@ -713,6 +934,7 @@ export default {
     copy: 'Copy to clipboard',
     moreActions: 'More actions',
     followOutput: 'Follow output',
+    stopFollowing: 'Stop following output',
     toggleConsole: 'Toggle console',
     close: 'Close',
   },
@@ -732,10 +954,16 @@ export default {
     live: 'live',
     openInEditor: 'Open this file in the editor',
     waiting: 'Waiting for output…',
+    liveFrom: 'live from here',
+    regex: 'Regular expression',
+    pause: 'Pause',
+    resume: 'Resume',
+    resumeHint: 'Resume — {n} line(s) held',
+    clear: 'Clear',
+    clearHint: 'Clear the view — nothing is deleted from disk',
     containerStream: 'Container output',
     // The cross-project tail. Live only, so an empty pane is its opening state
     // and not a fault — the wording has to say that outright.
-    all: 'All projects',
     allDescription:
       'A live tail across every project. Only output written from now on appears here — open a project to read the history of one file.',
     allProjects: 'Every project',
@@ -878,21 +1106,63 @@ export default {
   newProject: {
     nameHint: 'Starts with a letter or digit; dash, underscore and dot allowed (e.g. api.myapp).',
     domainHint: 'Generated from the project name when left empty.',
+    domain_https:
+      "This TLD is on the browsers' HSTS preload list: it only loads over HTTPS, with no way to click through. Turn on HTTPS in Settings first.",
+    domain_certificate:
+      'Outside the configured suffix, so the wildcard certificate does not cover it — reissue certificates after creating the project.',
     documentRootHint: 'Path relative to the project root.',
     portHint: 'The port the app listens on inside the container.',
     sectionProject: 'Project',
     sectionPhp: 'PHP configuration',
     sectionNode: 'Node configuration',
+    sectionLang: '{runtime} configuration',
+    langVersion: 'Version',
+    optionalStep: 'Optional — clear it to skip this step.',
+    langBindHint: 'Must listen on 0.0.0.0 and the port above; Traefik proxies to it.',
     title: 'New project',
     name: 'Project name',
     template: 'Start from',
     templates: {
-      empty: 'Empty project (configure below)',
-      laravel: 'Laravel (composer create-project)',
-      wordpress: 'WordPress (wp core download)',
-      symfony: 'Symfony (composer create-project)',
-      nextjs: 'Next.js (create-next-app)',
+      empty: 'Empty project',
+      laravel: 'Laravel',
+      wordpress: 'WordPress',
+      symfony: 'Symfony',
+      nextjs: 'Next.js',
+      nuxt: 'Nuxt',
+      vue: 'Vue (Vite)',
+      react: 'React (Vite)',
+      svelte: 'SvelteKit',
+      astro: 'Astro',
+      cakephp: 'CakePHP',
+      yii: 'Yii 2',
+      codeigniter: 'CodeIgniter 4',
+      laminas: 'Laminas (Zend)',
+      drupal: 'Drupal',
+      prestashop: 'PrestaShop',
+      django: 'Django',
+      rails: 'Ruby on Rails',
+      slim: 'Slim',
+      nest: 'NestJS',
+      tina: 'TinaCMS',
+      angular: 'Angular',
+      typo3: 'TYPO3',
+      gin: 'Gin',
+      echo: 'Echo',
+      flask: 'Flask',
+      fastapi: 'FastAPI',
+      sinatra: 'Sinatra',
+      rocket: 'Rocket',
     },
+    templateGroups: {
+      php: 'PHP',
+      node: 'JavaScript',
+      cms: 'CMS & e-commerce',
+      python: 'Python',
+      go: 'Go',
+      other: 'Ruby & Rust',
+    },
+    detectedHint:
+      'The runtime, web server and document root come from the files the installer writes — Laravel serves from public/, WordPress from the project root. They are editable afterwards in the project’s settings.',
     templateHint:
       'The framework’s own installer runs in a throwaway container, then detection configures the project from what it wrote. The first run downloads the installer image — give it a few minutes.',
     domain: 'Domain',
@@ -932,6 +1202,7 @@ export default {
   },
 
   detail: {
+    openFolder: 'Open folder',
     dockerfileDesc: 'How the Rust generator renders this project — without writing the file.',
     compatHint:
       'Reproduces what Bash writes today; extensions that cannot build are dropped silently.',

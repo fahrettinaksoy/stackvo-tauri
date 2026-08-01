@@ -7,18 +7,14 @@
 //!
 //! ## Why two APIs
 //!
-//! The template upstream installs `mailhog/mailhog`, which is unmaintained;
-//! Mailpit is what every competitor ships now and what StackVo should move to.
-//! That move is a one-line image change in a repository this app does not own,
-//! and it renames a service, its `.env` keys, its container and its volume — a
-//! migration for everyone with a running stack.
-//!
-//! So this reads both. Not as a hedge: the app manages a checkout it does not
-//! dictate, exactly as it does for `.env` and `stackvo.json`, and a user on
-//! either image should get an inbox. The two APIs disagree about almost
-//! everything — envelope shape, field names, where the subject lives, whether
-//! there is a snippet at all — so both are normalised here, once, into the
-//! shape the UI renders.
+//! Both catchers ship as catalog services — neither enabled by default. The
+//! Mail page offers to enable Mailpit (the maintained one) on first visit,
+//! and one yes runs the whole chain: flag, regenerate, `up -d`. MailHog is
+//! kept by explicit decision for stacks that already run it.
+//! The two APIs disagree about almost everything, so both are normalised
+//! here, once, into the shape the UI renders. When both are enabled, Mailpit
+//! wins: it is the maintained one, and the two cannot share port 8025 at the
+//! same time anyway.
 //!
 //! ## Why this is not done in the webview
 //!
@@ -102,6 +98,14 @@ pub struct MailMessage {
     pub id: String,
     pub from: String,
     pub to: Vec<String>,
+    /// Cc as the message declares it. MailHog keeps it in a header, Mailpit
+    /// in a field; both normalise here.
+    pub cc: Vec<String>,
+    /// Bcc — Mailpit derives it from the SMTP envelope (RCPT TO minus the
+    /// headers), which is the only honest source. MailHog cannot tell a Bcc
+    /// from a To, so there it stays empty rather than guessed.
+    pub bcc: Vec<String>,
+    pub reply_to: Vec<String>,
     pub subject: String,
     /// Whatever the server said, unparsed — the UI formats dates in the user's
     /// locale and the two servers disagree on the field, not the format.
@@ -115,6 +119,77 @@ pub struct MailMessage {
 pub struct MailBody {
     pub text: Option<String>,
     pub html: Option<String>,
+    /// Every header the catcher reported, flattened to one row per value and
+    /// sorted by name — serde's JSON map keeps no order, so alphabetical is
+    /// the only order that is honest rather than accidental.
+    pub headers: Vec<MailHeader>,
+    /// Attachments, Mailpit only — MailHog returns the raw MIME document and
+    /// decoding it here would be a MIME parser this app has no reason to own.
+    pub attachments: Vec<MailAttachment>,
+    /// Total message size in bytes, when the catcher reports one.
+    pub size: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailHeader {
+    pub name: String,
+    pub value: String,
+}
+
+/// One attachment, as the catcher lists it. `part_id` is the handle the
+/// download route takes — never a path, for the same reason `app_log_open`
+/// takes a handle: a byte route that accepts arbitrary input from its own
+/// front end is a file reader.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailAttachment {
+    pub part_id: String,
+    pub file_name: String,
+    pub content_type: String,
+    pub size: u64,
+}
+
+/// Mailpit's HTML compatibility report — the thing a developer actually opens
+/// a mail catcher for: which of 186 client features this markup survives.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HtmlCheck {
+    /// Percent of tested client features fully supported.
+    pub supported: f64,
+    pub partial: f64,
+    pub unsupported: f64,
+    /// How many client/feature combinations were tested.
+    pub tests: u32,
+    pub warnings: Vec<HtmlWarning>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HtmlWarning {
+    pub title: String,
+    pub category: String,
+    /// How many times this construct appears in the message.
+    pub found: u32,
+    pub supported: f64,
+    pub partial: f64,
+    pub unsupported: f64,
+}
+
+/// A link found in the message and what answered it.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkCheck {
+    pub errors: u32,
+    pub links: Vec<LinkResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkResult {
+    pub url: String,
+    pub status: String,
+    pub status_code: u16,
 }
 
 fn string_at(value: &Value, path: &[&str]) -> Option<String> {
@@ -143,6 +218,14 @@ fn mailpit_address(value: &Value) -> Option<String> {
         Some(name) if !name.is_empty() => Some(format!("{name} <{address}>")),
         _ => Some(address.to_string()),
     }
+}
+
+/// A Mailpit address array field (`To`, `Cc`, `Bcc`, `ReplyTo`), normalised.
+fn mailpit_addresses(item: &Value, field: &str) -> Vec<String> {
+    item.get(field)
+        .and_then(|v| v.as_array())
+        .map(|list| list.iter().filter_map(mailpit_address).collect())
+        .unwrap_or_default()
 }
 
 /// MailHog keeps the subject in a header array, not a field.
@@ -180,6 +263,16 @@ pub fn parse_list(kind: Kind, body: &Value) -> Vec<MailMessage> {
                     .and_then(|v| v.as_array())
                     .map(|list| list.iter().filter_map(mailhog_address).collect())
                     .unwrap_or_default(),
+                // Headers carry a single joined string; kept as one entry
+                // rather than re-split, because quoted display names make
+                // comma-splitting a parser, not a convenience.
+                cc: mailhog_header(item, "Cc")
+                    .map(|v| vec![v])
+                    .unwrap_or_default(),
+                bcc: Vec::new(),
+                reply_to: mailhog_header(item, "Reply-To")
+                    .map(|v| vec![v])
+                    .unwrap_or_default(),
                 subject: mailhog_header(item, "Subject").unwrap_or_default(),
                 date: mailhog_header(item, "Date").or_else(|| string_at(item, &["Created"])),
                 // MailHog has no snippet; inventing one from the raw body would
@@ -200,6 +293,9 @@ pub fn parse_list(kind: Kind, body: &Value) -> Vec<MailMessage> {
                     .and_then(|v| v.as_array())
                     .map(|list| list.iter().filter_map(mailpit_address).collect())
                     .unwrap_or_default(),
+                cc: mailpit_addresses(item, "Cc"),
+                bcc: mailpit_addresses(item, "Bcc"),
+                reply_to: mailpit_addresses(item, "ReplyTo"),
                 subject: string_at(item, &["Subject"]).unwrap_or_default(),
                 date: string_at(item, &["Created"]),
                 snippet: string_at(item, &["Snippet"]).filter(|s| !s.is_empty()),
@@ -223,6 +319,143 @@ pub fn parse_counts(kind: Kind, body: &Value) -> (u64, Option<u64>) {
 }
 
 /// Normalise one message's body.
+/// Mailpit's `Attachments` array. Inline parts (a logo referenced by cid:)
+/// are deliberately not merged in: they are part of the rendering, not
+/// something the recipient was sent to open.
+pub fn parse_attachments(body: &Value) -> Vec<MailAttachment> {
+    body.get("Attachments")
+        .and_then(|v| v.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|a| {
+                    Some(MailAttachment {
+                        part_id: a.get("PartID")?.as_str()?.to_string(),
+                        file_name: a
+                            .get("FileName")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("attachment")
+                            .to_string(),
+                        content_type: a
+                            .get("ContentType")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("application/octet-stream")
+                            .to_string(),
+                        size: a.get("Size").and_then(|v| v.as_u64()).unwrap_or(0),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn percent(value: &Value, key: &str) -> f64 {
+    value.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0)
+}
+
+/// Mailpit's `html-check` payload. Warnings are sorted worst-first — a report
+/// whose first row is a construct every client supports buries the one that
+/// breaks Outlook.
+pub fn parse_html_check(body: &Value) -> HtmlCheck {
+    let total = body.get("Total").cloned().unwrap_or(Value::Null);
+    let mut warnings: Vec<HtmlWarning> = body
+        .get("Warnings")
+        .and_then(|v| v.as_array())
+        .map(|list| {
+            list.iter()
+                .map(|w| {
+                    let score = w.get("Score").cloned().unwrap_or(Value::Null);
+                    HtmlWarning {
+                        title: w
+                            .get("Title")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        category: w
+                            .get("Category")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        found: score.get("Found").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                        supported: percent(&score, "Supported"),
+                        partial: percent(&score, "Partial"),
+                        unsupported: percent(&score, "Unsupported"),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    warnings.sort_by(|a, b| {
+        b.unsupported
+            .partial_cmp(&a.unsupported)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    HtmlCheck {
+        supported: percent(&total, "Supported"),
+        partial: percent(&total, "Partial"),
+        unsupported: percent(&total, "Unsupported"),
+        tests: total.get("Tests").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        warnings,
+    }
+}
+
+/// Mailpit's `link-check` payload.
+pub fn parse_link_check(body: &Value) -> LinkCheck {
+    LinkCheck {
+        errors: body.get("Errors").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        links: body
+            .get("Links")
+            .and_then(|v| v.as_array())
+            .map(|list| {
+                list.iter()
+                    .map(|l| LinkResult {
+                        url: l
+                            .get("URL")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        status: l
+                            .get("Status")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        status_code: l.get("StatusCode").and_then(|v| v.as_u64()).unwrap_or(0)
+                            as u16,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
+/// `{ "Name": ["v1", "v2"] }` — the shape both servers use for header maps —
+/// flattened and sorted case-insensitively.
+pub fn parse_headers(map: &Value) -> Vec<MailHeader> {
+    let Some(map) = map.as_object() else {
+        return Vec::new();
+    };
+    let mut out: Vec<MailHeader> = map
+        .iter()
+        .flat_map(|(name, values)| {
+            values
+                .as_array()
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(|v| MailHeader {
+                            name: name.clone(),
+                            value: v.to_string(),
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        })
+        .collect();
+    out.sort_by_key(|a| a.name.to_lowercase());
+    out
+}
+
 pub fn parse_body(kind: Kind, body: &Value) -> MailBody {
     match kind {
         // MailHog returns the raw MIME document and leaves decoding to the
@@ -231,10 +464,22 @@ pub fn parse_body(kind: Kind, body: &Value) -> MailBody {
         Kind::Mailhog => MailBody {
             text: string_at(body, &["Content", "Body"]),
             html: None,
+            headers: body
+                .get("Content")
+                .and_then(|c| c.get("Headers"))
+                .map(parse_headers)
+                .unwrap_or_default(),
+            attachments: Vec::new(),
+            size: None,
         },
+        // Mailpit's detail payload has no header map; `message()` fetches it
+        // from the dedicated /headers route and fills this in.
         Kind::Mailpit => MailBody {
             text: string_at(body, &["Text"]).filter(|s| !s.is_empty()),
             html: string_at(body, &["HTML"]).filter(|s| !s.is_empty()),
+            headers: Vec::new(),
+            attachments: parse_attachments(body),
+            size: body.get("Size").and_then(|v| v.as_u64()),
         },
     }
 }
@@ -263,9 +508,20 @@ pub struct MailStatus {
 ///
 /// Mailpit first: on a checkout that somehow has both, the maintained one wins.
 fn detect(env: &crate::config::Env) -> Option<Kind> {
-    [Kind::Mailpit, Kind::Mailhog]
+    const ORDER: [Kind; 2] = [Kind::Mailpit, Kind::Mailhog];
+    // The *enabled* one wins — both catchers now ship keys, so mere key
+    // presence stopped being a signal. Mailpit first on a tie (both enabled
+    // cannot actually run: they fight over port 8025). With neither enabled,
+    // fall back to whichever is declared, so the status pane can still name
+    // the catcher it would be enabling.
+    ORDER
         .into_iter()
-        .find(|kind| env.get(&format!("{}_ENABLE", kind.prefix())).is_some())
+        .find(|kind| env.bool(&format!("{}_ENABLE", kind.prefix())))
+        .or_else(|| {
+            ORDER
+                .into_iter()
+                .find(|kind| env.get(&format!("{}_ENABLE", kind.prefix())).is_some())
+        })
 }
 
 fn base_url(env: &crate::config::Env, kind: Kind) -> String {
@@ -377,7 +633,121 @@ pub async fn messages(root: &Path, limit: u32) -> Result<Vec<MailMessage>> {
 pub async fn message(root: &Path, id: &str) -> Result<MailBody> {
     let (kind, base) = resolve(root)?;
     let body = get(&format!("{base}{}", kind.message_path(id))).await?;
-    Ok(parse_body(kind, &body))
+    let mut parsed = parse_body(kind, &body);
+
+    // Mailpit keeps the header map on a route of its own. Best-effort: a
+    // headers fetch that fails must not take the message body down with it —
+    // the tab simply comes up empty.
+    if kind == Kind::Mailpit {
+        if let Ok(map) = get(&format!("{base}/api/v1/message/{id}/headers")).await {
+            parsed.headers = parse_headers(&map);
+        }
+    }
+    Ok(parsed)
+}
+
+/// Search the inbox. Both servers run the query server-side — Mailpit's own
+/// syntax (`from:`, `to:`, `subject:`, quoted phrases) reaches it untouched,
+/// because reimplementing it here would be a second, worse parser.
+pub async fn search(root: &Path, query: &str, limit: u32) -> Result<Vec<MailMessage>> {
+    let (kind, base) = resolve(root)?;
+    let encoded = urlencode(query);
+    let path = match kind {
+        Kind::Mailhog => format!("/api/v2/search?kind=containing&query={encoded}&limit={limit}"),
+        Kind::Mailpit => format!("/api/v1/search?query={encoded}&limit={limit}"),
+    };
+    let body = get(&format!("{base}{path}")).await?;
+    Ok(parse_list(kind, &body))
+}
+
+/// Percent-encode a query for a URL. Small on purpose: the alternative is a
+/// dependency for one call site whose input is a search box.
+fn urlencode(text: &str) -> String {
+    text.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            b' ' => "+".to_string(),
+            other => format!("%{other:02X}"),
+        })
+        .collect()
+}
+
+/// How this message's HTML fares across real mail clients. Mailpit only —
+/// MailHog has no equivalent, and `None` is how the UI knows to hide the tab
+/// rather than show an empty one.
+pub async fn html_check(root: &Path, id: &str) -> Result<Option<HtmlCheck>> {
+    let (kind, base) = resolve(root)?;
+    if kind != Kind::Mailpit {
+        return Ok(None);
+    }
+    let body = get(&format!("{base}/api/v1/message/{id}/html-check")).await?;
+    Ok(Some(parse_html_check(&body)))
+}
+
+/// Follow every link in the message and report what answered.
+///
+/// **This leaves the machine** — it is the one call in this module that talks
+/// to the internet, so it is never run as part of opening a message; the UI
+/// asks for it explicitly.
+pub async fn link_check(root: &Path, id: &str) -> Result<Option<LinkCheck>> {
+    let (kind, base) = resolve(root)?;
+    if kind != Kind::Mailpit {
+        return Ok(None);
+    }
+    // Longer than the module default: this waits on third-party servers.
+    let response = reqwest::Client::new()
+        .get(format!("{base}/api/v1/message/{id}/link-check"))
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| {
+            Error::new(
+                Code::EngineUnreachable,
+                format!("the mail API did not answer: {e}"),
+            )
+        })?;
+    let body: Value = response
+        .json()
+        .await
+        .map_err(|e| Error::new(Code::EngineUnreachable, format!("unreadable reply: {e}")))?;
+    Ok(Some(parse_link_check(&body)))
+}
+
+/// Write one attachment to a chosen path.
+///
+/// `part_id` is a handle the catcher issued, and `path` is chosen through the
+/// system save dialog — the front end never names a source and never names a
+/// destination this process did not receive from the user.
+pub async fn save_attachment(root: &Path, id: &str, part_id: &str, path: &Path) -> Result<u64> {
+    let (_, base) = resolve(root)?;
+    let response = reqwest::Client::new()
+        .get(format!("{base}/api/v1/message/{id}/part/{part_id}"))
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| {
+            Error::new(
+                Code::EngineUnreachable,
+                format!("the mail API did not answer: {e}"),
+            )
+        })?;
+
+    if !response.status().is_success() {
+        return Err(Error::new(
+            Code::NotFound,
+            format!("the mail API returned {}", response.status()),
+        ));
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| Error::new(Code::IoError, format!("could not read the attachment: {e}")))?;
+    std::fs::write(path, &bytes)
+        .map_err(|e| Error::io(format!("writing {}", path.display()), e))?;
+    Ok(bytes.len() as u64)
 }
 
 /// Empty the inbox.
@@ -386,6 +756,39 @@ pub async fn clear(root: &Path) -> Result<()> {
 
     let response = reqwest::Client::new()
         .delete(format!("{base}{}", kind.clear_path()))
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| {
+            Error::new(
+                Code::EngineUnreachable,
+                format!("the mail API did not answer: {e}"),
+            )
+        })?;
+
+    if !response.status().is_success() {
+        return Err(Error::new(
+            Code::EngineUnreachable,
+            format!("the mail API returned {}", response.status()),
+        ));
+    }
+    Ok(())
+}
+
+/// Delete one message — the two servers disagree here too. MailHog addresses
+/// the message in the path; Mailpit takes a JSON body of ids on the
+/// collection route (its path form does not exist).
+pub async fn delete(root: &Path, id: &str) -> Result<()> {
+    let (kind, base) = resolve(root)?;
+
+    let request = match kind {
+        Kind::Mailhog => reqwest::Client::new().delete(format!("{base}/api/v1/messages/{id}")),
+        Kind::Mailpit => reqwest::Client::new()
+            .delete(format!("{base}/api/v1/messages"))
+            .json(&serde_json::json!({ "IDs": [id] })),
+    };
+
+    let response = request
         .timeout(std::time::Duration::from_secs(5))
         .send()
         .await
@@ -421,6 +824,7 @@ mod tests {
         "Content": {
           "Headers": {
             "Subject": ["Password reset"],
+            "Cc": ["qa@example.com"],
             "Date": ["Wed, 29 Jul 2026 14:05:33 +0000"]
           },
           "Body": "Click here to reset."
@@ -436,12 +840,93 @@ mod tests {
         "ID": "xyz",
         "From": { "Name": "Shop", "Address": "app@shop.loc" },
         "To": [{ "Name": "", "Address": "dev@example.com" }],
+        "Cc": [{ "Name": "QA", "Address": "qa@example.com" }],
+        "Bcc": [{ "Name": "", "Address": "audit@example.com" }],
+        "ReplyTo": [{ "Name": "", "Address": "noreply@shop.loc" }],
         "Subject": "Password reset",
         "Created": "2026-07-29T14:05:33Z",
         "Snippet": "Click here to reset.",
         "Read": false
       }]
     }"#;
+
+    #[test]
+    fn headers_flatten_multi_values_and_sort_case_insensitively() {
+        let map = json(
+            r#"{
+            "X-Priority": ["1"],
+            "Received": ["from a", "from b"],
+            "content-type": ["text/html"]
+        }"#,
+        );
+        let rows = parse_headers(&map);
+        let names: Vec<&str> = rows.iter().map(|h| h.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["content-type", "Received", "Received", "X-Priority"]
+        );
+        assert_eq!(rows[1].value, "from a");
+        assert_eq!(rows[2].value, "from b");
+
+        // MailHog's inline map reaches the same rows through parse_body.
+        let hog = parse_body(Kind::Mailhog, &json(MAILHOG)["items"][0]);
+        assert!(hog
+            .headers
+            .iter()
+            .any(|h| h.name == "Subject" && h.value == "Password reset"));
+    }
+
+    #[test]
+    fn attachments_and_checks_parse_real_payloads() {
+        // A real Mailpit detail payload, trimmed to the parts read here.
+        let detail = json(
+            r#"{
+          "Text": "t", "HTML": "<p>x</p>", "Size": 813,
+          "Attachments": [{
+            "PartID": "2", "FileName": "fatura.pdf",
+            "ContentType": "application/pdf", "Size": 64
+          }]
+        }"#,
+        );
+        let body = parse_body(Kind::Mailpit, &detail);
+        assert_eq!(body.size, Some(813));
+        assert_eq!(body.attachments.len(), 1);
+        assert_eq!(body.attachments[0].part_id, "2");
+        assert_eq!(body.attachments[0].file_name, "fatura.pdf");
+
+        // MailHog returns raw MIME; decoding it would be a MIME parser this
+        // module has no reason to own, so it reports none rather than guessing.
+        let hog = parse_body(Kind::Mailhog, &json(MAILHOG)["items"][0]);
+        assert!(hog.attachments.is_empty());
+    }
+
+    #[test]
+    fn html_check_reports_worst_first() {
+        let check = parse_html_check(&json(
+            r#"{
+          "Total": { "Tests": 186, "Supported": 84.7, "Partial": 7.1, "Unsupported": 8.2 },
+          "Warnings": [
+            { "Title": "safe", "Category": "html",
+              "Score": { "Found": 1, "Supported": 99.0, "Partial": 1.0, "Unsupported": 0.0 } },
+            { "Title": "breaks Outlook", "Category": "css",
+              "Score": { "Found": 3, "Supported": 40.0, "Partial": 10.0, "Unsupported": 50.0 } }
+          ]
+        }"#,
+        ));
+        assert_eq!(check.tests, 186);
+        // Worst first: a report led by a construct everything supports buries
+        // the one that actually breaks a client.
+        assert_eq!(check.warnings[0].title, "breaks Outlook");
+        assert_eq!(check.warnings[0].found, 3);
+    }
+
+    #[test]
+    fn a_query_is_encoded_rather_than_pasted_into_the_url() {
+        assert_eq!(
+            urlencode("from:a@b.c subject:\"ödeme\""),
+            "from%3Aa%40b.c+subject%3A%22%C3%B6deme%22"
+        );
+    }
 
     fn json(text: &str) -> Value {
         serde_json::from_str(text).expect("fixture should parse")
@@ -460,6 +945,12 @@ mod tests {
 
         assert_eq!(hog[0].from, "app@shop.loc");
         assert_eq!(hog[0].to, vec!["dev@example.com"]);
+        assert_eq!(hog[0].cc, vec!["qa@example.com"]);
+        assert!(hog[0].bcc.is_empty(), "MailHog cannot tell a Bcc from a To");
+
+        assert_eq!(pit[0].cc, vec!["QA <qa@example.com>"]);
+        assert_eq!(pit[0].bcc, vec!["audit@example.com"]);
+        assert_eq!(pit[0].reply_to, vec!["noreply@shop.loc"]);
         assert_eq!(hog[0].subject, "Password reset");
 
         assert_eq!(pit[0].from, "Shop <app@shop.loc>");

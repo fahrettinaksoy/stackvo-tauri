@@ -1,7 +1,14 @@
 # StackVo Desktop
 
-Native desktop app for [StackVo](https://github.com/stackvo/stackvo) — the Docker-based local
-development environment manager.
+A Docker-based local development environment manager, as a native desktop app.
+
+**Self-contained.** It used to require a clone of
+[StackVo](https://github.com/stackvo/stackvo) to read its generator and
+templates from. The generator was ported to Rust (the shell was deleted), and
+the service templates now ship inside the binary — so a workspace is a folder
+this app creates, not one you have to fetch. Point it at an empty directory and
+it writes the `.env`, the templates and the project tree itself. An existing
+checkout still works and is left exactly as it is.
 
 ## Why a desktop app
 
@@ -23,7 +30,7 @@ plane moves.
 | Host metrics       | `/proc` inside a container               | `sysinfo` on the host              |
 | Stopping the stack | impossible (kills the UI)                | `compose_down`                     |
 | Hosts file         | manual `sudo tee -a /etc/hosts`          | reviewed diff, one elevated write  |
-| Windows            | WSL2 only                                | native (once the generator ports)  |
+| Windows            | WSL2 only                                | native — no shell, no bash          |
 | Install size       | ~600 MB of images                        | ~10 MB                             |
 
 ## Status

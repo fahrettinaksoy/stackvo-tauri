@@ -667,17 +667,11 @@ pub async fn run(root: Option<&Path>) -> Doctor {
     };
     let ports = check_ports(required, table.as_ref(), owners.as_ref());
 
+    // The same list the dashboard offers to fix. It used to be computed here
+    // from projects alone, so the panel opened when something is wrong knew
+    // about fewer broken domains than the page that is working fine.
     let hosts_missing = match root {
-        Some(root) => crate::commands::list_projects(root)
-            .await
-            .map(|projects| {
-                projects
-                    .into_iter()
-                    .filter(|p| p.domain.is_some() && !p.domain_configured)
-                    .filter_map(|p| p.domain)
-                    .collect()
-            })
-            .unwrap_or_default(),
+        Some(root) => crate::commands::missing_hosts(root).await,
         None => Vec::new(),
     };
 

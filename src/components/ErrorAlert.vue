@@ -15,7 +15,7 @@ import { useI18n } from 'vue-i18n';
  * other.
  */
 const props = defineProps({
-  error: { type: [Object, null], default: null },
+  error: { type: [Object, String, null], default: null },
   type: { type: String, default: 'error' },
   closable: { type: Boolean, default: false },
 });
@@ -30,7 +30,29 @@ const headline = computed(() => {
   return code && te(`errors.${code}`) ? t(`errors.${code}`) : null;
 });
 
-const detail = computed(() => props.error?.message ?? '');
+/**
+ * Whatever was thrown, said out loud.
+ *
+ * It read `error.message` and nothing else, which is right for this app's own
+ * errors and wrong for everything else that can reach here: a Tauri plugin
+ * rejects with a plain string, and a string has no `.message`. The result was
+ * a red box with nothing in it — worse than no box, because it says something
+ * failed and refuses to say what.
+ */
+const detail = computed(() => {
+  const e = props.error;
+  if (!e) return '';
+  if (typeof e === 'string') return e;
+  if (typeof e.message === 'string' && e.message) return e.message;
+  // Last resort. `String(e)` on a bare object gives "[object Object]", which is
+  // no more useful than the empty box; JSON at least carries the fields.
+  try {
+    const text = JSON.stringify(e);
+    return text && text !== '{}' ? text : String(e);
+  } catch {
+    return String(e);
+  }
+});
 </script>
 
 <template>

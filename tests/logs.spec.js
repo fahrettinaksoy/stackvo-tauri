@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { LEVELS, countByLevel, filterLines, parseLevel, withLevels } from '@/lib/logs';
+import { LEVELS, countByLevel, filterLines, highlight, parseLevel, withLevels } from '@/lib/logs';
 
 /**
  * The fixtures are real lines, trimmed, from the logs on the machine this was
@@ -168,5 +168,35 @@ describe('countByLevel', () => {
     expect(counts.error).toBe(2);
     expect(counts.debug).toBe(0);
     expect(Object.keys(counts).sort()).toEqual([...LEVELS].sort());
+  });
+});
+
+describe('search modes', () => {
+  it('treats a plain query as literal text, not a pattern', () => {
+    const lines = [{ text: 'GET /a.b' }, { text: 'GET /axb' }];
+    const hit = filterLines(lines, { query: 'a.b' });
+    expect(hit).toHaveLength(1);
+    expect(hit[0].text).toBe('GET /a.b');
+  });
+
+  it('matches with a regex when asked, and matches nothing while one is half-typed', () => {
+    const lines = [{ text: 'status=500' }, { text: 'status=200' }];
+    expect(filterLines(lines, { query: 'status=5\\d\\d', regex: true })).toHaveLength(1);
+    // `(` is what every regex looks like one keystroke in. Flashing the whole
+    // buffer back mid-word is worse than showing nothing.
+    expect(filterLines(lines, { query: 'status=(', regex: true })).toHaveLength(0);
+  });
+
+  it('splits a line around its matches so they can be marked', () => {
+    const parts = highlight('GET /users 500', '500');
+    expect(parts.map((p) => p.text).join('')).toBe('GET /users 500');
+    expect(parts.filter((p) => p.hit).map((p) => p.text)).toEqual(['500']);
+  });
+
+  it('does not hang on a zero-width match', () => {
+    // `a*` matches the empty string at every position; advancing lastIndex by
+    // hand is what keeps this from looping forever on a legal pattern.
+    const parts = highlight('bbb', 'a*', true);
+    expect(parts.map((p) => p.text).join('')).toBe('bbb');
   });
 });

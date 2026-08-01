@@ -46,7 +46,7 @@ single cheapest thing on StackVo's list — see P1-6.
 | Capability | Herd | Lerd | EnvKit | FlyEnv | ServBay | ForgeKit | Laragon | Laradock | XAMPP | **StackVo** |
 | --- | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
 | Trusted local HTTPS (local CA) | ✅ | ✅ | ✅ | ✅ | ✅ +ACME | ✅ | ✅ | – | – | **✅** |
-| Framework scaffold / quick app | ✅ | ✅ detect | – | – | – | – | ✅ | ⚠️ detect | ⚠️ Bitnami | **✅** |
+| Framework scaffold / quick app | ✅ | ✅ detect | – | – | – | – | ✅ | ⚠️ detect | ⚠️ Bitnami | **✅ 17** |
 | Import an existing setup | ✅ guides | – | ✅ Laragon | – | – | – | – | – | – | **✅ compose** |
 | DB backup / restore / snapshot | – | ✅ | – | – | ✅ | – | ✅ | – | – | **✅** |
 | Mail catcher with a UI | ✅ | – | ✅ | ✅ | ✅ server | ✅ | – | ✅ | – | **✅** |
@@ -59,7 +59,7 @@ single cheapest thing on StackVo's list — see P1-6.
 | Dump / `dd()` catcher | ✅ | ✅ | ✅ | – | – | – | – | – | – | **✅** |
 | Profiler | ✅ | ✅ SPX | – | – | – | – | – | ✅ | – | **✅ Xdebug** |
 | Team config sharing | ✅ | – | – | ✅ sync | ✅ | – | ✅ | ✅ | – | **✅** |
-| Runtimes beyond PHP | Node | polyglot | +Py | **12** | 8 | – | +Py/Go | 100+ svc | Perl | **❌ 2 of 6** |
+| Runtimes beyond PHP | Node | polyglot | +Py | **12** | 8 | – | +Py/Go | 100+ svc | Perl | **✅ 6 of 6** |
 | Config editing from the UI | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | – | – | ⚠️ | **✅** |
 | PHP limits (`memory_limit`, uploads) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | **✅** |
 | Host metrics, disk I/O, network | – | – | – | – | – | – | – | – | – | **✅ only one** |
@@ -90,10 +90,14 @@ Each `⚠️` hides a decision, so they are itemised. The `⚠️` rows are chea
 > the project command palette, and **Sprint 10 shipped P3-17** — the profiler, via Xdebug rather
 > than either tool the item named, and **Sprint 11 shipped P3-20** — the production image, which
 > turned out to be a build rather than an export, and **Sprint 12 shipped P3-18** — the dump
-> catcher, which was rated expensive and was not. Their rows above read `✅`. One qualification on the MCP row: the read surface is complete, and
-> only two writing tools are exposed, because thirty-four commands report
-> progress through Tauri's event system and are not reachable from a stdio
-> subprocess until that is decoupled. The per-row notes below describe the
+> catcher, which was rated expensive and was not. Their rows above read `✅`.
+> The MCP qualification that stood here — only two writing tools, because
+> operations were welded to Tauri's event system — **was closed in Sprint 16**:
+> the runner takes an event *sink*, the stdio server passes a headless one, and
+> project start/stop, stack up/down and generate are write tools now. The
+> insight that made it small: events were only ever progress reporting —
+> `run_operation` already awaits completion and returns the outcome, which is
+> the part an MCP client actually wants. The per-row notes below describe the
 > state they were in when the gap was measured. Two findings came out of the
 > work and are worth carrying forward: the contract had drifted (four commands
 > were registered in `lib.rs` and absent from `ipc.json`, so suite E was **not**
@@ -108,13 +112,13 @@ Each `⚠️` hides a decision, so they are itemised. The `⚠️` rows are chea
 | **Doctor** | ✅ | **Since delivered.** `doctor.rs` reports the gate rows plus the failures that arrive later, each next to its repair in Settings → Doctor: port conflicts with the culprit *named* (the stack's own container is fine, someone else's container is named, a host process is named with pid — one `lsof`/`ss`/`netstat` spawn for the whole table), generated config older than its inputs (oldest-output vs newest-input mtime, so one fresh file cannot mask a stale one), hosts gaps routed through the reviewed-diff dialog, and reclaimable space with `docker_prune` behind a confirmation — volumes opt-in with their own warning, because the engine's "unused" means "not currently mounted" and a stopped project's database qualifies. Exposed as the `stackvo_doctor` MCP tool and in `npm run diagnose`, which found real findings on first run: a stale `parser.ajans` manifest and 13.8 GB reclaimable. | Port conflicts are diagnosed, not repaired — killing someone else's process is not a button this app should have. |
 | **Log viewer** | ✅ | **Since delivered, now including the cross-project view.** `LogView.vue` has search, level filtering with counts, and a picker over both log roots; `app_logs` / `app_log_open` read them from the host, so they work with the engine down. Click-through shipped in Sprint 4. The cross-project tail is Sprint 5: a Logs destination of its own, one `Fanout` across every project — measured on this checkout, 52 files across 11 projects, all under the 60-file cap. | Nothing outstanding. Two constraints are stated on screen rather than hidden: the tail is live-only, and it follows at most 60 files. |
 | **PHP limits** | ✅ | **Since delivered (Sprint 5).** `memory_limit`, `upload_max_filesize`, `post_max_size` and `max_execution_time` as a form over a real `.stackvo/php.ini`, mounted read-only at `/usr/local/etc/php/conf.d/zz-stackvo.ini` by a fifth compose overlay. Verified end to end against a real StackVo project image: 128M → 777M, 2M → 64M. | Only four directives are managed. Anything else in the file is preserved verbatim and shown, but is edited by hand. |
-| **Mail** | ⚠️ | `core/templates/services/mailhog/` ships and starts. | mailhog is unmaintained upstream; Mailpit is what everyone else ships. No inbox in the app — the user leaves for a browser tab. **Since resolved in the app**: the inbox reads both APIs, so a checkout on either image gets one. The image swap itself remains an upstream change — it renames a service, its `.env` keys, its container and its volume, which is a migration for every running stack, not a one-line edit. |
+| **Mail** | ✅ | **Closed in Sprint 17, by addition rather than swap.** `mailpit` is its own catalog service — template, `.env` keys, schema entry — beside an untouched MailHog, so the migration that made the swap expensive never happens: a stack already on MailHog keeps it, a new stack enables Mailpit. The in-app inbox has read both APIs since Sprint 1, so it works against whichever is on. Both catchers answer on 8025 — Mailpit chose MailHog's port deliberately. | Nothing. Sprint 20 settled the pair by decision: **both catchers ship**, neither on by default — the **Mail destination** in the nav rail (Herd's Mail page) offers the one-click enable-and-start, then gives sandboxed-iframe HTML preview, text and source tabs, live polling, and clear-with-confirm. |
 | **Profiler** | ✅ | **Since delivered (Sprint 10), by a different route than the item proposed.** Blackfire needs an account and SPX is not in the extension contract; Xdebug already is, and `xdebug.mode=profile` writes cachegrind files. A generated ini sends them into the mounted log tree, and a cachegrind parser aggregates them into a top-function table. | Self cost and per-call inclusive cost, not a flame graph — the call *tree* would need the caller edges reconstructed, which is a much larger promise. `core/templates/services/blackfire/` still ships and is still unwired. |
 | **Team config sharing** | ✅ | **Since delivered (Sprint 6).** The roadmap said "turn the commit-friendly `stackvo.json` into a flow"; read against the code that framing was wrong. `stackvo.json` needs no flow — it is already in the teammate's clone. What they do *not* get is the **stack**: which of the twenty services are on and at which versions, which lives in `.env`, the one file nobody commits, because it is also where every password is. A preset carries that and, by construction, has nowhere to put a secret. Import is plan-then-apply, like the hosts file and the certificate. | Ports and paths are deliberately excluded — they are properties of one machine, and importing somebody else's is how two people end up fighting over 3306. |
 | **Node dev server** | ✅ | **Since delivered (Sprint 8).** A compose overlay that mounts the source, keeps `node_modules` in an anonymous volume, and replaces the container's command with the dev server. Plus the `vite.config.js` snippet the project itself needs, generated with its domain in it. | The snippet is shown, never written — it is the user's build config. Anything that is not Vite, Nuxt or Next gets the mount but no config advice. |
-| **Runtimes** | ❌ | `C-02`, re-read in Sprint 9 and **half of it is stale**. `.env` still advertises `php,python,go,ruby,rust,nodejs`, but *this app* does not render all six: `commands.rs` marks each runtime `available` against `IMPLEMENTED_RUNTIMES = ["php", "node"]`, and the project form only ever emits one of those two. The "UI offers four choices that cannot build" half described the old web UI and was already fixed here. | What remains is the real gap: `core/cli/lib/generators/project/` holds generators for PHP servers and node only. Four of six languages have no Dockerfile template. Still a competitive gap; no longer a shipped bug in the desktop app. |
+| **Runtimes** | ✅ | **Since delivered (Sprint 18) — C-02 closed.** Python, Go, Ruby and Rust share one config shape (`version`, optional `install`/`build`, `start`, `port` — the interpreted/compiled split made explicit) and one Dockerfile template family: the node template's sibling, a snapshot container with the HOST/PORT Traefik contract. `{"runtime": "go"}` is a *complete manifest* — every field defaults to the ecosystem convention. Compose reuses the node-shaped service block wholesale; detection gained the exclusive markers (`go.mod`, `Cargo.toml`, `Gemfile`, `manage.py`, and `requirements.txt` guarded so a PHP repo shipping a Python tool stays PHP); the production-image strategy routes them with node (snapshot → re-tag). Written once, in Rust — the takeover is what made that possible. | The Bash CLI still knows only php and node; a lang-runtime project is desktop-app-managed. (resolved in Sprint 19: the Bash CLI is deleted and the version list runs to 1.84). |
 | **Migration** | ✅ | **Since delivered (Sprint 7).** A folder's own `docker-compose.yml`, read by `docker compose config --format json` — Docker parses its own format, so no YAML dependency was added. Yields the PHP version, domain, extensions, document root and, the part no marker file states, the backing services, as the same reviewed diff a preset import shows. | Image matching is exact, not fuzzy: `ghcr.io/acme/redis-shim` is not Redis. Anything unrecognised is named rather than dropped. |
-| **Scaffold** | ✅ | **Both halves delivered.** Import first: detection infers runtime, server, document root and PHP/Node version from `artisan`, `wp-config.php`, `composer.json` and `package.json` — on this checkout 11 of 21 directories were unmanaged before it. The create half followed as predicted, "a container run on top": `project_scaffold` runs the framework's own installer (composer create-project for Laravel/Symfony, wp-cli, create-next-app) in a throwaway `--rm` container — nothing installed on the host, `--user uid:gid` on unix so nothing lands root-owned, every command pinned non-interactive because a prompt inside an operation console is a hang. Then the *same adoption path* configures the project from what the installer wrote. | Framework choice is the four with one-command installers; anything else arrives by clone and adoption. |
+| **Scaffold** | ✅ | **Both halves delivered.** Import first: detection infers runtime, server, document root and PHP/Node version from `artisan`, `wp-config.php`, `composer.json` and `package.json` — on this checkout 11 of 21 directories were unmanaged before it. The create half followed as predicted, "a container run on top": `project_scaffold` runs the framework's own installer (composer create-project for Laravel/Symfony, wp-cli, create-next-app) in a throwaway `--rm` container — nothing installed on the host, `--user uid:gid` on unix so nothing lands root-owned, every command pinned non-interactive because a prompt inside an operation console is a hang. Then the *same adoption path* configures the project from what the installer wrote. | **Seventeen templates as of Sprint 22**, every installer measured in a real container rather than read off a README: PHP (Laravel, Symfony, CakePHP, Yii 2, CodeIgniter 4, Laminas), CMS/e-commerce (WordPress, Drupal, PrestaShop), JavaScript (Next.js, Nuxt, Vue, React, SvelteKit, Astro) and Python/Ruby (Django, Rails). Four findings came out of the measuring, none of which were guessable: composer projects need `--ignore-platform-reqs` because the *installer* container is not the machine the code runs on (CakePHP wants `ext-intl`, the composer image has none, StackVo's PHP image does); `nuxi` needs both `--template` and `--force`; Rails needs the full ruby image because slim cannot compile `websocket-driver`; and the JS installers all take `--no-install`, since the node Dockerfile installs for the container's own platform. **Measured and rejected, each for a different reason:** Magento (its community dist 404s without repo.magento.com credentials — a signup wall); Joomla and OpenCart (zips, not composer packages — they would need a downloader this module does not have); **Payload CMS** (`uv_tty_init returned EINVAL` — it refuses to start without a TTY, and an operation console has none); **Strapi** (worse: with stdin closed it exits **0 and writes nothing at all**, with or without a target directory — a silent success that produces an empty project); and **Sylius** (installs 32 files, then its `@auto-scripts` post-install hook dies with a ClassNotFound inside the installer container — a half-installed shop is worse than none). The first two are policy; the last three are the same underlying fact: their installers assume a human at a terminal. A PTY-backed interactive install could reach them — this app has a PTY — but that is a different feature from "run an installer and adopt the result". |
 | **Tunnel** | ✅ | **Since delivered.** A cloudflared *quick tunnel* as a sidecar container on the stack network — no account, no token; Cloudflare assigns a random `trycloudflare.com` URL. The sidecar targets the project container directly with the local domain as Host header, because with SSL on every Traefik project router is `websecure`-only, which a public visitor cannot handshake against. The URL is never cached: it is read out of the sidecar's own log on every status call, so app restarts and crashed tunnels stay truthful for free. Start refuses when the project container is down (a tunnel serving 502s looks like it worked), the UI states plainly that the URL is public and unauthenticated, and `--rm` means stop is also removal. | Verified by unit tests against the real cloudflared banner format; a live end-to-end start was deliberately not run unattended — it would expose a real project publicly. |
 | **Workers / cron** | ✅ | **Since delivered.** Each worker (queue, scheduler, Horizon) is a sidecar container built from the project's *own image* — same PHP, extensions, bind mount and network, so `.env` and the database resolve exactly as the web container sees them. Self-healing is deliberately not reimplemented: `--restart unless-stopped` is Docker's own supervisor, and the restart count is read back and shown, so a crash loop is a number on screen. Detection is file-based (`artisan` → queue + scheduler; `laravel/horizon` in composer.json → Horizon); `schedule:work` replaces a host cron entry outright. Stop is removal, because with unless-stopped a merely-stopped container is one engine restart away from coming back. | Run history (EnvKit ships it) is not kept; the worker's own log is one click away in the container logs pane. |
 | **Dumps** | ❌ | — | No command, no template, no plan. |
@@ -177,7 +181,7 @@ of sending the user to a browser tab. Cheap, and visible on the first send.
 
 ### P1 — differentiation
 
-**6. MCP server** · impact very high · effort **low** ⭐ *best ratio on this list* · **partly delivered** (Sprint 2)
+**6. MCP server** · impact very high · effort **low** ⭐ *best ratio on this list* · **delivered** (read surface Sprint 2, write surface Sprint 16)
 Five of eight competitors ship one. For StackVo it is close to mechanical: `contracts/ipc.json`
 already describes all 66 commands, their arguments, their return types and — critically — their
 `kind` (`query` / `mutation` / `operation` / `stream`). The tool list can be generated from it:
@@ -422,10 +426,13 @@ container-based into something visible.
 | 18 | ✅ Dump / `dd()` catcher | **Delivered in Sprint 12.** The cost estimate here was wrong twice — both the collector *and* the Composer package already ship with Laravel. See below. |
 | 19 | ✅ Project commands (was "tinker quick action") | **Delivered in Sprint 9**, as the set rather than the one button — see below. Lerd's Monaco-plus-LSP REPL is still not on the list. |
 | 20 | ✅ Export a production image | **Delivered in Sprint 11.** What `laradock ship` does, and the item that turned out to have a security property at its centre — see below. |
-| 21 | ACME / real certificates, wildcards | ServBay ships it; marginal for local development. |
+| ~~21~~ | ~~ACME / real certificates, wildcards~~ | **Closed as won't-do (Sprint 17), by decision.** Moved to "Not worth chasing" below, where it always belonged: a public CA cannot issue for `.loc`, and mkcert already produces a certificate the browser trusts. It does not appear in §8 and is not to be rescheduled. |
 
 ### Not worth chasing
 
+- **ACME / real certificates for local domains** (was P3-21). A public CA cannot issue for
+  `.loc`, and mkcert already produces a certificate the browser trusts. Closed by decision in
+  Sprint 17 — not deferred, closed.
 - **FlyEnv's 50+ utilities** (base64, QR codes, regex testers). Unfocused, and free in any browser.
 - **ServBay's and FlyEnv's AI Gateway / LLM proxy.** Out of scope. MCP yes (P1-6); an LLM
   provider proxy no.
@@ -452,6 +459,15 @@ container-based into something visible.
 | 11 | ✅ P3-20 production image | **Sprint 11 is complete.** The differentiator, and the first feature here whose central property is a security one. |
 | 12 | ✅ P3-18 dump catcher | **Sprint 12 is complete.** Rated expensive; measurement said otherwise. Only P3-21 is left, and P2-11 remains Phase 4 work. |
 | 14 | ✅ Template renderer ported · dump-collector leak fixed | **Sprint 14.** The first real step of the Bash removal, chosen after measuring the port surface rather than guessing at it. See §7. |
+| 15 | ✅ Heredoc configs ported · verify covers everything | **Sprint 15.** The last port surface: `nginx.conf`/`supervisord.conf`/`Caddyfile`, byte-for-byte with their trailing-space quirks, and `generator_verify` now compares every file Bash writes — 28/28 on this checkout, `readyToTakeOver: true`. The Bash removal is now a decision, not a porting task. |
+| 16 | ✅ P1-6 MCP write surface | **Sprint 16.** The event decoupling (`events::Sink`), and the write tools it unlocks: project start/stop, stack up/down, generate — each awaited to completion, still behind `--allow-writes`, still curated. P1-6 is fully delivered; §8 shrinks to upstream decisions plus the gated P2-11. |
+| 17 | ✅ Rust takeover · ✅ Mailpit by addition · ✅ P3-21 closed | **Sprint 17 — the decisions sprint.** The Rust generator writes directly (no shell, no selector, 32/32 verified first — the write path itself exposed `stackvo.yml` missing from the comparison); Mailpit joins the catalog beside MailHog so no stack migrates; ACME is closed as won't-do. §8 is down to one item: P2-11. |
+| 18 | ✅ P2-11 four lang runtimes | **Sprint 18 — the roadmap's last item.** Python, Go, Ruby, Rust: one shared config shape, one template family, node's compose block reused, exclusive-marker detection, snapshot release strategy. Also closed a Sprint 17 leftover found by audit: mailpit was missing from `TRAEFIK_ROUTED`, so its UI would have had no route. **Every item in this document is now delivered, closed, or upstream housekeeping.** |
+| 19 | ✅ core/cli deleted · ✅ MailHog retired · ✅ Rust versions | **Sprint 19 — the housekeeping sprint.** The audit found the app spawns no shell at all (certs call mkcert directly; `cli_script` had no callers), so Bash left the preflight gate too and Windows loses its WSL requirement. MailHog's retirement rewired migrate's image map (both catchers → mailpit) and re-froze the traefik fixtures, which since the takeover document the Rust renderer's own contract. |
+| 23 | ✅ Self-contained: skeleton compiled in, workspaces created | **Sprint 23.** The last thing tying this app to a separate `stackvo` clone was the template tree it renders from; it now ships inside the binary via `include_dir!` (rather than `bundle.resources`, whose `resolve_resource()` behaves differently under `tauri dev` than in a packaged app — a bug class that only appears *after* packaging). `looks_like_stackvo` stopped asking "is this a checkout" and became a three-way fitness question: existing, installable, or occupied — the last refused rather than merged, because scattering a stack through somebody's Documents on a mis-click is not undoable. Reads are workspace-first and fall back to the compiled-in copy, so shipping templates does not take away the ability to edit them. Verified end to end on an empty directory with no checkout anywhere: 36 files installed, generate wrote 11, verify 10/10. |
+| 22 | ✅ 28 scaffold templates in two kinds | **Sprint 22.** Seventeen installer-container templates and six written ones (Gin, Echo, Flask, FastAPI, Sinatra, Rocket have no scaffolder of their own), every flag measured in a real container. Rejected with reasons: Magento (signup wall), Joomla/OpenCart (zips), Payload (needs a TTY), Strapi (exits 0 writing nothing), Sylius (post-install hook dies), Statamic (same). |
+| 21 | ✅ Log ergonomics · ✅ Mail as a workbench | **Sprint 21.** The log pane gained the reproduce loop it existed for — clear, pause (which *holds* lines rather than dropping them, and counts what it holds), regex search with the hits marked in place — and the fanout stopped opening blank on a quiet stack: a small labelled seed per file, with the live boundary drawn after it. Mail gained what a catcher is actually for: server-side search in Mailpit's own syntax, attachments with save, and the client-compatibility report (186 features) with worst-first warnings. |
+| 20 | ✅ MailHog restored by decision · ✅ Mail destination with opt-in enable | **Sprint 20.** The retirement half of Sprint 19 was reversed on the owner's call: both catchers ship, neither enabled by default — the Mail page *asks*. Opening Mail with no catcher running offers one button whose yes runs the whole chain (`service_enable`: flag → regenerate → `up -d`), because flipping someone's `.env` on a page visit would be the app making stack decisions for them. `mail::detect` now prefers the *enabled* catcher (key presence stopped being a signal the moment both had keys). The inbox left the service sheet for a nav destination — Herd's Mail page: sandboxed-iframe preview (no sandbox tokens: a captured mail is untrusted by definition), text/source tabs, 10s polling, clear behind a confirm. |
 | 13 | ✅ Extension check in the doctor, **with its repair** | **Sprint 13.** Not a roadmap item — it came from finally reading the validator's *output* instead of its summary line. See below; the correction is partly to this document's own reporting. |
 
 `C-02` (P2-11) is scheduled separately: it is a Phase 4 generator concern, not a UI one, and
@@ -739,11 +755,7 @@ project owner's decision rather than a button. The catalog's own note agrees on 
 
 ### Not yet started
 
-| # | Item | Note |
-| --- | --- | --- |
-| **P2-11** | The four missing runtime generators | High effort, and gated on `C-02`. **Now the largest open item on the list.** |
-| — | *(nothing)* | Every P2 except `C-02` is delivered. What is left is P2-11 above and the P3 list below. |
-| **P3** | 21 | ACME only, and it is marginal for local development: mkcert already produces a certificate the browser trusts, and a public CA cannot issue for `.loc`. Everything else on the P3 list is delivered. |
+*Nothing.* P2-11 — the last entry this table ever held — shipped in Sprint 18.
 
 ### Debt found while building
 
@@ -769,7 +781,10 @@ items remain open, and neither is this app's to close unilaterally.
 - **Open.** `contracts:check` reports 4 errors, down from 8 — the four fixed were commands
   registered in `lib.rs` and absent from `ipc.json`. The remaining four are upstream StackVo
   contract conflicts, not app defects.
-- **Open, upstream.** Swapping the MailHog template to Mailpit in the `stackvo` repository
+- **Closed (Sprint 17), by addition rather than swap.** Mailpit is its own catalog service —
+  template, `.env` keys, schema entry — and MailHog is untouched, so the migration below never
+  has to happen. The original note, kept for the record: swapping the MailHog template in the
+  `stackvo` repository
   renames the service, its `.env` keys, the container and the volume — a migration for every
   running stack. Needs an explicit decision before it is worth doing.
 
@@ -833,9 +848,15 @@ bytes, so the handover cannot silently change anyone's images. Removing Bash
 removes that check. The sequence that keeps it:
 
 1. Port the remaining surfaces, each landing in `Verify` until byte-identical on
-   real data. **Sprint 14 did the renderer; `nginx.conf`/`supervisord.conf`
-   heredocs are what is left.**
+   real data. **Sprint 14 did the renderer; Sprint 15 did the heredocs — the
+   port surface is now complete.**
 2. When all 40 files match, `Rust` mode no longer needs Bash, and Bash goes.
+   **That point has been reached**: `generator_verify` now compares every file
+   Bash writes on this checkout — 28 exist here (fewer than 40 only because
+   this checkout has 5 nginx projects, not 11, and no percona template) — and
+   all 28 match, `readyToTakeOver: true`. What remains is the switch itself:
+   making `Rust` the default engine and deleting the shell, which is a
+   decision about the *upstream* repository, not more porting.
 
 And this reorders the roadmap: **P2-11 belongs after the port, not before.**
 Adding a Python generator today means writing it twice — once in Bash, once in
@@ -858,22 +879,60 @@ reported 12 containers affected when the real number was 2.
 
 ## 8. What is actually left
 
-Everything in sections 3 and 5 is delivered except the four entries below. Three
-of them are *partly* done, and the remainder in each case is named rather than
-implied.
+**One item.** Everything else in sections 3 and 5 is delivered, and the two
+standing decisions were both taken in Sprint 17 — recorded here because the
+*form* each took is the finding:
+
+- **The Rust generator is the generator.** `generate_run` renders and writes
+  every file directly — no shell is spawned, `bash` is no longer a generation
+  prerequisite, and the engine selector is gone from Settings because there is
+  no engine to select. The takeover gate earned its keep to the last: wiring
+  the write path exposed that `generated/stackvo.yml` had never been in the
+  comparison — the one file the "verify covers everything" claim missed — and
+  it was ported and verified (with node `.dockerignore`, **32/32 files
+  byte-identical**) *before* the first Rust write. `generator_verify` survives
+  as a drift check: does the disk still hold what the generator would write?
+  The upstream CLI kept its Bash until Sprint 19, when it was deleted outright —
+  the audit showed nothing anywhere still ran it.
+- **Mailpit arrived by addition, not by swap.** The migration that made the
+  swap expensive — renaming a service, its `.env` keys, container and volume
+  under every running stack — was the cost of *replacing* MailHog. Adding
+  `mailpit` as its own catalog service costs none of that: MailHog keeps
+  running wherever it runs, both catchers share port 8025 by Mailpit's own
+  design choice, and the in-app inbox has read both APIs since Sprint 1. P0-5
+  is closed.
+- **ACME (P3-21) is closed as won't-do**, moved to "Not worth chasing", and
+  will not be rescheduled.
 
 | item | state | what remains |
 | --- | --- | --- |
-| **P0-5 Mailpit** | partly delivered | The in-app inbox ships and reads both the MailHog and Mailpit APIs, so a checkout on either image gets one. **The image swap itself is upstream**: it renames a service, its `.env` keys, its container and its volume — a migration for every running stack, not a one-line edit. |
-| **P1-6 MCP server** | partly delivered | The read surface is complete; only two writing tools are exposed. Thirty-four commands report progress through Tauri's event system and are unreachable from a stdio subprocess until that is decoupled. |
-| **P2-11 four runtime generators** | not started | Python, Go, Ruby, Rust have no Dockerfile template. **Blocked on the Bash removal, not on effort** — see §7: adding one today means writing it twice or breaking the parity check. |
-| **P3-21 ACME** | not started, **not recommended** | A public CA cannot issue for `.loc`, and mkcert already produces a certificate the browser trusts. The item buys nothing for local development. |
+| **P2-11 four runtime generators** | **delivered** (Sprint 18) | Nothing. The predicted contract change happened — `project.schema.json` gained a runtime enum of six and a shared lang block — but the cost estimate collapsed once the shape was found: one `LangConfig` (version, optional install/build, start, port) serves all four, one template renders them, and compose reuses node's service block byte-for-byte in structure. Both open ends closed in Sprint 19: the Bash CLI is deleted, and the Rust version list runs to 1.84. |
+
+**The roadmap is complete — and as of Sprint 19, so is the housekeeping.**
+Every P0–P3 item is delivered or closed by decision, and the three upstream
+leftovers are done: `core/cli` and the root `stackvo.sh` launcher are deleted
+(the audit first proved the app spawns no shell anywhere — certificates call
+mkcert directly, the script mention in `certs.rs` was only a docstring — so
+the `bash` preflight requirement is gone too, and the workspace marker moved
+from `core/cli/stackvo.sh` to `core/templates`); the Rust version list runs
+to 1.84; and the mail question closed on the owner's terms in Sprint 20:
+both catchers ship, neither is on by default, and the Mail nav destination
+offers the one-click enable-and-start when its page finds no catcher running. The only line
+left open anywhere is upstream's `mongo-express` profile naming (C-09), which
+is a one-word template question, not a dependency.
 
 And one carried forward from §7, the only piece of the Bash removal still open:
 
 | surface | state |
 | --- | --- |
-| `render_template`, `configs/*`, `docker-compose.dynamic.yml` | ✅ ported, byte-identical against Bash's output |
-| project `nginx.conf` / `supervisord.conf` (22 files) | ❌ not ported — inline heredocs in `dockerfile/*.sh` plus a `sed` |
+| `render_template`, `configs/*`, `docker-compose.dynamic.yml` | ✅ ported, byte-identical against Bash's output — **and now compared by `generator_verify` on every run**, not only by fixtures |
+| project `nginx.conf` / `supervisord.conf` / `Caddyfile` heredocs | ✅ **ported in Sprint 15** — every byte reproduced, including the two heredoc lines that end in four trailing spaces (nginx and caddy) and the frankenphp one whose blank lines are genuinely blank; verified against all five nginx projects on this checkout |
 
-At 40/40 the `Rust` generator mode stops needing Bash and the shell can go.
+**The port surface is complete — and as of Sprint 17, taken over.** The final
+count is **32 of 32** (the write path exposed `stackvo.yml` and node
+`.dockerignore` as missing from the comparison; both were ported and verified
+before the first Rust write). The app now writes with Rust directly and spawns
+no shell. Deleting `core/cli` from upstream remains optional cleanup for CLI
+users — the app no longer cares either way. This superseded the older 28/28
+figure below,
+and it is the gate in front of P2-11.

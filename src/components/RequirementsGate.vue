@@ -30,7 +30,6 @@ const ICONS = {
   compose: 'mdi-layers-outline',
   network: 'mdi-lan',
   projects: 'mdi-folder-multiple-outline',
-  bash: 'mdi-console',
 };
 
 const STATE = {

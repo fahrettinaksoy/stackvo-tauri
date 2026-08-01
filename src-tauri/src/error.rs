@@ -79,7 +79,7 @@ impl Error {
 
     pub fn no_workspace() -> Self {
         Self::new(Code::NoWorkspace, "No StackVo directory selected yet.")
-            .with_hint("Choose the folder containing core/cli/stackvo.sh and projects/.")
+            .with_hint("Choose an empty folder for StackVo to set up, or one it already manages.")
     }
 
     pub fn not_found(what: impl std::fmt::Display) -> Self {

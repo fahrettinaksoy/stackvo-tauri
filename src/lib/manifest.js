@@ -61,6 +61,45 @@ export function overExtensionLimit(form, catalog) {
   return form.extensions.length > extensionLimit(catalog);
 }
 
+/** The four runtimes that share one config shape (mirror of LANG_RUNTIMES). */
+export const LANG_RUNTIMES = ['python', 'go', 'ruby', 'rust'];
+
+/**
+ * Each lang runtime's ecosystem defaults — the same values the Rust side
+ * (`manifest::lang_defaults`) applies when a field is omitted, repeated here
+ * so the form shows what will actually run instead of empty inputs.
+ */
+export const LANG_DEFAULTS = {
+  python: {
+    version: '3.13',
+    install: 'pip install --no-cache-dir -r requirements.txt',
+    build: '',
+    start: 'python main.py',
+    port: 8000,
+  },
+  go: {
+    version: '1.23',
+    install: '',
+    build: 'go build -o /app/server .',
+    start: '/app/server',
+    port: 8080,
+  },
+  ruby: {
+    version: '3.3',
+    install: 'bundle install',
+    build: '',
+    start: 'bundle exec ruby app.rb',
+    port: 4567,
+  },
+  rust: {
+    version: '1',
+    install: '',
+    build: 'cargo build --release',
+    start: 'cargo run --release',
+    port: 8080,
+  },
+};
+
 /** A form with the contract's own defaults in it. */
 export function blankForm() {
   return {
@@ -76,6 +115,13 @@ export function blankForm() {
     build: '',
     start: 'npm run dev -- --host 0.0.0.0 --port 3000',
     port: 3000,
+    // One block of lang fields, reused by whichever lang runtime is chosen;
+    // switching runtime re-seeds them from LANG_DEFAULTS.
+    langVersion: '',
+    langInstall: '',
+    langBuild: '',
+    langStart: '',
+    langPort: 8080,
   };
 }
 
@@ -92,7 +138,7 @@ export function formFromManifest(manifest) {
 
   form.name = manifest.name ?? '';
   form.domain = manifest.domain ?? '';
-  form.runtime = manifest.runtime === 'node' ? 'node' : 'php';
+  form.runtime = ['node', ...LANG_RUNTIMES].includes(manifest.runtime) ? manifest.runtime : 'php';
 
   if (manifest.server) form.server = manifest.server;
   if (manifest.documentRoot) form.documentRoot = manifest.documentRoot;
@@ -100,6 +146,14 @@ export function formFromManifest(manifest) {
   if (manifest.php) {
     form.phpVersion = manifest.php.version ?? '';
     form.extensions = [...(manifest.php.extensions ?? [])];
+  }
+
+  if (manifest.lang) {
+    form.langVersion = manifest.lang.version ?? '';
+    form.langInstall = manifest.lang.install ?? '';
+    form.langBuild = manifest.lang.build ?? '';
+    form.langStart = manifest.lang.start ?? '';
+    form.langPort = manifest.lang.port ?? 8080;
   }
 
   if (manifest.node) {
@@ -124,10 +178,17 @@ export function formFromManifest(manifest) {
  * disambiguating, so two blocks silently corrupt the generated Dockerfile
  * (W-02).
  */
-export function formToSpec(form) {
+export function formToSpec(form, tld) {
+  // The suffix is passed in rather than assumed. It used to be the literal
+  // `.loc`, which is not what the stack is configured with: routing labels,
+  // certificates and the services list all use DEFAULT_TLD_SUFFIX, so a
+  // project created without a typed domain got an address that nothing served.
+  // An unknown suffix leaves the domain empty, which the schema rejects — a
+  // visible failure rather than a project at the wrong hostname.
+  const suffix = String(tld ?? '').trim();
   const spec = {
     name: form.name,
-    domain: form.domain || `${form.name}.loc`,
+    domain: form.domain || (suffix ? `${form.name}.${suffix}` : ''),
     runtime: form.runtime,
   };
 
@@ -139,6 +200,15 @@ export function formToSpec(form) {
       port: Number(form.port),
     };
     if (form.build) spec.node.build = form.build;
+  } else if (LANG_RUNTIMES.includes(form.runtime)) {
+    const block = {
+      version: form.langVersion,
+      start: form.langStart,
+      port: Number(form.langPort),
+    };
+    if (form.langInstall) block.install = form.langInstall;
+    if (form.langBuild) block.build = form.langBuild;
+    spec[form.runtime] = block;
   } else {
     spec.server = form.server;
     spec.document_root = form.documentRoot;
@@ -158,4 +228,89 @@ export function formToSpec(form) {
  */
 export function specsDiffer(a, b) {
   return JSON.stringify(a) !== JSON.stringify(b);
+}
+
+/**
+ * Suffixes offered when picking a project's domain, best first.
+ *
+ * `test` and `localhost` are reserved for exactly this by RFC 6761, so no
+ * registry can ever sell them out from under a local setup. `loc` is the
+ * convention StackVo shipped with: not reserved, but unallocated, so it works.
+ * `dev` is here because people ask for it, with the catch below.
+ */
+export const LOCAL_SUFFIXES = ['test', 'localhost', 'loc', 'dev'];
+
+/**
+ * TLDs on the HSTS preload list, where every browser forces HTTPS.
+ *
+ * There is no click-through on these — a plain-HTTP `.dev` site is not a
+ * warning, it is a refusal. Offering the suffix without saying so would hand
+ * someone a project that cannot be opened and no clue why.
+ */
+export const HTTPS_ONLY_SUFFIXES = ['dev', 'app', 'page', 'new', 'foo'];
+
+/** `name.configured` first, then the alternatives, with no duplicates. */
+export function domainSuggestions(name, configured) {
+  const base = String(name ?? '').trim();
+  if (!base) return [];
+  const suffixes = [String(configured ?? '').trim(), ...LOCAL_SUFFIXES].filter(Boolean);
+  return [...new Set(suffixes.map((s) => `${base}.${s}`))];
+}
+
+/**
+ * What the chosen domain will cost, or null when it costs nothing.
+ *
+ * `https` — an HSTS-preloaded TLD: it will not load over plain HTTP at all.
+ * `certificate` — outside the configured suffix, so the wildcard does not
+ * cover it and certificates have to be reissued before HTTPS works.
+ */
+export function domainAdvice(domain, configured, sslEnabled) {
+  const value = String(domain ?? '')
+    .trim()
+    .toLowerCase();
+  if (!value) return null;
+
+  const tld = value.split('.').pop();
+  if (HTTPS_ONLY_SUFFIXES.includes(tld) && !sslEnabled) return 'https';
+
+  const suffix = String(configured ?? '')
+    .trim()
+    .toLowerCase();
+  if (suffix && !value.endsWith(`.${suffix}`)) return 'certificate';
+  return null;
+}
+
+/**
+ * A `.env` field name as a sentence rather than a shout.
+ *
+ * The fallback for settings with no translation of their own — the ones whose
+ * names are the terms their own documentation uses, where a translation would
+ * be a phrase nobody can search for. `BOOTSTRAP_SERVERS` becomes
+ * `Bootstrap servers`, which is the same word and easier to read.
+ */
+export function humaniseField(field) {
+  const text = String(field ?? '').trim();
+  if (!text) return '';
+  return text.charAt(0).toUpperCase() + text.slice(1).toLowerCase().replace(/_/g, ' ');
+}
+
+/**
+ * The domain a project should be filed under, or null when it stands alone.
+ *
+ * `parser.ajans.loc` belongs with `tracking.ajans.loc`; `l00kout.loc` does not
+ * belong to `loc`. Two rules, and both are load-bearing:
+ *
+ *  * a parent needs two labels of its own, so a second-level domain is never
+ *    filed under its TLD;
+ *  * it must not be the workspace's own suffix — every project shares that by
+ *    construction, so grouping on it yields one group holding everything,
+ *    which is no grouping plus a row.
+ */
+export function parentDomain(domain, suffix) {
+  const parts = String(domain ?? '')
+    .split('.')
+    .filter(Boolean);
+  if (parts.length < 3) return null;
+  const parent = parts.slice(1).join('.');
+  return parent === String(suffix ?? '').trim() ? null : parent;
 }

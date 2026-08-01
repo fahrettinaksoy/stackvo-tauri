@@ -14,25 +14,269 @@ pub struct Env {
     vars: BTreeMap<String, String>,
 }
 
+/// Values this app knows rather than values the user chose.
+///
+/// They shipped in `.env` because the shell generator had nowhere else to put
+/// them, and that made them stale by design: a workspace created last year
+/// still offers last year's PHP versions, because the list lives in a file the
+/// app never updates. Here they travel with the binary — new PHP release, new
+/// build, new list.
+///
+/// **Defaults, not constants.** `.env` still wins, so anyone who does want to
+/// pin a container name or trim the catalog writes the key and it takes
+/// effect. Nothing became unreachable; it stopped having to be copied.
+///
+/// The second group is different in kind and worth naming. Those *are* choices
+/// — the domain suffix, whether TLS is on — and they stay editable in
+/// Settings, which writes the key to `.env` when it is changed. What moved is
+/// only the default: a fresh workspace no longer ships seven lines restating
+/// what the app would have done anyway, and a `.env` line now means somebody
+/// decided something rather than that a file was copied.
+pub const EMBEDDED: [(&str, &str); 139] = [
+    // HOST_UID and HOST_GID are deliberately absent. `template::variables`
+    // fills them from getuid()/getgid() when nothing else has, and it does that
+    // only for keys that are missing — embedding them pinned one machine's ids
+    // into every install, so Grafana would have run as uid 501 on a Linux box
+    // where the developer is 1000.
+    ("SUPPORTED_SERVERS", "nginx,apache,caddy,frankenphp,swoole"),
+    ("SUPPORTED_SERVERS_DEFAULT", "nginx"),
+    ("SUPPORTED_LANGUAGES", "php,python,go,ruby,rust,nodejs"),
+    ("SUPPORTED_LANGUAGES_PHP_VERSIONS", "5.6,7.0,7.1,7.2,7.3,7.4,8.0,8.1,8.2,8.3,8.4,8.5"),
+    ("SUPPORTED_LANGUAGES_PHP_DEFAULT", "8.4"),
+    ("SUPPORTED_LANGUAGES_PHP_EXTENSIONS", "apcu,bcmath,bz2,calendar,ctype,curl,dba,dom,enchant,ev,event,exif,ffi,fileinfo,filter,ftp,gd,gettext,gmp,hash,iconv,igbinary,imagick,imap,intl,json,ldap,lz4,mbstring,mcrypt,memcache,memcached,mongodb,monolog,mysqli,mysqlnd,odbc,opcache,openswoole,openssl,pcntl,pdo,pdo_dblib,pdo_mysql,pdo_oci,pdo_odbc,pdo_pgsql,pdo_sqlite,pdo_sqlsrv,pgsql,phalcon,phar,posix,pspell,readline,redis,session,shmop,simplexml,soap,sockets,sodium,sqlite3,sqlsrv,swoole,sysvmsg,sysvsem,sysvshm,tokenizer,uv,xdebug,xml,xmlreader,xmlrpc,xmlwriter,xsl,zip,zlib"),
+    ("SUPPORTED_LANGUAGES_PHP_EXTENSIONS_DEFAULT", "mbstring,tokenizer,xml,ctype,json,openssl,pdo,pdo_mysql,pdo_pgsql,pdo_sqlite,fileinfo,curl,zip,gd,imagick,intl,sodium,bcmath,redis,opcache,memcached,mongodb,swoole,soap,dom,filter,hash,pcntl,session,xmlreader,xmlwriter,xdebug"),
+    ("SUPPORTED_LANGUAGES_PYTHON_VERSIONS", "2.7,3.5,3.6,3.7,3.8,3.9,3.10,3.11,3.12,3.13,3.14"),
+    ("SUPPORTED_LANGUAGES_PYTHON_DEFAULT", "3.14"),
+    ("SUPPORTED_LANGUAGES_GO_VERSIONS", "1.11,1.12,1.13,1.14,1.15,1.16,1.17,1.18,1.19,1.20,1.21,1.22,1.23"),
+    ("SUPPORTED_LANGUAGES_GO_DEFAULT", "1.23"),
+    ("SUPPORTED_LANGUAGES_RUBY_VERSIONS", "2.4,2.5,2.6,2.7,3.0,3.1,3.2,3.3"),
+    ("SUPPORTED_LANGUAGES_RUBY_DEFAULT", "3.3"),
+    ("SUPPORTED_LANGUAGES_RUST_VERSIONS", "1.70,1.72,1.74,1.75,1.76,1.78,1.80,1.81,1.82,1.83,1.84"),
+    ("SUPPORTED_LANGUAGES_RUST_DEFAULT", "1.84"),
+    ("SUPPORTED_LANGUAGES_NODEJS_VERSIONS", "16,18,20,21,22,23"),
+    ("SUPPORTED_LANGUAGES_NODEJS_DEFAULT", "22"),
+    ("SERVICE_RABBITMQ_URL", "rabbitmq"),
+    ("SERVICE_KIBANA_URL", "kibana"),
+    ("SERVICE_GRAFANA_URL", "grafana"),
+    ("SERVICE_MAILHOG_URL", "mailhog"),
+    ("SERVICE_MAILPIT_URL", "mailpit"),
+    ("SERVICE_PHPMYADMIN_URL", "phpmyadmin"),
+    ("SERVICE_PHPMYADMIN_ARBITRARY", "1"),
+    ("SERVICE_PHPMYADMIN_HOST", "stackvo-mysql"),
+    ("SERVICE_PHPMYADMIN_UPLOAD_LIMIT", "300M"),
+    ("SERVICE_ADMINER_URL", "adminer"),
+    ("SERVICE_ADMINER_DEFAULT_SERVER", "stackvo-mysql"),
+    ("SERVICE_ADMINER_DESIGN", "pepa-linha"),
+    ("SERVICE_PGADMIN_URL", "pgadmin"),
+    ("SERVICE_PGADMIN_SERVER_MODE", "False"),
+    ("SERVICE_PGADMIN_MASTER_PASSWORD_REQUIRED", "False"),
+    ("SERVICE_KAFBAT_URL", "kafbat"),
+    ("SERVICE_KAFBAT_DYNAMIC_CONFIG", "true"),
+    ("SERVICE_KAFBAT_CLUSTER_NAME", "stackvo-kafka"),
+    ("SERVICE_KAFBAT_BOOTSTRAP_SERVERS", "stackvo-kafka:9092"),
+    ("SERVICE_MONGO_EXPRESS_URL", "mongo-express"),
+    ("SERVICE_MONGO_EXPRESS_MONGODB_SERVER", "stackvo-mongo"),
+    ("SERVICE_MONGO_EXPRESS_BASEURL", "/"),
+    ("SERVICE_PHPCACHEADMIN_URL", "phpcacheadmin"),
+    ("SERVICE_PHPCACHEADMIN_REDIS_HOST", "stackvo-redis"),
+    ("SERVICE_PHPCACHEADMIN_MEMCACHED_HOST", "stackvo-memcached"),
+    // Stack-shaping choices. Editable in Settings; absent from a fresh `.env`
+    // because the default is the answer almost everyone keeps.
+    ("DEFAULT_TLD_SUFFIX", "stackvo.loc"),
+    ("SERVER_MAX_BODY_SIZE", "1m"),
+    ("SERVER_FASTCGI_TIMEOUT", "60"),
+    ("SERVER_CLIENT_BODY_TIMEOUT", "60"),
+    ("SERVER_KEEPALIVE_TIMEOUT", "75"),
+    ("SERVER_TCP_NODELAY", "on"),
+    ("SERVER_GZIP", "off"),
+    ("SERVER_GZIP_COMP_LEVEL", "1"),
+    ("SERVER_GZIP_TYPES", ""),
+    ("SERVER_FASTCGI_CONNECT_TIMEOUT", "60"),
+    ("SERVER_FASTCGI_SEND_TIMEOUT", "60"),
+    ("SSL_ENABLE", "true"),
+    ("REDIRECT_TO_HTTPS", "true"),
+    ("DOCKER_DEFAULT_NETWORK", "stackvo-net"),
+    ("PHP_DEFAULT_TOOLS", "composer,nodejs"),
+    ("PHP_TOOL_COMPOSER_VERSION", "latest"),
+    ("PHP_TOOL_NODEJS_VERSION", "20"),
+    (
+        "PHP_DEFAULT_APT_PACKAGES",
+        "git,wget,unzip,default-mysql-client,postgresql-client,redis-tools,strace,vim,nano,curl,\
+         iputils-ping,net-tools,telnet,htop,procps,tar,gzip,bzip2,p7zip-full",
+    ),
+    // Per-service defaults. The Services pane edits these, and writes the key
+    // to `.env` when one is changed — so a fresh workspace ships no service
+    // configuration at all, and a line in that file means a decision.
+    //
+    // Credentials are deliberately NOT here. A database password is the one
+    // value a user should choose rather than inherit, and leaving it visible
+    // in `.env` is how somebody notices it still says `root`.
+    ("SERVICE_ADMINER_ENABLE", "false"),
+    ("SERVICE_ADMINER_HOST_PORT", "8082"),
+    ("SERVICE_ADMINER_VERSION", "latest"),
+    ("SERVICE_BLACKFIRE_ENABLE", "false"),
+    ("SERVICE_BLACKFIRE_VERSION", "2"),
+    ("SERVICE_CASSANDRA_ENABLE", "false"),
+    ("SERVICE_CASSANDRA_VERSION", "latest"),
+    ("SERVICE_ELASTICSEARCH_ENABLE", "false"),
+    ("SERVICE_ELASTICSEARCH_VERSION", "8.11.3"),
+    ("SERVICE_GRAFANA_ADMIN_USER", "admin"),
+    ("SERVICE_GRAFANA_ENABLE", "false"),
+    ("SERVICE_GRAFANA_VERSION", "latest"),
+    ("SERVICE_KAFBAT_ENABLE", "false"),
+    ("SERVICE_KAFBAT_HOST_PORT", "8080"),
+    ("SERVICE_KAFBAT_VERSION", "latest"),
+    ("SERVICE_KAFKA_ENABLE", "false"),
+    ("SERVICE_KAFKA_VERSION", "7.5.0"),
+    ("SERVICE_KIBANA_ENABLE", "false"),
+    ("SERVICE_KIBANA_VERSION", "8.11.3"),
+    ("SERVICE_MAILHOG_ENABLE", "false"),
+    ("SERVICE_MAILHOG_VERSION", "latest"),
+    ("SERVICE_MAILPIT_ENABLE", "false"),
+    ("SERVICE_MAILPIT_VERSION", "latest"),
+    ("SERVICE_MARIADB_DATABASE", "stackvo"),
+    ("SERVICE_MYSQL_ENABLE", "true"),
+    ("SERVICE_REDIS_ENABLE", "true"),
+    ("SERVICE_MARIADB_ENABLE", "false"),
+    ("SERVICE_MARIADB_VERSION", "10.6"),
+    ("SERVICE_MEMCACHED_ENABLE", "false"),
+    ("SERVICE_MEMCACHED_VERSION", "1.6"),
+    ("SERVICE_MONGO_ENABLE", "false"),
+    ("SERVICE_MONGO_EXPRESS_ADMIN_USERNAME", "root"),
+    ("SERVICE_MONGO_EXPRESS_BASICAUTH_USERNAME", "admin"),
+    ("SERVICE_MONGO_EXPRESS_ENABLE", "false"),
+    ("SERVICE_MONGO_EXPRESS_HOST_PORT", "8083"),
+    ("SERVICE_MONGO_EXPRESS_MONGODB_PORT", "27017"),
+    ("SERVICE_MONGO_EXPRESS_VERSION", "latest"),
+    ("SERVICE_MONGO_INITDB_ROOT_USERNAME", "root"),
+    ("SERVICE_MONGO_VERSION", "5.0"),
+    ("SERVICE_MYSQL_DATABASE", "stackvo"),
+    ("SERVICE_MYSQL_VERSION", "8.0"),
+    ("SERVICE_PGADMIN_DEFAULT_EMAIL", "admin@stackvo.loc"),
+    ("SERVICE_PGADMIN_ENABLE", "false"),
+    ("SERVICE_PGADMIN_HOST_PORT", "5050"),
+    ("SERVICE_PGADMIN_VERSION", "latest"),
+    ("SERVICE_PHPCACHEADMIN_ADMIN_USER", "admin"),
+    ("SERVICE_PHPCACHEADMIN_ENABLE", "false"),
+    ("SERVICE_PHPCACHEADMIN_HOST_PORT", "8084"),
+    ("SERVICE_PHPCACHEADMIN_MEMCACHED_PORT", "11211"),
+    ("SERVICE_PHPCACHEADMIN_REDIS_PORT", "6379"),
+    ("SERVICE_PHPCACHEADMIN_VERSION", "latest"),
+    ("SERVICE_PHPMYADMIN_ENABLE", "true"),
+    ("SERVICE_PHPMYADMIN_HOST_PORT", "8081"),
+    ("SERVICE_PHPMYADMIN_PORT", "3306"),
+    ("SERVICE_PHPMYADMIN_VERSION", "latest"),
+    ("SERVICE_POSTGRES_DB", "stackvo"),
+    ("SERVICE_POSTGRES_ENABLE", "false"),
+    ("SERVICE_POSTGRES_USER", "stackvo"),
+    ("SERVICE_POSTGRES_VERSION", "14"),
+    ("SERVICE_RABBITMQ_DEFAULT_USER", "admin"),
+    ("SERVICE_RABBITMQ_ENABLE", "true"),
+    ("SERVICE_RABBITMQ_VERSION", "3"),
+    ("SERVICE_REDIS_VERSION", "7.0"),
+    // Ports and starting credentials, so a workspace ships no `.env` content at
+    // all. These are placeholders every install shares, not secrets: they are
+    // in this file, which is public, and were in the committed `.env.example`
+    // before that. Changing one writes it to `.env`, where it stays private —
+    // and `no_real_credential_is_compiled_into_the_binary` below is what keeps
+    // a real one from ever being pasted in here.
+    ("SERVICE_POSTGRES_HOST_PORT", "5432"),
+    ("SERVICE_KAFKA_HOST_PORT", "9092"),
+    ("SERVICE_KAFKA_EXTERNAL_HOST_PORT", "29092"),
+    ("SERVICE_MYSQL_ROOT_PASSWORD", "root"),
+    ("SERVICE_MARIADB_ROOT_PASSWORD", "root"),
+    ("SERVICE_POSTGRES_PASSWORD", "root"),
+    ("SERVICE_MONGO_INITDB_ROOT_PASSWORD", "root"),
+    ("SERVICE_REDIS_PASSWORD", ""),
+    ("SERVICE_RABBITMQ_DEFAULT_PASS", "admin"),
+    ("SERVICE_GRAFANA_ADMIN_PASSWORD", "admin"),
+    ("SERVICE_PGADMIN_DEFAULT_PASSWORD", "admin"),
+    ("SERVICE_MONGO_EXPRESS_ADMIN_PASSWORD", "root"),
+    ("SERVICE_MONGO_EXPRESS_BASICAUTH_PASSWORD", "admin"),
+    ("SERVICE_PHPCACHEADMIN_ADMIN_PASS", "admin"),
+    ("SERVICE_BLACKFIRE_SERVER_ID", ""),
+    ("SERVICE_BLACKFIRE_SERVER_TOKEN", ""),
+];
+
+/// Older spellings, and what they mean now: `(legacy, current)`.
+///
+/// StackVo renamed these and kept reading both. The names are not
+/// interchangeable in one direction — the current name is what the code asks
+/// for — so the legacy value is copied forward at parse time rather than
+/// checked at every call site.
+const ALIASES: [(&str, &str); 6] = [
+    ("DEFAULT_SERVER", "SUPPORTED_SERVERS_DEFAULT"),
+    ("DEFAULT_PHP_VERSION", "SUPPORTED_LANGUAGES_PHP_DEFAULT"),
+    ("SUPPORTED_WEBSERVERS", "SUPPORTED_SERVERS"),
+    // Three port keys that never followed the convention the other six do.
+    // Renamed rather than left alone because the odd ones out are the reason
+    // somebody looks for `SERVICE_POSTGRES_HOST_PORT`, does not find it, and
+    // concludes the port cannot be changed. An existing checkout keeps its
+    // spelling through this table, so nothing moves ports on an upgrade.
+    ("HOST_PORT_POSTGRES", "SERVICE_POSTGRES_HOST_PORT"),
+    ("HOST_PORT_KAFKA", "SERVICE_KAFKA_HOST_PORT"),
+    (
+        "HOST_PORT_KAFKA_EXTERNAL",
+        "SERVICE_KAFKA_EXTERNAL_HOST_PORT",
+    ),
+];
+
 impl Env {
+    /// A missing `.env` is not an error.
+    ///
+    /// The file holds overrides, and having none is the normal state of a
+    /// fresh workspace — it is created the first time Settings writes a key.
+    /// Failing here instead would make every command in the app depend on a
+    /// file whose entire purpose is to be optional.
     pub fn load(root: &Path) -> Result<Self> {
         let path = root.join(".env");
-        let text = std::fs::read_to_string(&path)
-            .map_err(|e| Error::io(format!("reading {}", path.display()), e))?;
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(Error::io(format!("reading {}", path.display()), e)),
+        };
         Ok(Self::parse(&text))
     }
 
     pub fn parse(text: &str) -> Self {
-        let mut vars = BTreeMap::new();
+        let mut from_file: BTreeMap<String, String> = BTreeMap::new();
         for raw in text.lines() {
             let line = raw.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
             if let Some((k, v)) = line.split_once('=') {
-                vars.insert(k.trim().to_string(), v.trim().to_string());
+                from_file.insert(k.trim().to_string(), v.trim().to_string());
             }
         }
+
+        // The embedded values go in first so the file can overwrite any of
+        // them. Reversing this would make them constants, which is a
+        // different promise from the one being made.
+        let mut vars: BTreeMap<String, String> = EMBEDDED
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+
+        // An older name is honoured only when the file does not also carry the
+        // current one, so a checkout that spells a setting the old way still
+        // gets what it asked for.
+        //
+        // This has to look at what the *file* set, not at the merged map.
+        // Callers used to resolve these chains themselves with `first_of`,
+        // which worked while both names could only come from the file and
+        // broke the moment the current name shipped as an embedded default:
+        // the first arm then always answered, the alias never fired, and a
+        // checkout asking for Apache was quietly served nginx.
+        for (legacy, current) in ALIASES {
+            if let Some(value) = from_file.get(legacy) {
+                if !from_file.contains_key(current) {
+                    vars.insert(current.to_string(), value.clone());
+                }
+            }
+        }
+
+        vars.extend(from_file);
         Self { vars }
     }
 
@@ -49,12 +293,6 @@ impl Env {
     /// something a command returns.
     pub fn raw(&self) -> &BTreeMap<String, String> {
         &self.vars
-    }
-
-    /// First key that is present, in the order given. Encodes the precedence
-    /// chains in `contracts/project.schema.json` → `x-stackvo-read-rules`.
-    pub fn first_of(&self, keys: &[&str]) -> Option<&str> {
-        keys.iter().find_map(|k| self.get(k))
     }
 
     /// Only lowercase `true` counts, matching the Bash `[ "$value" = "true" ]`
@@ -173,7 +411,7 @@ SERVICE_MYSQL_ROOT_PASSWORD=hunter2
 SERVICE_MONGO_EXPRESS_ENABLE=true
 SUPPORTED_SERVERS=nginx,apache, caddy
 LOOKS_LIKE_URL=postgres://user:pw@host:5432/db?a=1
-STACKVO_UI_ENABLE=TRUE
+SERVICE_REDIS_ENABLE=TRUE
 "#;
 
     #[test]
@@ -214,12 +452,69 @@ STACKVO_UI_ENABLE=TRUE
         );
     }
 
+    /// The settings form binds to these by name and shows their defaults as
+    /// the starting value. A rename here without one there produces a control
+    /// wired to nothing: it renders, it accepts input, and it saves a key
+    /// nothing reads. Nothing about that looks broken on screen, so the names
+    /// are pinned on this side.
+    /// The bug this pins down is one embedding created.
+    ///
+    /// Callers resolved `SUPPORTED_SERVERS_DEFAULT` then `DEFAULT_SERVER` in
+    /// order, which was right while both could only come from the file. Once
+    /// the first shipped as an embedded default it was always present, so the
+    /// second was never consulted: a checkout that said Apache got nginx, with
+    /// nothing to see in the file it had written.
+    #[test]
+    fn a_legacy_key_still_beats_the_embedded_default_it_was_renamed_to() {
+        let env = Env::parse("DEFAULT_SERVER=apache\nDEFAULT_PHP_VERSION=7.4\n");
+        assert_eq!(env.get("SUPPORTED_SERVERS_DEFAULT"), Some("apache"));
+        assert_eq!(env.get("SUPPORTED_LANGUAGES_PHP_DEFAULT"), Some("7.4"));
+
+        // The current name wins when the file carries both — the alias is a
+        // fallback, not an override.
+        let both = Env::parse("DEFAULT_SERVER=apache\nSUPPORTED_SERVERS_DEFAULT=caddy\n");
+        assert_eq!(both.get("SUPPORTED_SERVERS_DEFAULT"), Some("caddy"));
+
+        // And with neither spelled out, the embedded default still answers.
+        assert_eq!(
+            Env::parse("").get("SUPPORTED_SERVERS_DEFAULT"),
+            Some("nginx")
+        );
+    }
+
+    #[test]
+    fn the_stack_shaping_settings_keep_their_names_and_defaults() {
+        let embedded: BTreeMap<&str, &str> = EMBEDDED.iter().copied().collect();
+        for (key, expected) in [
+            ("DEFAULT_TLD_SUFFIX", "stackvo.loc"),
+            ("SSL_ENABLE", "true"),
+            ("REDIRECT_TO_HTTPS", "true"),
+            ("DOCKER_DEFAULT_NETWORK", "stackvo-net"),
+            ("PHP_DEFAULT_TOOLS", "composer,nodejs"),
+        ] {
+            assert_eq!(embedded.get(key), Some(&expected), "{key}");
+        }
+
+        // Editable as chips, so it has to survive the split/join round trip
+        // the form does — no stray spaces, no empty entry from a trailing
+        // comma.
+        let apt = embedded
+            .get("PHP_DEFAULT_APT_PACKAGES")
+            .expect("apt package defaults ship");
+        let items: Vec<&str> = apt.split(',').collect();
+        assert!(items.len() > 10, "expected a real package list");
+        assert!(
+            items.iter().all(|p| !p.is_empty() && p.trim() == *p),
+            "a chip would render blank or padded: {items:?}"
+        );
+    }
+
     #[test]
     fn only_lowercase_true_is_truthy() {
         let env = Env::parse(SAMPLE);
         assert!(env.bool("SERVICE_MYSQL_ENABLE"));
         // Matches Bash's `[ "$value" = "true" ]` — uppercase is NOT true there.
-        assert!(!env.bool("STACKVO_UI_ENABLE"));
+        assert!(!env.bool("SERVICE_REDIS_ENABLE"));
     }
 
     #[test]

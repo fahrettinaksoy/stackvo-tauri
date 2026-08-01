@@ -5,7 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { useAppearanceStore } from '@/stores/appearance';
 import { useAppStore } from '@/stores/app';
 import { api } from '@/lib/ipc';
-import { LEVELS, countByLevel, filterLines, withLevels } from '@/lib/logs';
+import { LEVELS, countByLevel, filterLines, highlight, withLevels } from '@/lib/logs';
 import ErrorAlert from '@/components/ErrorAlert.vue';
 
 /**
@@ -79,6 +79,19 @@ const chosen = ref([]);
 const coverage = ref(null);
 
 const query = ref('');
+/** Treat the query as a pattern. Off by default: most searches are a word. */
+const useRegex = ref(false);
+/**
+ * Frozen buffer.
+ *
+ * Distinct from turning follow off, which only stops the scroll — lines keep
+ * arriving and the oldest fall out of the bounded buffer, so the thing you
+ * were reading can still scroll out from under you. Pausing holds the whole
+ * view still and counts what came in while you read, which is the state you
+ * actually want when something scrolled past too fast.
+ */
+const paused = ref(false);
+const pending = ref([]);
 const levels = ref([]);
 
 let unlistenLine = null;
@@ -139,10 +152,60 @@ async function jump(line, file) {
  */
 const tagged = computed(() => withLevels(lines.value));
 const visible = computed(() =>
-  filterLines(tagged.value, { query: query.value, levels: levels.value })
+  filterLines(tagged.value, {
+    query: query.value,
+    levels: levels.value,
+    regex: useRegex.value,
+  })
 );
 const counts = computed(() => countByLevel(tagged.value));
 const filtering = computed(() => !!query.value.trim() || levels.value.length > 0);
+
+/**
+ * A toggle's label names what the click will do, not the feature it belongs
+ * to. "Follow output" on a button that is already following says nothing
+ * about what pressing it changes — and the icon alone is the only other
+ * signal, which a screen reader does not get at all.
+ */
+/** Release what arrived while paused, in the order it arrived. */
+function resume() {
+  paused.value = false;
+  if (pending.value.length) {
+    lines.value.push(...pending.value);
+    pending.value = [];
+    if (lines.value.length > MAX_LINES) lines.value.splice(0, lines.value.length - MAX_LINES);
+  }
+  if (follow.value) nextTick(scrollToEnd);
+}
+
+/**
+ * Empty the view.
+ *
+ * The reproduce loop this pane exists for: clear, trigger the bug, read only
+ * what the bug wrote. Nothing is deleted from disk — the buffer is a window,
+ * and the next poll refills it from wherever the tail is.
+ */
+function clearView() {
+  lines.value = [];
+  pending.value = [];
+}
+
+const followLabel = computed(() =>
+  follow.value ? tc('a11y.stopFollowing') : tc('a11y.followOutput')
+);
+
+/**
+ * Where the seed ends and live output begins, as an index into `visible`.
+ *
+ * -1 when there is no seed or nothing live yet. Computed over the *visible*
+ * lines rather than the buffer, so a filter that hides the last historic line
+ * moves the boundary with it instead of leaving it stranded.
+ */
+const liveFrom = computed(() => {
+  const rows = visible.value;
+  const first = rows.findIndex((l) => !l.historic);
+  return first > 0 && rows[first - 1]?.historic ? first : -1;
+});
 
 /** The picker's entries: the container stream first, then files by group. */
 const sources = computed(() => {
@@ -215,10 +278,14 @@ async function openStream() {
     // Listen before opening, or the first lines race the subscription.
     unlistenLine = await listen('logs:line', (event) => {
       if (event.payload.streamId !== streamId.value) return;
-      const { line, stream, container, source: from } = event.payload;
-      lines.value.push({
+      const { line, stream, container, source: from, historic } = event.payload;
+      const row = {
         text: line,
         stream,
+        // The fanout's seed: what each file already held when the tail
+        // started. Drawn behind a boundary rather than passed off as output
+        // that just arrived — the ordering across files is by file, not time.
+        historic: !!historic,
         // Present on the fanout only, where one buffer carries many files.
         project: from ? container : '',
         // What level inheritance is keyed on: a stack frame must take the
@@ -227,7 +294,17 @@ async function openStream() {
         // tooltip, so the separator is one a human reads — safe as a key
         // either way, since `is_safe_name` keeps it out of a project name.
         origin: from ? `${container} · ${from}` : '',
-      });
+      };
+
+      // Paused: hold the line rather than drop it. Dropping would make the
+      // pause a gap in the record; holding makes it a delay.
+      if (paused.value) {
+        pending.value.push(row);
+        if (pending.value.length > MAX_LINES) pending.value.shift();
+        return;
+      }
+
+      lines.value.push(row);
       if (lines.value.length > MAX_LINES) lines.value.splice(0, lines.value.length - MAX_LINES);
       if (follow.value) scrollToEnd();
     });
@@ -390,7 +467,24 @@ onUnmounted(close);
             clearable
             prepend-inner-icon="mdi-magnify"
             class="log-search"
-          />
+          >
+            <!-- Regex as a switch inside the field, where the query it changes
+                 the meaning of is. `.*` reads as an icon a developer knows. -->
+            <template #append-inner>
+              <v-btn
+                icon
+                size="x-small"
+                variant="text"
+                :color="useRegex ? 'primary' : undefined"
+                :aria-label="tc('logs.regex')"
+                :aria-pressed="useRegex"
+                @click="useRegex = !useRegex"
+              >
+                <v-icon size="18">mdi-regex</v-icon>
+                <v-tooltip activator="parent">{{ tc('logs.regex') }}</v-tooltip>
+              </v-btn>
+            </template>
+          </v-text-field>
 
           <!-- Counts in the menu rather than chips in the bar: six levels of
                chips is wider than most of the lines they filter. -->
@@ -450,14 +544,50 @@ onUnmounted(close);
             icon
             variant="text"
             size="small"
-            :aria-label="tc('a11y.followOutput')"
+            :color="follow ? 'primary' : undefined"
+            :aria-label="followLabel"
             :aria-pressed="follow"
             @click="follow = !follow"
           >
             <v-icon>{{
               follow ? 'mdi-arrow-down-bold-box' : 'mdi-arrow-down-bold-box-outline'
             }}</v-icon>
-            <v-tooltip activator="parent">{{ tc('a11y.followOutput') }}</v-tooltip>
+            <v-tooltip activator="parent">{{ followLabel }}</v-tooltip>
+          </v-btn>
+
+          <v-btn
+            icon
+            variant="text"
+            size="small"
+            :color="paused ? 'warning' : undefined"
+            :aria-label="paused ? tc('logs.resume') : tc('logs.pause')"
+            :aria-pressed="paused"
+            @click="paused ? resume() : (paused = true)"
+          >
+            <v-badge
+              :model-value="paused && pending.length > 0"
+              :content="pending.length"
+              color="warning"
+              offset-x="-2"
+              offset-y="-2"
+            >
+              <v-icon>{{ paused ? 'mdi-play' : 'mdi-pause' }}</v-icon>
+            </v-badge>
+            <v-tooltip activator="parent">
+              {{ paused ? tc('logs.resumeHint', { n: pending.length }) : tc('logs.pause') }}
+            </v-tooltip>
+          </v-btn>
+
+          <v-btn
+            icon
+            variant="text"
+            size="small"
+            :disabled="!lines.length"
+            :aria-label="tc('logs.clear')"
+            @click="clearView"
+          >
+            <v-icon>mdi-notification-clear-all</v-icon>
+            <v-tooltip activator="parent">{{ tc('logs.clearHint') }}</v-tooltip>
           </v-btn>
 
           <!-- Whatever the frame needs to add — a dialog puts its dismiss here. -->
@@ -491,15 +621,20 @@ onUnmounted(close);
           <!-- Container paths in a stack frame become clickable: the bind
                mount states the substitution (/var/www/html ↔ projects/<name>),
                so a frame is one click from the editor, not a search. -->
-          <pre
-            v-for="(line, i) in visible"
-            :key="i"
-            class="log-line"
-            :class="[
-              { 'log-stderr': line.stream === 'stderr' },
-              line.level ? `level-${line.level}` : null,
-            ]"
-          ><span
+          <template v-for="(line, i) in visible" :key="i">
+            <!-- The live boundary. Everything above it was already in the file
+               when the tail started, grouped by file rather than by time —
+               which is the only claim this code can honestly make about it. -->
+            <div v-if="i === liveFrom" class="log-boundary">
+              <span>{{ tc('logs.liveFrom') }}</span>
+            </div>
+            <pre
+              class="log-line"
+              :class="[
+                { 'log-stderr': line.stream === 'stderr', 'log-historic': line.historic },
+                line.level ? `level-${line.level}` : null,
+              ]"
+            ><span
               v-if="line.project"
               class="log-origin"
               :title="line.origin"
@@ -512,7 +647,17 @@ onUnmounted(close);
                 :title="tc('logs.openInEditor')"
                 @click="jump(line, seg.file)"
                 >{{ seg.text }}</span
-              ><template v-else>{{ seg.text }}</template></template></pre>
+              ><!-- Marking the hit is the difference between "this line
+                    matched" and "this is why it matched" — on a 200-character
+                    request line, the second one is the answer. -->
+              <template v-else><template
+                  v-for="(part, k) in highlight(seg.text, query, useRegex)"
+                  :key="k"
+                ><mark v-if="part.hit" class="log-hit">{{ part.text }}</mark><template
+                    v-else
+                    >{{ part.text }}</template
+                  ></template></template></template></pre>
+          </template>
         </div>
 
         <template v-if="filtering && lines.length">
@@ -557,9 +702,42 @@ onUnmounted(close);
   flex: 0 1 auto;
 }
 
+.log-hit {
+  background: rgba(var(--v-theme-warning), 0.35);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.log-historic {
+  opacity: 0.6;
+}
+
+/* A labelled rule, not a line of text: it separates, it does not report. */
+.log-boundary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 4px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.55;
+}
+
+.log-boundary::before,
+.log-boundary::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.35;
+}
+
 .log-search {
-  max-width: 240px;
-  flex: 0 1 auto;
+  max-width: 420px;
+  min-width: 200px;
+  flex: 1 1 320px;
 }
 
 .log-view {

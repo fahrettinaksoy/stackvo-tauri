@@ -147,8 +147,17 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
   white-space: nowrap;
 }
 
+.side-sheet {
+  /* Vuetify takes `width` as a number, so the responsive cap cannot live in
+     the prop — a CSS function there parses to NaN and the drawer loses its
+     closed position entirely. */
+  max-width: 100vw;
+}
+
 .side-sheet__body {
-  padding: 8px 24px 24px;
+  /* 20 at the top, not 8: the first field was landing hard against the
+     header bar, which read as the two being one control. */
+  padding: 20px 24px 24px;
 }
 
 .side-sheet__body--flush {

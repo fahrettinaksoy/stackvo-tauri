@@ -1,11 +1,11 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
-import { openUrl } from '@tauri-apps/plugin-opener';
 import { useInventoryStore } from '@/stores/inventory';
 import { useOperationsStore } from '@/stores/operations';
 import { useAppStore } from '@/stores/app';
+import { parentDomain } from '@/lib/manifest';
 import { listenAll, REFRESH_TRIGGERS } from '@/lib/events';
 import { api } from '@/lib/ipc';
 import PageLayout from '@/components/PageLayout.vue';
@@ -27,6 +27,72 @@ const deleteFiles = ref(false);
 
 /** Projects whose manifest changed on disk since the list was loaded. */
 const staleManifests = ref(new Set());
+
+/**
+ * Rows grouped by parent domain, but only where a parent means something.
+ *
+ * The rule itself lives in `manifest.js` so it can be tested on its own; what
+ * is left here is the counting. A parent with a single project keeps its own
+ * domain as the key, so Vuetify makes a group of one and the header slot skips
+ * it — the row then reads exactly as it did before grouping existed.
+ */
+const rows = computed(() => {
+  const counts = new Map();
+  for (const p of inventory.projects) {
+    const parent = parentDomain(p.domain, app.tld);
+    if (parent) counts.set(parent, (counts.get(parent) ?? 0) + 1);
+  }
+  return inventory.projects.map((p) => {
+    const parent = parentDomain(p.domain, app.tld);
+    return {
+      ...p,
+      // `null` when it stands alone, which is the table's own escape hatch: a
+      // group with a null value has its header skipped and its rows always
+      // flattened. Giving each one its own key instead made a group of one —
+      // and groups start closed, so the header was suppressed, nothing was
+      // left to open it, and five projects vanished from the page.
+      parentDomain: parent && counts.get(parent) > 1 ? parent : null,
+    };
+  });
+});
+
+/**
+ * Groups start expanded.
+ *
+ * The table keeps that state internally — `opened` is a ref inside its own
+ * composable, with no prop to seed it and nothing exposed on the component to
+ * reach it. The only handle is `toggleGroup`, handed to this slot, so opening
+ * has to be asked for from here.
+ *
+ * Deferred and remembered, for two reasons. Toggling during render mutates
+ * state the same render reads, which Vue rightly complains about; and a group
+ * the user collapsed must stay collapsed, so this fires once per group and
+ * never again — `seen` is a plain Set rather than a ref because nothing should
+ * re-render when it changes.
+ */
+const seen = new Set();
+function openByDefault(item, isGroupOpen, toggleGroup) {
+  const open = isGroupOpen(item);
+  if (!open && !seen.has(item.id)) {
+    seen.add(item.id);
+    nextTick(() => toggleGroup(item));
+  }
+  // Returned so the binding that calls this reflects real state rather than
+  // being an attribute that is always empty — an attribute that says nothing
+  // is a worse home for a side effect than one that says something.
+  return open;
+}
+
+const groupBy = [{ key: 'parentDomain', order: 'asc' }];
+
+/**
+ * Ordered by domain, inside a group and out.
+ *
+ * The table sorts by the group key before anything else, so without this the
+ * rows arrived in whatever order the inventory returned them — which is the
+ * order Docker happened to answer in, and changes between refreshes.
+ */
+const sortBy = [{ key: 'domain', order: 'asc' }];
 
 const headers = computed(() => [
   { title: t('projectsView.colDomain'), key: 'domain', sortable: true, align: 'start' },
@@ -300,66 +366,76 @@ onUnmounted(() => teardown?.());
     <!-- Unmanaged folders ------------------------------------------------ -->
     <!-- Real code sitting in projects/ with no stackvo.json. It is invisible
          everywhere else in the app, which is why it accumulates. -->
-    <v-alert
+    <!-- Flush and square, like the search field directly under it. Both span
+         the card, and a radius on a surface that runs to an edge cuts a notch
+         out of the corner rather than rounding it — which is what the inset
+         version looked like against the rows below. -->
+    <v-expansion-panels
       v-if="adoptable.length"
-      type="info"
-      variant="tonal"
-      class="ma-2"
-      :icon="false"
-      density="compact"
+      variant="accordion"
+      rounded="0"
+      flat
+      class="adopt-panels"
     >
-      <div class="d-flex align-center ga-2 mb-2">
-        <v-icon size="small">mdi-folder-search-outline</v-icon>
-        <span class="text-body-2">{{ t('adopt.found', { n: adoptable.length }) }}</span>
-      </div>
+      <v-expansion-panel elevation="0">
+        <v-expansion-panel-title>
+          <v-icon size="small" class="mr-2">mdi-folder-search-outline</v-icon>
+          <span class="text-body-2">{{ t('adopt.found', { n: adoptable.length }) }}</span>
+        </v-expansion-panel-title>
 
-      <div v-for="folder in adoptable" :key="folder.name" class="adopt-row">
-        <span class="adopt-name">{{ folder.name }}</span>
+        <!-- Bounded and scrolling: a checkout with twenty stray folders pushed
+             the table itself off the screen, and this is a thing you deal with
+             once rather than the reason the page exists. -->
+        <v-expansion-panel-text class="adopt-body">
+          <div v-for="folder in adoptable" :key="folder.name" class="adopt-row">
+            <span class="adopt-name">{{ folder.name }}</span>
 
-        <v-chip v-if="folder.detected.framework" size="x-small" color="success" variant="tonal">
-          {{ folder.detected.framework }}
-        </v-chip>
-        <v-chip v-else size="x-small" variant="tonal">{{ folder.detected.runtime }}</v-chip>
+            <v-chip v-if="folder.detected.framework" size="x-small" color="success" variant="tonal">
+              {{ folder.detected.framework }}
+            </v-chip>
+            <v-chip v-else size="x-small" variant="tonal">{{ folder.detected.runtime }}</v-chip>
 
-        <!-- The files the guess came from. A document root inferred wrongly
-             builds, starts and serves a 404 with no error anywhere. -->
-        <span class="adopt-evidence">
-          {{
-            folder.detected.evidence.length
-              ? t('adopt.from', { files: folder.detected.evidence.join(', ') })
-              : t('adopt.noEvidence')
-          }}
-        </span>
+            <!-- The files the guess came from. A document root inferred wrongly
+               builds, starts and serves a 404 with no error anywhere. -->
+            <span class="adopt-evidence">
+              {{
+                folder.detected.evidence.length
+                  ? t('adopt.from', { files: folder.detected.evidence.join(', ') })
+                  : t('adopt.noEvidence')
+              }}
+            </span>
 
-        <v-spacer />
+            <v-spacer />
 
-        <!-- Offered only when the folder has one. It is the better route when
-             it exists: a compose file states the PHP version, the domain and
-             the services, none of which any marker file does. -->
-        <v-btn
-          v-if="folder.composeFile"
-          size="x-small"
-          variant="tonal"
-          color="primary"
-          prepend-icon="mdi-file-import-outline"
-          :loading="migrationBusy && migrationFor === folder.name"
-          :disabled="!!adopting || migrationBusy"
-          @click="scanCompose(folder)"
-        >
-          {{ t('migrate.read') }}
-        </v-btn>
+            <!-- Offered only when the folder has one. It is the better route when
+               it exists: a compose file states the PHP version, the domain and
+               the services, none of which any marker file does. -->
+            <v-btn
+              v-if="folder.composeFile"
+              size="x-small"
+              variant="tonal"
+              color="primary"
+              prepend-icon="mdi-file-import-outline"
+              :loading="migrationBusy && migrationFor === folder.name"
+              :disabled="!!adopting || migrationBusy"
+              @click="scanCompose(folder)"
+            >
+              {{ t('migrate.read') }}
+            </v-btn>
 
-        <v-btn
-          size="x-small"
-          variant="tonal"
-          :loading="adopting === folder.name"
-          :disabled="!!adopting || !folder.hasFiles || migrationBusy"
-          @click="adopt(folder)"
-        >
-          {{ t('adopt.action') }}
-        </v-btn>
-      </div>
-    </v-alert>
+            <v-btn
+              size="x-small"
+              variant="tonal"
+              :loading="adopting === folder.name"
+              :disabled="!!adopting || !folder.hasFiles || migrationBusy"
+              @click="adopt(folder)"
+            >
+              {{ t('adopt.action') }}
+            </v-btn>
+          </div>
+        </v-expansion-panel-text>
+      </v-expansion-panel>
+    </v-expansion-panels>
 
     <!-- The compose review. A dialog rather than an inline expansion: it is a
          decision about two files at once — a manifest and the shared .env —
@@ -478,7 +554,9 @@ onUnmounted(() => teardown?.());
     <div class="table-wrap">
       <v-data-table
         :headers="headers"
-        :items="inventory.projects"
+        :items="rows"
+        :group-by="groupBy"
+        :sort-by="sortBy"
         :search="search"
         :loading="inventory.loadingProjects"
         items-per-page="-1"
@@ -491,11 +569,38 @@ onUnmounted(() => teardown?.());
         height="100%"
         density="compact"
       >
+        <!-- Standalone projects never reach this slot: their group value is
+             null and the table skips the header for those outright. The guard
+             is here anyway so a future key change cannot quietly reintroduce a
+             one-row group with a heading over it. -->
+        <template #group-header="{ item, columns, toggleGroup, isGroupOpen }">
+          <tr
+            v-if="item.items.length > 1"
+            class="group-row"
+            :data-open="openByDefault(item, isGroupOpen, toggleGroup)"
+          >
+            <td :colspan="columns.length">
+              <div class="d-flex align-center ga-2">
+                <v-btn
+                  size="x-small"
+                  variant="text"
+                  :icon="isGroupOpen(item) ? 'mdi-chevron-down' : 'mdi-chevron-right'"
+                  :aria-label="item.value"
+                  @click="toggleGroup(item)"
+                />
+                <v-icon size="small" icon="mdi-sitemap-outline" />
+                <span class="font-weight-medium">{{ item.value }}</span>
+                <v-chip size="x-small" variant="tonal">{{ item.items.length }}</v-chip>
+              </div>
+            </td>
+          </tr>
+        </template>
+
         <template #item.domain="{ item }">
           <div v-if="item.domain" class="d-flex align-center ga-2">
             <a
               class="domain-link"
-              @click="item.domainConfigured && openUrl(`https://${item.domain}`)"
+              @click="item.domainConfigured && api.openInBrowser(`https://${item.domain}`)"
               >{{ item.domain }}</a
             >
 
@@ -641,7 +746,7 @@ onUnmounted(() => teardown?.());
             size="small"
             color="primary"
             variant="tonal"
-            @click="openUrl(`https://${item.domain}`)"
+            @click="api.openInBrowser(`https://${item.domain}`)"
           >
             <v-icon>mdi-open-in-new</v-icon>
           </v-btn>
@@ -726,6 +831,27 @@ onUnmounted(() => teardown?.());
 </template>
 
 <style scoped>
+/* Bounded so a checkout with many stray folders cannot push the table off the
+   screen. The height is the panel body's, not the page's — adopting is
+   something you do once, and it should not become the reason this page
+   scrolls. */
+/* A rule under it, so the panel reads as a band of the card rather than as a
+   row of the table it sits above. */
+.adopt-panels {
+  border-bottom: thin solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.adopt-body :deep(.v-expansion-panel-text__wrapper) {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+/* A heading, not a row of data: it carries the parent domain and a count, and
+   should read as the label above the rows rather than as one of them. */
+.group-row td {
+  background: rgba(var(--v-theme-on-surface), 0.04);
+}
+
 /* Names a block inside the migration review, which has four of them. */
 .section-head {
   font-size: 13px;

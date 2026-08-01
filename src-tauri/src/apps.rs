@@ -136,6 +136,110 @@ const EDITORS: &[(&str, &str, &str, &str)] = &[
     ("vim", "Vim", "mdi-vim", ""),
 ];
 
+/// Browsers, by the same rule as editors: a `PATH` launcher when there is one,
+/// the macOS bundle otherwise. `open -a <bundle> <url>` is what clicking a link
+/// in Finder does, so a browser without a CLI shim is still launchable.
+///
+/// The empty id is the system default — not a browser, an *absence* of a
+/// choice, and the one entry that always works.
+#[cfg(target_os = "macos")]
+const BROWSERS: &[(&str, &str, &str, &str)] = &[
+    ("", "System default", "mdi-web", ""),
+    (
+        "google chrome",
+        "Chrome",
+        "mdi-google-chrome",
+        "/Applications/Google Chrome.app",
+    ),
+    (
+        "safari",
+        "Safari",
+        "mdi-apple-safari",
+        "/Applications/Safari.app",
+    ),
+    (
+        "firefox",
+        "Firefox",
+        "mdi-firefox",
+        "/Applications/Firefox.app",
+    ),
+    (
+        "microsoft edge",
+        "Edge",
+        "mdi-microsoft-edge",
+        "/Applications/Microsoft Edge.app",
+    ),
+    (
+        "brave browser",
+        "Brave",
+        "mdi-shield-check",
+        "/Applications/Brave Browser.app",
+    ),
+    ("arc", "Arc", "mdi-alpha-a-circle", "/Applications/Arc.app"),
+    (
+        "chromium",
+        "Chromium",
+        "mdi-google-chrome",
+        "/Applications/Chromium.app",
+    ),
+];
+
+#[cfg(target_os = "linux")]
+const BROWSERS: &[(&str, &str, &str, &str)] = &[
+    ("", "System default", "mdi-web", ""),
+    ("google-chrome", "Chrome", "mdi-google-chrome", ""),
+    ("firefox", "Firefox", "mdi-firefox", ""),
+    ("microsoft-edge", "Edge", "mdi-microsoft-edge", ""),
+    ("brave-browser", "Brave", "mdi-shield-check", ""),
+    ("chromium", "Chromium", "mdi-google-chrome", ""),
+];
+
+#[cfg(target_os = "windows")]
+const BROWSERS: &[(&str, &str, &str, &str)] = &[
+    ("", "System default", "mdi-web", ""),
+    ("chrome", "Chrome", "mdi-google-chrome", ""),
+    ("firefox", "Firefox", "mdi-firefox", ""),
+    ("msedge", "Edge", "mdi-microsoft-edge", ""),
+    ("brave", "Brave", "mdi-shield-check", ""),
+];
+
+pub fn browsers() -> Vec<App> {
+    BROWSERS
+        .iter()
+        .map(|(id, name, icon, bundle)| App {
+            id: (*id).to_string(),
+            name: (*name).to_string(),
+            icon: (*icon).to_string(),
+            // The system default is always available — it is the absence of a
+            // choice, and something always answers a URL.
+            available: id.is_empty()
+                || is_available(id)
+                || (cfg!(target_os = "macos")
+                    && !bundle.is_empty()
+                    && std::path::Path::new(bundle).exists()),
+        })
+        .collect()
+}
+
+/// How to open a URL in the chosen browser, or `None` for the system default.
+///
+/// Falls back rather than failing, exactly as `resolve_terminal` does: a
+/// preference outlives the app it names, and refusing to open a link because
+/// someone uninstalled Brave would be unhelpful when Safari is right there.
+pub fn resolve_browser(preferred: Option<&str>) -> Option<Launch> {
+    let id = preferred.filter(|p| !p.is_empty())?;
+    let entry = BROWSERS.iter().find(|(i, ..)| *i == id)?;
+
+    if is_available(entry.0) {
+        return Some(Launch::Command(entry.0));
+    }
+    #[cfg(target_os = "macos")]
+    if !entry.3.is_empty() && std::path::Path::new(entry.3).exists() {
+        return Some(Launch::Bundle(entry.3));
+    }
+    None
+}
+
 /// How an editor can be started, if at all.
 pub enum Launch {
     /// A launcher on `PATH`; the path is passed as an argument.
