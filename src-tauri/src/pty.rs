@@ -290,6 +290,23 @@ pub fn open_external(target: &PtyTarget, preferred: Option<&str>) -> Result<()> 
     spawn_terminal(id, &command)
 }
 
+/// Open the user's terminal running a command this app assembled.
+///
+/// For the one job macOS will not let a windowed app do: adding a certificate
+/// authority to the trust store. `security add-trusted-cert` needs an
+/// authorization it can only obtain interactively, and from a background child
+/// process it exits 0 and changes nothing — measured, twice, with the trust
+/// dump unchanged either side of it. `mkcert -install` asks `sudo` for a
+/// password instead, which works perfectly well in a terminal somebody is
+/// looking at and not at all anywhere else.
+///
+/// The command is built by the caller from compiled-in words and paths this app
+/// owns; nothing the frontend typed reaches it.
+pub fn open_external_shell(command: &str, preferred: Option<&str>) -> Result<()> {
+    let (id, ..) = crate::apps::resolve_terminal(preferred)?;
+    spawn_terminal(id, command)
+}
+
 /// Open the user's terminal running one of the catalog's commands.
 ///
 /// Separate from [`open_external`] because the command is not a shell here: it

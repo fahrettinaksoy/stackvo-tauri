@@ -352,6 +352,49 @@ fn mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
+/// Has one project's manifest been edited since anything was generated from it?
+///
+/// The per-project half of `generated_status`, and the honest version of a
+/// question the UI used to answer from events: it accumulated every
+/// `manifest:changed` the watcher emitted into a "needs regenerating" badge.
+/// The watcher cannot tell whose write it saw, so the app writing a manifest
+/// during `project_create` — and regenerating from it half a second later —
+/// lit the badge on a project that had just been generated. Answered from the
+/// two timestamps instead, it is true when it is true, whoever wrote the file.
+///
+/// Compared against the OLDEST output, so a compose file that was rewritten
+/// cannot mask a Dockerfile that was not. A project with no output at all has
+/// never been generated, which counts as stale.
+///
+/// Outputs that are absent are skipped rather than counted as missing, because
+/// only one of the two is common to every project: the compose entry. A PHP
+/// project's Dockerfile is rendered into `generated/projects/<name>/`, while
+/// every snapshot runtime builds from its own source directory and has no file
+/// there at all (C-19). Filtering rather than encoding that rule keeps the
+/// generator's layout in one place — the generator.
+pub fn project_generated_is_stale(root: &Path, name: &str) -> bool {
+    let Some(manifest) = crate::workspace::projects_root(root)
+        .map(|p| p.join(name).join("stackvo.json"))
+        .and_then(|p| mtime(&p))
+    else {
+        // No manifest is not a staleness problem; it is not a project.
+        return false;
+    };
+
+    let outputs = [
+        root.join("generated/docker-compose.projects.yml"),
+        root.join("generated/projects")
+            .join(name)
+            .join("Dockerfile"),
+    ];
+
+    let Some(oldest_output) = outputs.iter().filter_map(|p| mtime(p)).min() else {
+        return true;
+    };
+
+    manifest > oldest_output
+}
+
 /// Is `generated/` older than the inputs it was derived from?
 ///
 /// Inputs: `.env` and every project's `stackvo.json`. Outputs: the compose
@@ -388,7 +431,9 @@ pub fn generated_status(root: &Path) -> GeneratedStatus {
     };
 
     consider(&root.join(".env"), ".env".into());
-    if let Ok(entries) = std::fs::read_dir(root.join("projects")) {
+    if let Some(entries) =
+        crate::workspace::projects_root(root).and_then(|p| std::fs::read_dir(p).ok())
+    {
         for entry in entries.flatten() {
             let manifest = entry.path().join("stackvo.json");
             if manifest.is_file() {
@@ -503,7 +548,10 @@ pub fn extension_problems(root: &Path) -> Vec<ExtensionProblem> {
     }
 
     // --- each project -----------------------------------------------------
-    let Ok(dirs) = std::fs::read_dir(root.join("projects")) else {
+    let Some(projects) = crate::workspace::projects_root(root) else {
+        return out;
+    };
+    let Ok(dirs) = std::fs::read_dir(&projects) else {
         return out;
     };
 
@@ -700,6 +748,9 @@ mod tests {
     /// A workspace with the failure this check exists for: `imap` in the
     /// default selection, on a PHP version where it no longer exists.
     fn workspace_with_imap(dir: &Path) {
+        // The project tree is chosen, never defaulted; a test root says where
+        // its own is, like a real one does.
+        crate::workspace::point_at_projects(dir, &dir.join("projects")).unwrap();
         let shop = dir.join("projects").join("shop");
         std::fs::create_dir_all(&shop).unwrap();
         std::fs::write(
@@ -983,11 +1034,78 @@ services:
         assert_eq!(vague[0].state, State::Warn);
     }
 
+    /// The badge that appeared on every newly created project.
+    ///
+    /// It was an accumulator of watcher events, and the watcher cannot tell
+    /// whose write it saw — so the app writing the manifest during
+    /// `project_create` lit it, and the regenerate that followed did not put
+    /// it out. Measured from timestamps it is simply true or false.
+    #[test]
+    fn a_project_is_stale_only_when_its_manifest_outlives_the_output() {
+        let dir = std::env::temp_dir().join(format!(
+            "stackvo-project-stale-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("projects/app")).unwrap();
+        crate::workspace::point_at_projects(&dir, &dir.join("projects")).unwrap();
+
+        // A directory with no manifest is not a project, so not stale either.
+        assert!(!project_generated_is_stale(&dir, "app"));
+
+        // A manifest and nothing generated from it: stale.
+        std::fs::write(dir.join("projects/app/stackvo.json"), "{}").unwrap();
+        assert!(project_generated_is_stale(&dir, "app"));
+
+        // Generated after it — the state every create ends in, and the one
+        // that used to show the badge anyway.
+        std::fs::create_dir_all(dir.join("generated/projects/app")).unwrap();
+        std::fs::write(dir.join("generated/docker-compose.projects.yml"), "x").unwrap();
+        std::fs::write(dir.join("generated/projects/app/Dockerfile"), "FROM x").unwrap();
+        assert!(!project_generated_is_stale(&dir, "app"));
+
+        // Edited afterwards: stale again. Set explicitly rather than slept
+        // over, because mtime granularity is a whole second on some
+        // filesystems.
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(dir.join("projects/app/stackvo.json"))
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        assert!(project_generated_is_stale(&dir, "app"));
+
+        // A snapshot runtime keeps its Dockerfile in its own source directory
+        // (C-19), so there is nothing under `generated/projects/<name>`. That
+        // absence must not read as "never generated" — the compose entry is
+        // the output every project has.
+        //
+        // The compose mtime is set past the manifest's rather than just
+        // rewritten: the manifest above was stamped into the future, and a
+        // file written "now" is still older than that.
+        std::fs::remove_dir_all(dir.join("generated/projects/app")).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(dir.join("generated/docker-compose.projects.yml"))
+            .unwrap()
+            .set_modified(later + std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(
+            !project_generated_is_stale(&dir, "app"),
+            "a node project has no generated Dockerfile and is not stale for it"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn generated_status_reports_missing_stale_and_fresh() {
         let dir = std::env::temp_dir().join(format!("stackvo-doctor-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("projects/app")).unwrap();
+        crate::workspace::point_at_projects(&dir, &dir.join("projects")).unwrap();
 
         // Never generated.
         assert_eq!(generated_status(&dir).state, State::Fail);

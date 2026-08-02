@@ -82,7 +82,8 @@ pub fn overlay_path(root: &Path) -> PathBuf {
 }
 
 pub fn config_path(root: &Path, name: &str) -> PathBuf {
-    root.join("projects")
+    crate::workspace::projects_root(root)
+        .unwrap_or_default()
         .join(name)
         .join(crate::phpini::CONFIG_DIR)
         .join(CONFIG_FILE)
@@ -292,7 +293,10 @@ fn entries(root: &Path) -> Vec<Entry> {
             .unwrap_or_default();
     let services = crate::xdebug::generated_services(&generated);
 
-    let Ok(dirs) = std::fs::read_dir(root.join("projects")) else {
+    let Some(projects) = crate::workspace::projects_root(root) else {
+        return out;
+    };
+    let Ok(dirs) = std::fs::read_dir(&projects) else {
         return out;
     };
 
@@ -396,7 +400,7 @@ pub struct DevServerStatus {
 
 /// What is true for one project, across all three layers.
 pub async fn status(root: &Path, name: &str) -> Result<DevServerStatus> {
-    let dir = root.join("projects").join(name);
+    let dir = crate::workspace::require_projects_root(root)?.join(name);
     let manifest_file = dir.join("stackvo.json");
     if !manifest_file.is_file() {
         return Err(Error::not_found(format!("project {name}")));
@@ -474,7 +478,7 @@ pub async fn set(
     enabled: bool,
     command: Option<String>,
 ) -> Result<DevServerStatus> {
-    let dir = root.join("projects").join(name);
+    let dir = crate::workspace::require_projects_root(root)?.join(name);
     let manifest_file = dir.join("stackvo.json");
     if !manifest_file.is_file() {
         return Err(Error::not_found(format!("project {name}")));

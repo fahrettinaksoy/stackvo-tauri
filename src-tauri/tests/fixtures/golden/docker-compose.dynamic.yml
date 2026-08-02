@@ -1,0 +1,580 @@
+services:
+
+  mysql:
+    profiles: ["services", "mysql"]  # --services for all, --profile mysql for this service only
+    image: "mysql:8.0"
+    container_name: "stackvo-mysql"
+    restart: unless-stopped
+
+    environment:
+      MYSQL_ROOT_PASSWORD: "root"
+      MYSQL_DATABASE: "stackvo"
+
+    volumes:
+      - stackvo-mysql-data:/var/lib/mysql
+      - /stackvo/generated/configs/mysql.cnf:/etc/mysql/conf.d/stackvo.cnf:ro
+      - /stackvo/logs/services/mysql:/var/log/mysql
+
+    command: >
+      mysqld
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --skip-character-set-client-handshake
+
+    ports:
+      - "3306:3306"
+
+    networks:
+      - "stackvo-net"
+
+
+  mariadb:
+    profiles: ["services", "mariadb"]  # --services for all, --profile mariadb for this service only
+    image: "mariadb:10.6"
+    container_name: "stackvo-mariadb"
+    restart: unless-stopped
+
+    environment:
+      MARIADB_ROOT_PASSWORD: "root"
+      MARIADB_DATABASE: "stackvo"
+
+    volumes:
+      - stackvo-mariadb-data:/var/lib/mysql
+      - /stackvo/generated/configs/mariadb.cnf:/etc/mysql/conf.d/stackvo.cnf:ro
+      # Log volume mount removed - logs go to stdout/stderr (GEMINI.md compliance)
+
+    command: >
+      mariadbd
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+
+    ports:
+      - "3307:3306"
+
+    networks:
+      - "stackvo-net"
+
+
+  postgres:
+    profiles: ["services", "postgres"]  # --services for all, --profile postgres for this service only
+    image: "postgres:14"
+    container_name: "stackvo-postgres"
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: "stackvo"
+      POSTGRES_USER: "stackvo"
+      POSTGRES_PASSWORD: "root"
+      PGDATA: "/var/lib/postgresql/data/pgdata"
+
+    volumes:
+      - stackvo-postgres-data:/var/lib/postgresql/data/pgdata
+      - /stackvo/logs/services/postgres:/var/log/postgresql
+
+    ports:
+      - "5432:5432"
+
+    networks:
+      - "stackvo-net"
+
+
+  mongo:
+    profiles: ["services", "mongo"]  # --services for all, --profile mongo for this service only
+    image: "mongo:5.0"
+    container_name: "stackvo-mongo"
+    restart: unless-stopped
+
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: "root"
+      MONGO_INITDB_ROOT_PASSWORD: "root"
+      MONGO_INITDB_DATABASE: "stackvo"
+
+    volumes:
+      - stackvo-mongo-data:/data/db
+      - /stackvo/generated/configs/mongo.conf:/etc/mongo/mongo.conf:ro
+      - /stackvo/logs/services/mongo:/var/log/mongodb
+
+    ports:
+      - "27017:27017"
+
+    networks:
+      - "stackvo-net"
+
+
+  cassandra:
+    profiles: ["services", "cassandra"]  # --services for all, --profile cassandra for this service only
+    image: "cassandra:latest"
+    container_name: "stackvo-cassandra"
+    restart: unless-stopped
+
+    environment:
+      CASSANDRA_CLUSTER_NAME: "StackvoCluster"
+      CASSANDRA_DC: "dc1"
+      CASSANDRA_RACK: "rack1"
+      CASSANDRA_ENDPOINT_SNITCH: "GossipingPropertyFileSnitch"
+      MAX_HEAP_SIZE: "512M"
+      HEAP_NEWSIZE: "128M"
+
+    volumes:
+      - stackvo-cassandra-data:/var/lib/cassandra
+      - /stackvo/logs/services/cassandra:/var/log/cassandra
+
+    ports:
+      - "9042:9042"
+      - "7199:7199"
+
+    networks:
+      - "stackvo-net"
+
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe cluster'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+
+  redis:
+    profiles: ["services", "redis"]  # --services for all, --profile redis for this service only
+    image: "redis:7.0"
+    container_name: "stackvo-redis"
+    restart: unless-stopped
+
+    command: ["redis-server", "/etc/redis/redis.conf"]
+
+    volumes:
+      - stackvo-redis-data:/data
+      - /stackvo/generated/configs/redis.conf:/etc/redis/redis.conf:ro
+      - /stackvo/logs/services/redis:/var/log/redis
+
+    ports:
+      - "6379:6379"
+
+    networks:
+      - "stackvo-net"
+
+
+  memcached:
+    profiles: ["services", "memcached"]  # --services for all, --profile memcached for this service only
+    image: "memcached:1.6"
+    container_name: "stackvo-memcached"
+    restart: unless-stopped
+
+    command: >
+      memcached
+      -m 256
+      -c 1024
+      -t 4
+      
+
+    ports:
+      - "11211:11211"
+
+    volumes:
+      - /stackvo/logs/services/memcached:/var/log/memcached
+
+    networks:
+      - "stackvo-net"
+
+  rabbitmq:
+    profiles: ["services", "rabbitmq"]  # --services for all, --profile rabbitmq for this service only
+    image: "rabbitmq:3-management"
+    container_name: "stackvo-rabbitmq"
+    restart: unless-stopped
+
+    environment:
+      RABBITMQ_DEFAULT_USER: "admin"
+      RABBITMQ_DEFAULT_PASS: "admin"
+      RABBITMQ_DEFAULT_VHOST: "/"
+
+    volumes:
+      - stackvo-rabbitmq-data:/var/lib/rabbitmq
+      - stackvo-rabbitmq-logs:/var/log/rabbitmq
+
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+    networks:
+      - "stackvo-net"
+
+
+  zookeeper:
+    profiles: ["services", "kafka"]  # --services for all, --profile kafka for this service only
+    image: confluentinc/cp-zookeeper:latest
+    container_name: stackvo-zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - /stackvo/logs/services/zookeeper:/var/log/zookeeper
+    ports:
+      - "2181:2181"
+    networks:
+      - "stackvo-net"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: stackvo-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://stackvo-kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_PROCESS_ROLES: ""
+    volumes:
+      - stackvo-kafka-data:/var/lib/kafka/data
+      - /stackvo/logs/services/kafka:/var/log/kafka
+    networks:
+      - "stackvo-net"
+
+
+  elasticsearch:
+    profiles: ["services", "elasticsearch"]  # --services for all, --profile elasticsearch for this service only
+    image: "docker.elastic.co/elasticsearch/elasticsearch:8.11.3"
+    container_name: "stackvo-elasticsearch"
+    restart: unless-stopped
+
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=${ES_JAVA_OPTS:--Xms1g -Xmx1g}
+      - xpack.security.enabled=${ELASTIC_SECURITY:-false}
+      - xpack.security.enrollment.enabled=${ELASTIC_ENROLLMENT:-false}
+      - cluster.name=stackvo-es
+      - network.host=0.0.0.0
+      # Redirect logs to stdout/stderr - accessible via Docker logs
+      - "logger.level=info"
+
+    ulimits:
+      memlock: -1
+      nofile: 65536
+
+    volumes:
+      - stackvo-elasticsearch-data:/usr/share/elasticsearch/data
+      # Log volume mount removed - to prevent permission issues
+
+    ports:
+      - "9200:9200"
+
+    networks:
+      - "stackvo-net"
+
+
+  kibana:
+    profiles: ["services", "kibana"]  # --services for all, --profile kibana for this service only
+    image: "kibana:8.11.3"
+    container_name: "stackvo-kibana"
+    restart: unless-stopped
+
+    environment:
+      ELASTICSEARCH_HOSTS: "http://stackvo-elasticsearch:9200"
+      SERVER_NAME: "stackvo-kibana"
+      SERVER_HOST: "0.0.0.0"
+
+    volumes:
+      - stackvo-kibana-data:/usr/share/kibana/data
+      - /stackvo/logs/services/kibana:/usr/share/kibana/logs
+
+    ports:
+      - "5601:5601"
+
+    networks:
+      - "stackvo-net"
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5601/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+
+  grafana:
+    profiles: ["services", "grafana"]  # --services for all, --profile grafana for this service only
+    image: "grafana/grafana:latest"
+    container_name: "stackvo-grafana"
+    restart: unless-stopped
+
+    environment:
+      GF_SECURITY_ADMIN_USER: "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+      GF_INSTALL_PLUGINS: ""
+      GF_SERVER_ROOT_URL: "http://grafana.stackvo.stackvo.loc"
+
+    volumes:
+      - stackvo-grafana-data:/var/lib/grafana
+      - stackvo-grafana-config:/etc/grafana
+      - /stackvo/logs/services/grafana:/var/log/grafana
+
+    ports:
+      - "3001:3000"
+
+    networks:
+      - "stackvo-net"
+
+    user: "1000"
+
+
+  mailhog:
+    profiles: ["services", "mailhog"]  # --services for all, --profile mailhog for this service only
+    image: "mailhog/mailhog:latest"
+    container_name: "stackvo-mailhog"
+    restart: unless-stopped
+
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+    volumes:
+      - /stackvo/logs/services/mailhog:/var/log/mailhog
+
+    networks:
+      - "stackvo-net"
+
+  mailpit:
+    profiles: ["services", "mailpit"]  # --services for all, --profile mailpit for this service only
+    image: "axllent/mailpit:latest"
+    container_name: "stackvo-mailpit"
+    restart: unless-stopped
+
+    environment:
+      MP_DATA_FILE: /data/mailpit.db
+
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+    volumes:
+      - stackvo-mailpit-data:/data
+
+    networks:
+      - "stackvo-net"
+
+
+  phpmyadmin:
+    profiles: ["services", "phpmyadmin"]  # --services for all, --profile phpmyadmin for this service only
+    image: "phpmyadmin:latest"
+    container_name: "stackvo-phpmyadmin"
+    restart: unless-stopped
+
+    environment:
+      PMA_ARBITRARY: "1"
+      PMA_HOST: "stackvo-mysql"
+      PMA_PORT: "3306"
+      UPLOAD_LIMIT: "300M"
+
+    volumes:
+      - /stackvo/logs/services/phpmyadmin:/var/log/phpmyadmin
+
+    ports:
+      - "8081:80"
+
+    networks:
+      - "stackvo-net"
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.phpmyadmin.rule=Host(`phpmyadmin.stackvo.loc`)"
+      - "traefik.http.routers.phpmyadmin.entrypoints=websecure"
+      - "traefik.http.routers.phpmyadmin.tls=true"
+      - "traefik.http.services.phpmyadmin.loadbalancer.server.port=80"
+
+  adminer:
+    profiles: ["services", "adminer"]  # --services for all, --profile adminer for this service only
+    image: "adminer:latest"
+    container_name: "stackvo-adminer"
+    restart: unless-stopped
+
+    environment:
+      ADMINER_DEFAULT_SERVER: "stackvo-mysql"
+      ADMINER_DESIGN: "pepa-linha"
+
+    volumes:
+      - /stackvo/logs/services/adminer:/var/log/adminer
+
+    ports:
+      - "8082:8080"
+
+    networks:
+      - "stackvo-net"
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.adminer.rule=Host(`adminer.stackvo.loc`)"
+      - "traefik.http.routers.adminer.entrypoints=websecure"
+      - "traefik.http.routers.adminer.tls=true"
+      - "traefik.http.services.adminer.loadbalancer.server.port=8080"
+
+  pgadmin:
+    profiles: ["services", "pgadmin"]  # --services for all, --profile pgadmin for this service only
+    image: "dpage/pgadmin4:latest"
+    container_name: "stackvo-pgadmin"
+    restart: unless-stopped
+
+    environment:
+      PGADMIN_DEFAULT_EMAIL: "admin@stackvo.loc"
+      PGADMIN_DEFAULT_PASSWORD: "admin"
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+
+    volumes:
+      - stackvo-pgadmin-data:/var/lib/pgadmin
+      - /stackvo/logs/services/pgadmin:/var/log/pgadmin
+
+    ports:
+      - "5050:80"
+
+    networks:
+      - "stackvo-net"
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.pgadmin.rule=Host(`pgadmin.stackvo.loc`)"
+      - "traefik.http.routers.pgadmin.entrypoints=websecure"
+      - "traefik.http.routers.pgadmin.tls=true"
+      - "traefik.http.services.pgadmin.loadbalancer.server.port=80"
+
+
+  kafbat:
+    profiles: ["services", "kafbat"]  # --services for all, --profile kafbat for this service only
+    image: "kafbat/kafka-ui:latest"
+    container_name: "stackvo-kafbat"
+    restart: unless-stopped
+
+    environment:
+      DYNAMIC_CONFIG_ENABLED: "true"
+      KAFKA_CLUSTERS_0_NAME: "stackvo-kafka"
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "stackvo-kafka:9092"
+
+    volumes:
+      - /stackvo/logs/services/kafbat:/var/log/kafbat
+
+    ports:
+      - "8080:8080"
+
+    networks:
+      - "stackvo-net"
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.kafbat.rule=Host(`kafbat.stackvo.loc`)"
+      - "traefik.http.routers.kafbat.entrypoints=websecure"
+      - "traefik.http.routers.kafbat.tls=true"
+      - "traefik.http.services.kafbat.loadbalancer.server.port=8080"
+
+  mongo-express:
+    profiles: ["services", "mongo-express"]  # --services for all, --profile mongo-express for this service only
+    image: "mongo-express:latest"
+    container_name: "stackvo-mongo-express"
+    restart: unless-stopped
+
+    environment:
+      ME_CONFIG_MONGODB_SERVER: "stackvo-mongo"
+      ME_CONFIG_MONGODB_PORT: "27017"
+      ME_CONFIG_MONGODB_ADMINUSERNAME: "root"
+      ME_CONFIG_MONGODB_ADMINPASSWORD: "root"
+      ME_CONFIG_BASICAUTH_USERNAME: "admin"
+      ME_CONFIG_BASICAUTH_PASSWORD: "admin"
+      ME_CONFIG_SITE_BASEURL: "/"
+
+    volumes:
+      - /stackvo/logs/services/mongo-express:/var/log/mongo-express
+
+    ports:
+      - "8083:8081"
+
+    networks:
+      - "stackvo-net"
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mongo-express.rule=Host(`mongo-express.stackvo.loc`)"
+      - "traefik.http.routers.mongo-express.entrypoints=websecure"
+      - "traefik.http.routers.mongo-express.tls=true"
+      - "traefik.http.services.mongo-express.loadbalancer.server.port=8081"
+
+  phpcacheadmin:
+    profiles: ["services", "phpcacheadmin"]  # --services for all, --profile phpcacheadmin for this service only
+    image: "robinn/phpcacheadmin:latest"
+    container_name: "stackvo-phpcacheadmin"
+    restart: unless-stopped
+
+    environment:
+      # Redis server configuration (PCA_ prefix required)
+      PCA_REDIS_0_HOST: "stackvo-redis"
+      PCA_REDIS_0_PORT: "6379"
+      PCA_REDIS_0_CLIENT: "predis"  # Use Predis library instead of PHP Redis extension
+      
+      # Memcached server configuration (PCA_ prefix required)
+      PCA_MEMCACHED_0_HOST: "stackvo-memcached"
+      PCA_MEMCACHED_0_PORT: "11211"
+      
+      # Admin authentication
+      PCA_ADMIN_USER: "admin"
+      PCA_ADMIN_PASS: "admin"
+      
+      # Disable metrics to avoid SQLite issues
+      PCA_METRICS: "false"
+
+    volumes:
+      - stackvo-phpcacheadmin-data:/var/www/html/data
+      - /stackvo/logs/services/phpcacheadmin:/var/log/phpcacheadmin
+
+    ports:
+      - "8084:80"
+
+    networks:
+      - "stackvo-net"
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.phpcacheadmin.rule=Host(`phpcacheadmin.stackvo.loc`)"
+      - "traefik.http.routers.phpcacheadmin.entrypoints=websecure"
+      - "traefik.http.routers.phpcacheadmin.tls=true"
+      - "traefik.http.services.phpcacheadmin.loadbalancer.server.port=80"
+
+
+  blackfire:
+    profiles: ["services", "blackfire"]  # --services for all, --profile blackfire for this service only
+    image: "blackfire/blackfire:2"
+    container_name: "stackvo-blackfire"
+    restart: unless-stopped
+
+    environment:
+      BLACKFIRE_SERVER_ID: ""
+      BLACKFIRE_SERVER_TOKEN: ""
+      BLACKFIRE_LOG_LEVEL: "1"
+
+    ports:
+      - "8707:8707"
+
+    volumes:
+      - /stackvo/logs/services/blackfire:/var/log/blackfire
+
+    networks:
+      - "stackvo-net"
+
+
+volumes:
+  stackvo-cassandra-data: {}
+  stackvo-elasticsearch-data: {}
+  stackvo-grafana-config: {}
+  stackvo-grafana-data: {}
+  stackvo-kafka-data: {}
+  stackvo-kibana-data: {}
+  stackvo-mailpit-data: {}
+  stackvo-mariadb-data: {}
+  stackvo-mongo-data: {}
+  stackvo-mysql-data: {}
+  stackvo-pgadmin-data: {}
+  stackvo-phpcacheadmin-data: {}
+  stackvo-postgres-data: {}
+  stackvo-rabbitmq-data: {}
+  stackvo-rabbitmq-logs: {}
+  stackvo-redis-data: {}

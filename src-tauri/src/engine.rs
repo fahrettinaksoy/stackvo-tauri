@@ -538,20 +538,48 @@ pub async fn disk_attribution() -> Result<Vec<DiskOwner>> {
 pub struct PruneReport {
     pub images_deleted: u64,
     pub volumes_deleted: u64,
+    /// Build-cache records removed. Counted separately from images because one
+    /// image's worth of cache is many records.
+    pub caches_deleted: u64,
     pub space_reclaimed: u64,
 }
 
-/// Remove dangling images and, only when asked, unused volumes.
+/// How far a build-cache prune goes.
 ///
-/// The two are separate flags because they are not the same risk: a dangling
-/// image is rebuildable by definition, while an unused volume can be the only
-/// copy of a database that belongs to a stopped project — the engine's
-/// definition of "unused" is "not currently mounted", not "not wanted".
-pub async fn prune(images: bool, volumes: bool) -> Result<PruneReport> {
+/// Three levels rather than a bool because the middle one is the only one that
+/// is always safe, and it is the one a project deletion wants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BuildCache {
+    /// Leave it alone.
+    #[default]
+    Keep,
+    /// Only records nothing references any more — what deleting an image
+    /// orphans. Rebuilding anything still installed stays incremental.
+    Dangling,
+    /// Every record, including the layers the remaining projects would have
+    /// reused. Reclaims the most and makes the next build of every project a
+    /// full one.
+    All,
+}
+
+/// Remove dangling images and, only when asked, unused volumes and build cache.
+///
+/// Separate flags because they are not the same risk. A dangling image is
+/// rebuildable by definition. An unused volume can be the only copy of a
+/// database that belongs to a stopped project — the engine's definition of
+/// "unused" is "not currently mounted", not "not wanted". And the build cache
+/// is *shared*: every StackVo project image starts from the same PHP base and
+/// runs the same extension installs, so those layers are one cache serving all
+/// of them. `BuildCache::All` on a machine with three projects reclaims the
+/// most and costs all three a full rebuild, which is why it is a level rather
+/// than the default.
+pub async fn prune(images: bool, volumes: bool, build_cache: BuildCache) -> Result<PruneReport> {
     let docker = connect()?;
     let mut report = PruneReport {
         images_deleted: 0,
         volumes_deleted: 0,
+        caches_deleted: 0,
         space_reclaimed: 0,
     };
 
@@ -579,6 +607,26 @@ pub async fn prune(images: bool, volumes: bool) -> Result<PruneReport> {
                 )
             })?;
         report.volumes_deleted = r.volumes_deleted.map(|v| v.len() as u64).unwrap_or(0);
+        report.space_reclaimed += r.space_reclaimed.unwrap_or(0).max(0) as u64;
+    }
+
+    if build_cache != BuildCache::Keep {
+        use bollard::query_parameters::PruneBuildOptionsBuilder;
+
+        // `all(false)` is the API default and means dangling only. Spelled out
+        // because the difference between the two is the whole point of the
+        // level, and a reader should not have to know the default to see it.
+        let options = PruneBuildOptionsBuilder::new()
+            .all(build_cache == BuildCache::All)
+            .build();
+
+        let r = docker.prune_build(Some(options)).await.map_err(|e| {
+            Error::new(
+                Code::EngineUnreachable,
+                format!("Cannot prune the build cache: {e}"),
+            )
+        })?;
+        report.caches_deleted = r.caches_deleted.map(|v| v.len() as u64).unwrap_or(0);
         report.space_reclaimed += r.space_reclaimed.unwrap_or(0).max(0) as u64;
     }
 
@@ -685,6 +733,90 @@ pub async fn stop_container(id: &str) -> Result<()> {
         }) => Ok(()),
         Err(e) => Err(lifecycle_error("stop", &name, e)),
     }
+}
+
+/// Delete a container, running or not.
+///
+/// `force` because stopping first and removing second is two round trips and a
+/// race: a restart policy can bring the container back between them. Removing
+/// a container that is not there is success, not a 404 to report — the caller
+/// is asking for it to be gone, and it is.
+///
+/// Anonymous volumes go with it (`v`). A project's compose service declares
+/// only bind mounts, so in practice this cleans up whatever an image's own
+/// `VOLUME` directive created and nothing the user named.
+pub async fn remove_container(id: &str) -> Result<()> {
+    use bollard::query_parameters::RemoveContainerOptionsBuilder;
+    let name = container_name(id);
+    let docker = connect()?;
+
+    let options = RemoveContainerOptionsBuilder::default()
+        .force(true)
+        .v(true)
+        .build();
+
+    match docker.remove_container(&name, Some(options)).await {
+        Ok(()) => Ok(()),
+        Err(bollard::errors::Error::DockerResponseServerError {
+            status_code: 404, ..
+        }) => Ok(()),
+        Err(e) => Err(lifecycle_error("remove", &name, e)),
+    }
+}
+
+/// Is this `repo:tag` an image built for `repository`?
+///
+/// Split at the LAST colon and compare the repository whole. Two ways to get
+/// this wrong, both of which delete something that is not yours: a
+/// `starts_with` makes deleting `lara` take `stackvo-laravel` with it, and
+/// splitting at the first colon mangles a registry port
+/// (`localhost:5000/img:tag`).
+fn is_project_image(tag: &str, repository: &str) -> bool {
+    tag.rsplit_once(':')
+        .is_some_and(|(repo, _)| repo == repository)
+}
+
+/// Delete every image built for one project, whatever it is tagged.
+///
+/// The tag is not fixed — Apache tags with the PHP version, everything else
+/// with `latest` — so the repository is matched instead, and matched *exactly*:
+/// a `starts_with` would let deleting `lara` take `stackvo-laravel` with it.
+///
+/// Returns what it removed, for the log line. A 409 (some other container
+/// still uses the image) is not an error to raise: it means the image is not
+/// this project's alone, and leaving it is the correct outcome.
+pub async fn remove_project_images(project: &str) -> Result<Vec<String>> {
+    use bollard::query_parameters::{ListImagesOptionsBuilder, RemoveImageOptionsBuilder};
+
+    let docker = connect()?;
+    let repository = container_name(project);
+
+    let images = docker
+        .list_images(Some(ListImagesOptionsBuilder::new().all(false).build()))
+        .await
+        .map_err(|e| Error::new(Code::EngineUnreachable, format!("Cannot list images: {e}")))?;
+
+    let tags: Vec<String> = images
+        .into_iter()
+        .flat_map(|image| image.repo_tags)
+        .filter(|tag| is_project_image(tag, &repository))
+        .collect();
+
+    let mut removed = Vec::new();
+    for tag in tags {
+        let options = RemoveImageOptionsBuilder::default().build();
+        match docker.remove_image(&tag, Some(options), None).await {
+            Ok(_) => removed.push(tag),
+            // 404: already gone. 409: another container holds it.
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404 | 409,
+                ..
+            }) => {}
+            Err(e) => return Err(lifecycle_error("remove image", &tag, e)),
+        }
+    }
+
+    Ok(removed)
 }
 
 pub async fn restart_container(id: &str) -> Result<()> {
@@ -1147,6 +1279,32 @@ mod tests {
         );
         assert_eq!(classify("/var/run/docker.sock"), Platform::Engine);
         assert_eq!(classify("/tmp/something-else"), Platform::Unknown);
+    }
+
+    /// Deleting a project deletes its image, and only its image.
+    #[test]
+    fn a_project_image_is_matched_by_whole_repository() {
+        assert!(is_project_image("stackvo-lara:latest", "stackvo-lara"));
+        // Apache tags with the PHP version rather than `latest`.
+        assert!(is_project_image("stackvo-lara:8.3", "stackvo-lara"));
+
+        // The reason this is not a prefix test: deleting `lara` must not take
+        // the neighbouring project's image with it.
+        assert!(!is_project_image("stackvo-laravel:latest", "stackvo-lara"));
+        assert!(!is_project_image("stackvo-lara-api:latest", "stackvo-lara"));
+        // Someone else's image that merely ends the same way.
+        assert!(!is_project_image(
+            "ghcr.io/acme/stackvo-lara:latest",
+            "stackvo-lara"
+        ));
+        // A registry port is a colon too, which is why the split is from the
+        // right — this one is a genuine match despite having two.
+        assert!(is_project_image(
+            "localhost:5000/img:tag",
+            "localhost:5000/img"
+        ));
+        // `<none>` images carry no tag at all.
+        assert!(!is_project_image("stackvo-lara", "stackvo-lara"));
     }
 
     #[test]

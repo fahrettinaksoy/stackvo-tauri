@@ -44,8 +44,29 @@ pub fn key_path(root: &Path) -> PathBuf {
     cert_dir(root).join("stackvo-wildcard.key")
 }
 
-pub fn ca_path(root: &Path) -> PathBuf {
-    cert_dir(root).join("stackvo-ca.crt")
+/// The certificate authority — the real file, not a copy of it.
+///
+/// This used to point at `generated/certs/stackvo-ca.crt`, a byte-identical
+/// duplicate that `apply` wrote next to the certificate. That made sense while
+/// the CA itself lived in mkcert's own platform directory, somewhere nobody
+/// would think to look; it stopped making sense the moment the CA moved into
+/// this app's own directory, and it read as two certificates in two places to
+/// the person looking at them.
+///
+/// `root` is unused now and kept so every path in this module is asked for the
+/// same way.
+pub fn ca_path(_root: &Path) -> PathBuf {
+    ca_file()
+}
+
+/// The same file, for callers that have no workspace root to hand.
+///
+/// Split out after the trust command was built from `ca_root()` — the
+/// *directory* — and handed `security add-trusted-cert` a folder to read a
+/// certificate from. One name for the directory and one for the file, so the
+/// two cannot be confused by looking similar at a call site.
+pub fn ca_file() -> PathBuf {
+    ca_root().join("rootCA.pem")
 }
 
 // ------------------------------------------------------------- pure logic
@@ -262,12 +283,82 @@ pub struct Mkcert {
 }
 
 /// First line of stdout, or None when the program cannot be run at all.
+/// Where mkcert keeps the certificate authority that signs everything here.
+///
+/// `<app root>/ca`, by handing mkcert a `CAROOT` rather than letting it use its
+/// platform default — `~/Library/Application Support/mkcert` on macOS.
+///
+/// Two reasons, and the second one is a real failure that reached a user.
+///
+/// The app's own directory is the app's own directory. Everything else it
+/// produces is under there; a certificate authority it created, for domains it
+/// invented, is not the exception. Deleting `~/.stackvo` should leave nothing
+/// behind, and until this it left a CA in a second place nobody had been told
+/// about.
+///
+/// And a shared default is a directory this app does not control. The one it
+/// was using had been created by `sudo mkcert -install` at some earlier point,
+/// so it was owned by root with the key at mode 0400 — unreadable as the user,
+/// permanently, with an error that pointed at mkcert rather than at ownership.
+/// A directory this app creates is owned by whoever runs the app, which is the
+/// only person who will ever need to read it.
+pub fn ca_root() -> std::path::PathBuf {
+    crate::workspace::app_root().join("ca")
+}
+
+/// Run a helper, with mkcert pointed at our own CA.
+///
+/// The environment is set for mkcert only. `security` and its equivalents read
+/// the system trust store and have no business being told about `CAROOT`.
+fn helper(program: &str) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new(program);
+
+    // Not the app's own directory. A helper that inherits a cwd it cannot read
+    // starts by complaining about it, and that noise reached a user on top of
+    // the real error:
+    //
+    //   shell-init: error retrieving current directory: getcwd: cannot access
+    //   parent directories: Operation not permitted
+    //
+    // Callers that need a working directory pass one, and it wins.
+    command.current_dir("/");
+    if program == "mkcert" {
+        let root = ca_root();
+        // mkcert creates it when missing, but then it is created by mkcert's
+        // umask rather than ours — and ownership is the whole point here.
+        let _ = std::fs::create_dir_all(&root);
+        command.env("CAROOT", root);
+
+        // And no Java. mkcert manages a JVM truststore whenever `JAVA_HOME` is
+        // set, through `keytool`, and it aborts the *whole run* when that
+        // fails — including a plain issue that was not asking for any of it.
+        // Measured on a machine with Homebrew's openjdk@17, where the store is
+        // not at the path mkcert expects:
+        //
+        //   with JAVA_HOME:    keytool error: Keystore file does not exist:
+        //   without JAVA_HOME: It will expire on 1 November 2028
+        //
+        // Same command, same CA, same directory. This certificate is for a
+        // browser and for Traefik; a JVM has never been in the picture, and
+        // being unable to issue one because of a keystore nobody mentioned is
+        // not a trade worth keeping. Somebody who does want Java to trust the
+        // CA can run `mkcert -install` themselves.
+        command.env_remove("JAVA_HOME");
+
+        // And no stdin. `mkcert -install` shells out to `sudo`, which reads a
+        // password from the terminal; a windowed app has none, so the prompt
+        // went nowhere and the process waited for ever — the first-run screen
+        // sat on "Issuing the certificate" until it was killed. With stdin
+        // closed, sudo fails immediately and the app can say so. The trust
+        // store is written by `install_ca` instead, through the same
+        // authentication panel the hosts file uses.
+        command.stdin(std::process::Stdio::null());
+    }
+    command
+}
+
 async fn probe(program: &str, args: &[&str]) -> Option<String> {
-    let output = tokio::process::Command::new(program)
-        .args(args)
-        .output()
-        .await
-        .ok()?;
+    let output = helper(program).args(args).output().await.ok()?;
 
     if !output.status.success() {
         return None;
@@ -301,20 +392,41 @@ pub async fn mkcert() -> Mkcert {
 /// untrusted CA is trusted sends the user hunting through browser settings;
 /// claiming a trusted one is not sends them re-running an install that already
 /// worked. Neither is worth guessing to avoid one nullable field.
+/// Does this machine accept the certificate we serve?
+///
+/// `security verify-cert`, which answers exactly that, after three attempts at
+/// deducing it from text failed in three different directions:
+///
+///   1. `find-certificate` — asked whether the CA is in *a keychain*. It is
+///      there whenever `add-trusted-cert` got that far, trusted or not, so this
+///      reported success on a machine where Chrome refused every page.
+///   2. `dump-trust-settings`, matching the common name — the trusted entry was
+///      a *different* mkcert CA with a similar name.
+///   3. `dump-trust-settings`, requiring `Number of trust settings > 0` — and
+///      an empty settings list is macOS for "trust this for everything". The
+///      certificate was trusted, the check said no, and the first-run screen
+///      waited ninety seconds for something that had already happened.
+///
+/// Each of those was a guess about how to read an answer. This asks the
+/// question: exit zero means a client will accept the chain. Against the
+/// certificate rather than the CA, because that is what a browser evaluates —
+/// a trusted CA with a leaf it did not sign is still a warning.
+///
+/// The `basic` policy, not `ssl`: the SSL policy also demands certificate
+/// transparency, which a locally-installed root neither has nor needs, and
+/// which browsers waive for exactly this case.
 #[cfg(target_os = "macos")]
-async fn trust_listing() -> Option<String> {
-    // Without `-p` this prints the attribute dump, where the `alis` blob holds
-    // the CA's name in plain text. With `-p` it prints base64, in which the
-    // name is not greppable.
-    let output = tokio::process::Command::new("security")
-        .args(["find-certificate", "-a", "-c", "mkcert"])
+async fn system_accepts(cert: &Path) -> Option<bool> {
+    if !cert.is_file() {
+        return Some(false);
+    }
+    let output = helper("security")
+        .args(["verify-cert", "-p", "basic", "-c"])
+        .arg(cert)
         .output()
         .await
         .ok()?;
-
-    // A miss exits non-zero with no output — that is a real "not trusted",
-    // not an unknown, so it must come back as Some("") rather than None.
-    Some(String::from_utf8_lossy(&output.stdout).to_string())
+    Some(output.status.success())
 }
 
 #[cfg(target_os = "linux")]
@@ -368,7 +480,17 @@ async fn trust_listing() -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+/// Will a client accept what we serve? `None` when the platform would not say.
+///
+/// Named for the CA because that is what a person changes, but asked of the
+/// certificate, which is what a browser judges.
+#[cfg(target_os = "macos")]
+pub async fn ca_trusted_for(cert: &Path) -> Option<bool> {
+    system_accepts(cert).await
+}
+
 /// Is our CA trusted? `None` when the platform would not say.
+#[cfg(not(target_os = "macos"))]
 pub async fn ca_trusted(ca_pem: Option<&[u8]>) -> Option<bool> {
     let listing = trust_listing().await?;
 
@@ -400,7 +522,10 @@ pub fn suffix(root: &Path) -> String {
 /// reported as invalid everywhere else in the app.
 pub fn project_domains(root: &Path) -> Vec<String> {
     let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(root.join("projects")) else {
+    let Some(projects) = crate::workspace::projects_root(root) else {
+        return out;
+    };
+    let Ok(entries) = std::fs::read_dir(&projects) else {
         return out;
     };
 
@@ -478,6 +603,14 @@ pub async fn status(root: &Path) -> CertStatus {
     let (add, _) = diff(&covered, &required);
 
     let ca_pem = std::fs::read(&ca_file).ok();
+    // macOS is asked about the certificate itself; everywhere else the trust
+    // store is a list of files and the CA's name is all there is to match on.
+    #[cfg(target_os = "macos")]
+    let ca_trusted = {
+        let _ = &ca_pem;
+        ca_trusted_for(&cert_file).await
+    };
+    #[cfg(not(target_os = "macos"))]
     let ca_trusted = ca_trusted(ca_pem.as_deref()).await;
 
     CertStatus {
@@ -516,6 +649,17 @@ pub struct CertPlan {
     pub changed: bool,
     pub cert_path: String,
     pub install_ca: bool,
+    /// Why the certificate authority was not added to the system trust store,
+    /// when it was meant to be.
+    ///
+    /// Not an error from `apply`. Trusting the CA and issuing the certificate
+    /// are two jobs, and the first failing must not cost the second: a stack
+    /// with an untrusted certificate serves every domain and shows a browser
+    /// warning, while a stack with no certificate at all serves nothing —
+    /// Traefik builds no TLS store and every name drops the connection. The
+    /// first is a state worth leaving somebody in; the second is not.
+    #[serde(default)]
+    pub trust_failed: Option<String>,
     /// Whether the running proxy was made to re-read the certificate.
     ///
     /// Only `apply` sets this; `plan` leaves it false, because planning changes
@@ -544,6 +688,7 @@ pub async fn plan(root: &Path, install_ca: bool) -> Result<CertPlan> {
         rejected: status.rejected,
         cert_path: cert_path(root).display().to_string(),
         install_ca: install_ca && status.ca_trusted != Some(true),
+        trust_failed: None,
         // Planning issues nothing, so there is nothing for the proxy to reread.
         reloaded: false,
     })
@@ -581,17 +726,6 @@ pub async fn apply(root: &Path, install_ca: bool) -> Result<CertPlan> {
         .with_hint("Check DEFAULT_TLD_SUFFIX in .env and the `domain` in each stackvo.json."));
     }
 
-    if plan.install_ca {
-        run("mkcert", &["-install".to_string()], None)
-            .await
-            .map_err(|e| {
-                e.with_hint(
-                    "Run `mkcert -install` once in a terminal — it needs a password for the \
-                     system trust store, and a windowed app has no terminal to ask in.",
-                )
-            })?;
-    }
-
     let dir = cert_dir(root);
     std::fs::create_dir_all(&dir)
         .map_err(|e| Error::io(format!("creating {}", dir.display()), e))?;
@@ -606,21 +740,73 @@ pub async fn apply(root: &Path, install_ca: bool) -> Result<CertPlan> {
 
     run("mkcert", &args, Some(&dir)).await?;
 
-    // Copy the CA next to the certificate for reference, the way the Bash
-    // helper does — Traefik does not read it, but a user importing it by hand
-    // needs somewhere to find it.
-    if let Some(ca_root) = mkcert.ca_root.as_deref() {
-        let source = Path::new(ca_root).join("rootCA.pem");
-        if source.is_file() {
-            let _ = std::fs::copy(&source, ca_path(root));
-        }
-    }
+    // No copy of the CA is written. There was one — `stackvo-ca.crt`, beside
+    // the certificate — from when the CA lived in mkcert's own directory and
+    // needed surfacing. It lives here now, so the copy was the same file twice
+    // under two names, which is exactly how it was reported.
 
     // A new file on disk is not a new certificate in the browser.
     let mut plan = plan;
     plan.reloaded = reload_proxy(root);
 
+    // Last, and allowed to fail. The certificate exists by now, so a refused or
+    // dismissed authentication prompt costs a browser warning rather than the
+    // whole stack.
+    if plan.install_ca {
+        if let Err(e) = trust_ca(&mkcert).await {
+            tracing::warn!(error = %e.message, "the CA was not added to the trust store");
+            plan.trust_failed = Some(e.message);
+        }
+    }
+
     Ok(plan)
+}
+
+/// Make this machine trust the certificate authority.
+///
+/// On macOS: it cannot be done from here, and saying so is the whole function.
+///
+/// Three attempts, each measured. `mkcert -install` shells out to `sudo`, which
+/// reads a password from a terminal a windowed app does not have — it waited
+/// for ever. The same write as root through `osascript` came back
+/// `SecTrustSettingsSetTrustSettings: the authorization was denied since no
+/// user interaction was possible`. And `security add-trusted-cert` against the
+/// user domain, which needs no root at all, **exits 0 and changes nothing**:
+/// the trust dump was byte-identical either side of it.
+///
+/// Modifying trust settings needs an authorization the Security framework will
+/// only grant interactively, and a background child process of a windowed app
+/// is not a place it will ask. So this reports what is true, and the UI offers
+/// [`crate::commands::cert_trust_in_terminal`] — `mkcert -install` in the
+/// user's own terminal, where `sudo` can ask and be answered.
+#[cfg(target_os = "macos")]
+async fn trust_ca(_mkcert: &Mkcert) -> Result<()> {
+    Err(Error::new(
+        Code::Unsupported,
+        "macOS will not let a windowed app change the certificate trust settings.",
+    )
+    .with_hint(
+        "The certificate is issued either way and the stack serves — the browser warns \
+         about the issuer until the authority is trusted. Settings \u{2192} Certificates has a \
+         button that does it in your terminal, where the password prompt can be answered.",
+    ))
+}
+
+/// Elsewhere, hand it back to mkcert.
+///
+/// It still cannot prompt — stdin is closed for every helper — so it fails
+/// quickly and says what to run instead of waiting for a password nobody can
+/// type.
+#[cfg(not(target_os = "macos"))]
+async fn trust_ca(_mkcert: &Mkcert) -> Result<()> {
+    run("mkcert", &["-install".to_string()], None)
+        .await
+        .map_err(|e| {
+            e.with_hint(
+                "Run `mkcert -install` once in a terminal — it needs a password for the \
+                 system trust store, and a windowed app has no terminal to ask in.",
+            )
+        })
 }
 
 /// The Traefik dynamic configuration directory — watched, unlike the certs.
@@ -709,7 +895,7 @@ fn rewrite_in_place(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 
 /// Run a program and turn a non-zero exit into an Error carrying its stderr.
 async fn run(program: &str, args: &[String], cwd: Option<&Path>) -> Result<()> {
-    let mut command = tokio::process::Command::new(program);
+    let mut command = helper(program);
     command.args(args);
     if let Some(dir) = cwd {
         command.current_dir(dir);
@@ -734,15 +920,155 @@ async fn run(program: &str, args: &[String], cwd: Option<&Path>) -> Result<()> {
         .find(|l| !l.is_empty())
         .unwrap_or("no output");
 
-    Err(Error::new(
+    let error = Error::new(
         Code::PermissionDenied,
         format!("{program} failed: {reason}"),
+    );
+    match unreadable_ca_hint(reason) {
+        Some(hint) => Err(error.with_hint(hint)),
+        None => Err(error),
+    }
+}
+
+/// The one mkcert failure whose obvious fix makes it worse.
+///
+/// `failed to read the CA key: … permission denied` means mkcert's own
+/// certificate authority is owned by root, which happens when `mkcert -install`
+/// was run once under `sudo`. Every later run as the ordinary user then fails
+/// on a key it cannot read — and the standing advice, "run `mkcert -install` in
+/// a terminal", does nothing about it. Run *that* under sudo, which is what
+/// somebody reaches for next, and the CA is re-created owned by root again.
+///
+/// Measured on the machine that reported it: the CA directory was `root:staff`
+/// with the key at mode 0400, dated weeks before the failure.
+fn unreadable_ca_hint(reason: &str) -> Option<String> {
+    let reason = reason.to_ascii_lowercase();
+    if !(reason.contains("ca key") && reason.contains("permission denied")) {
+        return None;
+    }
+
+    let dir = ca_root().display().to_string();
+
+    Some(format!(
+        "mkcert's certificate authority is owned by root, so it cannot be read as you. \
+         It gets that way when `mkcert -install` is run once with sudo. Give it back with:\n\n\
+         sudo chown -R \"$(id -un)\" \"{dir}\"\n\n\
+         Then try again. Do not re-run mkcert with sudo — that recreates the same problem."
     ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Everything mkcert is handed, and the one thing it is not.
+    ///
+    /// Both were real failures on the machine that reported them. `CAROOT`
+    /// because mkcert's platform default is a directory this app does not own —
+    /// the one in use had been created by `sudo mkcert -install` and was
+    /// root-owned, unreadable, permanently. `JAVA_HOME` because mkcert manages
+    /// a JVM truststore whenever it is set and aborts the whole run when
+    /// `keytool` fails, which it did: same command, same CA, issued fine with
+    /// the variable removed and refused with it present.
+    #[test]
+    fn mkcert_is_pointed_at_our_ca_and_told_nothing_about_java() {
+        let command = helper("mkcert");
+        let envs: Vec<_> = command.as_std().get_envs().collect();
+
+        let caroot = envs
+            .iter()
+            .find(|(k, _)| *k == std::ffi::OsStr::new("CAROOT"))
+            .and_then(|(_, v)| *v)
+            .expect("mkcert must be told where the CA lives");
+        assert_eq!(std::path::Path::new(caroot), ca_root());
+        assert!(
+            ca_root().starts_with(crate::workspace::app_root()),
+            "the CA belongs inside the directory the app owns"
+        );
+
+        // `get_envs` reports a removal as a key mapped to None.
+        let java = envs
+            .iter()
+            .find(|(k, _)| *k == std::ffi::OsStr::new("JAVA_HOME"));
+        assert_eq!(
+            java.map(|(_, v)| *v),
+            Some(None),
+            "JAVA_HOME must be removed, not merely left alone"
+        );
+
+        // And only for mkcert: the trust-store helpers read the system's own
+        // state and have no business being told about either.
+        let other = helper("security");
+        assert_eq!(other.as_std().get_envs().count(), 0);
+    }
+
+    /// A directory is not a certificate.
+    ///
+    /// The trust command was built from `ca_root()` and handed
+    /// `security add-trusted-cert` a folder, which it cannot read a
+    /// certificate out of. The two names looked alike at the call site and
+    /// nothing else could tell them apart.
+    #[test]
+    fn the_ca_file_is_a_file_inside_the_ca_directory() {
+        let dir = ca_root();
+        let file = ca_file();
+
+        assert!(file.starts_with(&dir), "{file:?} is not inside {dir:?}");
+        assert_ne!(file, dir, "the file and the directory are the same path");
+        assert_eq!(
+            file.file_name().and_then(|n| n.to_str()),
+            Some("rootCA.pem"),
+            "mkcert writes its authority under this name"
+        );
+    }
+
+    /// The check asks the system instead of reading its prose.
+    ///
+    /// Three text-parsing versions preceded it and each was wrong differently:
+    /// presence in a keychain read as trust; a similarly named CA read as ours;
+    /// and an empty trust-settings list read as "not trusted" when it is macOS
+    /// for "trust this for everything" — that last one left the first-run
+    /// screen waiting ninety seconds for something that had already happened.
+    ///
+    /// So there is nothing left to unit test here: the answer comes from
+    /// `security verify-cert`, and asserting that it is called correctly means
+    /// calling it. This checks the one thing that is still ours to get wrong —
+    /// that the question is asked about the certificate a browser evaluates,
+    /// not about the authority behind it.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn trust_is_judged_on_the_certificate_that_gets_served() {
+        let root = std::path::Path::new("/tmp/stackvo-trust-shape");
+        assert_eq!(
+            cert_path(root).file_name().and_then(|n| n.to_str()),
+            Some("stackvo-wildcard.crt"),
+            "the leaf is what a browser judges; a trusted CA with a leaf it did \
+             not sign is still a warning"
+        );
+        assert_ne!(cert_path(root), ca_file());
+    }
+
+    /// The failure whose obvious fix makes it worse.
+    #[test]
+    fn a_root_owned_ca_is_named_as_such_instead_of_sent_back_to_mkcert() {
+        // What mkcert actually printed on the machine that reported this.
+        let real = "ERROR: failed to read the CA key: open /Users/me/Library/Application \
+                    Support/mkcert/rootCA-key.pem: permission denied";
+        let hint = unreadable_ca_hint(real).expect("this is the case the hint exists for");
+        assert!(hint.contains("chown"), "the fix is ownership: {hint}");
+        assert!(
+            hint.contains("Do not re-run mkcert with sudo"),
+            "sudo is what somebody reaches for next, and it recreates the problem: {hint}"
+        );
+
+        // Everything else keeps mkcert's own words and the standing advice.
+        assert!(unreadable_ca_hint("ERROR: failed to find any PEM data").is_none());
+        assert!(
+            unreadable_ca_hint("permission denied").is_none(),
+            "not every denial is the CA"
+        );
+        assert!(unreadable_ca_hint("no output").is_none());
+    }
 
     fn s(items: &[&str]) -> Vec<String> {
         items.iter().map(|x| x.to_string()).collect()

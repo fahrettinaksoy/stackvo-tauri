@@ -47,18 +47,21 @@ export function isIncompatible(extension, phpVersion) {
 /**
  * How many extensions the manifest can carry.
  *
- * A Bash parser limit, not a preference: the extractor greps 50 lines past the
- * `"extensions"` marker, so entry 51 onward is dropped without a word (C-04).
- * Read from the catalog so the number has one source, with the contract's own
- * value as the fallback.
+ * This was a hard 50 — the Bash extractor's `grep -A 50` window (C-04), which
+ * dropped entry 51 onward without a word. That extractor is gone, so the limit
+ * is simply the size of the catalog: everything on offer can be selected. Read
+ * from the catalog rather than restated here, so the counter cannot disagree
+ * with the list it is counting.
  */
 export function extensionLimit(catalog) {
-  return catalog?.maxExtensions ?? 50;
+  return catalog?.maxExtensions ?? catalog?.phpExtensions?.length ?? 0;
 }
 
-/** Would this form write more extensions than the parser can read back? */
+/** More extensions than the catalog even offers — a hand-edited spec, not a
+ *  picker one, since the picker cannot offer what it does not list. */
 export function overExtensionLimit(form, catalog) {
-  return form.extensions.length > extensionLimit(catalog);
+  const limit = extensionLimit(catalog);
+  return limit > 0 && form.extensions.length > limit;
 }
 
 /** The four runtimes that share one config shape (mirror of LANG_RUNTIMES). */
@@ -248,6 +251,21 @@ export const LOCAL_SUFFIXES = ['test', 'localhost', 'loc', 'dev'];
  * someone a project that cannot be opened and no clue why.
  */
 export const HTTPS_ONLY_SUFFIXES = ['dev', 'app', 'page', 'new', 'foo'];
+
+/**
+ * A project name or a hostname, in the one spelling everything downstream uses.
+ *
+ * Mirrors `workspace::canonical_name`. Applied as the field is typed rather
+ * than on submit, because the alternative is a form that accepts `Aksoyca` and
+ * a project that comes back called `aksoyca` — the backend has to canonicalise
+ * regardless (Docker rejects a capital in an image reference), so the only
+ * question is whether the user watches it happen or is surprised by it.
+ */
+export function canonical(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase();
+}
 
 /** `name.configured` first, then the alternatives, with no duplicates. */
 export function domainSuggestions(name, configured) {

@@ -36,7 +36,12 @@ pub struct CpuStats {
     /// 1/5/15-minute load average. `None` on Windows, which has no equivalent.
     pub load_average: Option<[f64; 3]>,
     /// Where the time went. `None` until two samples exist — the counters are
-    /// cumulative, so a single reading cannot produce a percentage.
+    /// cumulative, so a single reading cannot produce a percentage — and `None`
+    /// for good on a machine where it was measured to disagree with `percent`.
+    ///
+    /// See `breakdown_is_credible`. It is reported when it can be trusted and
+    /// withheld when it cannot, rather than drawn next to a number it
+    /// contradicts.
     pub breakdown: Option<CpuBreakdown>,
 }
 
@@ -55,6 +60,19 @@ pub struct CpuBreakdown {
 pub struct MemoryStats {
     pub total: u64,
     pub used: u64,
+    /// `total - used`. The complement of what is in use, and the only figure
+    /// that can sit beside `used` in one control without the two contradicting
+    /// each other.
+    ///
+    /// The dashboard used to put `available` there, and on a 24 GB machine that
+    /// read: used 18.7, available 12.4 — 31.1 GB of a 24 GB machine. Both
+    /// numbers were true and they measure different things, so the donut drawn
+    /// from the pair filled to 60% while the label in its middle said 78%.
+    pub free: u64,
+    /// What a new process could actually get, which on macOS and Linux is more
+    /// than `free`: page cache is reclaimable and is counted in `used`. Kept
+    /// because it is the more useful number for "can I run this", and reported
+    /// separately because it is not part of a total.
     pub available: u64,
     pub percent: f32,
     pub swap_total: u64,
@@ -120,7 +138,10 @@ pub struct Sampler {
     /// between two readings, which is why this measurement is held open.
     cpu_load: Option<systemstat::DelayedMeasurement<systemstat::CPULoad>>,
     breakdown: Option<CpuBreakdown>,
-    /// Per-process disk totals from the previous sample, for the rate.
+    /// Set once the CPU-time split has been caught disagreeing with per-core
+    /// usage, and never cleared. See `breakdown_is_credible`.
+    breakdown_untrusted: bool,
+    /// Running per-process disk totals, accumulated from per-refresh deltas.
     disk_totals: (u64, u64),
 }
 
@@ -142,6 +163,7 @@ impl Sampler {
             // The first sample() opens it; the second reports it.
             cpu_load: None,
             breakdown: None,
+            breakdown_untrusted: false,
             disk_totals: (0, 0),
         }
     }
@@ -183,40 +205,71 @@ impl Sampler {
     fn refresh_breakdown(&mut self) {
         if let Some(measurement) = self.cpu_load.take() {
             if let Ok(load) = measurement.done() {
-                self.breakdown = Some(CpuBreakdown {
+                let breakdown = CpuBreakdown {
                     user: load.user * 100.0,
                     nice: load.nice * 100.0,
                     system: load.system * 100.0,
                     idle: load.idle * 100.0,
-                });
+                };
+                // Once, and for the life of the process. The disagreement is
+                // a property of the machine's counters, not of the moment: on
+                // the Apple Silicon box this was measured on the gap wanders
+                // either side of the tolerance, so judging each sample on its
+                // own merits made the legend flicker between four rows and two
+                // every couple of seconds. A machine whose counters are right
+                // never trips this; one whose counters are wrong does not
+                // become right later.
+                if self.breakdown_untrusted {
+                    self.breakdown = None;
+                } else if breakdown_is_credible(
+                    100.0 - breakdown.idle,
+                    self.system.global_cpu_usage(),
+                ) {
+                    self.breakdown = Some(breakdown);
+                } else {
+                    tracing::info!(
+                        cpu_time_busy = 100.0 - breakdown.idle,
+                        per_core_average = self.system.global_cpu_usage(),
+                        "the CPU-time split disagrees with per-core usage; not reporting it"
+                    );
+                    self.breakdown_untrusted = true;
+                    self.breakdown = None;
+                }
             }
         }
         self.cpu_load = start_cpu_measurement();
     }
 
     /// System-wide disk throughput, summed over every process.
+    ///
+    /// From `read_bytes`, which sysinfo defines as the I/O since the last
+    /// refresh, rather than from differencing `total_read_bytes` ourselves.
+    /// The difference matters when a process exits: its lifetime total leaves
+    /// the sum, the running total falls, and the subtraction saturates to zero
+    /// — so a tick during which something finished reported no disk activity at
+    /// all, however much the rest of the machine had done. A build finishing is
+    /// exactly when that happens, and exactly when the number is being watched.
     fn disk(&mut self, elapsed: Option<f64>) -> DiskStats {
-        let (mut read, mut write) = (0u64, 0u64);
+        let (mut read_delta, mut write_delta) = (0u64, 0u64);
         for process in self.system.processes().values() {
             let usage = process.disk_usage();
-            read += usage.total_read_bytes;
-            write += usage.total_written_bytes;
+            read_delta += usage.read_bytes;
+            write_delta += usage.written_bytes;
         }
 
-        // Processes come and go, so the running total can fall; saturating_sub
-        // turns that into a zero rate rather than an enormous one.
+        // The running totals stay, because they are what the payload calls
+        // totals — but nothing is derived from them any more.
+        self.disk_totals.0 = self.disk_totals.0.saturating_add(read_delta);
+        self.disk_totals.1 = self.disk_totals.1.saturating_add(write_delta);
+
         let (read_rate, write_rate) = match elapsed {
-            Some(secs) => (
-                read.saturating_sub(self.disk_totals.0) as f64 / secs,
-                write.saturating_sub(self.disk_totals.1) as f64 / secs,
-            ),
+            Some(secs) => (read_delta as f64 / secs, write_delta as f64 / secs),
             None => (0.0, 0.0),
         };
-        self.disk_totals = (read, write);
 
         DiskStats {
-            read_total: read,
-            write_total: write,
+            read_total: self.disk_totals.0,
+            write_total: self.disk_totals.1,
             read_rate,
             write_rate,
         }
@@ -248,6 +301,7 @@ impl Sampler {
         MemoryStats {
             total,
             used,
+            free: total.saturating_sub(used),
             available: self.system.available_memory(),
             percent: percent_of(used, total),
             swap_total: self.system.total_swap(),
@@ -324,6 +378,41 @@ impl Default for Sampler {
     }
 }
 
+/// Does the CPU-time split agree with the usage figure it sits beside?
+///
+/// Two independent measurements of the same quantity: `systemstat` reads the
+/// platform's CPU-time counters, `sysinfo` averages per-core usage. They should
+/// land in the same place, and on Apple Silicon they do not. Measured on an
+/// 8-core M-series machine with four cores pinned flat out — where the true
+/// figure is known in advance — `sysinfo` reported 63–71% and the CPU-time
+/// split reported 95%, saturating; at idle the same split read 12–19% against
+/// `sysinfo`'s 24–29%. Not a scale factor, so not something to correct for.
+/// (`examples/cpu_truth.rs` is that experiment, kept so the claim can be
+/// re-run rather than believed.)
+///
+/// The likely mechanism is core parking: an idle efficiency core that the
+/// scheduler powers down stops accumulating idle ticks, so the idle share of
+/// total ticks collapses under load. Whatever the cause, a dashboard that draws
+/// a ring from one measurement and prints the other in its middle is wrong
+/// twice — the ring disagreed with its own label by 3×.
+///
+/// So it is checked rather than trusted. Where the two agree the split is real
+/// detail worth having (Linux reads `/proc/stat`, which does not have this
+/// problem); where they do not, the UI shows the figure it can stand behind and
+/// says the split is unavailable.
+///
+/// A flat margin in percentage points, not a ratio.
+///
+/// A ratio was tried first and let the case this exists for straight through:
+/// 95% against a real 67% is 1.4×, which any tolerance loose enough for two
+/// windows that do not line up would have to allow. In points it is 28 apart,
+/// which nothing sane calls agreement. The measured disagreements are 28 and
+/// 12 points; ordinary window skew on this machine is 1 to 5.
+fn breakdown_is_credible(busy: f32, reference: f32) -> bool {
+    const TOLERANCE: f32 = 10.0;
+    (busy - reference).abs() <= TOLERANCE
+}
+
 /// Open a CPU-time measurement. Returns None when the platform refuses, which
 /// is reported as an absent breakdown rather than as zeroes.
 fn start_cpu_measurement() -> Option<systemstat::DelayedMeasurement<systemstat::CPULoad>> {
@@ -370,24 +459,35 @@ mod tests {
         assert!(stats.memory.percent >= 0.0 && stats.memory.percent <= 100.0);
     }
 
+    /// Two things, and the second one changed.
+    ///
+    /// The first sample still cannot report a split — the counters are
+    /// cumulative, so one reading describes the app's own start-up burst rather
+    /// than the interval anybody asked about.
+    ///
+    /// The second sample used to be required to produce one. It is not any
+    /// more: the split is withheld where it disagrees with the usage figure
+    /// beside it, which on Apple Silicon is most of the time, so this asserts
+    /// what a reported split must look like rather than that one exists.
     #[test]
-    fn the_cpu_breakdown_needs_two_samples_and_then_sums_to_a_hundred() {
+    fn a_reported_cpu_breakdown_needs_two_samples_and_sums_to_a_hundred() {
         let mut sampler = Sampler::new();
 
-        // The counters are cumulative, so the first sample only opens the
-        // measurement. Reporting one here would describe the app's own
-        // start-up burst rather than the interval the caller asked about.
         assert!(
             sampler.sample().cpu.breakdown.is_none(),
             "the first sample must not report a breakdown"
         );
 
         std::thread::sleep(std::time::Duration::from_millis(400));
-        let b = sampler
-            .sample()
-            .cpu
-            .breakdown
-            .expect("a breakdown once two samples exist");
+        let sample = sampler.sample();
+
+        let Some(b) = sample.cpu.breakdown else {
+            // Withheld, which is a valid outcome and the common one here. The
+            // machine this runs on decides which branch is taken, so both have
+            // to be acceptable — and `a_breakdown_that_disagrees_with_the_usage_figure_is_withheld`
+            // is where the withholding rule itself is pinned down.
+            return;
+        };
 
         let total = b.user + b.nice + b.system + b.idle;
         assert!(
@@ -400,6 +500,13 @@ mod tests {
                 "{value} is not a percentage"
             );
         }
+
+        // And a reported one agrees with the figure it is shown beside — that
+        // is the condition it was reported under.
+        assert!(
+            breakdown_is_credible(100.0 - b.idle, sample.cpu.percent),
+            "a breakdown was reported that disagrees with cpu.percent"
+        );
     }
 
     #[test]
@@ -426,5 +533,63 @@ mod tests {
             first.network.rx_rate, 0.0,
             "no previous sample means no rate"
         );
+    }
+
+    /// The memory card draws a ring from `used` and its companion, and prints
+    /// `percent` in the middle. Those three have to describe one machine.
+    ///
+    /// They did not: the companion was `available`, which counts reclaimable
+    /// page cache that `used` also counts, so on a 24 GB machine the pair read
+    /// 18.7 + 12.4 = 31.1 GB and the ring filled to 60% under a label saying
+    /// 78%.
+    #[test]
+    fn memory_used_and_free_describe_the_same_machine() {
+        let mut sampler = Sampler::new();
+        let m = sampler.sample().memory;
+
+        assert!(m.total > 0, "no memory reading at all");
+        assert_eq!(
+            m.used + m.free,
+            m.total,
+            "used and free must be the whole machine"
+        );
+
+        // And the number in the middle of the ring is the ring's own share.
+        let drawn = m.used as f32 / m.total as f32 * 100.0;
+        assert!(
+            (drawn - m.percent).abs() < 0.5,
+            "the ring says {drawn:.1}% and the label says {:.1}%",
+            m.percent
+        );
+
+        // `available` is still reported, and is still allowed to exceed `free`
+        // — that is the whole reason it is a separate field.
+        assert!(m.available >= m.free || m.available > 0);
+    }
+
+    /// The check that decides whether the CPU-time split is shown.
+    #[test]
+    fn a_breakdown_that_disagrees_with_the_usage_figure_is_withheld() {
+        // The measured Apple Silicon disagreement, both directions.
+        assert!(
+            !breakdown_is_credible(95.0, 67.0),
+            "a split saturating at 95% against a real 67% must not be shown"
+        );
+        assert!(
+            !breakdown_is_credible(11.8, 24.2),
+            "a split reading half the real figure must not be shown"
+        );
+
+        // Ordinary agreement, including the wobble between two measurement
+        // windows that do not line up exactly.
+        assert!(breakdown_is_credible(30.0, 31.0));
+        assert!(breakdown_is_credible(31.0, 30.0));
+        assert!(breakdown_is_credible(60.0, 55.0));
+
+        // Near zero a ratio would mean nothing — 1% against 4% is four times
+        // as much and also nothing at all — which is why the rule counts
+        // points rather than multiples.
+        assert!(breakdown_is_credible(1.0, 4.0));
+        assert!(breakdown_is_credible(0.0, 0.0));
     }
 }

@@ -40,39 +40,56 @@ const totalStopped = computed(() => Math.max(0, totalContainers.value - totalRun
  * cumulative, so the first reading would describe the app's own start-up rather
  * than the interval anyone asked about.
  */
+/**
+ * The ring: busy against idle, from the one CPU figure that was verified.
+ *
+ * It used to be the CPU-time split — system, user, nice, idle — with
+ * `cpu.percent` printed in the middle. Two different measurements in one
+ * control, and on Apple Silicon they disagree by 3×: the ring filled to 6%
+ * under a label reading 21%. The split is now reported by the backend only
+ * when it agrees with `percent`, so the ring is drawn from `percent` itself and
+ * the two can no longer contradict each other.
+ */
 const cpuPieItems = computed(() => {
-  const b = stats.value?.cpu.breakdown;
-  if (!b) return [];
+  const c = stats.value?.cpu;
+  if (!c) return [];
+  const busy = Math.max(0, Math.min(100, c.percent));
   return [
     {
-      key: 'system',
-      title: t('dashboard.system'),
-      value: b.system,
-      color: colors.value.error,
-      display: percent(b.system),
-    },
-    {
-      key: 'user',
-      title: t('dashboard.user'),
-      value: b.user,
+      key: 'busy',
+      title: t('dashboard.used'),
+      value: busy,
       color: colors.value.info,
-      display: percent(b.user),
+      display: percent(busy),
     },
     {
-      key: 'nice',
-      title: t('dashboard.nice'),
-      value: b.nice,
-      color: colors.value.warning,
-      display: percent(b.nice),
+      key: 'idle',
+      title: t('dashboard.idle'),
+      value: 100 - busy,
+      color: colors.value['surface-variant'],
+      display: percent(100 - busy),
     },
+  ];
+});
+
+/**
+ * The legend beside it: the split where the backend vouches for it, the ring's
+ * own two shares where it does not.
+ */
+const cpuLegendItems = computed(() => {
+  const b = stats.value?.cpu.breakdown;
+  if (!b) return cpuPieItems.value;
+  return [
+    { key: 'system', title: t('dashboard.system'), value: b.system, color: colors.value.error },
+    { key: 'user', title: t('dashboard.user'), value: b.user, color: colors.value.info },
+    { key: 'nice', title: t('dashboard.nice'), value: b.nice, color: colors.value.warning },
     {
       key: 'idle',
       title: t('dashboard.idle'),
       value: b.idle,
       color: colors.value['surface-variant'],
-      display: percent(b.idle),
     },
-  ];
+  ].map((row) => ({ ...row, display: percent(row.value) }));
 });
 
 function gaugeColor(value) {
@@ -88,8 +105,11 @@ const memoryPie = computed(() => {
     { key: 'used', title: t('dashboard.used'), value: m.used, color: colors.value.info },
     {
       key: 'free',
-      title: t('dashboard.available'),
-      value: m.available,
+      // `free`, not `available`: the ring and the percentage in its middle have
+      // to describe one machine, and `available` counts reclaimable cache that
+      // `used` counts too — the pair summed to 31 GB on a 24 GB laptop.
+      title: t('dashboard.free'),
+      value: m.free,
       color: colors.value['surface-variant'],
     },
   ];
@@ -132,6 +152,20 @@ const txHistory = computed(() => (metrics.netTx.length ? metrics.netTx : [0]));
 
 const missingDomains = ref([]);
 const showHostsFix = ref(false);
+
+/**
+ * The missing names, capped.
+ *
+ * A stack with twenty projects has twenty of them and this is one line of a
+ * banner, so the tail becomes a count — but the first few are named, because
+ * "which ones" is the only question this row raises.
+ */
+const missingDomainsLabel = computed(() => {
+  const SHOWN = 3;
+  const shown = missingDomains.value.slice(0, SHOWN).join(', ');
+  const rest = missingDomains.value.length - SHOWN;
+  return rest > 0 ? `${shown} (+${rest})` : shown;
+});
 
 async function refreshMissing() {
   try {
@@ -274,13 +308,10 @@ onMounted(() => {
               <v-progress-circular indeterminate size="28" />
             </div>
 
-            <div
-              v-else-if="!cpuPieItems.length"
-              class="flex-grow-1 d-flex align-center justify-center text-caption text-medium-emphasis text-center px-4"
-            >
-              {{ t('dashboard.breakdownPending') }}
-            </div>
-
+            <!-- No "waiting for a second sample" branch any more. That
+                 message was for the CPU-time split, which the card no longer
+                 depends on — the ring comes from a figure the first sample
+                 already has, so there is nothing to wait for. -->
             <div v-else class="flex-grow-1 d-flex align-center justify-center">
               <v-pie
                 :items="cpuPieItems"
@@ -297,24 +328,23 @@ onMounted(() => {
                     <div class="text-caption text-grey">{{ t('dashboard.cpu') }}</div>
                   </div>
                 </template>
-                <template #legend="{ items, toggle, isActive }">
+                <!-- The rows are the split when the backend vouches for it
+                     and the ring's own two shares when it does not, so they
+                     are their own list rather than the pie's slices. -->
+                <template #legend>
                   <v-list class="py-0 bg-transparent metric-legend">
                     <v-list-item
-                      v-for="item in items"
+                      v-for="item in cpuLegendItems"
                       :key="item.key"
-                      :class="['my-0', { 'opacity-40': !isActive(item) }]"
+                      class="my-0"
                       :title="item.title"
                       rounded="lg"
-                      link
-                      @click="toggle(item)"
                     >
                       <template #prepend>
                         <v-avatar :color="item.color" :size="10" class="mr-2" />
                       </template>
                       <template #append>
-                        <span class="text-caption font-weight-bold ml-3">{{
-                          item.raw.display
-                        }}</span>
+                        <span class="text-caption font-weight-bold ml-3">{{ item.display }}</span>
                       </template>
                     </v-list-item>
                   </v-list>
@@ -594,10 +624,15 @@ onMounted(() => {
                 <v-btn size="x-small" variant="text" to="/projects">{{ t('app.projects') }}</v-btn>
               </div>
 
+              <!-- Named, not counted. "2 × no hosts entry" is a true sentence
+                   that cannot be acted on or even checked: with `stackvo.loc`
+                   and `traefik.stackvo.loc` sitting in the file, it reads as
+                   the app failing to see them, and the only way to find out
+                   which two it meant was to open the dialog. -->
               <div v-if="missingDomains.length" class="d-flex align-center ga-2">
                 <v-icon size="18">mdi-web-off</v-icon>
                 <span class="text-body-2">
-                  {{ missingDomains.length }} × {{ t('projects.domainMissing') }}
+                  {{ t('projects.domainMissing') }}: {{ missingDomainsLabel }}
                 </span>
                 <v-spacer />
                 <v-btn size="x-small" variant="text" @click="showHostsFix = true">{{

@@ -323,35 +323,11 @@ pub fn apply(add: &[String], remove: &[String]) -> crate::error::Result<HostsPla
 /// inside the staged file's contents, not in this command line.
 #[cfg(target_os = "macos")]
 fn elevated_copy(from: &Path, to: &Path) -> crate::error::Result<bool> {
-    use crate::error::{Code, Error};
-
-    // osascript's `with administrator privileges` shows the standard macOS
-    // authentication prompt; there is no way to bypass it silently.
-    let script = format!(
-        r#"do shell script "/bin/cp '{}' '{}'" with administrator privileges"#,
-        from.display(),
-        to.display()
-    );
-
-    let output = std::process::Command::new("osascript")
-        .args(["-e", &script])
-        .output()
-        .map_err(|e| Error::io("running osascript", e))?;
-
-    if output.status.success() {
-        return Ok(true);
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    // -128 is the user cancelling the prompt, which is a choice, not a fault.
-    if stderr.contains("-128") || stderr.contains("User canceled") {
-        return Ok(false);
-    }
-
-    Err(Error::new(
-        Code::PermissionDenied,
-        format!("Could not update the hosts file: {stderr}"),
-    ))
+    // The elevation itself lives in `elevate`, shared with the certificate
+    // trust-store write — the other place this app needs a password, and the
+    // place where letting a child process ask for one hung the whole app.
+    crate::elevate::shell(&format!("/bin/cp '{}' '{}'", from.display(), to.display()))
+        .map_err(|e| e.with_hint("The hosts file could not be replaced."))
 }
 
 #[cfg(target_os = "linux")]

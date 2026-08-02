@@ -95,7 +95,7 @@ export default {
     networkSub: 'Anlık ağ kullanımı',
     downloadHistory: 'İndirme geçmişi',
     uploadHistory: 'Yükleme geçmişi',
-    breakdownPending: 'Kırılım için ikinci ölçüm bekleniyor — sayaçlar kümülatif.',
+    free: 'Boş',
   },
 
   projectsView: {
@@ -200,15 +200,18 @@ export default {
   },
 
   workspace: {
-    none: 'Henüz bir StackVo dizini seçilmedi.',
+    none: 'Henüz bir proje dizini seçilmedi.',
     change: 'Değiştir',
     source: {
       stored: 'kayıtlı seçim',
-      env: 'STACKVO_ROOT değişkeni',
-      discovered: 'otomatik bulundu',
+      env: 'STACKVO_PROJECTS değişkeni',
+      migrated: 'eski kurulumdan taşındı',
       none: 'seçilmedi',
     },
     version: 'Sürüm',
+    appDir: 'Uygulama dizini',
+    appDirDesc:
+      'StackVo’nun kendi ürettiği her şey burada: compose dosyaları, loglar, sertifikalar, ayarlar. Otomatik oluşturulur, sorulmaz.',
   },
 
   engine: {
@@ -245,7 +248,12 @@ export default {
     openDetail: 'Detayı aç',
     openSite: 'Siteyi aç',
     title: 'Projeler',
-    empty: 'Henüz proje yok.',
+    empty: 'Henüz proje yok',
+    emptyText:
+      'Proje dizininizde StackVo’nun yönettiği bir proje bulunmuyor. Yeni bir tane oluşturun ya da mevcut bir klasörü buraya taşıyıp sahiplendirin.',
+    noMatch: 'Eşleşen proje yok',
+    noMatchText: '“{term}” aramasıyla eşleşen bir proje bulunamadı.',
+    clearSearch: 'Aramayı temizle',
     running: 'Çalışıyor',
     stopped: 'Durdu',
     notBuilt: 'Derlenmedi',
@@ -267,23 +275,49 @@ export default {
     failedToast: '{operation} başarısız — çıktı konsolda',
   },
 
+  bootstrap: {
+    title: 'Yığın hazırlanıyor',
+    subtitle:
+      'Bir defalık kurulum: compose dosyaları yazılıyor ve çekirdek konteynerler ayağa kaldırılıyor. Bittiğinde stackvo.loc yayında olacak.',
+    generate: 'Compose dosyaları yazılıyor',
+    generateDetail: 'Şablonlar ayarlarınızla işleniyor; up komutuna verilecek dosyalar bunlar.',
+    start: 'Çekirdek konteynerler başlatılıyor',
+    startDetail:
+      'Traefik — her alan adının üzerinden geçtiği vekil sunucu. İlk seferde imaj indirilebilir.',
+    certificates: 'Sertifika üretiliyor',
+    certificatesDetail:
+      'Traefik HTTPS sunuyor; sertifika olmadan hiçbir alan adı cevap veremez. İlk seferde sistem parolası sorulabilir.',
+    trust: 'Sertifikaya güven',
+    trustDetail:
+      'macOS bu izni yalnızca etkileşimli veriyor, o yüzden bir terminal açılır ve sudo parolanız sorulur. Girmezseniz yığın yine çalışır, tarayıcı sadece uyarı gösterir.',
+    waitingForPassword: 'Terminal açıldı — parolanızı girin, buradan takip ediliyor.',
+    retry: 'Yeniden dene',
+    untrusted:
+      'Sertifika üretildi ama sistem ona güvenmiyor — tarayıcı uyarı gösterecek. Ayarlar → Sertifikalar’dan tekrar deneyebilirsiniz.',
+  },
+
   preflight: {
     title: 'StackVo çalışmaya hazır değil',
     subtitle: '{count} gereksinim karşılanmıyor. Uygulama, bunlar tamamlanınca açılacak.',
     recheck: 'Yeniden denetle',
     blocked: 'Yukarıdaki bir gereksinim karşılanmadan denetlenemiyor.',
+    lead: 'Adımları sıradan takip edin — işaretli adımın düğmesi işi uygulama adına yapar.',
+    progress: '{total} adımın {done} tanesi tamam',
+    nextStep: 'Sıradaki adım',
+    manual: 'Bu adımı elle tamamlamanız gerekiyor.',
+    help: 'Kurulum talimatları',
 
-    workspace: 'StackVo dizini',
+    workspace: 'Proje dizini',
     workspaceHint: {
       macos:
-        'Boş bir klasör seçin — StackVo ilk kullanımda kurar — ya da hâlihazırda yönettiği bir klasörü.',
+        'Projelerinizin durduğu klasörü seçin — mevcut bir klasör de olabilir, yeni bir tane de. Docker’ın erişebildiği bir yerde olmalı; ev dizininizin altı güvenlidir. StackVo kendi dosyalarını buraya değil, ~/.stackvo altına yazar.',
       linux:
-        'Boş bir klasör seçin — StackVo ilk kullanımda kurar — ya da hâlihazırda yönettiği bir klasörü.',
+        'Projelerinizin durduğu klasörü seçin — mevcut bir klasör de olabilir, yeni bir tane de. Docker’ın erişebildiği bir yerde olmalı; ev dizininizin altı güvenlidir. StackVo kendi dosyalarını buraya değil, ~/.stackvo altına yazar.',
       windows:
-        'Boş bir klasör seçin — StackVo ilk kullanımda kurar — ya da hâlihazırda yönettiği bir klasörü.',
+        'Projelerinizin durduğu klasörü seçin — mevcut bir klasör de olabilir, yeni bir tane de. Docker Desktop’ın paylaştığı bir sürücüde olmalı. StackVo kendi dosyalarını buraya değil, kendi dizinine yazar.',
     },
-    workspaceAction: 'Dizin seç',
-    workspaceInstalled: '{path} kuruldu — şablonlar, .env ve proje ağacı hazır.',
+    workspaceAction: 'Proje dizinini seç',
+    workspaceInstalled: 'Proje dizini {path} olarak ayarlandı.',
 
     engine: 'Docker motoru',
     engineHint: {
@@ -317,13 +351,16 @@ export default {
     },
     networkAction: 'Ağı oluştur',
 
-    projects: 'projects/ klasörü',
-    projectsHint: {
-      macos: 'Projeler bu klasörün altında yaşar; henüz yok.',
-      linux: 'Projeler bu klasörün altında yaşar; henüz yok.',
-      windows: 'Projeler bu klasörün altında yaşar; henüz yok.',
+    hosts: 'Alan adı kayıtları',
+    hostsHint: {
+      macos:
+        'Bu adlar /etc/hosts dosyasında yok, dolayısıyla tarayıcı hiçbirini çözemez. Ekleme yönetici parolası ister; ne yazılacağı önce gösterilir.',
+      linux:
+        'Bu adlar /etc/hosts dosyasında yok, dolayısıyla tarayıcı hiçbirini çözemez. Ekleme yönetici parolası ister; ne yazılacağı önce gösterilir.',
+      windows:
+        'Bu adlar Windows\\System32\\drivers\\etc\\hosts dosyasında yok, dolayısıyla tarayıcı hiçbirini çözemez. Ekleme yönetici izni ister; ne yazılacağı önce gösterilir.',
     },
-    projectsAction: 'Oluştur',
+    hostsAction: 'Kayıtları ekle',
 
     mkcert: 'mkcert',
     mkcertHint: {
@@ -610,7 +647,13 @@ export default {
     rejected: 'Atlandı — geçerli alan adı değil',
     covered: 'Kapsanan ({n})',
     reissue: 'Sertifikayı yenile',
-    reissueAndTrust: 'Yenile ve CA’ya güven',
+    trustInTerminal: 'CA’ya güven (terminalde)',
+    trustInTerminalHint:
+      'macOS, güven ayarlarını yalnızca etkileşimli olarak değiştirtiyor — pencereli bir uygulama bunu kendi başına yapamıyor. Düğme terminalinizi açıp `sudo parolanızı sorar. Sonra tarayıcıyı tamamen kapatıp açın.',
+    leafLabel: 'Sertifika',
+    caLabel: 'İmzalayan CA',
+    whySeparate:
+      'İkisi ayrı dizinde çünkü sertifika dizini Traefik konteynerine bağlanıyor. CA’nın özel anahtarı oraya konsaydı, o konteynerdeki herhangi bir süreç bu makinenin güvendiği her alan adı için sertifika üretebilirdi. CA ayrıca yeniden üretilmez — silinirse tarayıcıya verdiğiniz güven de gider.',
     notReloaded:
       'Sertifika yenilendi, ancak proxy hâlâ öncekini sunuyor. Devreye girmesi için stack’i yeniden başlatın veya generate çalıştırın.',
   },
@@ -816,6 +859,23 @@ export default {
     // Alt gruplar.
     workspaceGroup: 'Çalışma dizini',
     workspaceGroupDesc: 'Bu uygulamanın yönettiği checkout',
+
+    templates: {
+      title: 'Şablon geçersiz kılmaları',
+      description:
+        'Şablonlar uygulamanın içinde gömülü. Bir dosya yalnızca siz devraldığınızda çalışma dizininde belirir — ve o andan itibaren güncellemeler ona uğramaz.',
+      count: '{total} şablonun {count} tanesi bu çalışma dizininde devralınmış.',
+      none: '{total} şablonun tamamı gömülü sürümden okunuyor.',
+      pick: 'Devralınacak şablon',
+      pickHint: 'Dosya çalışma dizinine kopyalanır ve editörünüzde açılır.',
+      override: 'Devral ve düzenle',
+      open: 'Aç',
+      revert: 'Varsayılana dön',
+      revertTitle: 'Devralınan şablon silinsin mi?',
+      revertBody:
+        'Sizin düzenlediğiniz dosya silinir ve gömülü sürüm devreye girer. Düzenlemenizin başka bir kopyası yok — bu işlem geri alınamaz.',
+      reload: 'Yenile',
+    },
     engineGroupDesc: 'Konteynerleri çalıştıran motorun durumu',
     externalApps: 'Dış uygulamalar',
     externalAppsDesc: 'Terminal ve editör hangi uygulamada açılsın',
@@ -1096,8 +1156,12 @@ export default {
     pruneVolumesLabel: '{count} kullanılmayan birimi kaldır — {size}.',
     pruneVolumesWarning:
       '“Kullanılmayan”, “şu anda bağlı değil” demektir — durdurulmuş bir projenin verisi de buna girer. Buradan kaldırılan geri gelmez; önce veritabanlarını yedekleyin.',
+    pruneBuildCacheLabel: 'Build cache’in tamamını kaldır.',
+    pruneBuildCacheWarning:
+      'Bir projeyi silmek, o projenin imajının tuttuğu cache’i zaten geri kazanır. Geriye kalan ortak kısımdır: her proje imajı aynı PHP tabanından ve aynı eklenti kurulumlarından derlenir. Bunu kaldırmak veri kaybettirmez — her projenin bir sonraki derlemesini baştan yaptırır.',
     pruneConfirm: 'Kaldır',
-    pruneResult: '{images} imaj ve {volumes} birim kaldırıldı — {size} kazanıldı.',
+    pruneResult:
+      '{images} imaj, {volumes} birim ve {caches} cache kaydı kaldırıldı — {size} kazanıldı.',
 
     ownersTitle: 'Baytlar kimde',
     ownerCol: 'Üye',
@@ -1109,7 +1173,8 @@ export default {
   },
 
   newProject: {
-    nameHint: 'Harf veya rakamla başlar; tire, alt çizgi ve nokta kullanılabilir (ör. api.myapp).',
+    nameHint:
+      'Küçük harf; harf veya rakamla başlar, tire, alt çizgi ve nokta kullanılabilir (ör. api.myapp).',
     domainHint: 'Boş bırakılırsa proje adından üretilir.',
     domain_https:
       'Bu uzantı tarayıcıların HSTS ön yükleme listesinde: yalnızca HTTPS ile açılır ve uyarıyı geçme imkânı yoktur. Önce Ayarlar’dan HTTPS’i aç.',
@@ -1178,7 +1243,7 @@ export default {
     documentRoot: 'Doküman kökü',
     extensions: 'PHP eklentileri',
     incompatible: 'Bu PHP sürümüyle kurulamaz',
-    tooManyExtensions: 'fazlası sessizce düşer',
+    tooManyExtensions: 'katalogda olandan fazla eklenti',
     install: 'Kurulum komutu',
     build: 'Derleme komutu (opsiyonel)',
     start: 'Başlatma komutu',
@@ -1188,6 +1253,8 @@ export default {
     unavailableRuntimes: 'Generator olmadığı için gizlendi: {list}',
     deleteTitle: '{name} silinsin mi?',
     deleteBody: 'Proje StackVo listesinden çıkar. Kaynak dosyalar diskte kalır.',
+    deleteAlso:
+      'Konteyneri, imajı, üretilen Dockerfile’ı, logları, hosts kaydı ve sertifikadaki adı da kaldırılır.',
     deleteFiles: 'Proje klasörünü de sil (geri alınamaz)',
     delete: 'Sil',
   },
@@ -1232,7 +1299,7 @@ export default {
   errors: {
     ENGINE_UNREACHABLE: 'Docker motoruna ulaşılamıyor.',
     NO_WORKSPACE: 'StackVo dizini seçilmedi.',
-    IO_ERROR: 'Dosya okunamadı.',
+    IO_ERROR: 'Dosya işlemi başarısız oldu.',
     NOT_FOUND: 'Bulunamadı.',
     ALREADY_EXISTS: 'Bu isimde bir proje zaten var.',
     INVALID_INPUT: 'Girdi geçersiz.',

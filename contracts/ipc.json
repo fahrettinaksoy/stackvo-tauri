@@ -174,11 +174,12 @@
       "kind": "mutation",
       "args": {
         "images": "bool",
-        "volumes": "bool"
+        "volumes": "bool",
+        "buildCache": "'keep' | 'dangling' | 'all' (default 'keep')"
       },
       "returns": "PruneReport",
       "why": "SystemResources has reported reclaimable bytes since Phase 1 with no way to act on the number. Dangling images accumulate on every rebuild, and this app rebuilds a lot — every Xdebug toggle, every extension change.",
-      "notes": "Images means dangling images only (the engine's default prune set — rebuildable by definition). Volumes are a separate flag because the engine's \"unused\" means \"not currently mounted\", and the database of a stopped project qualifies; the UI warns before passing volumes:true. Guarded by the 'prune' inflight subject."
+      "notes": "Images means dangling images only (the engine's default prune set — rebuildable by definition). Volumes are a separate flag because the engine's \"unused\" means \"not currently mounted\", and the database of a stopped project qualifies; the UI warns before passing volumes:true. buildCache is a level rather than a flag because its two useful values are different bargains: 'dangling' reclaims only records nothing references any more — what project_delete already does for itself after removing the project's image, since Docker offers no per-project handle on the cache (the filters are until/id/parent/type) — while 'all' also takes the layers every project image shares, because they all build from the same PHP base and the same extension installs. 'all' costs no data and costs every remaining project a full rebuild; the UI states that before passing it. Guarded by the 'prune' inflight subject."
     },
     "workspace_get": {
       "new": true,
@@ -195,6 +196,13 @@
       },
       "returns": "Workspace",
       "notes": "Validates that the path contains core/cli/stackvo.sh and projects/ before accepting it, then persists it. Rejects with NO_WORKSPACE and an explanation rather than silently accepting a wrong folder."
+    },
+    "bootstrap_complete": {
+      "replaces": "none — new in the desktop app",
+      "kind": "mutation",
+      "args": {},
+      "returns": "void",
+      "notes": "Writes the marker that makes workspace_get report bootstrapped:true. Called by the first-run screen after its last step, so a run that failed or was skipped is offered again next launch."
     },
     "workspace_pick": {
       "new": true,
@@ -250,7 +258,7 @@
         "remove_files": "bool (default false)"
       },
       "returns": "void",
-      "notes": "remove_files is NEW and MUST default to false. The current deleteProject() removes the project directory outright with no confirmation contract — a desktop app deleting user source code needs an explicit opt-in."
+      "notes": "remove_files is NEW and MUST default to false. The current deleteProject() removes the project directory outright with no confirmation contract — a desktop app deleting user source code needs an explicit opt-in. The flag guards the user's CODE and nothing else: deleting a project always removes its container (web, worker sidecars, tunnel), every image tagged stackvo-<name>, generated/projects/<name>, logs/projects/<name>, its /etc/hosts line if StackVo wrote it, and its name from the certificate — all of which exist only because the project did. Docker-side cleanup is best effort and logged: a stopped engine is a fine moment to stop managing a project, and making the daemon a lock on deletion would be worse than a leftover image. Traefik needs nothing extra — project routing is compose labels, so it goes with the regenerated compose file. Named volumes likewise: a project service declares only bind mounts. Build cache is NOT touched; it is shared and global, and pruning it belongs to docker_prune."
     },
     "project_start": {
       "replaces": "POST /api/projects/:c/start",
@@ -574,6 +582,31 @@
       "returns": "void",
       "notes": "Written atomically. Takes effect on the next generate: the directives are rendered into each project's server config, not into a file the server reads directly."
     },
+    "templates_list": {
+      "replaces": "none — new in the desktop app",
+      "kind": "query",
+      "args": {},
+      "returns": "Array<{ path: string, overridden: boolean }>",
+      "notes": "Every template compiled into the binary, with whether this workspace has a copy on disk. Installing writes none, so a copy means somebody chose to override it."
+    },
+    "template_override": {
+      "replaces": "none — new in the desktop app",
+      "kind": "mutation",
+      "args": {
+        "path": "string"
+      },
+      "returns": "string",
+      "notes": "Copies the shipped file into the workspace so it can be edited, and returns its absolute path. Refuses when a copy is already there — that file is the user's edit. Only paths in templates_list are accepted."
+    },
+    "template_revert": {
+      "replaces": "none — new in the desktop app",
+      "kind": "mutation",
+      "args": {
+        "path": "string"
+      },
+      "returns": "void",
+      "notes": "Deletes the workspace's copy; the version in the binary takes over on the next render. Destructive and not undoable — the front end confirms first."
+    },
     "env_defaults": {
       "replaces": "none — new in the desktop app",
       "kind": "query",
@@ -883,6 +916,13 @@
       "returns": "string[]",
       "why": "Every project domain with no hosts entry. Drives the one-click fix; the web UI could detect this but had no way to act on it."
     },
+    "hosts_missing_core": {
+      "replaces": "none — new in the desktop app",
+      "kind": "query",
+      "args": {},
+      "returns": "Array<string>",
+      "notes": "Only <suffix> and traefik.<suffix> — the two names the stack is addressed through, and the set the preflight gate blocks on. hosts_missing is the everything list, for the dashboard's fix-all banner."
+    },
     "hosts_overview": {
       "replaces": "none — new in the desktop app",
       "kind": "query",
@@ -920,6 +960,13 @@
       "why": "Reissues the wildcard certificate for the domains the projects actually have, and — when the CA is not trusted yet — installs it. Without this the certificate goes stale the moment a project is created, and on Linux and Windows the CA is never trusted at all: the Bash helper's trust step returns early on anything but macOS, so those users get a browser warning and no explanation.",
       "notes": "Trust installation delegates to `mkcert -install` rather than reimplementing four trust stores (macOS keychain, Linux ca-certificates, NSS for Firefox and Chrome, Windows Root). mkcert may need a password for the system store; on Linux it shells out to sudo, which a GUI process has no terminal for. That failure MUST be reported with the exact command to run, not swallowed — a CA that silently failed to install looks identical to one that worked until the browser disagrees. Issuing the certificate itself writes only inside the workspace and never elevates."
     },
+    "cert_trust_in_terminal": {
+      "replaces": "none — new in the desktop app",
+      "kind": "mutation",
+      "args": {},
+      "returns": "void",
+      "notes": "Opens the user's terminal running `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain <ca>` — the write mkcert itself performs, without mkcert's pre-check, which reports the CA already installed whenever it is merely present in a keychain. macOS grants the authorization only interactively, so sudo needs a terminal to ask in."
+    },
     "project_adoptable": {
       "new": true,
       "kind": "query",
@@ -934,7 +981,7 @@
       "args": {
         "name": "string",
         "spec": "ProjectSpec (optional — defaults to what was detected)",
-        "domain": "string? — overrides the detected domain only"
+        "overrides": "{ domain?, phpVersion?, server?, extensions? } — each replaces one detected value"
       },
       "returns": "OperationId",
       "emits": [
@@ -943,7 +990,7 @@
         "project:error"
       ],
       "why": "Writes stackvo.json for a directory that is already there, then regenerates. The counterpart of project_create, which requires the directory to be absent.",
-      "notes": "Refuses when a manifest already exists — adopting a managed project would silently overwrite settings the user chose. The spec is validated against project.schema.json exactly as project_create's is; detection fills the form, it does not bypass the check. `domain` is an override on top of detection rather than part of the spec: detection reads the code and can say \"this is Laravel, its document root is public\", but it has no way to know the user wanted `shop.loc` instead of `<directory>.loc`. Passing a full spec still bypasses detection entirely; passing only a domain does not."
+      "notes": "Refuses when a manifest already exists — adopting a managed project would silently overwrite settings the user chose. The spec is validated against project.schema.json exactly as project_create's is; detection fills the form, it does not bypass the check. `overrides` sit on top of detection rather than replacing it, one value at a time: detection reads the code and can say \"this is Laravel, its document root is public\", but it has no way to know the user wanted `shop.loc`, and the three PHP fields are the scaffolding gap — a composer.json states the version the framework NEEDS (`\"php\": \"^8.3\"`), which read as an answer pins a new Laravel to the floor of its own range, nothing in a checkout names a web server, and detection has no opinion about extensions at all, so an adopted project took the generator's seven-entry fallback. The PHP three apply only when the detected spec has a `php` block, so a Node template cannot pick up a second runtime block (W-02). Passing a full spec still bypasses detection entirely; passing overrides does not. Also writes the project's hosts entry and extends the certificate — see project_create."
     },
     "mail_status": {
       "new": true,
@@ -1607,6 +1654,7 @@
       "new": true,
       "payload": {
         "scope": "string",
+        "subject": "string — the scope again, because progress and done are subjected on it and a reader that opens an operation under a different subject never closes it",
         "operation_id": "string"
       }
     },
@@ -1614,6 +1662,7 @@
       "new": true,
       "payload": {
         "operation_id": "string",
+        "subject": "string — the SCOPE, not a project name. A caller that marked a project busy before invoking generate_run must clear that flag itself.",
         "line": "string"
       }
     },
@@ -1839,8 +1888,9 @@
       "manifest_valid": "bool",
       "manifest_errors": "string[]",
       "domain_configured": "bool",
+      "generated_stale": "bool",
       "ports": "Port[]",
-      "note": "manifest_valid/manifest_errors are NEW: an invalid manifest must be visible in the list, not a silently missing project."
+      "note": "manifest_valid/manifest_errors are NEW: an invalid manifest must be visible in the list, not a silently missing project. generated_stale is measured from the manifest's mtime against the oldest of its generated outputs, NOT accumulated from `manifest:changed` events — the watcher cannot tell whose write it saw, so the app writing a manifest during project_create used to raise a 'needs regenerating' badge on a project it went on to generate half a second later. Derived, it is also right on first load, which an event-driven flag never was for an edit made while the app was closed."
     },
     "Service": {
       "id": "string",

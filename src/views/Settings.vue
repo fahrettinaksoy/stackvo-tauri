@@ -623,6 +623,84 @@ async function saveServerConfig() {
 watch(serverTab, loadServerConfig);
 
 /**
+ * Which shipped templates this workspace has taken over.
+ *
+ * The app renders from the copies compiled into its binary and reads the
+ * workspace first, so a file under `core/` is an override and nothing else —
+ * installing writes none. That is what makes this list answerable, and the
+ * question it answers is a real one: an edit made months ago is invisible
+ * until the stack stops matching what the documentation says it does.
+ */
+const templates = ref([]);
+const templatesBusy = ref(false);
+const templatesError = ref(null);
+const templateBusy = ref(null);
+const templateToOverride = ref(null);
+const revertTarget = ref(null);
+
+const overriddenTemplates = computed(() => templates.value.filter((f) => f.overridden));
+const shippedTemplates = computed(() => templates.value.filter((f) => !f.overridden));
+
+async function loadTemplates() {
+  templatesBusy.value = true;
+  templatesError.value = null;
+  try {
+    templates.value = await api.templatesList();
+  } catch (e) {
+    templatesError.value = e;
+  } finally {
+    templatesBusy.value = false;
+  }
+}
+
+/**
+ * Copy the shipped file in, then open it in the user's own editor.
+ *
+ * Not a textarea in this pane: these are compose fragments and server configs,
+ * and the tool for editing YAML is the one they already have open.
+ */
+async function overrideTemplate() {
+  const path = templateToOverride.value;
+  if (!path) return;
+
+  templateBusy.value = path;
+  templatesError.value = null;
+  try {
+    const absolute = await api.templateOverride(path);
+    await loadTemplates();
+    templateToOverride.value = null;
+    await api.openInEditor(absolute).catch(() => {});
+  } catch (e) {
+    templatesError.value = e;
+  } finally {
+    templateBusy.value = null;
+  }
+}
+
+function openTemplate(path) {
+  const root = app.workspace?.root;
+  if (root) api.openInEditor(`${root}/${path}`).catch(() => {});
+}
+
+/** Deletes the user's edit. Confirmed in the dialog, not here. */
+async function revertTemplate() {
+  const path = revertTarget.value;
+  revertTarget.value = null;
+  if (!path) return;
+
+  templateBusy.value = path;
+  templatesError.value = null;
+  try {
+    await api.templateRevert(path);
+    await loadTemplates();
+  } catch (e) {
+    templatesError.value = e;
+  } finally {
+    templateBusy.value = null;
+  }
+}
+
+/**
  * The nginx directives the form offers, mirroring the table in the generator.
  *
  * Ports are absent on purpose and it is worth saying why: the container
@@ -894,6 +972,21 @@ async function verifyGenerator() {
 const certs = ref(null);
 const certPlan = ref(null);
 const certBusy = ref(false);
+
+/**
+ * Trust the CA by opening a terminal.
+ *
+ * The app cannot do it: macOS grants the authorization for trust settings only
+ * interactively, and a background child process of a windowed app is not
+ * somewhere it will ask.
+ */
+async function trustCaInTerminal() {
+  try {
+    await api.certTrustInTerminal();
+  } catch (e) {
+    envError.value = e;
+  }
+}
 const certError = ref(null);
 
 async function loadCerts() {
@@ -933,7 +1026,9 @@ async function reissueCerts() {
   certError.value = null;
   certNotReloaded.value = false;
   try {
-    const applied = await api.certApply(certs.value?.caTrusted !== true);
+    // `false`: the trust write is its own button now. Asking for it here made
+    // every reissue return an error about something the user had not asked for.
+    const applied = await api.certApply(false);
     // A certificate nothing serves is not a certificate the user has.
     certNotReloaded.value = applied?.reloaded === false;
     await loadCerts();
@@ -960,6 +1055,7 @@ onMounted(async () => {
   loadProxy();
   loadHosts();
   loadServerConfig();
+  loadTemplates();
   loadPrefs();
   loadCerts();
   verifyGenerator();
@@ -2133,7 +2229,10 @@ onMounted(async () => {
               :title="t('settings.workspaceGroup')"
               :description="t('settings.workspaceGroupDesc')"
             >
-              <div class="text-body-2 break">{{ app.workspace?.root || t('workspace.none') }}</div>
+              <!-- The one the user chose. -->
+              <div class="text-body-2 break">
+                {{ app.workspace?.projectsDir || t('workspace.none') }}
+              </div>
               <div v-if="app.workspace" class="text-caption text-medium-emphasis mt-1">
                 {{ t(`workspace.source.${app.workspace.source}`) }}
                 <template v-if="app.workspace.stackvoVersion">
@@ -2151,15 +2250,139 @@ onMounted(async () => {
                   {{ t('workspace.change') }}
                 </v-btn>
                 <v-btn
-                  v-if="app.workspace?.root"
+                  v-if="app.workspace?.projectsDir"
                   size="small"
                   variant="text"
                   prepend-icon="mdi-open-in-new"
-                  @click="api.openFolder(app.workspace.root)"
+                  @click="api.openFolder(app.workspace.projectsDir)"
                 >
                   {{ t('projects.openFolder') }}
                 </v-btn>
               </div>
+
+              <!-- And the one it never asks about. Shown because "where did my
+                   compose file go" is a fair question, and because the answer
+                   is a hidden directory nobody would find by looking. -->
+              <v-divider class="my-4" />
+
+              <div class="text-caption text-medium-emphasis">{{ t('workspace.appDir') }}</div>
+              <div class="text-body-2 break mt-1">{{ app.workspace?.root }}</div>
+              <div class="text-caption text-medium-emphasis mt-1">
+                {{ t('workspace.appDirDesc') }}
+              </div>
+              <v-btn
+                v-if="app.workspace?.root"
+                size="small"
+                variant="text"
+                class="mt-2 ml-n2"
+                prepend-icon="mdi-open-in-new"
+                @click="api.openFolder(app.workspace.root)"
+              >
+                {{ t('projects.openFolder') }}
+              </v-btn>
+            </SettingsGroup>
+
+            <!-- The templates are in the binary; a copy under `core/` exists
+                 only because somebody made one here. That is what makes this
+                 list possible at all — every workspace used to hold all thirty
+                 files, so "has a copy" said nothing. -->
+            <SettingsGroup
+              icon="mdi-file-replace-outline"
+              :title="t('settings.templates.title')"
+              :description="t('settings.templates.description')"
+            >
+              <template #append>
+                <v-btn
+                  size="small"
+                  variant="text"
+                  prepend-icon="mdi-refresh"
+                  :loading="templatesBusy"
+                  @click="loadTemplates"
+                >
+                  {{ t('settings.templates.reload') }}
+                </v-btn>
+              </template>
+
+              <v-alert
+                v-if="templatesError"
+                type="error"
+                variant="tonal"
+                density="comfortable"
+                class="mb-3"
+                :text="templatesError.message || String(templatesError)"
+              />
+
+              <div class="text-body-2 mb-3">
+                {{
+                  overriddenTemplates.length
+                    ? t('settings.templates.count', {
+                        count: overriddenTemplates.length,
+                        total: templates.length,
+                      })
+                    : t('settings.templates.none', { total: templates.length })
+                }}
+              </div>
+
+              <!-- Overridden ones first and always visible: they are the
+                   answer to "why does my stack not match the docs", and a
+                   forgotten edit is the reason that question gets asked. -->
+              <v-list v-if="overriddenTemplates.length" density="compact" class="pa-0 mb-2">
+                <v-list-item
+                  v-for="file in overriddenTemplates"
+                  :key="file.path"
+                  class="px-0"
+                  :title="file.path"
+                >
+                  <template #prepend>
+                    <v-icon size="18" color="warning" class="mr-2">mdi-pencil</v-icon>
+                  </template>
+                  <template #append>
+                    <v-btn
+                      size="x-small"
+                      variant="text"
+                      prepend-icon="mdi-open-in-new"
+                      @click="openTemplate(file.path)"
+                    >
+                      {{ t('settings.templates.open') }}
+                    </v-btn>
+                    <v-btn
+                      size="x-small"
+                      variant="text"
+                      color="error"
+                      prepend-icon="mdi-undo-variant"
+                      :loading="templateBusy === file.path"
+                      @click="revertTarget = file.path"
+                    >
+                      {{ t('settings.templates.revert') }}
+                    </v-btn>
+                  </template>
+                </v-list-item>
+              </v-list>
+
+              <v-select
+                v-model="templateToOverride"
+                :items="shippedTemplates"
+                item-title="path"
+                item-value="path"
+                :label="t('settings.templates.pick')"
+                :hint="t('settings.templates.pickHint')"
+                persistent-hint
+                variant="outlined"
+                density="comfortable"
+                hide-no-data
+              />
+              <v-btn
+                size="small"
+                variant="tonal"
+                color="primary"
+                prepend-icon="mdi-file-edit-outline"
+                class="mt-3"
+                :disabled="!templateToOverride"
+                :loading="templateBusy === templateToOverride"
+                @click="overrideTemplate"
+              >
+                {{ t('settings.templates.override') }}
+              </v-btn>
             </SettingsGroup>
 
             <SettingsGroup
@@ -2625,8 +2848,31 @@ onMounted(async () => {
                   :disabled="!certs.mkcertAvailable"
                   @click="reissueCerts"
                 >
-                  {{ certs.caTrusted === true ? t('certs.reissue') : t('certs.reissueAndTrust') }}
+                  {{ t('certs.reissue') }}
                 </v-btn>
+
+                <!-- Trusting the CA is a separate button because it is a
+                     separate thing, and on macOS it is the only one this app
+                     cannot do for itself: `sudo` needs a terminal, root through
+                     AppleScript is refused, and the user-domain write exits 0
+                     and changes nothing. So it opens a terminal — which is
+                     honest, and works. -->
+                <v-btn
+                  v-if="certs.caTrusted !== true"
+                  size="small"
+                  variant="tonal"
+                  color="warning"
+                  block
+                  class="mt-2"
+                  prepend-icon="mdi-console"
+                  :disabled="!certs.mkcertAvailable"
+                  @click="trustCaInTerminal"
+                >
+                  {{ t('certs.trustInTerminal') }}
+                </v-btn>
+                <div v-if="certs.caTrusted !== true" class="text-caption text-medium-emphasis mt-2">
+                  {{ t('certs.trustInTerminalHint') }}
+                </div>
 
                 <!-- The certificate is on disk and the browser is still getting
                      the old one. Silence here is what made this bug survive:
@@ -2635,8 +2881,38 @@ onMounted(async () => {
                   <div class="text-caption">{{ t('certs.notReloaded') }}</div>
                 </v-alert>
 
-                <div v-if="certs.certPath" class="text-caption text-medium-emphasis mt-2">
-                  {{ certs.certPath }}
+                <!-- Both paths, each said to be what it is.
+                     They were reported as "the certificate is in two places",
+                     three times, because only one of them was ever shown and
+                     the other was found by looking. They are two different
+                     files with two different jobs, and the reason they are not
+                     in one directory is the line below the second one. -->
+                <div class="mt-3">
+                  <div v-if="certs.certPath" class="text-caption text-medium-emphasis">
+                    <strong>{{ t('certs.leafLabel') }}</strong> · {{ certs.certPath }}
+                  </div>
+                  <div v-if="certs.caPath" class="text-caption text-medium-emphasis mt-1">
+                    <strong>{{ t('certs.caLabel') }}</strong> · {{ certs.caPath }}
+                    <!-- The reason they are not one directory is worth having
+                         and is not worth three lines of a settings pane. It was
+                         three lines here, and read as a lecture attached to two
+                         file paths.
+                         The `#activator` slot rather than `activator="parent"`:
+                         the first version nested the tooltip inside `v-icon`
+                         alongside the icon's own name, so the slot held two
+                         things and the hover reached neither. This is the shape
+                         every other tooltip in this app already uses. -->
+                    <v-tooltip :text="t('certs.whySeparate')" location="top" max-width="420">
+                      <template #activator="{ props }">
+                        <v-icon
+                          v-bind="props"
+                          size="14"
+                          class="ml-1 why-separate"
+                          icon="mdi-information-outline"
+                        />
+                      </template>
+                    </v-tooltip>
+                  </div>
                 </div>
               </template>
             </SettingsGroup>
@@ -2828,10 +3104,36 @@ onMounted(async () => {
     </div>
   </PageLayout>
   <ServiceSettingsSheet v-model="sheetOpen" :service="sheetService" @applied="onServiceApplied" />
+
+  <!-- Reverting deletes the file the user edited. There is no copy of it
+       anywhere — the binary holds the shipped version, not theirs. -->
+  <v-dialog :model-value="!!revertTarget" max-width="520" @update:model-value="revertTarget = null">
+    <v-card v-if="revertTarget">
+      <v-card-item>
+        <template #prepend><v-icon color="error">mdi-undo-variant</v-icon></template>
+        <v-card-title class="text-body-1">{{ t('settings.templates.revertTitle') }}</v-card-title>
+      </v-card-item>
+      <v-card-text>
+        <p class="text-body-2 mb-2">{{ t('settings.templates.revertBody') }}</p>
+        <code class="text-caption break">{{ revertTarget }}</code>
+      </v-card-text>
+      <v-card-actions>
+        <v-spacer />
+        <v-btn variant="text" @click="revertTarget = null">{{ t('hosts.cancel') }}</v-btn>
+        <v-btn color="error" variant="flat" @click="revertTemplate">
+          {{ t('settings.templates.revert') }}
+        </v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
 </template>
 
 <style scoped>
 /* Config is read in columns — an alignment that a proportional face destroys. */
+.why-separate {
+  cursor: help;
+}
+
 .server-config :deep(textarea) {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.8125rem;

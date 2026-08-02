@@ -10,6 +10,7 @@ pub mod detect;
 pub mod devserver;
 pub mod doctor;
 pub mod dumps;
+pub mod elevate;
 pub mod engine;
 pub mod env_writer;
 pub mod error;
@@ -116,6 +117,31 @@ pub fn run() {
                 .clone()
                 .unwrap_or_else(|| "StackVo".to_string());
             app.set_menu(menu::build(&handle, &labels, &product)?)?;
+
+            // Fill the screen the window opened on.
+            //
+            // `"maximized": true` in the config did not do it, and paired with
+            // `"center": true` it produced the shape in the bug report: a
+            // window sized for the screen, then re-centred on the size it had
+            // before, hanging off the right edge. Both of those are gone.
+            //
+            // The work area rather than the monitor: on macOS the monitor
+            // includes the menu bar and the dock, and a window set to it sits
+            // underneath both. `maximize()` is the fallback for the case where
+            // no monitor answers — a window on no screen at all, which happens
+            // while displays are being reconfigured.
+            if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+                match window.current_monitor() {
+                    Ok(Some(monitor)) => {
+                        let area = monitor.work_area();
+                        let _ = window.set_position(area.position);
+                        let _ = window.set_size(area.size);
+                    }
+                    _ => {
+                        let _ = window.maximize();
+                    }
+                }
+            }
 
             // `startMinimized` has been in the preference defaults all along
             // and was never read. With a tray that survives a window close, it
@@ -262,6 +288,7 @@ pub fn run() {
             // Phase 1 — reads
             commands::workspace_get,
             commands::workspace_set,
+            commands::bootstrap_complete,
             commands::engine_status,
             commands::engine_start,
             commands::host_stats,
@@ -275,6 +302,10 @@ pub fn run() {
             commands::doctor,
             commands::server_config_get,
             commands::server_config_set,
+            commands::hosts_missing_core,
+            commands::templates_list,
+            commands::template_override,
+            commands::template_revert,
             commands::env_get,
             commands::env_defaults,
             commands::env_reveal,
@@ -364,6 +395,7 @@ pub fn run() {
             commands::pty_write,
             commands::pty_resize,
             commands::pty_close,
+            commands::cert_trust_in_terminal,
             commands::terminal_open_external,
             // Gap fill — declared in the contract from Phase 0, implemented now
             commands::workspace_pick,

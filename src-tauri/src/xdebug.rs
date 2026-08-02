@@ -143,7 +143,8 @@ pub struct ModeConfig {
 pub const MODE_FILE: &str = "xdebug.json";
 
 pub fn mode_path(root: &Path, name: &str) -> PathBuf {
-    root.join("projects")
+    crate::workspace::projects_root(root)
+        .unwrap_or_default()
         .join(name)
         .join(crate::phpini::CONFIG_DIR)
         .join(MODE_FILE)
@@ -402,7 +403,7 @@ fn mtime(path: &Path) -> Option<i64> {
 // ------------------------------------------------------------------- I/O
 
 fn projects_dir(root: &Path) -> PathBuf {
-    root.join("projects")
+    crate::workspace::projects_root(root).unwrap_or_default()
 }
 
 fn manifest_path(root: &Path, name: &str) -> PathBuf {
@@ -920,11 +921,11 @@ networks:
             dockerfile_path(root, "shop"),
             Path::new("/w/generated/projects/shop/Dockerfile")
         );
-        // The bind-mount source is the other one, and stays that way.
-        assert_eq!(
-            projects_dir(root).join("shop"),
-            Path::new("/w/projects/shop")
-        );
+        // The bind-mount source is the other one, and stays that way — but
+        // it is the chosen tree now, so with nothing chosen there is no path
+        // to give. `/w` has no pointer file and never will; that empty answer
+        // is the honest one.
+        assert_eq!(projects_dir(root), Path::new(""));
     }
 
     #[test]

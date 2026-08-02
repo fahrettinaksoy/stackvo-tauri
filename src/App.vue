@@ -16,6 +16,7 @@ import OperationConsole from '@/components/OperationConsole.vue';
 import { toasts } from '@/lib/toast';
 import ErrorAlert from '@/components/ErrorAlert.vue';
 import RequirementsGate from '@/components/RequirementsGate.vue';
+import BootstrapGate from '@/components/BootstrapGate.vue';
 import NewProjectDrawer from '@/components/NewProjectDrawer.vue';
 import CloseDialog from '@/components/CloseDialog.vue';
 
@@ -37,6 +38,43 @@ const route = useRoute();
 const isAboutWindow = computed(() => route.name === 'About');
 const router = useRouter();
 const { t, locale } = useI18n();
+
+/**
+ * The shell is down to the gate and nothing else.
+ *
+ * Leaving the bar and the two rails up around the requirements card was worse
+ * than untidy: every control in them acts on a workspace or a daemon that is
+ * the very thing missing, so the window showed a start button, a stop button
+ * and an empty project list that could only be disabled or lie. One screen with
+ * one instruction on it is the honest shape for "this cannot run yet".
+ */
+const gated = computed(() => !app.booting && !!app.preflight && !app.preflight.ready);
+
+/**
+ * Whether the stack still has to be assembled before the app is worth showing.
+ *
+ * `bootstrapDone` is a session flag rather than a second read of the workspace:
+ * the screen can be left by skipping past a failure, and without it that would
+ * bounce straight back to the same screen.
+ */
+const bootstrapDone = ref(false);
+const needsBootstrap = computed(
+  () =>
+    !gated.value &&
+    !app.booting &&
+    !!app.workspace &&
+    !app.workspace.bootstrapped &&
+    !bootstrapDone.value
+);
+
+/**
+ * Neither full-window screen wants the shell around it.
+ *
+ * Same reasoning for both: the bar acts on a stack that is not running yet and
+ * the rails list projects nobody can open, so every control in them would be
+ * disabled or misleading.
+ */
+const chromeHidden = computed(() => gated.value || needsBootstrap.value);
 
 /**
  * Which of the two left drawers is expanded, if either.
@@ -228,7 +266,7 @@ onUnmounted(() => {
 
   <v-app v-else>
     <!-- App bar ---------------------------------------------------------- -->
-    <v-app-bar color="primary" elevation="3">
+    <v-app-bar v-if="!chromeHidden" color="primary" elevation="3">
       <v-toolbar-title class="text-h4 app-title">
         <span class="font-weight-bold">Stack</span><span class="font-weight-light">Vo</span>
       </v-toolbar-title>
@@ -362,6 +400,7 @@ onUnmounted(() => {
 
     <!-- Primary navigation ----------------------------------------------- -->
     <v-navigation-drawer
+      v-if="!chromeHidden"
       location="left"
       permanent
       :rail="rail"
@@ -450,6 +489,7 @@ onUnmounted(() => {
 
     <!-- Projects rail ----------------------------------------------------- -->
     <v-navigation-drawer
+      v-if="!chromeHidden"
       location="left"
       permanent
       :rail="railProjects"
@@ -489,14 +529,28 @@ onUnmounted(() => {
       <v-list nav class="projects-scroll">
         <div
           v-if="inventory.loadingProjects && !inventory.projects.length"
-          class="pa-6 text-center text-medium-emphasis"
+          class="text-center text-medium-emphasis"
+          :class="railProjects ? 'py-6' : 'pa-6'"
         >
           <v-progress-circular indeterminate size="22" />
         </div>
 
-        <div v-else-if="!filteredProjects.length" class="pa-6 text-center text-medium-emphasis">
-          <v-icon size="30" class="mb-1">mdi-folder-off-outline</v-icon>
-          <div class="text-caption">{{ t('projects.empty') }}</div>
+        <!-- Rail mode gets the icon and nothing else.
+             Vuetify hides a `v-list-item-title` when the drawer is a rail, and
+             this is plain markup inside the list rather than a list item — so
+             the sentence stayed, wrapped to three lines inside 66px minus 48px
+             of padding, and read as a rendering fault. The tooltip carries the
+             words instead; they are one hover or one expand away. -->
+        <div
+          v-else-if="!filteredProjects.length"
+          class="text-center text-medium-emphasis"
+          :class="railProjects ? 'py-6' : 'pa-6'"
+        >
+          <v-icon size="30" :class="railProjects ? '' : 'mb-1'">mdi-folder-off-outline</v-icon>
+          <div v-if="!railProjects" class="text-caption">{{ t('projects.empty') }}</div>
+          <v-tooltip v-else activator="parent" location="right">
+            {{ t('projects.empty') }}
+          </v-tooltip>
         </div>
 
         <!-- No `rounded="0"` here. That marks a surface running to an edge,
@@ -512,7 +566,7 @@ onUnmounted(() => {
         >
           <template #prepend>
             <v-icon
-              size="22"
+              size="32"
               :color="project.running ? 'success' : ''"
               :class="{ 'project-icon--stopped': !project.running }"
               >{{ project.runtime === 'node' ? 'mdi-nodejs' : 'mdi-language-php' }}</v-icon
@@ -632,7 +686,13 @@ onUnmounted(() => {
            it drove, so it could assume both; a desktop app can assume neither,
            nor a compose plugin new enough for profiles, nor the network its own
            generator declares external. -->
-      <RequirementsGate v-else-if="app.preflight && !app.preflight.ready" />
+      <RequirementsGate v-else-if="gated" />
+
+      <!-- Passing the checks is not the same as being set up. On the first
+           launch the compose files have never been written and nothing is
+           running, so the dashboard would open behind a proxy that is not
+           there. This does that once, in front of the person waiting. -->
+      <BootstrapGate v-else-if="needsBootstrap" @done="bootstrapDone = true" />
 
       <router-view v-else />
     </v-main>

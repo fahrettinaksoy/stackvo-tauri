@@ -155,10 +155,25 @@ fn compose_projects_matches() {
     let projects = compose_projects_from(&manifests);
     // The fixture was written with the sandbox path replaced by this
     // placeholder, so rendering with it as the host root makes the two
-    // comparable without depending on where the sandbox happened to live.
-    let ours = render_compose_projects(&projects, "__ROOT__");
+    // comparable without depending on where the sandbox happened to live. The
+    // project tree was `<root>/projects` when Bash wrote it, which is what the
+    // second argument says.
+    let ours = render_compose_projects(&projects, "__ROOT__", "__ROOT__/projects");
     let theirs = std::fs::read_to_string(dir.join("docker-compose.projects.yml"))
         .expect("reference compose file");
+
+    // One line differs on purpose, and the fixture stays as Bash wrote it so
+    // that the difference is visible here rather than edited into the
+    // reference.
+    //
+    // Bash gave a Node project the build context `../projects/<name>`, relative
+    // to `generated/` and therefore only correct while the project tree was a
+    // fixed distance from the compose file. It is a directory the user chooses
+    // now, possibly on another volume, and no relative path reaches that. The
+    // absolute form names the same directory in the single-root layout this
+    // fixture describes — which is what makes rewriting the expectation honest
+    // rather than convenient.
+    let theirs = theirs.replace("context: ../projects/", "context: __ROOT__/projects/");
 
     if let Some(diff) = first_difference(&ours, &theirs) {
         panic!("\n=== docker-compose.projects.yml ===\n{diff}");
@@ -212,7 +227,10 @@ fn traefik_config_matches_without_ssl() {
 fn traefik_routes_match_with_ssl() {
     // These fixtures were frozen from the Bash generator; since the takeover
     // they document the Rust renderer's own contract, updated when the
-    // routed-service set changes (mailhog -> mailpit, Sprint 19).
+    // routed-service set changes (mailhog -> mailpit, Sprint 19) — and now
+    // that the bare suffix has a router of its own. Bash never wrote one, so
+    // `https://<suffix>/` resolved, presented a valid certificate and returned
+    // 404 with nothing on the machine explaining why.
     let opts = traefik_opts(
         true,
         vec![

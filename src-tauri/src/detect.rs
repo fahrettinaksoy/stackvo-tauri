@@ -499,7 +499,10 @@ pub fn compose_file(dir: &Path) -> Option<std::path::PathBuf> {
 /// Every directory under `projects/` with no `stackvo.json`.
 pub fn adoptable(root: &Path) -> Vec<Adoptable> {
     let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(root.join("projects")) else {
+    let Some(projects) = crate::workspace::projects_root(root) else {
+        return out;
+    };
+    let Ok(entries) = std::fs::read_dir(&projects) else {
         return out;
     };
 

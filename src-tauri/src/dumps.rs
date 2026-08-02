@@ -174,7 +174,10 @@ fn entries(root: &Path) -> Vec<Entry> {
             .unwrap_or_default();
     let services = crate::xdebug::generated_services(&generated);
 
-    let Ok(dirs) = std::fs::read_dir(root.join("projects")) else {
+    let Some(projects) = crate::workspace::projects_root(root) else {
+        return out;
+    };
+    let Ok(dirs) = std::fs::read_dir(&projects) else {
         return out;
     };
 

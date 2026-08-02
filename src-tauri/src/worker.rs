@@ -92,7 +92,10 @@ pub fn parse_id(id: &str) -> Option<(String, Kind)> {
 
 /// Which workers this project can offer, from its files alone.
 pub fn available(root: &Path, project: &str) -> Vec<Kind> {
-    let dir = root.join("projects").join(project);
+    let Some(projects) = crate::workspace::projects_root(root) else {
+        return Vec::new();
+    };
+    let dir = projects.join(project);
     if !dir.join("artisan").is_file() {
         return Vec::new();
     }
@@ -222,6 +225,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let project = dir.join("projects/app");
         std::fs::create_dir_all(&project).unwrap();
+        crate::workspace::point_at_projects(&dir, &dir.join("projects")).unwrap();
 
         assert!(available(&dir, "app").is_empty());
 

@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n';
 import {
   LANG_DEFAULTS,
   LANG_RUNTIMES,
+  canonical,
   extensionLimit,
   isIncompatible,
   overExtensionLimit,
@@ -34,6 +35,21 @@ const props = defineProps({
    * move, not a field.
    */
   lockName: { type: Boolean, default: false },
+  /**
+   * The project is being scaffolded from a template, so some of the form is
+   * the framework's answer rather than the user's.
+   *
+   * Hidden: the runtime (the template IS the runtime) and the document root
+   * (`public` for Laravel, `web` for TYPO3 — detection reads it off what the
+   * installer wrote, and a field would only let the two disagree).
+   *
+   * Still asked: PHP version, web server and extensions. None of those are
+   * discoverable from the installed code — a framework declares a *floor*
+   * (`"php": "^8.3"`), not the version you want to run, and nothing in a
+   * checkout says nginx or apache. Left to detection they defaulted silently,
+   * which is what put a Laravel 13 project on PHP 8.3 with seven extensions.
+   */
+  scaffold: { type: Boolean, default: false },
 });
 
 const form = defineModel({ type: Object, required: true });
@@ -46,6 +62,27 @@ const app = useAppStore();
  * developer may well want `.test` or `.dev`, and typing a whole hostname to
  * get one is not offering it.
  */
+/**
+ * Both identifiers are written back lower-case as they are typed.
+ *
+ * The name becomes a directory, a container name and an image reference, and
+ * Docker refuses the last of those with a capital in it. The domain is compared
+ * byte-for-byte in three places — the Traefik rule, the hosts line, the
+ * certificate — so one stray capital is a project that resolves and 404s.
+ */
+const name = computed({
+  get: () => form.value.name,
+  set: (value) => {
+    form.value.name = canonical(value);
+  },
+});
+const domain = computed({
+  get: () => form.value.domain,
+  set: (value) => {
+    form.value.domain = canonical(value);
+  },
+});
+
 const domainItems = computed(() => domainSuggestions(form.value.name, app.tld));
 const domainHint = computed(() => t('newProject.domainHint'));
 const domainWarning = computed(() => {
@@ -159,7 +196,7 @@ defineExpose({ focusName: () => nameField.value?.focus() });
 
     <v-text-field
       ref="nameField"
-      v-model="form.name"
+      v-model="name"
       :label="t('newProject.name')"
       prepend-inner-icon="mdi-folder-outline"
       :readonly="lockName"
@@ -167,7 +204,7 @@ defineExpose({ focusName: () => nameField.value?.focus() });
       :hint="lockName ? t('projectSettings.nameLocked') : t('newProject.nameHint')"
     />
     <v-combobox
-      v-model="form.domain"
+      v-model="domain"
       :label="t('newProject.domain')"
       :items="domainItems"
       :placeholder="form.name ? `${form.name}.${app.tld}` : ''"
@@ -177,7 +214,9 @@ defineExpose({ focusName: () => nameField.value?.focus() });
       persistent-hint
       :messages="domainWarning ? [domainWarning] : []"
     />
+    <!-- Scaffolding picked the runtime the moment the template was chosen. -->
     <v-select
+      v-if="!scaffold"
       :model-value="form.runtime"
       :items="runtimes.map((r) => ({ value: r.id, title: r.id }))"
       :label="t('newProject.runtime')"
@@ -201,7 +240,10 @@ defineExpose({ focusName: () => nameField.value?.focus() });
         :label="t('newProject.server')"
         prepend-inner-icon="mdi-server"
       />
+      <!-- The framework decides this one — `public` for Laravel, `web` for
+           TYPO3 — and detection reads it off what the installer wrote. -->
       <v-text-field
+        v-if="!scaffold"
         v-model="form.documentRoot"
         :label="t('newProject.documentRoot')"
         prepend-inner-icon="mdi-folder-outline"
@@ -236,8 +278,8 @@ defineExpose({ focusName: () => nameField.value?.focus() });
           </template>
         </v-autocomplete>
 
-        <!-- The manifest cap is a Bash parser limit, not a preference: entry 51
-             onward is dropped without a word (C-04). -->
+        <!-- A count, not a quota: the ceiling is the catalog itself now that
+             the Bash parser's 50-line window is gone (C-04, closed). -->
         <div class="text-caption mt-1" :class="overLimit ? 'text-error' : 'text-medium-emphasis'">
           {{ form.extensions.length }} / {{ maxExtensions }}
           <span v-if="overLimit">— {{ t('newProject.tooManyExtensions') }}</span>
@@ -245,7 +287,12 @@ defineExpose({ focusName: () => nameField.value?.focus() });
       </div>
     </template>
 
-    <template v-else-if="isLang">
+    <!-- The non-PHP runtimes are configured entirely from what the installer
+         wrote: `.nvmrc`, `engines.node`, the dev script, the port it binds.
+         Asking for them here would be asking the user to repeat the template,
+         and to disagree with it. PHP is the exception above, because a
+         `composer.json` declares a floor rather than a choice. -->
+    <template v-else-if="isLang && !scaffold">
       <div class="sheet-group">{{ t('newProject.sectionLang', { runtime: form.runtime }) }}</div>
 
       <v-select
@@ -285,7 +332,7 @@ defineExpose({ focusName: () => nameField.value?.focus() });
       />
     </template>
 
-    <template v-else>
+    <template v-else-if="!scaffold">
       <div class="sheet-group">{{ t('newProject.sectionNode') }}</div>
 
       <v-select

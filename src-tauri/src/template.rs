@@ -479,7 +479,23 @@ pub const DYNAMIC_SERVICES: [(&str, &str); 21] = [
 /// binary, so a packaged app needs no checkout and an edited template still
 /// wins.
 pub fn render_dynamic_compose(root: &std::path::Path, env: &BTreeMap<String, String>) -> String {
-    let mut out = String::from("services:\n\n");
+    let enabled = DYNAMIC_SERVICES
+        .iter()
+        .any(|(flag, _)| env.get(*flag).map(String::as_str) == Some("true"));
+
+    // `services:` with nothing under it is not an empty mapping, it is null,
+    // and Compose rejects the whole file with "services must be a mapping" —
+    // taking Traefik down with it, because these files are merged. Switching
+    // every service off is a thing the Services page lets anybody do.
+    //
+    // The non-empty spelling is left exactly as it was. It is compared
+    // byte-for-byte against frozen output, and the blank line after the key is
+    // part of that.
+    let mut out = String::from(if enabled {
+        "services:\n\n"
+    } else {
+        "services: {}\n\n"
+    });
 
     for (flag, path) in DYNAMIC_SERVICES {
         if env.get(flag).map(String::as_str) != Some("true") {
