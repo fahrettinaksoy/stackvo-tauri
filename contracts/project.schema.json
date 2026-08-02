@@ -82,9 +82,8 @@
         },
         "extensions": {
           "type": "array",
-          "maxItems": 50,
           "uniqueItems": true,
-          "description": "PHP extensions to compile in. See php-extensions.json for install method and system dependencies. HARD LIMIT 50: the Bash parser extracts these with `grep -A 50 '\"extensions\"'`, so entry 51 onward is silently dropped. Omitting this key yields the built-in default set: pdo pdo_mysql mysqli gd curl zip mbstring (get_default_extensions) — which is NOT the same as SUPPORTED_LANGUAGES_PHP_EXTENSIONS_DEFAULT in .env.",
+          "description": "PHP extensions to compile in. See php-extensions.json for install method and system dependencies. There is no count limit: the old HARD LIMIT 50 was the Bash parser's `grep -A 50 '\"extensions\"'` window (C-04), which retired with the Bash generator — the whole catalog may be selected, at the cost of build time. Omitting this key yields the built-in default set: pdo pdo_mysql mysqli gd curl zip mbstring (get_default_extensions) — which is NOT the same as SUPPORTED_LANGUAGES_PHP_EXTENSIONS_DEFAULT in .env.",
           "items": {
             "type": "string",
             "pattern": "^[a-z0-9_]+$",

@@ -86,6 +86,37 @@ describe('translations', () => {
 });
 
 /**
+ * Vuetify's own labels, which this app made itself responsible for.
+ *
+ * `createVueI18nAdapter` routes every internal Vuetify string — a snackbar's
+ * close button, an empty table's caption, a data table's pager — through this
+ * i18n instance rather than Vuetify's own store. vue-i18n returns an unknown
+ * key verbatim, so the moment the adapter went in and `$vuetify` was not
+ * merged, those labels started rendering as their own names: a snackbar with
+ * **$VUETIFY.DISMISS** where its close button should be.
+ *
+ * Checked against the real instance rather than the locale files, because the
+ * merge happens in `i18n/index.js` and that is the thing that can be undone.
+ */
+describe('vuetify labels', () => {
+  it('resolve through the app i18n instance in both locales', async () => {
+    const { i18n } = await import('@/i18n');
+    const { t } = i18n.global;
+
+    // One per component family that leaked, not an exhaustive list — the point
+    // is that `$vuetify` is present and reachable, not to restate Vuetify.
+    const keys = ['$vuetify.dismiss', '$vuetify.close', '$vuetify.noDataText'];
+
+    for (const locale of ['tr', 'en']) {
+      i18n.global.locale.value = locale;
+      for (const key of keys) {
+        expect(t(key), `${locale}:${key} rendered as its own name`).not.toContain('$vuetify');
+      }
+    }
+  });
+});
+
+/**
  * The error codes are the contract's machine-readable half; the locales are how
  * they reach a person. A code Rust can emit but no locale names renders as the
  * raw English message from Rust, in an app that otherwise speaks two languages.

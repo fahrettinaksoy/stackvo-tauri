@@ -3,14 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '@/lib/ipc';
 import { useAppStore } from '@/stores/app';
-import {
-  blankForm,
-  domainAdvice,
-  domainSuggestions,
-  formToSpec,
-  isIncompatible,
-  overExtensionLimit,
-} from '@/lib/manifest';
+import { blankForm, formToSpec, isIncompatible, overExtensionLimit } from '@/lib/manifest';
 import ErrorAlert from '@/components/ErrorAlert.vue';
 import ProjectFormFields from '@/components/ProjectFormFields.vue';
 import SideSheet from '@/components/SideSheet.vue';
@@ -20,23 +13,6 @@ const emit = defineEmits(['update:modelValue', 'created']);
 
 const { t } = useI18n();
 const app = useAppStore();
-/**
- * The suffix is a choice, not a fixture. The configured one leads because it
- * is what the certificate already covers; the rest are offered because a
- * developer may well want `.test` or `.dev`, and typing a whole hostname to
- * get one is not offering it.
- */
-const domainItems = computed(() => domainSuggestions(form.value.name, app.tld));
-const domainHint = computed(() => t('newProject.domainHint'));
-const domainWarning = computed(() => {
-  const effective = form.value.domain || domainItems.value[0] || '';
-  const advice = domainAdvice(effective, app.tld, app.sslEnabled);
-  // Spelled out rather than built from the advice, so the keys stay findable
-  // by a search — and by the test that proves every string is reachable.
-  if (advice === 'https') return t('newProject.domain_https');
-  if (advice === 'certificate') return t('newProject.domain_certificate');
-  return '';
-});
 
 const fields = ref(null);
 
@@ -82,6 +58,45 @@ const TEMPLATE_GROUPS = [
   { key: 'go', items: ['gin', 'echo'] },
   { key: 'other', items: ['rails', 'sinatra', 'rocket'] },
 ];
+/**
+ * Which runtime each template installs.
+ *
+ * Named per template rather than per group because the groups are about where
+ * a user looks for a thing, not what runs it: `cms` holds four PHP frameworks
+ * and TinaCMS, which is Node. What this decides is which fields the form can
+ * usefully ask for — a PHP template gets the version/server/extension choice,
+ * everything else is read back off what its installer wrote.
+ */
+const TEMPLATE_RUNTIME = {
+  laravel: 'php',
+  symfony: 'php',
+  cakephp: 'php',
+  yii: 'php',
+  codeigniter: 'php',
+  laminas: 'php',
+  slim: 'php',
+  wordpress: 'php',
+  drupal: 'php',
+  prestashop: 'php',
+  typo3: 'php',
+  tina: 'node',
+  nextjs: 'node',
+  nuxt: 'node',
+  vue: 'node',
+  react: 'node',
+  svelte: 'node',
+  astro: 'node',
+  nest: 'node',
+  angular: 'node',
+  django: 'python',
+  fastapi: 'python',
+  flask: 'python',
+  gin: 'go',
+  echo: 'go',
+  rails: 'ruby',
+  sinatra: 'ruby',
+  rocket: 'rust',
+};
 const TEMPLATE_ICONS = {
   empty: 'mdi-folder-outline',
   laravel: 'mdi-laravel',
@@ -122,7 +137,14 @@ const FRAMEWORK_GROUPS = TEMPLATE_GROUPS.filter((g) => g.key !== 'blank');
 function choose(key) {
   template.value = key;
   openGroup.value = FRAMEWORK_GROUPS.find((g) => g.items.includes(key))?.key ?? null;
+  // The template IS the runtime, so the form follows it rather than offering a
+  // second, contradictable answer. It decides which fields are worth asking
+  // for: PHP templates get version/server/extensions, the rest get neither.
+  form.value.runtime = TEMPLATE_RUNTIME[key] ?? 'php';
 }
+
+/** A scaffolded PHP project still has three choices its installer cannot make. */
+const phpScaffold = computed(() => scaffolding.value && form.value.runtime === 'php');
 
 const unavailable = computed(() => catalog.value?.runtimes?.filter((r) => !r.available) ?? []);
 
@@ -150,6 +172,14 @@ async function load() {
 /** Validate before creating, so a bad extension is caught here. */
 async function validate() {
   if (!form.value.name) return;
+  // A scaffold's manifest is written by adoption from what the installer left
+  // on disk, so the only part of this form that reaches it is the PHP
+  // override. For every other template the spec below is a fabrication, and
+  // findings about a document root nobody will write are noise.
+  if (scaffolding.value && !phpScaffold.value) {
+    report.value = null;
+    return;
+  }
   try {
     report.value = await api.projectValidate(form.value.name, formToSpec(form.value, app.tld));
   } catch (e) {
@@ -165,10 +195,21 @@ async function create() {
       // Install first, adopt second: adoption is the same detection a git
       // clone gets, so the manifest reflects what the installer wrote.
       await api.projectScaffold(form.value.name, template.value);
-      // Detection fills runtime, server and document root from what the
-      // installer wrote; the domain is the one thing it cannot know, so it
-      // rides along as an override.
-      await api.projectAdopt(form.value.name, null, form.value.domain || null);
+      // Detection fills the runtime and the document root from what the
+      // installer wrote. The rest it cannot know: a domain is a choice, and a
+      // `composer.json` states the PHP floor the framework needs rather than
+      // the version to run it on — read as an answer, `"php": "^8.3"` puts a
+      // brand-new Laravel on 8.3. Those ride along as overrides.
+      await api.projectAdopt(form.value.name, null, {
+        domain: form.value.domain || null,
+        ...(phpScaffold.value
+          ? {
+              phpVersion: form.value.phpVersion,
+              server: form.value.server,
+              extensions: [...form.value.extensions],
+            }
+          : {}),
+      });
     } else {
       await api.projectCreate(formToSpec(form.value, app.tld));
     }
@@ -229,47 +270,20 @@ const canCreate = computed(
          beside it, visible, and the two stack on a narrow window. -->
     <div class="new-project">
       <div class="new-project__form">
-        <!-- A scaffolded project's runtime, server and document root come from
-             detection over what the installer wrote — the form would only let
-             the two disagree. Only the name is the user's to choose. -->
-        <template v-if="scaffolding">
-          <div class="sheet-group">{{ t('newProject.sectionProject') }}</div>
-          <v-text-field
-            v-model="form.name"
-            :label="t('newProject.name')"
-            :hint="t('newProject.nameHint')"
-            persistent-hint
-            density="comfortable"
-            variant="outlined"
-            prepend-inner-icon="mdi-folder-outline"
-            class="mb-4"
-          />
-          <!-- The domain is a user's choice, not a property of the code, so it
-               is asked for here exactly as it is for an empty project. -->
-          <v-combobox
-            v-model="form.domain"
-            :label="t('newProject.domain')"
-            :items="domainItems"
-            :placeholder="form.name ? `${form.name}.${app.tld}` : ''"
-            persistent-placeholder
-            :hint="domainHint"
-            persistent-hint
-            :messages="domainWarning ? [domainWarning] : []"
-            density="comfortable"
-            variant="outlined"
-            prepend-inner-icon="mdi-web"
-          />
+        <!-- One form for both paths, in `scaffold` mode for a template. It
+             drops the runtime and the document root — the template is the
+             first and the framework is the second — and keeps the three a
+             framework does not answer: PHP version, web server, extensions.
+             The duplicate name and domain fields that used to live here were
+             the same two fields written twice. -->
+        <ProjectFormFields ref="fields" v-model="form" :catalog="catalog" :scaffold="scaffolding" />
 
-          <!-- Everything the framework decides is left to the framework, and
-               said so rather than left as an absence: a Laravel document root
-               typed by hand is a 404 nobody can explain. -->
-          <v-alert type="info" variant="tonal" class="mt-4">
-            <div class="text-caption">{{ t('newProject.templateHint') }}</div>
-            <div class="text-caption mt-2">{{ t('newProject.detectedHint') }}</div>
-          </v-alert>
-        </template>
-
-        <ProjectFormFields v-else ref="fields" v-model="form" :catalog="catalog" />
+        <!-- Said rather than left as an absence: a Laravel document root typed
+             by hand is a 404 nobody can explain. -->
+        <v-alert v-if="scaffolding" type="info" variant="tonal" class="mt-4">
+          <div class="text-caption">{{ t('newProject.templateHint') }}</div>
+          <div class="text-caption mt-2">{{ t('newProject.detectedHint') }}</div>
+        </v-alert>
 
         <v-alert v-if="report && !report.valid" type="warning" variant="tonal" class="mt-5">
           <div v-for="(issue, i) in report.errors" :key="i" class="text-caption">

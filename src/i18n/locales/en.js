@@ -94,7 +94,7 @@ export default {
     networkSub: 'Real-time network usage monitoring',
     downloadHistory: 'Download History',
     uploadHistory: 'Upload History',
-    breakdownPending: 'Waiting for a second sample — the counters are cumulative.',
+    free: 'Free',
   },
 
   projectsView: {
@@ -199,15 +199,18 @@ export default {
   },
 
   workspace: {
-    none: 'No StackVo directory selected yet.',
+    none: 'No project directory selected yet.',
     change: 'Change',
     source: {
       stored: 'saved choice',
-      env: 'STACKVO_ROOT',
-      discovered: 'found automatically',
+      env: 'STACKVO_PROJECTS',
+      migrated: 'carried over from an older install',
       none: 'not selected',
     },
     version: 'Version',
+    appDir: 'App directory',
+    appDirDesc:
+      'Everything StackVo produces lives here: compose files, logs, certificates, settings. Created automatically, never asked about.',
   },
 
   engine: {
@@ -244,7 +247,12 @@ export default {
     openDetail: 'Open detail',
     openSite: 'Open site',
     title: 'Projects',
-    empty: 'No projects yet.',
+    empty: 'No projects yet',
+    emptyText:
+      'Your project directory holds nothing StackVo manages. Create one, or move an existing folder here and adopt it.',
+    noMatch: 'No matching projects',
+    noMatchText: 'Nothing matched “{term}”.',
+    clearSearch: 'Clear search',
     running: 'Running',
     stopped: 'Stopped',
     notBuilt: 'Not built',
@@ -266,23 +274,49 @@ export default {
     failedToast: '{operation} failed — the console has the output',
   },
 
+  bootstrap: {
+    title: 'Setting the stack up',
+    subtitle:
+      'A one-time setup: the compose files get written and the core containers come up. When it finishes, stackvo.loc is serving.',
+    generate: 'Writing the compose files',
+    generateDetail:
+      'Templates rendered with your settings — these are the files every up is given.',
+    start: 'Starting the core containers',
+    startDetail: 'Traefik, the proxy every domain goes through. The first run may pull an image.',
+    certificates: 'Issuing the certificate',
+    certificatesDetail:
+      'Traefik serves HTTPS, and without a certificate no domain answers at all. The first run may ask for your password.',
+    trust: 'Trusting the certificate',
+    trustDetail:
+      'macOS grants this only interactively, so a terminal opens and asks for your sudo password. Skip it and the stack still runs — the browser just warns.',
+    waitingForPassword: 'A terminal is open — type your password there; this is watching for it.',
+    retry: 'Try again',
+    untrusted:
+      'The certificate was issued but this machine does not trust the issuer — the browser will warn. You can retry from Settings → Certificates.',
+  },
+
   preflight: {
     title: 'StackVo is not ready to run',
     subtitle: '{count} requirements are not met. The app opens once they are.',
     recheck: 'Check again',
     blocked: 'Cannot be checked until a requirement above it is met.',
+    lead: 'Work through the steps in order — the marked one has a button that does it for you.',
+    progress: '{done} of {total} steps done',
+    nextStep: 'Next step',
+    manual: 'This step has to be done by hand.',
+    help: 'Installation instructions',
 
-    workspace: 'StackVo directory',
+    workspace: 'Project directory',
     workspaceHint: {
       macos:
-        'Choose an empty folder — StackVo sets it up on first use — or one it already manages.',
+        'Choose the folder your projects live in — an existing one is fine, so is a new one. It has to be somewhere Docker can reach; anywhere under your home directory is safe. StackVo keeps its own files in ~/.stackvo, not here.',
       linux:
-        'Choose an empty folder — StackVo sets it up on first use — or one it already manages.',
+        'Choose the folder your projects live in — an existing one is fine, so is a new one. It has to be somewhere Docker can reach; anywhere under your home directory is safe. StackVo keeps its own files in ~/.stackvo, not here.',
       windows:
-        'Choose an empty folder — StackVo sets it up on first use — or one it already manages.',
+        'Choose the folder your projects live in — an existing one is fine, so is a new one. It has to be on a drive Docker Desktop shares. StackVo keeps its own files in its own directory, not here.',
     },
-    workspaceAction: 'Choose folder',
-    workspaceInstalled: 'Set up {path} — templates, .env and the project tree are in place.',
+    workspaceAction: 'Choose project directory',
+    workspaceInstalled: 'Projects will be read from {path}.',
 
     engine: 'Docker engine',
     engineHint: {
@@ -310,13 +344,16 @@ export default {
     },
     networkAction: 'Create network',
 
-    projects: 'projects/ directory',
-    projectsHint: {
-      macos: 'Projects live under this folder; it is not there yet.',
-      linux: 'Projects live under this folder; it is not there yet.',
-      windows: 'Projects live under this folder; it is not there yet.',
+    hosts: 'Hosts file entries',
+    hostsHint: {
+      macos:
+        'These names are not in /etc/hosts, so the browser cannot resolve any of them. Adding them asks for an administrator password; what gets written is shown first.',
+      linux:
+        'These names are not in /etc/hosts, so the browser cannot resolve any of them. Adding them asks for an administrator password; what gets written is shown first.',
+      windows:
+        'These names are not in Windows\\System32\\drivers\\etc\\hosts, so the browser cannot resolve any of them. Adding them asks for administrator rights; what gets written is shown first.',
     },
-    projectsAction: 'Create',
+    hostsAction: 'Add entries',
 
     mkcert: 'mkcert',
     mkcertHint: {
@@ -606,7 +643,13 @@ export default {
     rejected: 'Skipped — not valid hostnames',
     covered: 'Covered ({n})',
     reissue: 'Reissue certificate',
-    reissueAndTrust: 'Reissue and trust the CA',
+    trustInTerminal: 'Trust the CA (in a terminal)',
+    trustInTerminalHint:
+      'macOS grants the authorization for trust settings only interactively, so a windowed app cannot do it. This opens your terminal and asks for your sudo password. Then quit and reopen the browser.',
+    leafLabel: 'Certificate',
+    caLabel: 'Signing CA',
+    whySeparate:
+      'They are in separate directories because the certificate directory is mounted into the Traefik container. With the CA private key in there, anything in that container could issue a certificate for any domain this machine trusts. The CA is also never reissued — losing it costs every trust decision you have made.',
     notReloaded:
       'The certificate was reissued, but the proxy is still serving the previous one. Restart the stack, or run generate, to pick it up.',
   },
@@ -810,6 +853,23 @@ export default {
     // Groups.
     workspaceGroup: 'Working directory',
     workspaceGroupDesc: 'The checkout this app drives',
+
+    templates: {
+      title: 'Template overrides',
+      description:
+        'The templates live inside the app. A file appears in the workspace only when you take it over — and from then on, updates no longer reach it.',
+      count: '{count} of {total} templates are overridden in this workspace.',
+      none: 'All {total} templates are read from the shipped versions.',
+      pick: 'Template to take over',
+      pickHint: 'The file is copied into the workspace and opened in your editor.',
+      override: 'Take over and edit',
+      open: 'Open',
+      revert: 'Back to shipped',
+      revertTitle: 'Delete the overridden template?',
+      revertBody:
+        'Your edited file is deleted and the shipped version takes over. There is no other copy of your edit — this cannot be undone.',
+      reload: 'Reload',
+    },
     engineGroupDesc: 'State of the engine running the containers',
     externalApps: 'External apps',
     externalAppsDesc: 'Which app terminals and editors open in',
@@ -1091,8 +1151,12 @@ export default {
     pruneVolumesLabel: 'Remove {count} unused volume(s) — {size}.',
     pruneVolumesWarning:
       '“Unused” means “not currently mounted” — the data of a stopped project qualifies. Anything removed here is gone; back up databases first.',
+    pruneBuildCacheLabel: 'Remove the whole build cache.',
+    pruneBuildCacheWarning:
+      'Deleting a project already reclaims the cache its own image held. What is left is shared: every project image builds from the same PHP base and the same extension installs. Removing it costs no data — it costs every project a full rebuild next time.',
     pruneConfirm: 'Remove',
-    pruneResult: 'Removed {images} image(s) and {volumes} volume(s) — {size} reclaimed.',
+    pruneResult:
+      'Removed {images} image(s), {volumes} volume(s) and {caches} cache record(s) — {size} reclaimed.',
 
     ownersTitle: 'Who holds the bytes',
     ownerCol: 'Member',
@@ -1104,7 +1168,8 @@ export default {
   },
 
   newProject: {
-    nameHint: 'Starts with a letter or digit; dash, underscore and dot allowed (e.g. api.myapp).',
+    nameHint:
+      'Lower-case, starting with a letter or digit; dash, underscore and dot allowed (e.g. api.myapp).',
     domainHint: 'Generated from the project name when left empty.',
     domain_https:
       "This TLD is on the browsers' HSTS preload list: it only loads over HTTPS, with no way to click through. Turn on HTTPS in Settings first.",
@@ -1173,7 +1238,7 @@ export default {
     documentRoot: 'Document root',
     extensions: 'PHP extensions',
     incompatible: 'Cannot be installed on this PHP version',
-    tooManyExtensions: 'the rest would be dropped silently',
+    tooManyExtensions: 'more extensions than the catalog offers',
     install: 'Install command',
     build: 'Build command (optional)',
     start: 'Start command',
@@ -1183,6 +1248,10 @@ export default {
     unavailableRuntimes: 'Hidden — no generator: {list}',
     deleteTitle: 'Delete {name}?',
     deleteBody: 'The project leaves the StackVo list. Your source files stay on disk.',
+    // Said before the button is pressed, because these are not recoverable and
+    // the old dialog mentioned none of them.
+    deleteAlso:
+      'Its container, image, generated Dockerfile, logs, hosts entry and certificate name are removed with it.',
     deleteFiles: 'Also delete the project folder (cannot be undone)',
     delete: 'Delete',
   },
@@ -1227,7 +1296,10 @@ export default {
   errors: {
     ENGINE_UNREACHABLE: 'Cannot reach the Docker engine.',
     NO_WORKSPACE: 'No StackVo directory selected.',
-    IO_ERROR: 'Could not read from disk.',
+    // The code covers every filesystem failure — reading, writing, removing —
+    // and the sentence under it names the operation. A headline that says
+    // "read" over a message about removing a directory contradicts it.
+    IO_ERROR: 'A filesystem operation failed.',
     NOT_FOUND: 'Not found.',
     ALREADY_EXISTS: 'A project with that name already exists.',
     INVALID_INPUT: 'The input is not valid.',

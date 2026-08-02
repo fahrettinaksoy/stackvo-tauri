@@ -961,117 +961,22 @@ fn the_fanout_covers_the_real_checkout_without_replaying_it() {
     );
 }
 
-/// The template renderer, against the bytes Bash actually wrote.
-///
-/// This is the check that decides whether the Bash generator can be removed for
-/// this surface, so it is not a fixture: it renders the real templates with the
-/// real `.env` and compares to `generated/`, which Bash produced.
-///
-/// Both differences it found on the first run were things reading the shell
-/// could not have told me: `HOST_STACKVO_ROOT` is computed in `env-loader.sh`
-/// and is not in `.env` (so every volume mount came out relative), and
-/// `include_module` ends with a bare `echo ""` after its awk pipeline.
-#[test]
-fn the_rust_renderer_reproduces_bash_byte_for_byte() {
-    use stackvo_desktop_lib::{config::Env, template};
-
-    let Some(root) = checkout() else {
-        eprintln!("no StackVo checkout found, skipping");
-        return;
-    };
-
-    let env = Env::load(&root).expect(".env");
-    let vars = template::variables(&env, &root);
-    let templates = root.join("core/templates");
-
-    // The service config files, each a direct render of one template.
-    const CONFIGS: [(&str, &str); 5] = [
-        ("redis/redis.conf.tpl", "redis.conf"),
-        ("mysql/my.cnf.tpl", "mysql.cnf"),
-        ("mongo/mongo.conf.tpl", "mongo.conf"),
-        ("postgres/postgres.conf.tpl", "postgres.conf"),
-        ("elasticsearch/elasticsearch.yml.tpl", "elasticsearch.yml"),
-    ];
-
-    let mut checked = 0usize;
-    for (tpl, out) in CONFIGS {
-        let template = templates.join("services").join(tpl);
-        let generated = root.join("generated/configs").join(out);
-        let (Ok(text), Ok(expected)) = (
-            std::fs::read_to_string(&template),
-            std::fs::read_to_string(&generated),
-        ) else {
-            continue;
-        };
-        checked += 1;
-        assert_eq!(
-            template::render(&text, &vars),
-            expected,
-            "{out} does not match what Bash wrote"
-        );
-    }
-
-    // And the assembled services file — twenty templates, the awk filter and
-    // the harvested volumes section.
-    let generated = root.join("generated/docker-compose.dynamic.yml");
-    if let Ok(expected) = std::fs::read_to_string(&generated) {
-        // The workspace root, not the template directory: templates resolve
-        // workspace-first and fall back to the copies compiled into the
-        // binary.
-        let rendered = template::render_dynamic_compose(&root, &vars);
-
-        // One deliberate divergence from what Bash wrote. This file predates
-        // the retirement of the containerised web UI, so a checkout generated
-        // back then still carries a `stackvo-ui` block that nothing emits any
-        // more. Drop it from the expectation rather than keeping dead code
-        // alive to satisfy a stale artifact; everything else must still match
-        // byte for byte, which is what this test is actually guarding.
-        let expected = strip_retired_ui_service(&expected);
-        assert_eq!(
-            rendered.len(),
-            expected.len(),
-            "docker-compose.dynamic.yml differs in length"
-        );
-        assert_eq!(rendered, expected, "docker-compose.dynamic.yml differs");
-        eprintln!(
-            "renderer: {checked} config(s) + docker-compose.dynamic.yml ({} bytes) byte-identical",
-            expected.len()
-        );
-    }
-}
-
-/// Remove a `stackvo-ui:` service block from a generated compose file, if one
-/// is there. Services are two-space indented and each carries its own trailing
-/// blank line, so a block runs until the next key at that indent — or, if it
-/// is the last service, until the top-level `volumes:` key.
-///
-/// The one subtlety is that boundary. A following service line belongs to the
-/// next block and is kept as-is, but the blank line before `volumes:` is not
-/// part of any service: the renderer emits it separately, right before the
-/// volumes header. Deleting it along with the block would leave the two
-/// sections welded together and cost exactly one byte against the renderer.
-fn strip_retired_ui_service(text: &str) -> String {
-    let Some(start) = text.find("\n  stackvo-ui:\n") else {
-        return text.to_string();
-    };
-    let rest = &text[start + 1..];
-    let end = rest
-        .match_indices('\n')
-        .map(|(i, _)| i + 1)
-        .find_map(|i| {
-            let line = &rest[i..];
-            if line.starts_with("volumes:") {
-                // Back up over the separator newline, which survives.
-                Some(i - 1)
-            } else if line.starts_with("  ")
-                && line[2..].starts_with(|c: char| c.is_ascii_alphanumeric())
-            {
-                Some(i)
-            } else {
-                None
-            }
-        })
-        .map(|i| start + 1 + i)
-        .unwrap_or(text.len());
-    format!("{}{}", &text[..start + 1], &text[end..])
-}
+// `the_rust_renderer_reproduces_bash_byte_for_byte` lived here. It rendered the
+// service configs and `docker-compose.dynamic.yml` and compared them to what
+// the Bash generator had written into `generated/`, which was the right check
+// while there was a Bash generator to disagree with.
+//
+// It is retired for two reasons, and the second is the serious one. The Bash
+// CLI was deleted in Sprint 19, so the "reference" it compared against was
+// whatever a checkout happened to be carrying — files that could be years old,
+// and in one measured case still held a `stackvo-ui` service the app stopped
+// emitting, which the test papered over with a bespoke stripping function.
+//
+// And it only ran where a checkout existed. Every test in this file opens with
+// `let Some(root) = checkout() else { return }`, so on a machine with none —
+// which is now every fresh install, and this one — the file reports seventeen
+// passes and asserts nothing at all. That is the failure mode a guard must not
+// have: it does not go red, it goes quiet.
+//
+// The coverage moved to `golden_render.rs`, which renders from the templates
+// compiled into the binary and needs nothing on disk.

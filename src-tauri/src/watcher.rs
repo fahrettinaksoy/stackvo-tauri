@@ -50,16 +50,19 @@ const DEBOUNCE: Duration = Duration::from_millis(400);
 
 /// Which project a changed path belongs to, if any.
 ///
-/// Accepts only `<root>/projects/<name>/stackvo.json` — deliberately narrow, so
-/// an editor's `stackvo.json~` backup or a file deeper in the tree does not
+/// Accepts only `<projects>/<name>/stackvo.json` — deliberately narrow, so an
+/// editor's `stackvo.json~` backup or a file deeper in the tree does not
 /// trigger a regenerate prompt.
-fn project_for(root: &Path, changed: &Path) -> Option<String> {
+///
+/// Takes the project directory rather than the app root and resolving it here:
+/// this is a question about two paths, and asking it that way is what lets it
+/// be tested against paths that never exist on disk.
+fn project_for(projects: &Path, changed: &Path) -> Option<String> {
     if changed.file_name()? != "stackvo.json" {
         return None;
     }
 
-    let projects = root.join("projects");
-    let relative = changed.strip_prefix(&projects).ok()?;
+    let relative = changed.strip_prefix(projects).ok()?;
     let mut parts = relative.components();
     let name = parts.next()?.as_os_str().to_str()?.to_string();
 
@@ -70,7 +73,16 @@ fn project_for(root: &Path, changed: &Path) -> Option<String> {
 /// Start watching. The returned watcher must be kept alive — dropping it stops
 /// the watch, which is why it is parked in Tauri's managed state.
 pub fn start(app: AppHandle, root: PathBuf) -> notify::Result<notify::RecommendedWatcher> {
-    let projects_dir = root.join("projects");
+    // Nothing to watch before a project tree is chosen. `NotFound` rather than
+    // a silent no-op: `retarget` stores the result, and a watcher that quietly
+    // watches nothing has exactly one symptom — edits stop prompting a
+    // regenerate, months later, with nothing to point at.
+    let Some(projects_dir) = crate::workspace::projects_root(&root) else {
+        return Err(notify::Error::io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no project directory has been chosen",
+        )));
+    };
     let (tx, rx) = mpsc::channel::<Event>();
 
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
@@ -81,6 +93,7 @@ pub fn start(app: AppHandle, root: PathBuf) -> notify::Result<notify::Recommende
 
     watcher.watch(&projects_dir, RecursiveMode::Recursive)?;
 
+    let watched = projects_dir.clone();
     std::thread::spawn(move || {
         let mut last: Vec<(String, Instant)> = Vec::new();
 
@@ -90,7 +103,7 @@ pub fn start(app: AppHandle, root: PathBuf) -> notify::Result<notify::Recommende
             }
 
             for path in &event.paths {
-                let Some(project) = project_for(&root, path) else {
+                let Some(project) = project_for(&watched, path) else {
                     continue;
                 };
 
@@ -120,13 +133,13 @@ pub fn start(app: AppHandle, root: PathBuf) -> notify::Result<notify::Recommende
 mod tests {
     use super::*;
 
-    const ROOT: &str = "/w/stackvo";
+    const PROJECTS: &str = "/w/stackvo/projects";
 
     #[test]
     fn matches_a_project_manifest() {
         assert_eq!(
             project_for(
-                Path::new(ROOT),
+                Path::new(PROJECTS),
                 Path::new("/w/stackvo/projects/shop/stackvo.json")
             ),
             Some("shop".to_string())
@@ -141,7 +154,7 @@ mod tests {
             "/w/stackvo/projects/shop/.stackvo/Dockerfile",
         ] {
             assert_eq!(
-                project_for(Path::new(ROOT), Path::new(path)),
+                project_for(Path::new(PROJECTS), Path::new(path)),
                 None,
                 "{path}"
             );
@@ -153,14 +166,14 @@ mod tests {
         // Too shallow, and too deep — neither is a project manifest.
         assert_eq!(
             project_for(
-                Path::new(ROOT),
+                Path::new(PROJECTS),
                 Path::new("/w/stackvo/projects/stackvo.json")
             ),
             None
         );
         assert_eq!(
             project_for(
-                Path::new(ROOT),
+                Path::new(PROJECTS),
                 Path::new("/w/stackvo/projects/a/b/stackvo.json")
             ),
             None
@@ -170,7 +183,10 @@ mod tests {
     #[test]
     fn ignores_paths_outside_the_projects_directory() {
         assert_eq!(
-            project_for(Path::new(ROOT), Path::new("/w/stackvo/core/stackvo.json")),
+            project_for(
+                Path::new(PROJECTS),
+                Path::new("/w/stackvo/core/stackvo.json")
+            ),
             None
         );
     }

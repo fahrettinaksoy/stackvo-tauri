@@ -6,6 +6,12 @@ http:
         - websecure
       service: api@internal
       tls: {}
+    root:
+      rule: "Host(`stackvo.loc`)"
+      entryPoints:
+        - websecure
+      service: api@internal
+      tls: {}
     rabbitmq:
       rule: "Host(`rabbitmq.stackvo.loc`)"
       entryPoints:

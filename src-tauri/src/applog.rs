@@ -354,7 +354,7 @@ const MAX_FOLLOWED: usize = 60;
 /// must keep working with the engine down, which is the whole premise of
 /// reading logs from the host.
 pub fn projects(root: &Path) -> Result<Vec<String>> {
-    let dir = root.join("projects");
+    let dir = crate::workspace::require_projects_root(root)?;
     let entries =
         std::fs::read_dir(&dir).map_err(|e| Error::io(format!("reading {}", dir.display()), e))?;
 
@@ -606,6 +606,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("stackvo-applog-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        // The project tree is chosen, never defaulted — a test root has to
+        // say where it is like anything else does.
+        crate::workspace::point_at_projects(&dir, &dir.join("projects")).unwrap();
         dir
     }
 
@@ -745,10 +748,16 @@ mod tests {
     fn workspace(name: &str, projects: &[&str]) -> PathBuf {
         let root = scratch(name);
         for project in projects {
-            let logs = root.join("projects").join(project).join("storage/logs");
+            let logs = crate::workspace::projects_root(&root)
+                .unwrap()
+                .join(project)
+                .join("storage/logs");
             std::fs::create_dir_all(&logs).unwrap();
             std::fs::write(
-                root.join("projects").join(project).join("stackvo.json"),
+                crate::workspace::projects_root(&root)
+                    .unwrap()
+                    .join(project)
+                    .join("stackvo.json"),
                 "{}",
             )
             .unwrap();

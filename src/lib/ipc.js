@@ -58,6 +58,13 @@ export async function call(command, args = {}) {
 export const api = {
   workspaceGet: () => call('workspace_get'),
   workspaceSet: (path) => call('workspace_set', { path }),
+  /**
+   * Record that the first-run setup finished.
+   *
+   * Written by the screen that runs it, after its last step — so a setup that
+   * failed part way, or was skipped past, is offered again next launch.
+   */
+  bootstrapComplete: () => call('bootstrap_complete'),
 
   engineStatus: () => call('engine_status'),
   /** Everything that must be true before the app can work. See `preflight.rs`. */
@@ -67,7 +74,10 @@ export const api = {
   /** The full diagnosis with named culprits. See `doctor.rs`. */
   doctor: () => call('doctor'),
   /** Dangling images by default; unused volumes only when explicitly asked. */
-  dockerPrune: (images = true, volumes = false) => call('docker_prune', { images, volumes }),
+  /** `buildCache` — 'keep' | 'dangling' | 'all'. 'all' reclaims the layers
+   *  every project image shares, so each one rebuilds from scratch next time. */
+  dockerPrune: (images = true, volumes = false, buildCache = 'keep') =>
+    call('docker_prune', { images, volumes, buildCache }),
 
   hostStats: () => call('host_stats'),
   dockerSystemResources: () => call('docker_system_resources'),
@@ -80,6 +90,18 @@ export const api = {
   catalogGet: () => call('catalog_get'),
   serverConfigGet: (server) => call('server_config_get', { server }),
   serverConfigSet: (server, content) => call('server_config_set', { server, content }),
+
+  /**
+   * The shipped templates, and which of them this workspace has taken over.
+   *
+   * A file under `core/` exists only because somebody chose to override it —
+   * installing writes none — so `overridden` is simply whether it is there.
+   */
+  templatesList: () => call('templates_list'),
+  /** Copy the shipped file into the workspace; resolves to its absolute path. */
+  templateOverride: (path) => call('template_override', { path }),
+  /** Delete the workspace's copy. The version in the binary takes over again. */
+  templateRevert: (path) => call('template_revert', { path }),
   envGet: () => call('env_get'),
   envDefaults: () => call('env_defaults'),
   /** One secret, unmasked, on explicit request. See `env_reveal` in Rust. */
@@ -136,6 +158,15 @@ export const api = {
   hostsPlan: (add = [], remove = []) => call('hosts_plan', { add, remove }),
   hostsApply: (add = [], remove = []) => call('hosts_apply', { add, remove }),
   hostsMissing: () => call('hosts_missing'),
+  /**
+   * Only the two names the stack is addressed through.
+   *
+   * What the preflight gate offers, because that is what it blocks on. The
+   * dashboard asks for `hostsMissing` — "fix everything" is a thing somebody
+   * can ask for, but not a thing to do to them while a password prompt they
+   * opened for two entries is on screen.
+   */
+  hostsMissingCore: () => call('hosts_missing_core'),
   hostsOverview: () => call('hosts_overview'),
 
   // --- Mail -----------------------------------------------------------------
@@ -244,6 +275,15 @@ export const api = {
   certPlan: (installCa = true) => call('cert_plan', { installCa }),
   /** Reissues, and installs the CA when nothing trusts it yet. */
   certApply: (installCa = true) => call('cert_apply', { installCa }),
+  /**
+   * Trust the CA, in the user's own terminal.
+   *
+   * macOS will not let a windowed app change trust settings: `sudo` needs a
+   * terminal, root-via-AppleScript is refused outright, and the user-domain
+   * write exits 0 and does nothing. `mkcert -install` in a real terminal is
+   * the one thing that works, so the app opens one.
+   */
+  certTrustInTerminal: () => call('cert_trust_in_terminal'),
 
   // --- Project lifecycle ----------------------------------------------------
   /** Opens the native picker, validates, and persists in one step. */
@@ -271,9 +311,11 @@ export const api = {
   /** Folders under projects/ with no stackvo.json — real code, unmanaged. */
   projectAdoptable: () => call('project_adoptable'),
   /** Writes the manifest for a directory that is already there. */
-  /** `domain` overrides only the domain; everything else still comes from
-   *  detection over what is on disk. */
-  projectAdopt: (name, spec = null, domain = null) => call('project_adopt', { name, spec, domain }),
+  /** `overrides` — `{domain, phpVersion, server, extensions}`, each optional —
+   *  replaces only what it names; everything else still comes from detection
+   *  over what is on disk. */
+  projectAdopt: (name, spec = null, overrides = null) =>
+    call('project_adopt', { name, spec, overrides }),
   projectManifestRead: (name) => call('project_manifest_read', { name }),
   projectManifestWrite: (name, manifest) => call('project_manifest_write', { name, manifest }),
 

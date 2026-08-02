@@ -80,6 +80,19 @@ impl Default for AppState {
 
 // ---------------------------------------------------------------- workspace
 
+/// Record that the first-run setup finished.
+///
+/// Called by the screen that runs it, after its last step — not by any of the
+/// steps. The difference is the whole reason this exists rather than deriving
+/// the answer from a file one of them writes: a setup that generated the
+/// compose files and then failed to issue a certificate used to look finished
+/// for ever, and the stack it left could not serve a single domain.
+#[tauri::command]
+pub fn bootstrap_complete(state: State<'_, AppState>) -> Result<()> {
+    let root = state.root()?;
+    workspace::mark_bootstrapped(&root)
+}
+
 #[tauri::command]
 pub fn workspace_get(state: State<'_, AppState>) -> Result<Workspace> {
     let ws = workspace::resolve();
@@ -89,6 +102,11 @@ pub fn workspace_get(state: State<'_, AppState>) -> Result<Workspace> {
     Ok(ws)
 }
 
+/// Point the app at a project tree.
+///
+/// This used to choose the app's own directory as well, because there was one
+/// directory and it held both. The app root is derived now, so the only thing
+/// left to choose is where the user's code lives.
 #[tauri::command]
 pub fn workspace_set(
     app: AppHandle,
@@ -96,12 +114,14 @@ pub fn workspace_set(
     state: State<'_, AppState>,
     watcher: State<'_, crate::watcher::Handle>,
 ) -> Result<Workspace> {
-    let ws = workspace::set(&path)?;
+    let ws = workspace::set_projects(&path)?;
     if let Ok(mut cached) = state.workspace.lock() {
         *cached = ws.clone();
     }
-    // Move the file watcher with the workspace, or it keeps reporting changes
-    // in the checkout the user just left.
+    // Move the file watcher with the choice, or it keeps reporting changes in
+    // the tree the user just left. It takes the app root and reads the pointer
+    // itself — handing it the project directory would make it watch a
+    // `projects/` folder one level further down that nobody has.
     watcher.retarget(&app, ws.require_root().ok());
     Ok(ws)
 }
@@ -159,6 +179,13 @@ pub struct Project {
     /// Mirrors `manifest.valid`, hoisted so list views do not have to dig.
     pub manifest_valid: bool,
     pub domain_configured: bool,
+    /// The manifest has been edited since anything was generated from it.
+    ///
+    /// Measured from the two files' timestamps rather than remembered from
+    /// watcher events, so it is right on first load — an edit made while the
+    /// app was closed used to go unreported — and it stops being true the
+    /// moment a regenerate makes it untrue.
+    pub generated_stale: bool,
     pub ports: Vec<Port>,
 }
 
@@ -171,7 +198,7 @@ pub async fn projects_list(state: State<'_, AppState>) -> Result<Vec<Project>> {
 /// The command's logic, free of Tauri `State` so it can be exercised from tests
 /// and from the `diagnose` example.
 pub async fn list_projects(root: &std::path::Path) -> Result<Vec<Project>> {
-    let projects_dir = root.join("projects");
+    let projects_dir = crate::workspace::require_projects_root(root)?;
 
     // A dead engine must not hide the project list — the manifests are on disk
     // and readable either way. Container state simply degrades to "not running".
@@ -252,6 +279,7 @@ pub async fn list_projects(root: &std::path::Path) -> Result<Vec<Project>> {
                 domain: m.domain.clone(),
                 runtime: m.runtime.clone(),
                 manifest_valid: m.valid,
+                generated_stale: crate::doctor::project_generated_is_stale(root, &dir_name),
                 name: dir_name,
                 manifest: m,
                 domain_configured,
@@ -415,9 +443,14 @@ pub struct Catalog {
     pub servers: Vec<String>,
     pub default_server: String,
     pub php_extensions: Vec<ExtensionOption>,
-    /// The Bash parser's hard ceiling on `php.extensions` (CONFLICTS.md C-04).
-    /// Exposed so the picker can stop the user at 50 rather than let the
-    /// generator drop the tail in silence.
+    /// How many extensions a manifest may carry.
+    ///
+    /// This used to be a hard 50 — the Bash extractor's `grep -A 50` window,
+    /// CONFLICTS.md C-04, which promised to lift the moment the generator was
+    /// ported. It has been: nothing reads `stackvo.json` with grep any more, so
+    /// the ceiling is now simply the size of the catalog. Still exposed, and
+    /// still derived rather than hardcoded, so the picker's counter cannot
+    /// disagree with the list it is counting.
     pub max_extensions: usize,
 }
 
@@ -461,7 +494,7 @@ pub fn build_catalog(root: &std::path::Path) -> Result<Catalog> {
 
     let catalog_names = env.list("SUPPORTED_LANGUAGES_PHP_EXTENSIONS");
     let matrix = &php_extensions().extensions;
-    let php_ext = catalog_names
+    let php_ext: Vec<ExtensionOption> = catalog_names
         .into_iter()
         .filter_map(|name| {
             let spec = matrix.get(&name)?;
@@ -485,8 +518,8 @@ pub fn build_catalog(root: &std::path::Path) -> Result<Catalog> {
             .get("SUPPORTED_SERVERS_DEFAULT")
             .unwrap_or("nginx")
             .to_string(),
+        max_extensions: php_ext.len(),
         php_extensions: php_ext,
-        max_extensions: 50,
     })
 }
 
@@ -496,15 +529,75 @@ pub fn build_catalog(root: &std::path::Path) -> Result<Catalog> {
 /// workspace byte-identical happens at render time, not here. An editor that
 /// showed the stripped version would delete the instructions the first time it
 /// was saved.
+///
+/// A workspace with no file falls back to the copy in the binary, which is
+/// eighteen lines of explanation and not one directive — so it renders to
+/// nothing either way, and the editor opens on the instructions rather than on
+/// an empty box. That mattered from the moment `install` stopped writing the
+/// file: an empty editor does not tell anybody that nginx directives are a
+/// thing they can add, and this pane is the only place that says so.
 #[tauri::command]
 pub fn server_config_get(state: State<'_, AppState>, server: String) -> Result<String> {
     let root = state.root()?;
     let path = checked_server_config(&root, &server)?;
     match std::fs::read_to_string(&path) {
         Ok(text) => Ok(text),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(crate::skeleton::read_template(
+            &root,
+            &format!("core/servers/{server}.conf"),
+        )
+        .unwrap_or_default()),
         Err(e) => Err(Error::io(format!("reading {}", path.display()), e)),
     }
+}
+
+/// One shipped file, and whether this workspace has taken it over.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateFile {
+    /// Relative to the workspace root, and the id every other call takes.
+    pub path: String,
+    /// There is a copy on disk, so the workspace's version is what renders.
+    pub overridden: bool,
+}
+
+/// Every template the app ships, and which ones this workspace has changed.
+///
+/// This list could not be produced at all until installing stopped copying
+/// everything to disk: with all thirty files present in every workspace, "has
+/// a copy" meant "was installed" rather than "was changed".
+#[tauri::command]
+pub fn templates_list(state: State<'_, AppState>) -> Result<Vec<TemplateFile>> {
+    let root = state.root()?;
+    Ok(crate::skeleton::overridable()
+        .into_iter()
+        .map(|path| TemplateFile {
+            overridden: root.join(&path).is_file(),
+            path,
+        })
+        .collect())
+}
+
+/// Copy the shipped file into the workspace and return where it landed.
+///
+/// The absolute path is the useful return: the caller's next move is to open
+/// the file in the user's own editor, which is a better place to edit compose
+/// YAML than a box in a settings pane.
+#[tauri::command]
+pub fn template_override(state: State<'_, AppState>, path: String) -> Result<String> {
+    let root = state.root()?;
+    crate::skeleton::materialize(&root, &path)?;
+    Ok(root.join(&path).display().to_string())
+}
+
+/// Drop the workspace's copy and go back to the version in the binary.
+///
+/// Destructive by definition — the file being deleted is the user's edit — so
+/// the front end asks first. Nothing here is undoable.
+#[tauri::command]
+pub fn template_revert(state: State<'_, AppState>, path: String) -> Result<()> {
+    let root = state.root()?;
+    crate::skeleton::revert(&root, &path)
 }
 
 #[tauri::command]
@@ -1302,10 +1395,19 @@ pub async fn generate_run(
     let scope = scope.unwrap_or_else(|| "all".into());
     let operation_id = events::next_operation_id("generate");
 
+    // `subject` as well as `scope`, and both the same string. The progress and
+    // finished events this operation goes on to emit are subjected on the
+    // scope; without it here the opening event fell through the reader's
+    // `subject ?? project ?? service ?? "stack"` chain and opened the operation
+    // against "stack" — a subject its own finish then never closed.
     events::emit(
         &app,
         "generate:start",
-        serde_json::json!({ "operationId": operation_id, "scope": scope }),
+        serde_json::json!({
+            "operationId": operation_id,
+            "scope": scope,
+            "subject": scope,
+        }),
     );
 
     generate(&app, &root, &operation_id, &scope).await?;
@@ -1537,7 +1639,14 @@ pub fn hosts_plan(add: Vec<String>, remove: Vec<String>) -> Result<hosts::HostsP
     hosts::plan(&add, &remove)
 }
 
-#[tauri::command]
+/// Rewrite the hosts file, with the system asking for a password first.
+///
+/// `(async)` for the same reason as `workspace_pick`: a synchronous command
+/// runs on the main thread, and this one blocks on `osascript … with
+/// administrator privileges` — a prompt that stays up for as long as somebody
+/// takes to find and type their password. Every second of that was a second the
+/// window behind it could not repaint.
+#[tauri::command(async)]
 pub fn hosts_apply(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1569,6 +1678,25 @@ pub fn hosts_apply(
 pub async fn hosts_missing(state: State<'_, AppState>) -> Result<Vec<String>> {
     let root = state.root()?;
     Ok(missing_hosts(&root).await)
+}
+
+/// Only the two names the stack is addressed through.
+///
+/// A separate command rather than a filter the caller applies, because the two
+/// questions have different right answers and the wrong one shipped: the
+/// preflight gate blocks on `<suffix>` and `traefik.<suffix>`, and its button
+/// wrote every missing name it could find — so a machine that had asked for two
+/// entries got four, including the admin UI of a service the user had not
+/// mentioned. A prompt that appears for one reason must not do a second thing
+/// while it is up.
+///
+/// The dashboard keeps using `hosts_missing`, which is the "fix everything"
+/// surface and is asked for as such. A service's own line still arrives when
+/// that service is switched on — see `sync_service_host`.
+#[tauri::command]
+pub async fn hosts_missing_core(state: State<'_, AppState>) -> Result<Vec<String>> {
+    let root = state.root()?;
+    Ok(missing_hosts_by_owner(&root).await.core)
 }
 
 /// Whether a service's hosts line should be added, removed, or left alone.
@@ -1647,25 +1775,137 @@ async fn sync_service_host(root: &std::path::Path, service: &str, enabled: bool)
 /// `status_for` is what the hosts dialog itself reads, so "missing" here cannot
 /// mean something different from "missing" there either.
 pub(crate) async fn missing_hosts(root: &std::path::Path) -> Vec<String> {
-    let wanted = wanted_domains(root).await;
-    crate::hosts::status_for(&wanted)
-        .into_iter()
-        .filter(|entry| !entry.configured)
-        .map(|entry| entry.domain)
-        .collect()
+    let split = missing_hosts_by_owner(root).await;
+    split.core.into_iter().chain(split.rest).collect()
 }
 
-/// Every domain the stack serves, whether or not it is in `/etc/hosts`.
+/// The same list, split by whether the stack can be reached at all without it.
+#[derive(Debug, Default)]
+pub(crate) struct MissingHosts {
+    /// The two names the stack itself is addressed through.
+    pub core: Vec<String>,
+    /// Everything else: a service's admin UI, a project's domain.
+    pub rest: Vec<String>,
+}
+
+/// Which missing names hold the gate, and which are just missing.
 ///
-/// One list rather than three checks: the answer to "is this in hosts" is
-/// `hosts::status_for`, and asking it once for everything keeps projects and
-/// services from drifting into two different ideas of what "configured" means.
-async fn wanted_domains(root: &std::path::Path) -> Vec<String> {
+/// The line is drawn at "is the stack reachable at all". `<suffix>` and
+/// `traefik.<suffix>` are the address of the thing itself and there is no
+/// getting to anything without them, which is why a gate that numbered them as
+/// a step and then closed over them had listed a requirement it did not
+/// require.
+///
+/// Everything else is a specific thing being unreachable. A service's admin UI
+/// is offered when that service is switched on (`sync_service_host`), a
+/// project's domain on the pages that own the project — both belong in the
+/// file, neither is a reason to refuse to open the app. That distinction was
+/// wrong here once already, in the other direction: the first version of this
+/// split blocked on every enabled service's UI too, which would have held the
+/// whole app shut over phpMyAdmin.
+pub(crate) async fn missing_hosts_by_owner(root: &std::path::Path) -> MissingHosts {
+    let core = core_domains(root);
+    let is_core: std::collections::HashSet<String> =
+        core.iter().map(|d| d.to_ascii_lowercase()).collect();
+
+    let mut out = MissingHosts::default();
+    for entry in crate::hosts::status_for(&wanted_domains(root).await) {
+        if entry.configured {
+            continue;
+        }
+        if is_core.contains(&entry.domain.to_ascii_lowercase()) {
+            out.core.push(entry.domain);
+        } else {
+            out.rest.push(entry.domain);
+        }
+    }
+    out
+}
+
+/// The admin UI of every service whose name is worth asking about.
+///
+/// **Running, or already written down.** Not "enabled" — that was the bug, and
+/// it was the same bug in three places before it was stated properly.
+/// `SERVICE_X_ENABLE` decides whether a service is *in* the compose profile,
+/// and phpMyAdmin and RabbitMQ ship switched on, so a fresh install with
+/// nothing ever started was told two hosts entries were missing. They were, in
+/// the sense that the file did not contain them; they were also the addresses
+/// of two containers that did not exist.
+///
+/// The "or already written down" half is what keeps this one list rather than
+/// two. A stopped service that has a line stays in the answer, so nothing ever
+/// offers to delete it as stale, and the file's own contents never become a
+/// thing to argue with. Without that, "what should be here" and "what is not
+/// junk" needed separate definitions — and the version of this that had two
+/// definitions is exactly how the settings pane went on listing names the
+/// dashboard had stopped listing.
+///
+/// Toggling a service on still writes its line eagerly (`sync_service_host`),
+/// and that is not the same thing: a button somebody pressed may act on intent,
+/// an unsolicited list may not.
+async fn service_domains(root: &std::path::Path) -> Vec<String> {
     let Ok(env) = Env::load(root) else {
         return Vec::new();
     };
     let tld = env.get("DEFAULT_TLD_SUFFIX").unwrap_or("stackvo.loc");
 
+    // A dead engine means nothing is running, which is the right answer here
+    // rather than a reason to fail.
+    let containers = engine::stackvo_containers().await.unwrap_or_default();
+    let (_, managed) = crate::hosts::mapped_domains();
+
+    env_schema()
+        .service_catalog()
+        .into_iter()
+        .filter_map(|(id, _)| env.service_url(&id).map(|url| (id, format!("{url}.{tld}"))))
+        .filter(|(id, domain)| {
+            containers.get(id).is_some_and(|c| c.running)
+                || managed.contains(&domain.to_ascii_lowercase())
+        })
+        .map(|(_, domain)| domain)
+        .collect()
+}
+
+/// The two names the stack answers on before anything else exists.
+///
+/// `<suffix>` because `certs::required_domains` issues for the bare name as
+/// well as the wildcard, so the app already holds that it should answer, and
+/// `traefik.<suffix>` because `routes.yml` has always written that router while
+/// nothing ever offered the entry that makes it reachable.
+///
+/// Exactly these two. Anything that can be switched off is not the address of
+/// the stack.
+#[cfg(test)]
+pub(crate) fn core_domains_for_test(root: &std::path::Path) -> Vec<String> {
+    core_domains(root)
+}
+
+/// What the settings pane lists, for a test that has to see the same list.
+#[cfg(test)]
+pub(crate) async fn wanted_domains_for_test(root: &std::path::Path) -> Vec<String> {
+    wanted_domains(root).await
+}
+
+fn core_domains(root: &std::path::Path) -> Vec<String> {
+    let Ok(env) = Env::load(root) else {
+        return Vec::new();
+    };
+    let tld = env.get("DEFAULT_TLD_SUFFIX").unwrap_or("stackvo.loc");
+
+    let mut out = vec![tld.to_string(), format!("traefik.{tld}")];
+    out.retain(|d| crate::hosts::is_valid_domain(d));
+    out
+}
+
+/// Every domain the file should carry.
+///
+/// The one answer, used by the settings pane, the dashboard banner and the
+/// preflight gate alike. There were briefly two — a wide one for deciding what
+/// in the file is stale and a narrow one for what to warn about — and the two
+/// disagreed in the way two definitions of the same thing always do: the
+/// dashboard stopped naming phpMyAdmin and the settings pane went on listing
+/// it, on a machine where it had never run.
+async fn wanted_domains(root: &std::path::Path) -> Vec<String> {
     let mut wanted: Vec<String> = list_projects(root)
         .await
         .unwrap_or_default()
@@ -1673,26 +1913,11 @@ async fn wanted_domains(root: &std::path::Path) -> Vec<String> {
         .filter_map(|p| p.domain)
         .collect();
 
-    // Only the services that are on. Their lines are added when a service is
-    // enabled and taken away when it is disabled, so the file describes the
-    // stack rather than the catalogue — see `sync_service_host`.
-    for (id, _) in env_schema().service_catalog() {
-        if !env.service_enabled(&id) {
-            continue;
-        }
-        if let Some(url) = env.service_url(&id) {
-            wanted.push(format!("{url}.{tld}"));
-        }
-    }
-
-    // The proxy's own dashboard. `routes.yml` has always written this router;
-    // nothing ever offered the hosts entry that makes it reachable.
-    wanted.push(format!("traefik.{tld}"));
-
-    // And the suffix itself, because the certificate already covers it:
-    // `certs::required_domains` issues for `<suffix>` as well as `*.<suffix>`,
-    // so the app already holds that the bare name should answer.
-    wanted.push(tld.to_string());
+    // Everything the stack itself answers on, from the two functions that know.
+    // Restating the suffix and the proxy here — as this used to — is how the
+    // gate and the dashboard come to disagree about what the stack needs.
+    wanted.extend(core_domains(root));
+    wanted.extend(service_domains(root).await);
 
     // A malformed domain would be refused by the writer for the whole batch,
     // taking every valid line with it.
@@ -2734,6 +2959,50 @@ pub fn pty_close(registry: State<'_, pty::Registry>, session_id: String) -> Resu
     pty::close(&registry, &session_id)
 }
 
+/// Trust the certificate authority, in the user's own terminal.
+///
+/// The one job macOS will not let this app do for itself — see
+/// `certs::trust_ca`. `mkcert -install` asks `sudo` for a password, which works
+/// in a terminal somebody is looking at and nowhere else, so the app opens one
+/// and hands it the command rather than pretending.
+///
+/// `CAROOT` is passed explicitly because the terminal is a fresh login shell
+/// that knows nothing about this app's environment, and without it mkcert would
+/// install a certificate authority from its own default directory — not the one
+/// that signed this stack's certificate.
+#[tauri::command]
+pub fn cert_trust_in_terminal() -> Result<()> {
+    let preferred = prefs_get().ok().and_then(|p| {
+        p.get("terminalApp")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    });
+
+    // The command mkcert itself runs, without mkcert's own pre-check.
+    //
+    // `mkcert -install` was here first and it does nothing: it decides the CA
+    // is already installed and returns happy. Its check is Go's
+    // `x509.Verify` against the system roots, and on macOS that is satisfied by
+    // the certificate merely being *in* a keychain — the same trap this app
+    // fell into a few hours earlier. Measured either side of a run that printed
+    // "The local CA is already installed in the system trust store! 👍":
+    //
+    //   security verify-cert -p basic -c <leaf>  →  CSSMERR_TP_NOT_TRUSTED
+    //
+    // So it is the underlying write instead, which is exactly what mkcert
+    // shells out to when it does decide to act:
+    //
+    //   sudo -- security add-trusted-cert -d -k /Library/Keychains/System.keychain <ca>
+    //
+    // `sudo` needs a terminal to ask for a password in, which is the entire
+    // reason this opens one rather than doing it in the background.
+    let command = format!(
+        "sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain '{}'",
+        crate::certs::ca_file().display()
+    );
+    crate::pty::open_external_shell(&command, preferred.as_deref())
+}
+
 #[tauri::command]
 pub fn terminal_open_external(target: PtyTarget) -> Result<()> {
     let preferred = prefs_get().ok().and_then(|p| {
@@ -2794,38 +3063,12 @@ pub fn project_manifest_write(
 /// CONFLICTS.md C-01. Here the payload IS the manifest, so there is nothing to
 /// reassemble and nothing to get wrong.
 fn parse_spec(value: &serde_json::Value, expected_name: &str) -> Result<Manifest> {
-    let raw = serde_json::to_string_pretty(value)?;
-    let m = manifest::normalize(value, &raw, expected_name);
+    // `normalize_spec`, not `normalize`: an incoming spec is a JSON value with
+    // no meaningful key order, so the layout rule (W-01) is checked against the
+    // bytes `manifest::write` will actually produce.
+    let m = manifest::normalize_spec(value, expected_name);
 
     if !m.valid {
-        // Two of the contract's rules are about the *layout of a file* — W-01
-        // (`php.extensions` must be the last key, because the Bash extractor
-        // swallows whatever follows the array) and C-04 (the 50-line parser
-        // window). An incoming spec is a JSON value, and a value has no
-        // meaningful key order: `serde_json`'s map is sorted, so `extensions`
-        // lands before `version` and W-01 fires on a spec that is perfectly
-        // fine. Checking a layout rule against something that has no layout is
-        // checking nothing.
-        //
-        // What *will* have a layout is `manifest::to_json`, which exists
-        // precisely to satisfy these rules. So when the only complaints are
-        // layout ones, re-validate the bytes that are actually going to be
-        // written. Found by the first spec to carry `php.extensions` — every
-        // caller before the compose importer happened to omit them.
-        const LAYOUT_ONLY: [&str; 2] = ["W-01", "C-04"];
-        if m.errors
-            .iter()
-            .all(|e| LAYOUT_ONLY.contains(&e.code.as_str()))
-        {
-            let canonical = manifest::to_json(&m);
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&canonical) {
-                let rechecked = manifest::normalize(&parsed, &canonical, expected_name);
-                if rechecked.valid {
-                    return Ok(rechecked);
-                }
-            }
-        }
-
         return Err(
             Error::new(Code::InvalidManifest, "the project definition is not valid")
                 .with_details(serde_json::json!({ "errors": m.errors })),
@@ -2836,8 +3079,12 @@ fn parse_spec(value: &serde_json::Value, expected_name: &str) -> Result<Manifest
 
 #[tauri::command]
 pub fn project_validate(name: String, spec: serde_json::Value) -> Result<serde_json::Value> {
-    let raw = serde_json::to_string_pretty(&spec)?;
-    let m = manifest::normalize(&spec, &raw, &name);
+    // The same rule as `parse_spec`: layout is judged on the bytes that would
+    // be written, not on a pretty-printed `Value` whose keys `serde_json` has
+    // sorted. Otherwise the New Project sheet reports W-01 against every PHP
+    // spec that carries extensions — and its Create button stays disabled for
+    // a project that `project_create` would have accepted.
+    let m = manifest::normalize_spec(&spec, &name);
 
     // Also pre-flight the extension list, so a bad name is caught here rather
     // than minutes into a Docker build.
@@ -2866,11 +3113,17 @@ pub async fn project_create(
     spec: serde_json::Value,
 ) -> Result<String> {
     let root = state.root()?;
-    let name = spec
-        .get("name")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| Error::new(Code::InvalidInput, "`name` is required"))?
-        .to_string();
+    // Canonicalised before anything is created: the directory, the manifest's
+    // `name` and the image reference have to be the same string, and only one
+    // of the three is allowed capitals. See `workspace::canonical_name`.
+    let name = workspace::canonical_name(
+        spec.get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| Error::new(Code::InvalidInput, "`name` is required"))?,
+    );
+
+    let mut spec = spec;
+    spec["name"] = serde_json::json!(name);
 
     let m = parse_spec(&spec, &name)?;
     let dir = workspace::project_dir(&root, &name)?;
@@ -2924,7 +3177,106 @@ pub async fn project_create(
         }
     }
 
+    // Resolvable, then trusted. Everything else creation needs is generated
+    // in-process; these two were the steps left to the README and to a trip
+    // through Settings.
+    if outcome.is_ok() {
+        sync_project_host(&app, m.domain.as_deref()).await;
+        sync_certificate(&app, &state, &root).await;
+    }
+
     outcome.map(|_| operation_id)
+}
+
+/// Make a new project's domain resolve, the moment the project exists.
+///
+/// The counterpart of `sync_service_host`, and the same argument: routing was
+/// written and the container was ready, but the name went nowhere, so the
+/// browser answered `ERR_NAME_NOT_RESOLVED` for a project the app had just
+/// reported as created. Everything else creation needs — the Dockerfile, the
+/// compose entry, the Traefik labels — is generated in-process; this was the
+/// one step left to the README.
+///
+/// Only when the line is actually missing. Every hosts write shows the system's
+/// authentication prompt, and asking for a password to write something already
+/// there is the kind of prompt people learn to click through.
+///
+/// Never fatal, and deliberately not part of the create transaction: the
+/// project is on disk and generated either way, a rollback here would delete
+/// work over a file the user can also fix from the Domains pane, and refusing
+/// the password prompt is a choice, not a failure.
+async fn sync_project_host(app: &AppHandle, domain: Option<&str>) {
+    let Some(domain) = domain.filter(|d| hosts::is_valid_domain(d)) else {
+        return;
+    };
+
+    let configured = hosts::status_for(std::slice::from_ref(&domain.to_string()))
+        .first()
+        .is_some_and(|e| e.configured);
+    if configured {
+        return;
+    }
+
+    match hosts::apply(&[domain.to_string()], &[]) {
+        Ok(plan) => events::emit(
+            app,
+            "hosts:changed",
+            serde_json::json!({ "added": plan.add, "removed": plan.remove }),
+        ),
+        Err(e) => {
+            tracing::warn!(domain = %domain, error = %e.message, "hosts entry not written")
+        }
+    }
+}
+
+/// Make the certificate describe the workspace as it is now.
+///
+/// Called after a project appears and after one goes away, because both change
+/// the answer. A new domain that resolves and routes but is not on the
+/// certificate is a full-page browser interstitial, and the fix was a trip to
+/// Settings → Certificates to press Reissue — a step the app knew was needed
+/// the moment the manifest was written, and made the user discover. A deleted
+/// project leaves the opposite: a name the certificate still vouches for that
+/// nothing serves.
+///
+/// `certs::plan` already answers "does this need reissuing" — new names, stale
+/// names, expired, missing — so this asks it rather than deciding again. When
+/// nothing changed, nothing runs: every reissue rewrites the key pair and makes
+/// Traefik reread it, and the common case (`shop.<suffix>`, already inside the
+/// wildcard) changes nothing at all.
+///
+/// `install_ca: false`, deliberately. Issuing writes inside the workspace and
+/// needs nothing; installing the CA touches four system trust stores and can
+/// raise an authentication prompt, which is a once-per-machine setup step the
+/// requirements gate owns and not something to spring on someone who pressed
+/// Create. Never fatal for the same reason as the hosts entry.
+async fn sync_certificate(app: &AppHandle, state: &AppState, root: &std::path::Path) {
+    // The same guard `cert_apply` takes, for the same reason: two reissues at
+    // once write one pair of files from two argument lists. A reissue already
+    // running is not worth queueing behind — the Certificates pane reports
+    // whatever it leaves behind.
+    let Ok(_busy) = state.inflight.acquire("certs") else {
+        tracing::warn!("a reissue was already running; certificate left alone");
+        return;
+    };
+
+    match certs::plan(root, false).await {
+        Ok(plan) if !plan.changed => return,
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!(error = %e.message, "certificate not reissued");
+            return;
+        }
+    }
+
+    match certs::apply(root, false).await {
+        Ok(plan) => events::emit(
+            app,
+            "certs:changed",
+            serde_json::json!({ "added": plan.add, "removed": plan.remove }),
+        ),
+        Err(e) => tracing::warn!(error = %e.message, "certificate not reissued"),
+    }
 }
 
 // ------------------------------------------------------- adopting a folder
@@ -2941,13 +3293,36 @@ pub fn project_adoptable(state: State<'_, AppState>) -> Result<Vec<detect::Adopt
 /// The counterpart of `project_create`, which requires the directory to be
 /// absent. Nothing here writes application files: the code is already there,
 /// and the only thing missing is the manifest that makes StackVo see it.
+/// What adoption asks the user for, because detection cannot answer it.
+///
+/// Each field replaces one value in the detected spec; an absent field leaves
+/// detection's answer alone. Not a partial `ProjectSpec`: a spec passed whole
+/// *replaces* detection, which is the right thing for an importer and the
+/// wrong thing for a form that only means to change the PHP version.
+///
+/// Why these four. The domain is a choice — detection can say "this is
+/// Laravel, its document root is public", never that the user wanted
+/// `shop.loc`. The other three are the scaffolding gap: a `composer.json`
+/// states the PHP version the framework *needs* (`"php": "^8.3"`), read as an
+/// answer it pins a brand-new Laravel to the floor of its own range; nothing
+/// in a checkout names a web server; and detection has no opinion at all about
+/// extensions, so an adopted project got the generator's seven-entry fallback.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdoptOverrides {
+    pub domain: Option<String>,
+    pub php_version: Option<String>,
+    pub server: Option<String>,
+    pub extensions: Option<Vec<String>>,
+}
+
 #[tauri::command]
 pub async fn project_adopt(
     app: AppHandle,
     state: State<'_, AppState>,
     name: String,
     spec: Option<serde_json::Value>,
-    domain: Option<String>,
+    overrides: Option<AdoptOverrides>,
 ) -> Result<String> {
     let root = state.root()?;
     let dir = workspace::project_dir(&root, &name)?;
@@ -2974,12 +3349,24 @@ pub async fn project_adopt(
         None => detected_spec(&name, &detect::detect(&dir)),
     };
 
-    // The domain is the one field detection cannot answer. It reads the code
-    // and can say "this is Laravel, its document root is public"; it has no
-    // way to know the user wanted `shop.loc` rather than `<directory>.loc`.
-    // So it is an override on top of detection, not a replacement for it.
-    if let Some(domain) = domain.filter(|d| !d.trim().is_empty()) {
+    // Overrides on top of detection, not a replacement for it: everything the
+    // installed code can answer for itself still comes from the code.
+    let overrides = overrides.unwrap_or_default();
+    if let Some(domain) = overrides.domain.filter(|d| !d.trim().is_empty()) {
         spec["domain"] = serde_json::json!(domain.trim());
+    }
+    // Only onto a PHP project. A Node template carrying a stale PHP version
+    // from a form the user never saw would be a second runtime block (W-02).
+    if spec.get("php").is_some() {
+        if let Some(server) = overrides.server.filter(|s| !s.trim().is_empty()) {
+            spec["server"] = serde_json::json!(server.trim());
+        }
+        if let Some(version) = overrides.php_version.filter(|v| !v.trim().is_empty()) {
+            spec["php"]["version"] = serde_json::json!(version.trim());
+        }
+        if let Some(extensions) = overrides.extensions {
+            spec["php"]["extensions"] = serde_json::json!(extensions);
+        }
     }
     let m = parse_spec(&spec, &name)?;
 
@@ -3006,6 +3393,12 @@ pub async fn project_adopt(
                 SubjectEvent::project(&name).error(e.message.clone()),
             );
         }
+    }
+
+    // An adopted project is reached by name exactly like a created one.
+    if outcome.is_ok() {
+        sync_project_host(&app, m.domain.as_deref()).await;
+        sync_certificate(&app, &state, &root).await;
     }
 
     outcome.map(|_| operation_id)
@@ -3056,11 +3449,25 @@ fn detected_spec(name: &str, detected: &detect::Detected) -> serde_json::Value {
     spec
 }
 
-/// Delete a project.
+/// Delete a project, and everything the app made because of it.
 ///
 /// `remove_files` defaults to FALSE and must be opted into explicitly. The web
 /// UI's deleteProject() removed the directory outright — a desktop app deleting
 /// someone's source code needs a deliberate second step, not a default.
+///
+/// That flag guards **the user's code and nothing else**. Everything else here
+/// exists only because the project did, and a deleted project used to leave all
+/// of it behind: a stopped `stackvo-<name>` container, a two-gigabyte
+/// `stackvo-<name>` image, its rendered Dockerfile under `generated/projects/`,
+/// its log directory, its `/etc/hosts` line and its name on the certificate.
+/// None of that is recoverable value — it is the debris of something that no
+/// longer exists, and the user has to find it in `docker images` to know it is
+/// there.
+///
+/// Docker-side cleanup is best effort by design: the engine being down is a
+/// perfectly good moment to stop managing a project, and refusing to delete
+/// until Docker comes back would make a stopped daemon into a lock. What fails
+/// is logged and named, never silent.
 #[tauri::command]
 pub async fn project_delete(
     app: AppHandle,
@@ -3075,14 +3482,59 @@ pub async fn project_delete(
     }
     let _busy = state.inflight.acquire(format!("project:{name}"))?;
 
+    // Read before anything is removed: the domain is in the manifest, and the
+    // hosts line and the certificate are both keyed by it. Absent or
+    // unreadable, those two steps are simply skipped — a project whose
+    // manifest is already gone has no domain to clean up after.
+    let domain = manifest::read(&dir.join("stackvo.json"), &name)
+        .ok()
+        .and_then(|m| m.domain);
+
     let operation_id = events::next_operation_id("delete");
     events::emit(&app, "project:deleting", SubjectEvent::project(&name));
 
     let outcome = async {
-        let _ = engine::stop_container(&name).await;
+        remove_project_containers(&name).await;
+
+        match engine::remove_project_images(&name).await {
+            Ok(removed) if !removed.is_empty() => {
+                tracing::info!(project = %name, images = ?removed, "project images removed")
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(project = %name, error = %e.message, "project images not removed")
+            }
+        }
+
+        // The build cache the image was holding, now that the image is gone.
+        //
+        // Dangling, not all. Docker offers no per-project handle on the build
+        // cache — the filters are `until`, `id`, `parent`, `type` — so the way
+        // to reclaim one project's cache is to delete its image and then
+        // collect what nothing references any more, which is what this does.
+        //
+        // The rest is not this project's to take. Every StackVo project image
+        // starts from the same PHP base and runs the same extension installs,
+        // so most of those layers are one cache shared by every project on the
+        // machine; `BuildCache::All` here would charge the projects the user
+        // kept for the one they deleted. That level exists, deliberately, in
+        // the prune panel where its cost can be stated before it is paid.
+        match engine::prune(false, false, engine::BuildCache::Dangling).await {
+            Ok(report) if report.space_reclaimed > 0 => tracing::info!(
+                project = %name,
+                records = report.caches_deleted,
+                bytes = report.space_reclaimed,
+                "orphaned build cache reclaimed"
+            ),
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(project = %name, error = %e.message, "build cache not pruned")
+            }
+        }
 
         if remove_files.unwrap_or(false) {
-            std::fs::remove_dir_all(&dir)
+            remove_project_dir(&dir)
+                .await
                 .map_err(|e| Error::io("removing the project directory", e))?;
         } else {
             // Keep the source; drop only the manifest, which is what makes
@@ -3091,6 +3543,20 @@ pub async fn project_delete(
             if manifest_path.exists() {
                 std::fs::remove_file(&manifest_path)
                     .map_err(|e| Error::io("removing stackvo.json", e))?;
+            }
+        }
+
+        // App-owned output, removed either way. `remove_files` is about the
+        // user's code; a rendered Dockerfile and a container log directory for
+        // a project that no longer exists are neither code nor the user's.
+        for output in [
+            root.join("generated/projects").join(&name),
+            root.join("logs/projects").join(&name),
+        ] {
+            if output.is_dir() {
+                if let Err(e) = remove_project_dir(&output).await {
+                    tracing::warn!(path = %output.display(), error = %e, "generated output not removed");
+                }
             }
         }
 
@@ -3107,7 +3573,110 @@ pub async fn project_delete(
         ),
     }
 
+    // The two the rest of the machine shares. Both run on success only: a
+    // failed delete leaves the project in place, and taking its name out of
+    // the hosts file would make the project it did not delete unreachable.
+    if outcome.is_ok() {
+        drop_project_host(&app, domain.as_deref()).await;
+        sync_certificate(&app, &state, &root).await;
+    }
+
     outcome.map(|_| operation_id)
+}
+
+/// Every container this project owns: the web one, its worker sidecars, and a
+/// tunnel if one was ever opened.
+///
+/// Stop-only was the old behaviour, and a stopped container is still a name
+/// Docker will refuse to reuse, still a row in `docker ps -a`, and still the
+/// thing that makes recreating a project under the same name fail.
+async fn remove_project_containers(name: &str) {
+    let mut ids = vec![name.to_string(), crate::tunnel::container_id(name)];
+    ids.extend(
+        crate::worker::Kind::ALL
+            .iter()
+            .map(|kind| crate::worker::container_id(name, *kind)),
+    );
+
+    for id in ids {
+        if let Err(e) = engine::remove_container(&id).await {
+            tracing::warn!(container = %id, error = %e.message, "container not removed");
+        }
+    }
+}
+
+/// Take a deleted project's name back out of `/etc/hosts`.
+///
+/// The mirror of `sync_project_host`, and it inherits that function's one hard
+/// rule from `sync_service_host`: only lines StackVo wrote come back out. A
+/// line somebody added by hand stays, even for a project being deleted — a
+/// tool that removes entries it did not write is a tool nobody trusts with
+/// that file again.
+async fn drop_project_host(app: &AppHandle, domain: Option<&str>) {
+    let Some(domain) = domain.filter(|d| hosts::is_valid_domain(d)) else {
+        return;
+    };
+
+    let managed = hosts::mapped_domains()
+        .1
+        .contains(&domain.to_ascii_lowercase());
+    if !managed {
+        return;
+    }
+
+    match hosts::apply(&[], &[domain.to_string()]) {
+        Ok(plan) => events::emit(
+            app,
+            "hosts:changed",
+            serde_json::json!({ "added": plan.add, "removed": plan.remove }),
+        ),
+        Err(e) => {
+            tracing::warn!(domain = %domain, error = %e.message, "hosts entry not removed")
+        }
+    }
+}
+
+/// `remove_dir_all`, retried when the tree gains an entry while it is emptied.
+///
+/// Reported as `Directory not empty (os error 66)` deleting a project nothing
+/// was running. `remove_dir_all` reads a directory, unlinks what it read, then
+/// `rmdir`s it — and anything that writes into that directory in between makes
+/// the final `rmdir` fail. On macOS the usual author is Finder putting
+/// `.DS_Store` back into a folder it has open; an editor's swap file and an
+/// indexer do the same thing. Nothing is wrong with the deletion, it simply
+/// lost a race, and the second pass finds the directory almost empty.
+///
+/// Bounded, and only for the two errors that are actually races. A permission
+/// error — a `storage/` tree a container wrote as root, say — is a real refusal
+/// and is reported on the first attempt rather than three seconds later.
+async fn remove_project_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    use std::io::ErrorKind;
+    const ATTEMPTS: u32 = 3;
+
+    for attempt in 1..=ATTEMPTS {
+        let error = match std::fs::remove_dir_all(dir) {
+            Ok(()) => return Ok(()),
+            Err(e) => e,
+        };
+
+        let racy = matches!(
+            error.kind(),
+            ErrorKind::DirectoryNotEmpty | ErrorKind::ResourceBusy
+        );
+        if attempt == ATTEMPTS || !racy {
+            return Err(error);
+        }
+
+        tracing::warn!(
+            dir = %dir.display(),
+            attempt,
+            error = %error,
+            "the project directory gained an entry while it was being removed; retrying"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    }
+
+    unreachable!("the loop returns on the last attempt")
 }
 
 // ---------------------------------------------------------------- bulk + compose
@@ -3607,6 +4176,10 @@ pub async fn project_scaffold(
         )
     })?;
 
+    // Same canonicalisation as `project_create`, and for the same reason: the
+    // adoption that follows scaffolding keys off the directory this makes.
+    let name = workspace::canonical_name(&name);
+
     let _busy = state.inflight.acquire(format!("project:{name}"))?;
     let root = state.root()?;
     let dir = workspace::project_dir(&root, &name)?;
@@ -3864,7 +4437,12 @@ pub async fn tunnel_stop(state: State<'_, AppState>, name: String) -> Result<()>
 }
 
 /// Reclaim space from dangling images and — only when explicitly asked —
-/// unused volumes.
+/// unused volumes and the build cache.
+///
+/// `build_cache` defaults to `Keep`. `Dangling` is what a project deletion
+/// already does for itself; `All` is the one that reclaims the shared layers
+/// every project image is built on, and costs each of them a full rebuild.
+/// A level rather than a flag because those are two different bargains.
 ///
 /// Volumes are opt-in per call rather than a default, because the engine's
 /// "unused" means "not currently mounted": the database of a project that
@@ -3874,10 +4452,11 @@ pub async fn docker_prune(
     state: State<'_, AppState>,
     images: bool,
     volumes: bool,
+    build_cache: Option<engine::BuildCache>,
 ) -> Result<engine::PruneReport> {
     // One prune at a time: two concurrent passes double-report the same bytes.
     let _busy = state.inflight.acquire("prune")?;
-    engine::prune(images, volumes).await
+    engine::prune(images, volumes, build_cache.unwrap_or_default()).await
 }
 
 // ---------------------------------------------------------------- preferences
@@ -4342,7 +4921,21 @@ pub fn open_in_editor(state: State<'_, AppState>, path: String) -> Result<()> {
         .with_hint("Choose an editor in Settings, or open the folder manually."))
 }
 
-#[tauri::command]
+/// Ask the OS for a folder.
+///
+/// `(async)` is load-bearing, and its absence is what froze the window. Tauri
+/// runs a *synchronous* command on the main thread — there is no command
+/// threadpool for one, which is what the note here used to claim. On macOS the
+/// panel itself must run on the main thread too, so `blocking_pick_folder`
+/// schedules it there and blocks the caller until it closes: called from the
+/// main thread, that is the main thread waiting for work only the main thread
+/// can do. The panel still appeared, because AppKit runs it on a nested run
+/// loop, and everything behind it stopped drawing for as long as it was open.
+///
+/// The attribute moves the body onto a blocking task, which is the arrangement
+/// the plugin documents: block a worker, leave the main thread to draw the
+/// window and run the panel.
+#[tauri::command(async)]
 pub fn workspace_pick(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -4350,8 +4943,6 @@ pub fn workspace_pick(
 ) -> Result<Option<Workspace>> {
     use tauri_plugin_dialog::DialogExt;
 
-    // blocking_pick_folder must not run on the main thread on macOS; Tauri's
-    // command threadpool is already off it, so this is safe here.
     let picked = app.dialog().file().blocking_pick_folder();
 
     let Some(folder) = picked else {
@@ -4361,7 +4952,7 @@ pub fn workspace_pick(
         .into_path()
         .map_err(|e| Error::new(Code::IoError, format!("could not resolve the folder: {e}")))?;
 
-    let ws = workspace::set(&path)?;
+    let ws = workspace::set_projects(&path)?;
     if let Ok(mut cached) = state.workspace.lock() {
         *cached = ws.clone();
     }
@@ -4561,7 +5152,9 @@ pub fn render_generated(root: &std::path::Path) -> Result<Rendered> {
 
     // ---- per-project files ----
     let mut manifests: Vec<(String, crate::manifest::Manifest)> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(root.join("projects")) {
+    if let Some(entries) =
+        crate::workspace::projects_root(root).and_then(|p| std::fs::read_dir(p).ok())
+    {
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.is_dir() {
@@ -4634,7 +5227,13 @@ pub fn render_generated(root: &std::path::Path) -> Result<Rendered> {
         label: "docker-compose.projects.yml".into(),
         path: root.join("generated/docker-compose.projects.yml"),
         scope: "projects",
-        content: generator::render_compose_projects(&projects, &root.display().to_string()),
+        content: generator::render_compose_projects(
+            &projects,
+            &root.display().to_string(),
+            &crate::workspace::require_projects_root(root)?
+                .display()
+                .to_string(),
+        ),
     });
 
     // ---- the base compose (stackvo.yml) ----
@@ -4971,6 +5570,30 @@ mod tests {
     /// Every hosts write shows the system's password prompt, so the question
     /// this table answers is "does the user get asked". A toggle that would
     /// change nothing must not.
+    /// Deleting a project removes a populated tree, and says so honestly when
+    /// there is nothing to remove rather than retrying its way to a timeout.
+    #[tokio::test]
+    async fn removing_a_project_directory_clears_a_populated_tree() {
+        let dir = std::env::temp_dir().join(format!(
+            "stackvo-remove-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let nested = dir.join("vendor").join("laravel");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("composer.json"), "{}").unwrap();
+        // The entry that starts the race in the first place.
+        std::fs::write(dir.join(".DS_Store"), "").unwrap();
+
+        remove_project_dir(&dir).await.unwrap();
+        assert!(!dir.exists());
+
+        // A directory that is not there is not a race, so it fails at once
+        // with the reason rather than after three passes.
+        let missing = remove_project_dir(&dir).await.unwrap_err();
+        assert_eq!(missing.kind(), std::io::ErrorKind::NotFound);
+    }
+
     #[test]
     fn a_hosts_prompt_only_happens_when_the_file_would_change() {
         // Enabled and unresolvable: add it — otherwise the admin UI opens on
@@ -5086,5 +5709,101 @@ mod tests {
         assert!(!scope_includes("projects", "services"));
         assert!(scope_includes("services", "services"));
         assert!(!scope_includes("services", "projects"));
+    }
+
+    /// A command that waits for a person must not wait on the main thread.
+    ///
+    /// Tauri runs a synchronous command on the main thread; only `async fn` or
+    /// `#[tauri::command(async)]` moves it off. Two commands here blocked there
+    /// on something only a human could finish — the folder panel and the
+    /// administrator prompt — and both froze the window for exactly as long as
+    /// the person took. `workspace_pick` even carried a comment asserting the
+    /// opposite ("Tauri's command threadpool is already off it"), which is why
+    /// this is a test rather than a note: the belief was written down, and it
+    /// was wrong.
+    ///
+    /// Reads the source because the property is about the attribute, and the
+    /// attribute is invisible to anything else. The same trick `tray.rs` is
+    /// checked with in `app-shell.spec.js`.
+    #[test]
+    fn a_command_that_waits_for_a_person_is_not_on_the_main_thread() {
+        const SOURCE: &str = include_str!("commands.rs");
+
+        // Calls that do not return until somebody has clicked, typed or
+        // dismissed something. Not "slow" calls — slow is a different problem
+        // with a different fix, and listing them here would make this test a
+        // performance opinion instead of a correctness one.
+        const WAITS_FOR_A_PERSON: [&str; 3] = [
+            "blocking_pick_folder",
+            "blocking_pick_file",
+            // Elevation: `osascript … with administrator privileges` on macOS,
+            // `pkexec` on Linux. Both put up a password prompt and block.
+            "hosts::apply(",
+        ];
+
+        let mut offenders = Vec::new();
+
+        for block in SOURCE.split("#[tauri::command").skip(1) {
+            let Some((attribute, rest)) = block.split_once('\n') else {
+                continue;
+            };
+            // `(async)]` — anything else on that line is a plain command.
+            let off_main_thread =
+                attribute.contains("(async)") || rest.trim_start().starts_with("pub async fn");
+
+            let Some(name) = rest
+                .split_once("fn ")
+                .and_then(|(_, after)| after.split_once('('))
+                .map(|(n, _)| n.trim())
+            else {
+                continue;
+            };
+
+            // Two things end up in a segment that are not part of its body, and
+            // both were found by this test reporting `open_in_editor` for a
+            // call it does not make.
+            //
+            // The next command's doc comment: it sits *before* the attribute
+            // that terminates the segment, so prose about `blocking_pick_folder`
+            // lands in the previous command. Comments are dropped, which is
+            // right regardless — a call named in a sentence is not a call.
+            //
+            // And the test module, which trails the last command and holds the
+            // list below as string literals.
+            let body: String = block
+                .split("\n#[cfg(test)]")
+                .next()
+                .unwrap_or(block)
+                .lines()
+                .map(|line| match line.find("//") {
+                    Some(at) => &line[..at],
+                    None => line,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            for call in WAITS_FOR_A_PERSON {
+                if body.contains(call) && !off_main_thread {
+                    offenders.push(format!("{name} calls {call}"));
+                }
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "these block the main thread until a person acts — mark them \
+             #[tauri::command(async)]: {offenders:?}"
+        );
+
+        // A guard over an empty set passes for the wrong reason, and this one
+        // greps for strings that a refactor could rename out from under it.
+        let seen = WAITS_FOR_A_PERSON
+            .iter()
+            .filter(|call| SOURCE.contains(*call))
+            .count();
+        assert!(
+            seen >= 2,
+            "expected to be checking real calls, matched {seen} of the list"
+        );
     }
 }

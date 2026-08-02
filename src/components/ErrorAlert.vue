@@ -68,3 +68,15 @@ const detail = computed(() => {
     <div v-if="error.hint" class="text-caption mt-1 text-medium-emphasis">{{ error.hint }}</div>
   </v-alert>
 </template>
+
+<style scoped>
+/* Vuetify ships `.v-alert { flex: 1 1 }`, which is right for an alert laid out
+   in a row beside something else and wrong for every use here: each of these
+   sits in a `flex-direction: column` page body, so `flex-grow: 1` handed the
+   alert all the space the content below did not use. A two-line message about
+   a failed delete came out as a 300px red panel with the text floating in the
+   middle of it. The height of an alert should be the height of what it says. */
+.v-alert {
+  flex: 0 0 auto;
+}
+</style>

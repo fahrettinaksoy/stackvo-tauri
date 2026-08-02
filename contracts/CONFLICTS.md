@@ -93,6 +93,11 @@ selects everything in the UI loses **28** of them.
 **Decision.** `maxItems: 50` in the schema, enforced by the validator with an explicit error message
 naming the limit and its cause. Removed when the Rust generator lands.
 
+**Closed.** The Rust generator landed and the Bash CLI was deleted, so the window it protected no
+longer exists. `maxItems` is off the schema, the count check is out of `manifest::normalize` and
+`validate-contracts.mjs`, and `catalog.maxExtensions` is now the catalog's own length — selecting
+every extension is a supported (slow to build) choice rather than silent truncation.
+
 ---
 
 ## 🟠 C-05 — Two different "default extension sets"

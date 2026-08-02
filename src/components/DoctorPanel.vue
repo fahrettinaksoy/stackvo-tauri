@@ -38,6 +38,17 @@ const hostsOpen = ref(false);
 const pruneOpen = ref(false);
 const pruneImages = ref(true);
 const pruneVolumes = ref(false);
+/**
+ * Off by default, and a checkbox rather than a level, because only one of the
+ * two levels is a decision worth surfacing here.
+ *
+ * `dangling` already happens on its own — deleting a project reclaims the
+ * cache its image was holding. What is left is the shared part: every project
+ * image builds from the same PHP base and the same extension installs, so
+ * those layers are one cache serving all of them. Ticking this reclaims that,
+ * and every project's next build runs in full.
+ */
+const pruneBuildCache = ref(false);
 /** The last prune's outcome, shown until the next action. */
 const pruneResult = ref(null);
 
@@ -156,7 +167,11 @@ async function prune() {
   busy.value = 'prune';
   error.value = null;
   try {
-    pruneResult.value = await api.dockerPrune(pruneImages.value, pruneVolumes.value);
+    pruneResult.value = await api.dockerPrune(
+      pruneImages.value,
+      pruneVolumes.value,
+      pruneBuildCache.value ? 'all' : 'keep'
+    );
     pruneOpen.value = false;
     await load();
   } catch (e) {
@@ -433,6 +448,7 @@ onMounted(load);
           t('doctor.pruneResult', {
             images: pruneResult.imagesDeleted,
             volumes: pruneResult.volumesDeleted,
+            caches: pruneResult.cachesDeleted,
             size: bytes(pruneResult.spaceReclaimed),
           })
         }}
@@ -515,8 +531,19 @@ onMounted(load);
             })
           "
         />
+        <v-checkbox
+          v-model="pruneBuildCache"
+          density="compact"
+          hide-details
+          :label="t('doctor.pruneBuildCacheLabel')"
+        />
         <v-alert v-if="pruneVolumes" type="warning" variant="tonal" class="mt-3">
           <div class="text-caption">{{ t('doctor.pruneVolumesWarning') }}</div>
+        </v-alert>
+        <!-- Its own warning, for its own reason: this one costs no data, it
+             costs every project's next build. -->
+        <v-alert v-if="pruneBuildCache" type="warning" variant="tonal" class="mt-3">
+          <div class="text-caption">{{ t('doctor.pruneBuildCacheWarning') }}</div>
         </v-alert>
       </v-card-text>
 
@@ -526,7 +553,7 @@ onMounted(load);
         <v-btn
           color="primary"
           variant="flat"
-          :disabled="!pruneImages && !pruneVolumes"
+          :disabled="!pruneImages && !pruneVolumes && !pruneBuildCache"
           :loading="busy === 'prune'"
           @click="prune"
         >

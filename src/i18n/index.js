@@ -1,4 +1,5 @@
 import { createI18n } from 'vue-i18n';
+import { en as vuetifyEn, tr as vuetifyTr } from 'vuetify/locale';
 import tr from './locales/tr';
 import en from './locales/en';
 
@@ -15,7 +16,24 @@ export const i18n = createI18n({
   legacy: false,
   locale: initialLocale(),
   fallbackLocale: 'en',
-  messages: { tr, en },
+  /**
+   * Vuetify's own strings live under `$vuetify`, merged in here.
+   *
+   * `createVueI18nAdapter` makes Vuetify resolve its internal labels through
+   * this instance instead of its own locale store — so every one of them,
+   * `$vuetify.dismiss` for a snackbar's close button through
+   * `$vuetify.noDataText` for an empty table, became a lookup vue-i18n had no
+   * answer for. A missing key is returned verbatim, and the button's
+   * text-transform then shouted it: **$VUETIFY.DISMISS**.
+   *
+   * Taken from `vuetify/locale`, which ships both languages this app speaks,
+   * rather than written out here — these are the library's strings, not the
+   * app's, and the app's own files stay the only place its own copy lives.
+   */
+  messages: {
+    tr: { ...tr, $vuetify: vuetifyTr },
+    en: { ...en, $vuetify: vuetifyEn },
+  },
 });
 
 export async function setLocale(locale) {

@@ -415,6 +415,8 @@ mod tests {
         let dir = std::env::temp_dir().join("stackvo-xdebug-order-test");
         let project = dir.join("projects").join("shop");
         std::fs::create_dir_all(&project).unwrap();
+        crate::workspace::point_at_projects(&dir, &dir.join("projects")).unwrap();
+
         std::fs::create_dir_all(dir.join("generated")).unwrap();
 
         // The overlay may only name services the generator actually emitted,
@@ -460,6 +462,7 @@ mod tests {
         let project = dir.join("projects").join("shop");
         std::fs::create_dir_all(project.join(".stackvo")).unwrap();
         std::fs::create_dir_all(dir.join("generated")).unwrap();
+        crate::workspace::point_at_projects(&dir, &dir.join("projects")).unwrap();
 
         std::fs::write(
             dir.join("generated").join("docker-compose.projects.yml"),
@@ -513,6 +516,7 @@ mod tests {
         let shop = dir.join("projects").join("shop");
         std::fs::create_dir_all(&shop).unwrap();
         std::fs::create_dir_all(dir.join("generated")).unwrap();
+        crate::workspace::point_at_projects(&dir, &dir.join("projects")).unwrap();
 
         std::fs::write(
             dir.join("generated").join("docker-compose.projects.yml"),
@@ -558,6 +562,7 @@ mod tests {
         std::fs::create_dir_all(php.join(".stackvo")).unwrap();
         std::fs::create_dir_all(node.join(".stackvo")).unwrap();
         std::fs::create_dir_all(dir.join("generated")).unwrap();
+        crate::workspace::point_at_projects(&dir, &dir.join("projects")).unwrap();
 
         std::fs::write(
             dir.join("generated").join("docker-compose.projects.yml"),

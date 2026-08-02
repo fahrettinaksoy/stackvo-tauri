@@ -1214,12 +1214,24 @@ fn traefik_labels(project: &str, domain: &str, port: u16) -> String {
 /// `host_root` is the absolute path of the StackVo checkout on the host — it
 /// goes into the bind mounts verbatim, which is the one place the generated
 /// output is machine-specific.
-pub fn render_compose_service(project: &ComposeProject, host_root: &str) -> String {
+pub fn render_compose_service(
+    project: &ComposeProject,
+    host_root: &str,
+    projects_root: &str,
+) -> String {
     let name = project.name;
 
     // Blank lines carry trailing spaces for these three; see the doc comment.
+    //
+    // The PHP context stays relative: `./projects` resolves against the compose
+    // file's own directory, which is `generated/`, so it points at the
+    // Dockerfiles this app writes — app-owned, and unaffected by where the user
+    // keeps their code. Node's `../projects` did point at the user's tree,
+    // because its build needs the real source for `COPY . .`, so that one has
+    // to become the chosen path. Absolute rather than relative: there is no
+    // relative path from `generated/` to a directory on another volume.
     let (pad, context) = match project.runtime_server {
-        None => ("", "../projects"),
+        None => ("", projects_root),
         Some(Server::Nginx) | Some(Server::Apache) | Some(Server::Caddy) => ("    ", "./projects"),
         _ => ("", "./projects"),
     };
@@ -1230,9 +1242,18 @@ pub fn render_compose_service(project: &ComposeProject, host_root: &str) -> Stri
         _ => "latest".to_string(),
     };
 
+    // The image reference — and only that — is forced lower-case. Docker
+    // refuses `stackvo-Aksoyca:latest` with "repository name must be
+    // lowercase", which fails the build rather than the project, so a
+    // directory that already has capitals stays buildable. New projects never
+    // reach this branch: `workspace::canonical_name` settles the case before
+    // the directory exists. Identical output for a lower-case name, which is
+    // every name the differential fixtures carry.
+    let image = format!("stackvo-{}", name.to_ascii_lowercase());
+
     let mut out = String::new();
     out.push_str(&format!(
-        "  {name}:\n    profiles: [\"projects\", \"project-{name}\"]  # --projects for all, --profile project-{{name}} for this project only\n    build:\n      context: {context}/{name}\n      dockerfile: Dockerfile\n    image: stackvo-{name}:{tag}\n    container_name: \"stackvo-{name}\"\n    restart: unless-stopped\n{pad}\n"
+        "  {name}:\n    profiles: [\"projects\", \"project-{name}\"]  # --projects for all, --profile project-{{name}} for this project only\n    build:\n      context: {context}/{name}\n      dockerfile: Dockerfile\n    image: {image}:{tag}\n    container_name: \"stackvo-{name}\"\n    restart: unless-stopped\n{pad}\n"
     ));
 
     match project.runtime_server {
@@ -1255,7 +1276,7 @@ pub fn render_compose_service(project: &ComposeProject, host_root: &str) -> Stri
             };
 
             out.push_str(&format!(
-                "    volumes:\n      - {host_root}/projects/{name}:/var/www/html\n      - {host_root}/logs/projects/{name}:{log_target}\n{pad}\n"
+                "    volumes:\n      - {projects_root}/{name}:/var/www/html\n      - {host_root}/logs/projects/{name}:{log_target}\n{pad}\n"
             ));
             out.push_str(&format!("    networks:\n      - stackvo-net\n{pad}\n"));
 
@@ -1273,20 +1294,40 @@ pub fn render_compose_service(project: &ComposeProject, host_root: &str) -> Stri
 ///
 /// Services are emitted in name order, which is what the Bash generator's
 /// directory iteration produces.
-pub fn render_compose_projects(projects: &[ComposeProject], host_root: &str) -> String {
+///
+/// Two roots, because they are two different people's directories: `host_root`
+/// is the app's own, which holds the log trees it mounts, and `projects_root`
+/// is wherever the user keeps their code. They were the same path until the
+/// project tree became something you choose.
+pub fn render_compose_projects(
+    projects: &[ComposeProject],
+    host_root: &str,
+    projects_root: &str,
+) -> String {
     // Bind mounts carry host paths into Docker, which on Windows means
     // `C:\Users\me` has to become `/c/Users/me`. Identity everywhere else.
     let host_root = crate::paths::to_docker_mount(host_root);
     let host_root = host_root.as_str();
+    let projects_root = crate::paths::to_docker_mount(projects_root);
+    let projects_root = projects_root.trim_end_matches('/');
 
-    let mut out = String::from("name: stackvo\n\nservices:\n");
+    // Same null-versus-empty-mapping trap as the dynamic file, and this one is
+    // reachable on a fresh install rather than only after somebody switches
+    // everything off: a workspace with no projects yet rendered `services:`
+    // with nothing under it, so the first press of "start everything" answered
+    // "services must be a mapping".
+    let mut out = String::from(if projects.is_empty() {
+        "name: stackvo\n\nservices: {}\n"
+    } else {
+        "name: stackvo\n\nservices:\n"
+    });
 
     let mut sorted: Vec<&ComposeProject> = projects.iter().collect();
     sorted.sort_by_key(|p| p.name);
 
     for project in sorted {
         out.push('\n');
-        out.push_str(&render_compose_service(project, host_root));
+        out.push_str(&render_compose_service(project, host_root, projects_root));
     }
 
     out.push_str("\n\nnetworks:\n  stackvo-net:\n    external: true\n");
@@ -1402,6 +1443,20 @@ pub fn render_traefik_routes(opts: &TraefikOptions) -> String {
     let mut out = format!(
         "http:\n  routers:\n    traefik:\n      rule: \"Host(`traefik.{tld}`)\"\n      entryPoints:\n        - websecure\n      service: api@internal\n      tls: {{}}\n"
     );
+
+    // The bare suffix. Everything was already in place for it — the wildcard
+    // certificate carries `<suffix>` as its own SAN, the hosts entry is one of
+    // the two the app blocks on — except a router, so `https://stackvo.loc/`
+    // reached Traefik and got a 404. Nothing on the machine said why.
+    //
+    // Pointed at the dashboard because that is what exists to point at: the
+    // containerised web UI that used to live here was retired in Sprint 19 and
+    // the stack serves no static content of its own. Two names for one page is
+    // a smaller surprise than a name that resolves, presents a valid
+    // certificate and then says not found.
+    out.push_str(&format!(
+        "    root:\n      rule: \"Host(`{tld}`)\"\n      entryPoints:\n        - websecure\n      service: api@internal\n      tls: {{}}\n"
+    ));
 
     for (service, _) in TRAEFIK_ROUTED {
         if !opts.enabled(service) {
@@ -1652,9 +1707,45 @@ mod tests {
         assert_eq!(projects[0].node_port, Some(8080));
 
         // And the rendered block publishes the app port to Traefik.
-        let service = render_compose_service(&projects[0], "/x");
+        let service = render_compose_service(&projects[0], "/x", "/code");
         assert!(service.contains("loadbalancer.server.port=8080"));
         assert!(service.contains("PORT: 8080"));
+
+        // A Node image is built from the source, so its context has to be the
+        // directory the user actually keeps it in — not a path under the app's
+        // own root, which is where `../projects` pointed when there was one
+        // root and would still point now that there are two.
+        assert!(
+            service.contains("context: /code/"),
+            "the node build context did not follow the project tree: {service}"
+        );
+    }
+
+    #[test]
+    fn an_adopted_directory_with_capitals_still_yields_a_legal_image_reference() {
+        // Docker refuses `stackvo-Aksoyca:latest` outright — "repository name
+        // must be lowercase" — which fails the build, not the manifest. New
+        // projects are canonicalised before the directory exists; an adopted
+        // folder keeps its name, so only the image reference gives way.
+        let mut m = php_manifest("nginx");
+        m.name = "Aksoyca".into();
+        m.domain = Some("aksoyca.loc".into());
+
+        let manifests = vec![("Aksoyca".to_string(), m)];
+        let projects = compose_projects_from(&manifests);
+        let service = render_compose_service(&projects[0], "/x", "/code");
+
+        assert!(
+            service.contains("image: stackvo-aksoyca:latest"),
+            "{service}"
+        );
+        // Everything Docker allows a capital in keeps the directory's spelling,
+        // because that is what the container is found by.
+        assert!(
+            service.contains("container_name: \"stackvo-Aksoyca\""),
+            "{service}"
+        );
+        assert!(service.contains("context: ./projects/Aksoyca"), "{service}");
     }
 
     #[test]

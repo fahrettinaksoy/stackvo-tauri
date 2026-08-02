@@ -25,8 +25,19 @@ const hostsFixFor = ref(null);
 const deleteTarget = ref(null);
 const deleteFiles = ref(false);
 
-/** Projects whose manifest changed on disk since the list was loaded. */
-const staleManifests = ref(new Set());
+/*
+ * There is no `staleManifests` set any more, and that is the point.
+ *
+ * The badge used to be an accumulator: every `manifest:changed` the watcher
+ * emitted added a name, and only a successful regenerate took one out. The
+ * watcher cannot tell whose write it saw, so creating a project — the app
+ * writing `stackvo.json`, then regenerating from it — added the name and
+ * nothing removed it. The badge appeared on every new project and stayed.
+ *
+ * It reads `item.generatedStale` now, which the backend measures from the
+ * manifest's timestamp against the generated output's. A watcher event only
+ * triggers a reload; the answer comes from the files.
+ */
 
 /**
  * Rows grouped by parent domain, but only where a parent means something.
@@ -159,6 +170,18 @@ async function openTerminal(project) {
   }
 }
 
+/**
+ * Run a row action with the row marked busy.
+ *
+ * On success the flag is left for the event stream to clear, which is what
+ * keeps the row honest when something else acts on the project — another
+ * window, the watcher, a container that stopped on its own.
+ *
+ * That only works if `fn` runs a command whose events carry **the project's
+ * own name** as their subject. Start, stop, restart, build and delete all do.
+ * A command that reports under something else has to clear the flag itself —
+ * see `regenerate`.
+ */
 async function act(project, fn) {
   actionError.value = null;
   ops.markBusy(project.name, true);
@@ -177,9 +200,34 @@ async function confirmDelete() {
   deleteFiles.value = false;
 }
 
+/**
+ * Re-render the generated tree after a manifest changed underneath us.
+ *
+ * Not `act`, and the reason is the subject. `generate_run` reports under the
+ * SCOPE it was handed — every one of its events carries `"projects"` — so the
+ * flag `act` sets under the project's name has nothing coming to clear it. The
+ * regenerate finished, said so, and the row's button spun for ever.
+ *
+ * Cleared in `finally` here instead, which is sound because `generate_run`
+ * awaits the whole render before it resolves: the promise settling means the
+ * files are written, not that the work was accepted.
+ *
+ * The badge needs no clearing. It is `item.generatedStale`, measured from the
+ * files, so reloading the list after a successful render is what turns it off
+ * — and a render that failed leaves it on, which is correct and used not to
+ * be: `act` swallows the error, so the marker came off either way.
+ */
 async function regenerate(project) {
-  await act(project, () => api.generateRun('projects'));
-  staleManifests.value = new Set([...staleManifests.value].filter((n) => n !== project.name));
+  actionError.value = null;
+  ops.markBusy(project.name, true);
+  try {
+    await api.generateRun('projects');
+    await inventory.loadProjects();
+  } catch (e) {
+    actionError.value = e;
+  } finally {
+    ops.markBusy(project.name, false);
+  }
 }
 
 /**
@@ -297,10 +345,11 @@ onMounted(async () => {
 
   // The watcher reports a manifest change; it does not regenerate. Rebuilding a
   // container under someone who is mid-edit is worse than the staleness.
-  const offManifest = await listenAll(['manifest:changed'], (_name, payload) => {
-    staleManifests.value = new Set([...staleManifests.value, payload.project]);
-    inventory.loadProjects();
-  });
+  //
+  // The event is a nudge to look again, not the answer: whether the project is
+  // actually behind its generated output is `generatedStale`, which the reload
+  // brings back with the row.
+  const offManifest = await listenAll(['manifest:changed'], () => inventory.loadProjects());
 
   const offHosts = await listenAll(['hosts:changed'], () => inventory.loadProjects());
 
@@ -639,7 +688,7 @@ onUnmounted(() => teardown?.());
               </div>
             </v-tooltip>
 
-            <v-tooltip v-if="staleManifests.has(item.name)" location="top">
+            <v-tooltip v-if="item.generatedStale" location="top">
               <template #activator="{ props }">
                 <v-icon v-bind="props" color="info" size="small" @click.stop="regenerate(item)"
                   >mdi-sync-alert</v-icon
@@ -777,11 +826,44 @@ onUnmounted(() => teardown?.());
           </v-btn>
         </template>
 
+        <!-- Two empty states, not one.
+             "Nothing here yet" and "nothing matched what you typed" are
+             different situations with different next moves, and a single
+             centred sentence answered neither: on a first run it named the
+             problem and offered nothing, and after a typo it implied the
+             projects were gone. Each now carries the action that resolves it. -->
         <template #no-data>
-          <div class="pa-8 text-center text-medium-emphasis">
-            <v-icon size="32" class="mb-2">mdi-folder-off-outline</v-icon>
-            <div>{{ t('projects.empty') }}</div>
-          </div>
+          <v-empty-state
+            v-if="search"
+            icon="mdi-magnify-close"
+            :title="t('projects.noMatch')"
+            :text="t('projects.noMatchText', { term: search })"
+          >
+            <template #actions>
+              <v-btn variant="tonal" prepend-icon="mdi-close" @click="search = ''">
+                {{ t('projects.clearSearch') }}
+              </v-btn>
+            </template>
+          </v-empty-state>
+
+          <v-empty-state
+            v-else
+            icon="mdi-folder-plus-outline"
+            :title="t('projects.empty')"
+            :text="t('projects.emptyText')"
+          >
+            <template #actions>
+              <v-btn
+                color="primary"
+                variant="flat"
+                prepend-icon="mdi-plus"
+                :disabled="!app.hasWorkspace"
+                @click="app.newProjectOpen = true"
+              >
+                {{ t('newProject.title') }}
+              </v-btn>
+            </template>
+          </v-empty-state>
         </template>
 
         <template #bottom />
@@ -802,7 +884,10 @@ onUnmounted(() => teardown?.());
           </v-card-title>
         </v-card-item>
         <v-card-text>
-          <p class="text-body-2 mb-3">{{ t('newProject.deleteBody') }}</p>
+          <p class="text-body-2 mb-1">{{ t('newProject.deleteBody') }}</p>
+          <!-- The rest of what goes, named. A dialog that says only "your
+               source files stay" reads as a promise that nothing else moves. -->
+          <p class="text-caption text-medium-emphasis mb-3">{{ t('newProject.deleteAlso') }}</p>
           <v-checkbox
             v-model="deleteFiles"
             :label="t('newProject.deleteFiles')"

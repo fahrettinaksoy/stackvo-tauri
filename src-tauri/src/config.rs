@@ -135,8 +135,22 @@ pub const EMBEDDED: [(&str, &str); 139] = [
     ("SERVICE_MAILPIT_ENABLE", "false"),
     ("SERVICE_MAILPIT_VERSION", "latest"),
     ("SERVICE_MARIADB_DATABASE", "stackvo"),
-    ("SERVICE_MYSQL_ENABLE", "true"),
-    ("SERVICE_REDIS_ENABLE", "true"),
+    // Every service ships switched off, this one included.
+    //
+    // MySQL, Redis, phpMyAdmin and RabbitMQ used to default on, inherited from
+    // the `.env.example` of the project this replaced. Nothing on disk said so
+    // — the value is compiled in — so deleting the workspace and every Docker
+    // resource still produced a Services page with four entries marked
+    // enabled, and no file to point at.
+    //
+    // It is also the rule mailpit was already following, for a reason worth
+    // generalising: a stack that arrives with things already on never reaches
+    // the offer to turn them on, and the feature that makes the offer looks
+    // like it does nothing. And "enabled" is not "running", so four rows read
+    // ENABLED beside a header counting `0 / 21` — a distinction nobody should
+    // have to learn from a contradiction.
+    ("SERVICE_MYSQL_ENABLE", "false"),
+    ("SERVICE_REDIS_ENABLE", "false"),
     ("SERVICE_MARIADB_ENABLE", "false"),
     ("SERVICE_MARIADB_VERSION", "10.6"),
     ("SERVICE_MEMCACHED_ENABLE", "false"),
@@ -162,7 +176,7 @@ pub const EMBEDDED: [(&str, &str); 139] = [
     ("SERVICE_PHPCACHEADMIN_MEMCACHED_PORT", "11211"),
     ("SERVICE_PHPCACHEADMIN_REDIS_PORT", "6379"),
     ("SERVICE_PHPCACHEADMIN_VERSION", "latest"),
-    ("SERVICE_PHPMYADMIN_ENABLE", "true"),
+    ("SERVICE_PHPMYADMIN_ENABLE", "false"),
     ("SERVICE_PHPMYADMIN_HOST_PORT", "8081"),
     ("SERVICE_PHPMYADMIN_PORT", "3306"),
     ("SERVICE_PHPMYADMIN_VERSION", "latest"),
@@ -171,7 +185,7 @@ pub const EMBEDDED: [(&str, &str); 139] = [
     ("SERVICE_POSTGRES_USER", "stackvo"),
     ("SERVICE_POSTGRES_VERSION", "14"),
     ("SERVICE_RABBITMQ_DEFAULT_USER", "admin"),
-    ("SERVICE_RABBITMQ_ENABLE", "true"),
+    ("SERVICE_RABBITMQ_ENABLE", "false"),
     ("SERVICE_RABBITMQ_VERSION", "3"),
     ("SERVICE_REDIS_VERSION", "7.0"),
     // Ports and starting credentials, so a workspace ships no `.env` content at

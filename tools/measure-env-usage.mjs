@@ -25,7 +25,9 @@ const argv = process.argv.slice(2);
 const fix = argv.includes('--fix');
 const rootFlag = argv.indexOf('--root');
 const ROOT = resolve(
-  rootFlag !== -1 ? argv[rootFlag + 1] : process.env.STACKVO_ROOT || join(HERE, '..', '..', 'stackvo')
+  rootFlag !== -1
+    ? argv[rootFlag + 1]
+    : process.env.STACKVO_ROOT || join(HERE, '..', '..', 'stackvo')
 );
 
 if (!existsSync(join(ROOT, 'core'))) {
@@ -39,7 +41,8 @@ if (!existsSync(join(ROOT, 'core'))) {
  * source and a text search cannot find them. Declared rather than measured.
  */
 const DYNAMIC = /^SUPPORTED_LANGUAGES_(PHP|PYTHON|GO|RUBY|RUST|NODEJS)_/;
-const DYNAMIC_CONSUMER = 'core/ui/server/routes/supported-languages.js (built from a template string)';
+const DYNAMIC_CONSUMER =
+  'core/ui/server/routes/supported-languages.js (built from a template string)';
 
 /** Every file under core/, minus the noise. */
 function sources(dir, acc = []) {
@@ -113,7 +116,11 @@ if (!mismatches.length) {
 }
 
 for (const m of mismatches) {
-  console.log(`  ${m.key.padEnd(36)} labelled ${m.labelled}, measured ${m.measured} (${m.count} files)`);
+  console.log(
+    `  ${m.key.padEnd(36)} labelled ${m.labelled}, measured ${m.measured} (${m.count} files)`
+  );
 }
-console.log(`\n  ${mismatches.length} mismatch(es)${fix ? ' — schema updated' : ' — rerun with --fix to update the schema'}\n`);
+console.log(
+  `\n  ${mismatches.length} mismatch(es)${fix ? ' — schema updated' : ' — rerun with --fix to update the schema'}\n`
+);
 process.exit(fix ? 0 : 1);

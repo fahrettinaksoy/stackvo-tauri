@@ -1,5 +1,13 @@
 # Competitive analysis — where StackVo Desktop stands
 
+> **2026-08-01 itibarıyla boşluk tespiti için geçerliliğini yitirdi.** Bu
+> dokümandaki her madde ya teslim edildi ya da kararla kapatıldı; artık bir
+> kuyruk değil, *ne yapıldığının kaydı*. Güncel boşluk listesi
+> [competitive-gaps-2026-08.md](competitive-gaps-2026-08.md) — on ürüne karşı
+> ölçüldü, bu dokümanın atladığı ve sahadaki mimari olarak en yakın rakip olan
+> **DDEV** dahil. Aşağıdaki §8 kendi kapsamı hakkında hâlâ doğru; yalnızca
+> yol haritasının tamamı değil.
+
 Nine competing local development environment managers, read against StackVo's actual surface.
 The point is not a feature count. It is to decide which gaps are worth closing, in what order,
 and which are traps.

@@ -87,10 +87,21 @@ const SERVERS = ['nginx', 'apache', 'caddy', 'frankenphp', 'swoole'];
 
 // ---------------------------------------------------------------- load contracts
 
-if (!existsSync(STACKVO_ROOT)) {
-  console.error(`stackvo checkout not found at ${STACKVO_ROOT}\nPass --root <path>.`);
-  process.exit(2);
-}
+/**
+ * Suites A–D read a workspace; E and F read this repository.
+ *
+ * This used to exit(2) when there was no workspace, which took E and F down
+ * with it — and those are the two that check the IPC contract against the Rust
+ * registry and the JS wrappers, i.e. the only suites that can catch a command
+ * added to one side and not the other. Once the Bash CLI was retired there was
+ * no reason for a developer to have a checkout at all, so the answer to "is the
+ * contract still consistent" became "cannot run" on a normal machine.
+ *
+ * A missing workspace is now a stated fact rather than a stop: A–D see an empty
+ * env and no manifests, which is exactly what they see for an empty workspace,
+ * and report nothing.
+ */
+const HAVE_WORKSPACE = existsSync(STACKVO_ROOT);
 
 const phpExt = readJson(join(CONTRACTS, 'php-extensions.json'));
 const envSchema = readJson(join(CONTRACTS, 'env.schema.json'));
@@ -297,15 +308,8 @@ for (const dir of projectDirs) {
         if (!Array.isArray(exts)) {
           err('A', subject, 'INVALID_EXTENSIONS', '`php.extensions` must be an array');
         } else {
-          // C-04: the grep -A 50 window
-          if (exts.length > 50)
-            err(
-              'A',
-              subject,
-              'C-04',
-              `${exts.length} extensions — the Bash parser reads only 50 lines past the marker, so ${exts.length - 50} will be SILENTLY DROPPED`
-            );
-
+          // No count limit: C-04's `grep -A 50` window went out with the Bash
+          // extractor, and the Rust generator installs whatever is listed.
           const seen = new Set();
           for (const e of exts) {
             if (typeof e !== 'string') {
@@ -369,17 +373,7 @@ for (const dir of projectDirs) {
                 'A',
                 subject,
                 'W-01',
-                'keys appear after `php.extensions` — the Bash extractor swallows the next 50 lines of quoted tokens as extension names'
-              );
-
-            const linesAfter =
-              raw.slice(marker, close === -1 ? undefined : close).split('\n').length - 1;
-            if (linesAfter > 50)
-              err(
-                'A',
-                subject,
-                'C-04',
-                `the extensions array spans ${linesAfter} lines; the parser window is 50`
+                'keys appear after `php.extensions` — the canonical layout puts the array last'
               );
           }
         }
@@ -450,24 +444,27 @@ for (const e of defaultSet) {
     );
 }
 
-if (defaultSet.length > 50)
-  err(
-    'B',
-    '.env',
-    'C-04',
-    `the default extension set has ${defaultSet.length} entries; selecting them all loses ${defaultSet.length - 50} to the parser window`
-  );
-if (catalog.length > 50)
-  warn(
-    'B',
-    '.env',
-    'C-04',
-    `the catalog offers ${catalog.length} extensions but a manifest can only carry 50 — selecting everything silently drops ${catalog.length - 50}`
-  );
+// The catalog used to be checked against a ceiling of 50 here — C-04, the Bash
+// parser window. It is gone, so selecting the whole catalog is now a supported
+// (if slow to build) choice rather than a silent truncation.
 
 // ================================================================ SUITE C — services
 
-const templatesDir = join(STACKVO_ROOT, 'core', 'templates', 'services');
+/**
+ * The templates this app ships, not the ones a workspace happens to hold.
+ *
+ * The workspace copy was the only source when the templates lived in a
+ * checkout. They live in `skeleton/` now and are compiled into the binary, and
+ * a workspace has a copy of one only when somebody overrode it — so reading the
+ * workspace made this suite report all twenty-one services as having no
+ * template on any normal machine, which is the reverse of the truth.
+ *
+ * Reading `skeleton/` also makes the check run everywhere: "is every service in
+ * env.schema.json backed by a template" is a question about this repository,
+ * and it now gets answered on every machine rather than only on one with a
+ * clone of the retired project beside it.
+ */
+const templatesDir = join(HERE, '..', 'skeleton', 'core', 'templates', 'services');
 const templateIds = existsSync(templatesDir)
   ? readdirSync(templatesDir).filter(
       (d) => !d.startsWith('.') && statSync(join(templatesDir, d)).isDirectory()
@@ -747,9 +744,13 @@ if (asJson) {
     F: 'reachability',
   };
   console.log(`\nstackvo contract check — v1`);
-  console.log(`  root      ${STACKVO_ROOT}`);
-  console.log(`  env       ${envPath}`);
-  console.log(`  manifests ${manifestCount}\n`);
+  console.log(`  root      ${STACKVO_ROOT}${HAVE_WORKSPACE ? '' : '  (not there)'}`);
+  console.log(`  env       ${envPath ?? '(none — every setting is a binary default)'}`);
+  console.log(`  manifests ${manifestCount}`);
+  if (!HAVE_WORKSPACE) {
+    console.log(`  note      no workspace, so A–D checked nothing. E and F are about this repo.`);
+  }
+  console.log('');
 
   for (const suite of Object.keys(SUITES)) {
     const rows = findings.filter((f) => f.suite === suite);

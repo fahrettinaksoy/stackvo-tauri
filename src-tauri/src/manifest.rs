@@ -159,6 +159,23 @@ pub fn read(path: &Path, dir_name: &str) -> Result<Manifest> {
     Ok(normalize(&json, &raw, dir_name))
 }
 
+/// Validate a spec that is not (yet) a file.
+///
+/// One of the contract's rules is about the *layout of a document* — W-01,
+/// `php.extensions` must be the last key. A `serde_json::Value` has no layout:
+/// `serde_json`'s map is a `BTreeMap`, so pretty-printing one sorts the keys
+/// and lands `extensions` before `version`, tripping W-01 on a spec that is
+/// perfectly fine.
+///
+/// The bytes that will actually reach disk come from [`to_json`], which exists
+/// precisely to satisfy that rule — so those are the bytes the layout check is
+/// run against. The first pass runs with no bytes at all, which skips the
+/// layout check, only to obtain the manifest `to_json` needs.
+pub fn normalize_spec(json: &serde_json::Value, dir_name: &str) -> Manifest {
+    let probe = normalize(json, "", dir_name);
+    normalize(json, &to_json(&probe), dir_name)
+}
+
 pub fn normalize(json: &serde_json::Value, raw: &str, dir_name: &str) -> Manifest {
     let mut errors: Vec<Finding> = Vec::new();
     let mut warnings: Vec<Finding> = Vec::new();
@@ -183,8 +200,29 @@ pub fn normalize(json: &serde_json::Value, raw: &str, dir_name: &str) -> Manifes
         );
     }
 
+    // A capital in the name is not a style question: `image: stackvo-<name>`
+    // is an image reference, and Docker refuses those unless they are
+    // lower-case. Created projects are canonicalised before the directory is
+    // made (`workspace::canonical_name`); an adopted directory keeps its own
+    // name, so this says why the build the generator writes is unusual.
+    if name != name.to_ascii_lowercase() {
+        warnings.push(Finding {
+            code: "NAME_CASE".into(),
+            path: "name".into(),
+            message: format!(
+                "\"{name}\" has capitals; Docker image references must be lower-case, so the image is tagged \"stackvo-{}\" while the directory keeps its own spelling",
+                name.to_ascii_lowercase()
+            ),
+        });
+    }
+
     // ---- domain (required; no fallback exists) ---------------------------
-    let domain = str_field(json, "domain");
+    //
+    // Lower-cased on the way in. Hostnames are case-insensitive, but the
+    // Traefik `Host()` rule, the hosts-file line and the certificate SAN are
+    // three separate strings compared byte-for-byte in three separate places —
+    // `Aksoyca.loc` in the manifest is a project that resolves and then 404s.
+    let domain = str_field(json, "domain").map(|d| d.trim().to_ascii_lowercase());
     if domain.is_none() {
         error(
             "MISSING_DOMAIN",
@@ -362,19 +400,10 @@ fn read_php(
             .map(|s| s.to_string())
             .collect(),
         Some(list) => {
-            // C-04: the Bash extractor's window is 50 lines.
-            if list.len() > 50 {
-                errors.push(Finding {
-                    code: "C-04".into(),
-                    path: "php.extensions".into(),
-                    message: format!(
-                        "{} extensions; the Bash parser reads only 50, so {} would be silently dropped",
-                        list.len(),
-                        list.len() - 50
-                    ),
-                });
-            }
-
+            // No ceiling on the count. There used to be one — C-04, the Bash
+            // extractor's `grep -A 50` window, which dropped extension 51
+            // onward in silence. The generator is Rust with a real JSON parser
+            // now, so the only limit left is what the catalog offers.
             let matrix = &php_extensions().extensions;
             let mut out = Vec::new();
             for item in list {
@@ -573,9 +602,11 @@ fn read_node(
 
 /// W-01: `php.extensions` must be the last key in the document.
 ///
-/// The Bash extractor takes every quoted lowercase token in the 50 lines after
-/// the `"extensions"` marker, so any key emitted after the array is swallowed
-/// into the extension list and reaches `docker-php-ext-install` as a bogus name.
+/// Historically because the Bash extractor took every quoted lowercase token
+/// after the `"extensions"` marker and fed it to `docker-php-ext-install`. That
+/// extractor is gone, and with it C-04's 50-line window, which used to be
+/// checked here too; the canonical layout stays because [`to_json`] writes it
+/// and a manifest that keeps one shape produces readable diffs.
 fn check_extension_layout(raw: &str, errors: &mut Vec<Finding>) {
     let Some(marker) = raw.rfind("\"extensions\"") else {
         return;
@@ -593,18 +624,8 @@ fn check_extension_layout(raw: &str, errors: &mut Vec<Finding>) {
         errors.push(Finding {
             code: "W-01".into(),
             path: "php.extensions".into(),
-            message:
-                "keys appear after `php.extensions`; the Bash extractor swallows the following tokens as extension names"
-                    .into(),
-        });
-    }
-
-    let span = raw[marker..close].lines().count();
-    if span > 50 {
-        errors.push(Finding {
-            code: "C-04".into(),
-            path: "php.extensions".into(),
-            message: format!("the extensions array spans {span} lines; the parser window is 50"),
+            message: "keys appear after `php.extensions`; the canonical layout puts the array last"
+                .into(),
         });
     }
 }
@@ -686,6 +707,69 @@ mod tests {
 }"#;
         let m = parse(raw, "ordered");
         assert!(m.errors.iter().any(|e| e.code == "W-01"), "{:?}", m.errors);
+    }
+
+    #[test]
+    fn a_spec_is_judged_on_the_bytes_it_would_become() {
+        // Exactly what the New Project sheet sends. Serialised as a `Value` its
+        // keys come out sorted — `extensions` before `version` — which used to
+        // trip W-01 and disable the Create button on a perfectly valid project.
+        let spec = serde_json::json!({
+            "name": "aksoyca",
+            "domain": "aksoyca.loc",
+            "runtime": "php",
+            "server": "nginx",
+            "document_root": "public",
+            "php": { "version": "8.4", "extensions": ["bcmath", "mbstring", "pdo_mysql"] }
+        });
+        assert!(
+            serde_json::to_string_pretty(&spec)
+                .map(|raw| normalize(&spec, &raw, "aksoyca"))
+                .unwrap()
+                .errors
+                .iter()
+                .any(|e| e.code == "W-01"),
+            "the sorted-key serialisation is what made this a bug"
+        );
+
+        let m = normalize_spec(&spec, "aksoyca");
+        assert!(m.valid, "{:?}", m.errors);
+    }
+
+    #[test]
+    fn normalize_spec_still_reports_real_faults() {
+        // Layout is forgiven, semantics are not: imap does not build on 8.4.
+        let spec = serde_json::json!({
+            "name": "legacy",
+            "domain": "legacy.loc",
+            "runtime": "php",
+            "php": { "version": "8.4", "extensions": ["imap"] }
+        });
+        let m = normalize_spec(&spec, "legacy");
+        assert!(!m.valid);
+        assert!(m.errors.iter().any(|e| e.code == "C-06"), "{:?}", m.errors);
+    }
+
+    #[test]
+    fn a_domain_is_canonicalised_and_a_capitalised_name_is_flagged() {
+        let raw = r#"{
+  "name": "Aksoyca",
+  "domain": "Aksoyca.LOC",
+  "php": { "version": "8.4" }
+}"#;
+        let m = parse(raw, "Aksoyca");
+        // The Traefik rule, the hosts line and the certificate are three
+        // byte-for-byte comparisons of this string.
+        assert_eq!(m.domain.as_deref(), Some("aksoyca.loc"));
+        // The name is the directory's, so it is not rewritten — but the image
+        // reference it produces is not a legal one, and that is worth saying.
+        assert_eq!(m.name, "Aksoyca");
+        assert!(
+            m.warnings.iter().any(|w| w.code == "NAME_CASE"),
+            "{:?}",
+            m.warnings
+        );
+        assert!(m.valid, "{:?}", m.errors);
     }
 
     #[test]
