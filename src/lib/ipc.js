@@ -291,6 +291,9 @@ export const api = {
   projectGet: (name) => call('project_get', { name }),
   /** Fill a new directory with a framework via a throwaway container. */
   projectScaffold: (name, template) => call('project_scaffold', { name, template }),
+  gitAvailable: () => call('git_available'),
+  projectClone: (url, name = null) => call('project_clone', { url, name }),
+  projectRegister: (name) => call('project_register', { name }),
 
   /** Every tunnel sidecar and its public URL, read live from its log. */
   tunnelStatus: () => call('tunnel_status'),
@@ -323,6 +326,7 @@ export const api = {
   /** The desktop's own accent colour, so the app can match it. */
   systemAccent: () => call('system_accent'),
   logsInfo: () => call('logs_info'),
+  localeGet: () => call('locale_get'),
   trayRelabel: () => call('tray_relabel'),
   appsAvailable: () => call('apps_available'),
   windowCloseAction: (action, remember) => call('window_close_action', { action, remember }),

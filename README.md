@@ -30,7 +30,7 @@ plane moves.
 | Host metrics       | `/proc` inside a container               | `sysinfo` on the host              |
 | Stopping the stack | impossible (kills the UI)                | `compose_down`                     |
 | Hosts file         | manual `sudo tee -a /etc/hosts`          | reviewed diff, one elevated write  |
-| Windows            | WSL2 only                                | native — no shell, no bash          |
+| Windows            | WSL2 only                                | native — no shell, no bash         |
 | Install size       | ~600 MB of images                        | ~10 MB                             |
 
 ## Status
@@ -158,17 +158,37 @@ fail.
 ### When something goes wrong
 
 The app writes a rotating log — seven days, then it drops the oldest.
-**Settings → Diagnostics** shows where and opens the folder. Password and token
-values are masked as the log is written, so it is safe to attach to an issue,
-but read it first.
+**Settings → Application log** shows where and opens the folder. Password and
+token values are masked as the log is written, so it is safe to attach to an
+issue, but read it first.
 
-| Platform | Location                                   |
-| -------- | ------------------------------------------ |
-| macOS    | `~/Library/Logs/dev.stackvo.desktop/`      |
-| Windows  | `%LOCALAPPDATA%\dev.stackvo.desktop\logs\` |
-| Linux    | `~/.local/share/dev.stackvo.desktop/logs/` |
+### Where things are kept
 
-Raise the level with `STACKVO_LOG=stackvo_desktop=debug`.
+Three directories, and which one you want depends on whose failure you are
+looking at. `src-tauri/src/appdir.rs` owns the first two and the reasoning.
+
+|             | macOS                                    | Windows                        | Linux                          |
+| ----------- | ---------------------------------------- | ------------------------------ | ------------------------------ |
+| App log     | `~/Library/Logs/StackVo/`                | `%LOCALAPPDATA%\StackVo\logs\` | `~/.local/state/stackvo/logs/` |
+| Preferences | `~/Library/Application Support/StackVo/` | `%APPDATA%\StackVo\`           | `~/.config/stackvo/`           |
+| Stack state | `~/.stackvo/`                            | `~/.stackvo/`                  | `~/.stackvo/`                  |
+
+**The app log and preferences** follow each platform rather than one string
+forced onto all three: Apple's log folder, `%LOCALAPPDATA%`, and
+`XDG_STATE_HOME` — which is where the XDG specification puts logs, and which
+this wrote outside of until it was noticed. Both are named `StackVo` and not
+`com.stackvo.desktop`: the bundle identifier is what the OS calls this app —
+the `Preferences` plist, the code signature, the privacy prompts — and these
+two folders are ours to name and the ones a person is asked to open. Postman,
+Termius and Redis Insight all split it the same way.
+
+**Stack state** is `~/.stackvo`, or wherever `STACKVO_ROOT` points: the `.env`,
+the templates, the generated compose files, the certificates, and
+`logs/projects/<name>/` — which is where a _project's_ web server writes, and is
+not the same thing as the app log above. It is the user's to move and safe to
+delete; nothing the app needs in order to start is kept there.
+
+Raise the log level with `STACKVO_LOG=stackvo_desktop=debug`.
 
 `diagnose` is the headless equivalent of the dashboard — it exercises every
 read-only command and prints what the UI would show, which makes it a genuine

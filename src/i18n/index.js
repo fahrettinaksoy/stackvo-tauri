@@ -5,10 +5,22 @@ import en from './locales/en';
 
 const STORAGE_KEY = 'stackvo.locale';
 
+/**
+ * The language for the very first paint, before anything can be asked.
+ *
+ * `localStorage` only, and only as a cache of a decision already made
+ * elsewhere: the authority is `preferences.json`, which the tray reads too, and
+ * reaching it means an IPC round trip that the module's own evaluation cannot
+ * wait for. `syncLocale` below reconciles the two as soon as the app boots.
+ *
+ * `navigator.language` used to be the fallback here and is deliberately gone.
+ * In a WKWebView it answers from the app bundle's localised resources — this
+ * app has none — so it is not a reading of the system setting, it just often
+ * resembles one. The real reading happens in Rust and arrives a moment later.
+ */
 function initialLocale() {
   const saved = localStorage.getItem(STORAGE_KEY);
-  if (saved === 'tr' || saved === 'en') return saved;
-  return navigator.language?.startsWith('tr') ? 'tr' : 'en';
+  return saved === 'tr' || saved === 'en' ? saved : 'en';
 }
 
 export const i18n = createI18n({
@@ -46,4 +58,26 @@ export async function setLocale(locale) {
   const { api } = await import('@/lib/ipc');
   await api.prefsSet({ locale }).catch(() => {});
   await api.trayRelabel().catch(() => {});
+}
+
+/**
+ * Settle on the language Rust resolved: the stored choice, else this machine's.
+ *
+ * Called once at boot. Deliberately **not** `setLocale`: writing the answer
+ * back would turn a detected language into a stored choice, and from then on
+ * the app would keep opening in whatever the machine happened to be set to on
+ * first run even after the user changed the machine. A guess must stay a guess
+ * until somebody picks.
+ *
+ * The `localStorage` write is the exception, and it is a cache rather than a
+ * decision — it is what stops the next launch from painting English for a
+ * frame before the round trip lands.
+ */
+export async function syncLocale() {
+  const { api } = await import('@/lib/ipc');
+  const resolved = await api.localeGet().catch(() => null);
+  if (resolved !== 'tr' && resolved !== 'en') return;
+
+  localStorage.setItem(STORAGE_KEY, resolved);
+  if (i18n.global.locale.value !== resolved) i18n.global.locale.value = resolved;
 }

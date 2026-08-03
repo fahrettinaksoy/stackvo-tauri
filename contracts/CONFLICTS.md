@@ -186,6 +186,14 @@ minimal mode.
 mapping MUST use the service catalog, never a naive `tr '_' '-'`. `services` in `env.schema.json`
 lists the 20 canonical ids.
 
+**Resolved in the desktop app.** There is no derivation left to get wrong: `compose_up_service`
+passes the service id through unchanged (`--profile mongo-express`), and `Env::service_prefix` maps
+in the one direction that is safe — id → env key. The validator asserted the Bash derivation until
+the shell was deleted out from under it, and then spent a while failing this repo for a bug this
+repo does not contain. It now checks what the app actually depends on: the template must declare
+both its own id and `services`. C-09 remains open **upstream**, in StackVo's `up`; the reproduction
+lives in `tests/real_checkout.rs` and only runs when a Bash checkout is present.
+
 ---
 
 ## 🟡 C-10 — `server` vs `webserver`

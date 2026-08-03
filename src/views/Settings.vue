@@ -73,6 +73,23 @@ const logs = ref(null);
 const apps = ref({ terminals: [], editors: [], browsers: [] });
 
 /**
+ * What an app picker shows when the user has never touched it.
+ *
+ * An empty box said nothing about what "Open in terminal" would start, while
+ * the back end has always fallen back to the first installed entry. Showing
+ * that entry is honest — it is what the button does — and it is deliberately
+ * not written to preferences.json: the fallback should keep tracking what is
+ * installed rather than freeze the first answer it ever gave.
+ */
+const appDefault = (list) => list?.find((a) => a.default)?.id ?? null;
+const appChoice = (stored, list) => stored ?? appDefault(list);
+const appItemProps = (a) => ({
+  prependIcon: a.icon,
+  disabled: !a.available,
+  subtitle: a.default ? t('settings.appDefault') : undefined,
+});
+
+/**
  * The open pane, persisted for the session only.
  *
  * Deliberately not in preferences.json: which pane you last had open is not a
@@ -583,7 +600,7 @@ async function copySystemInfo() {
  * and pretending otherwise would mean a form that can express a fraction of it
  * and silently drops the rest.
  */
-const CONFIGURABLE_SERVERS = ['nginx', 'caddy'];
+const CONFIGURABLE_SERVERS = ['nginx', 'caddy', 'frankenphp'];
 const serverTab = ref('nginx');
 const serverConfig = ref('');
 const serverConfigSaved = ref('');
@@ -640,6 +657,17 @@ const revertTarget = ref(null);
 
 const overriddenTemplates = computed(() => templates.value.filter((f) => f.overridden));
 const shippedTemplates = computed(() => templates.value.filter((f) => !f.overridden));
+
+/**
+ * Is this particular template the one being worked on?
+ *
+ * The emptiness check is the point. `templateBusy === templateToOverride` read
+ * correctly and was wrong for the state the pane opens in: both are null, null
+ * equals null, and the button sat there spinning before anyone had chosen a
+ * file — and again after every successful override, which clears the selection.
+ * Idle is not a path, so it can never be the busy one.
+ */
+const busyWith = (path) => !!path && templateBusy.value === path;
 
 async function loadTemplates() {
   templatesBusy.value = true;
@@ -725,10 +753,22 @@ const onOff = (key) => effective(key) === 'on';
 const setOnOff = (key, value) => edit(key, value ? 'on' : 'off');
 const gzipOn = computed(() => onOff('SERVER_GZIP'));
 
+/**
+ * Which servers have a generated config file, and so can take directives.
+ *
+ * FrankenPHP was `false` here and it was simply wrong: it writes a `Caddyfile`
+ * exactly as caddy does. Sitting greyed out beside Apache and Swoole — whose
+ * exclusion the note underneath explains — made an oversight look like a
+ * decision somebody had made.
+ *
+ * Not the same question as the request limits above, which reach nginx and
+ * caddy only; the note says which is which rather than this map pretending one
+ * flag answers both.
+ */
 const SERVER_SUPPORT = {
   nginx: true,
   caddy: true,
-  frankenphp: false,
+  frankenphp: true,
   apache: false,
   swoole: false,
 };
@@ -1062,7 +1102,11 @@ onMounted(async () => {
   appVersion.value = await getVersion().catch(() => '');
   updaterReady.value = await updatesConfigured();
   logs.value = await api.logsInfo().catch(() => null);
-  apps.value = await api.appsAvailable().catch(() => ({ terminals: [], editors: [] }));
+  // Every key the pickers read has to be present in the fallback too — a
+  // missing `browsers` leaves that select bound to undefined instead of empty.
+  apps.value = await api
+    .appsAvailable()
+    .catch(() => ({ terminals: [], editors: [], browsers: [] }));
   // No key means no check can succeed; asking anyway only produces a
   // signature error that looks like the server's fault.
   if (updaterReady.value) checkUpdate();
@@ -1433,11 +1477,11 @@ onMounted(async () => {
                      list but disabled — omitting them would read as lack of
                      support. -->
                 <v-select
-                  :model-value="prefs?.terminalApp ?? null"
+                  :model-value="appChoice(prefs?.terminalApp, apps.terminals)"
                   :items="apps.terminals"
                   item-title="name"
                   item-value="id"
-                  :item-props="(a) => ({ prependIcon: a.icon, disabled: !a.available })"
+                  :item-props="appItemProps"
                   :label="t('settings.terminalApp')"
                   :hint="t('settings.appsHint')"
                   persistent-hint
@@ -1445,11 +1489,11 @@ onMounted(async () => {
                   @update:model-value="(v) => setPref({ terminalApp: v || null })"
                 />
                 <v-select
-                  :model-value="prefs?.editorCommand ?? null"
+                  :model-value="appChoice(prefs?.editorCommand, apps.editors)"
                   :items="apps.editors"
                   item-title="name"
                   item-value="id"
-                  :item-props="(a) => ({ prependIcon: a.icon, disabled: !a.available })"
+                  :item-props="appItemProps"
                   :label="t('settings.editorApp')"
                   clearable
                   @update:model-value="(v) => setPref({ editorCommand: v || null })"
@@ -1458,11 +1502,11 @@ onMounted(async () => {
                      means the system default, which is why the list carries an
                      explicit entry for it rather than only an empty state. -->
                 <v-select
-                  :model-value="prefs?.browserCommand ?? null"
+                  :model-value="appChoice(prefs?.browserCommand, apps.browsers)"
                   :items="apps.browsers"
                   item-title="name"
                   item-value="id"
-                  :item-props="(a) => ({ prependIcon: a.icon, disabled: !a.available })"
+                  :item-props="appItemProps"
                   :label="t('settings.browserApp')"
                   :hint="t('settings.browserAppHint')"
                   persistent-hint
@@ -2350,7 +2394,7 @@ onMounted(async () => {
                       variant="text"
                       color="error"
                       prepend-icon="mdi-undo-variant"
-                      :loading="templateBusy === file.path"
+                      :loading="busyWith(file.path)"
                       @click="revertTarget = file.path"
                     >
                       {{ t('settings.templates.revert') }}
@@ -2378,7 +2422,7 @@ onMounted(async () => {
                 prepend-icon="mdi-file-edit-outline"
                 class="mt-3"
                 :disabled="!templateToOverride"
-                :loading="templateBusy === templateToOverride"
+                :loading="busyWith(templateToOverride)"
                 @click="overrideTemplate"
               >
                 {{ t('settings.templates.override') }}

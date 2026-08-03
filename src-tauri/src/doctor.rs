@@ -91,6 +91,68 @@ fn compose_ports(text: &str) -> Vec<(String, u16)> {
     out
 }
 
+/// The services in the `core` profile, in the order the file declares them.
+///
+/// Same line scanner and same justification as [`compose_ports`]: the input is
+/// this app's own generated file. Both list shapes are read because the
+/// template uses the inline one (`profiles: ["core"]`) and nothing stops a
+/// workspace that has taken the template over from using the block one.
+fn core_services(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut service: Option<String> = None;
+    let mut in_profiles = false;
+
+    let is_core = |value: &str| {
+        value
+            .trim_matches(|c: char| c == '[' || c == ']' || c.is_whitespace())
+            .split(',')
+            .any(|p| p.trim().trim_matches(|c| c == '"' || c == '\'') == "core")
+    };
+
+    for line in text.lines() {
+        let indent = line.len() - line.trim_start().len();
+        // A trailing comment is not part of the value. The shipped template
+        // carries one on this very line.
+        let trimmed = line.trim().split(" #").next().unwrap_or("").trim();
+
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        if indent == 2 && trimmed.ends_with(':') && !trimmed.starts_with('-') {
+            service = Some(trimmed.trim_end_matches(':').to_string());
+            in_profiles = false;
+            continue;
+        }
+
+        if indent == 4 {
+            if let Some(value) = trimmed.strip_prefix("profiles:") {
+                if value.trim().is_empty() {
+                    in_profiles = true; // block list on the following lines
+                } else if is_core(value) {
+                    out.extend(service.clone());
+                }
+                continue;
+            }
+            in_profiles = false;
+        }
+
+        if in_profiles {
+            match trimmed.strip_prefix("- ") {
+                Some(item) if is_core(item) => {
+                    out.extend(service.clone());
+                    in_profiles = false;
+                }
+                Some(_) => {}
+                None => in_profiles = false,
+            }
+        }
+    }
+
+    out.dedup();
+    out
+}
+
 /// The host side of a compose port mapping, if the mapping publishes one.
 ///
 /// Shapes: `"80:80"` · `"127.0.0.1:8080:80"` · `"6379:6379/tcp"` · `"9000"`
@@ -668,11 +730,93 @@ pub fn drop_extension(root: &Path, subject: &str, extension: &str) -> crate::err
     crate::manifest::write(&file, &manifest)
 }
 
+/// A container the stack does not work without.
+///
+/// Traefik is the whole of this set today: every project and service domain is
+/// routed through it, and with it down nothing answers by name — which is the
+/// single most common way a working install looks broken.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreContainer {
+    /// The compose service name, as the generated file declares it.
+    pub service: String,
+    /// What the engine calls it — `stackvo-traefik`.
+    pub container: String,
+    pub state: State,
+    /// Whether a container object exists at all.
+    ///
+    /// Separate from `running` because the two need different sentences and the
+    /// settings pane conflated them: `compose down` removes containers, so
+    /// "stopped" and "never created" both showed as one red chip, and somebody
+    /// went looking for a stopped container that was not there.
+    pub exists: bool,
+    pub running: bool,
+    /// The image, when there is a container to read one from.
+    pub image: Option<String>,
+}
+
+/// Which core containers exist, and which are up.
+///
+/// Read from `generated/stackvo.yml` rather than from a name written here: the
+/// generated file is what `compose up` executes, so it is also the honest
+/// answer to "what does core mean in this workspace".
+pub async fn core_containers(root: Option<&Path>, engine_up: bool) -> Vec<CoreContainer> {
+    let Some(root) = root else {
+        return Vec::new();
+    };
+    let Ok(text) = std::fs::read_to_string(root.join("generated/stackvo.yml")) else {
+        // Nothing generated yet. The `generated` row already says so, and a
+        // second row repeating it as "traefik is missing" would send someone
+        // after the wrong repair.
+        return Vec::new();
+    };
+
+    // With the engine down there is no answer to "is it running", and reporting
+    // one as "no" sends the user to start a stack when the problem is Docker.
+    let containers = if engine_up {
+        crate::engine::stackvo_containers().await.ok()
+    } else {
+        None
+    };
+
+    core_services(&text)
+        .into_iter()
+        .map(|service| {
+            let found = containers.as_ref().map(|c| c.get(&service));
+            let (state, exists, running, image) = match found {
+                None => (State::Unknown, false, false, None),
+                Some(None) => (State::Fail, false, false, None),
+                Some(Some(info)) => (
+                    if info.running { State::Ok } else { State::Fail },
+                    true,
+                    info.running,
+                    info.image.clone(),
+                ),
+            };
+            CoreContainer {
+                container: crate::engine::container_name(&service),
+                service,
+                state,
+                exists,
+                running,
+                image,
+            }
+        })
+        .collect()
+}
+
 /// The full report: the boot gate's rows plus everything above.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Doctor {
     pub preflight: crate::preflight::Preflight,
+    /// The containers the stack is addressed through — Traefik today.
+    ///
+    /// New because the gate does not cover it and nothing else did either: the
+    /// requirements screen answers "can this run", the ports section answers
+    /// "is 80 free", and between the two there was no row for "the proxy every
+    /// domain resolves through is not running".
+    pub core: Vec<CoreContainer>,
     pub ports: Vec<PortCheck>,
     /// Project domains with no hosts entry. Repaired through the reviewed
     /// `hosts_plan` / `hosts_apply` flow, never blindly.
@@ -730,6 +874,7 @@ pub async fn run(root: Option<&Path>) -> Doctor {
     };
 
     Doctor {
+        core: core_containers(root, engine_up).await,
         preflight,
         ports,
         hosts_missing,
@@ -911,6 +1056,94 @@ services:
       - "9000"
       - "6379:6379/tcp"
 "#;
+
+    /// The shipped template's exact line, trailing comment and all — that
+    /// comment is what a naive `contains("core")` check would still pass on
+    /// while a `starts_with` on the value would fail.
+    const PROFILED: &str = r#"
+services:
+
+  traefik:
+    profiles: ["core"] # Core service - starts automatically in minimal setup
+    image: "traefik:latest"
+
+  mysql:
+    profiles: ["services"]
+    image: "mysql:8.0"
+
+  blockstyle:
+    profiles:
+      - core
+    image: "whatever"
+
+  mongo-express:
+    profiles: ["services", "mongo-express"]
+    image: "mongo-express"
+"#;
+
+    #[test]
+    fn the_core_profile_is_read_from_the_generated_file() {
+        assert_eq!(
+            core_services(PROFILED),
+            vec!["traefik".to_string(), "blockstyle".to_string()],
+            "the core set is what the file says, not a name written in Rust"
+        );
+    }
+
+    /// The failure this guards: a substring match. `core` appears inside
+    /// `mongo-express`'s comment-free profile list nowhere, but "scorecard" or
+    /// a service literally named in a comment would sail through a
+    /// `contains("core")`, and the doctor would then report a container that
+    /// does not belong to the core profile as missing.
+    #[test]
+    fn a_profile_that_merely_contains_the_word_is_not_the_core_profile() {
+        const NEAR: &str = r#"
+services:
+
+  scorecard:
+    profiles: ["scorecard"]
+    image: "x"
+
+  commented:
+    profiles: ["services"] # not core, whatever this comment says about core
+    image: "y"
+"#;
+        assert!(core_services(NEAR).is_empty());
+    }
+
+    /// A workspace that has never generated has no compose file, and the
+    /// `generated` row already says so. A second row claiming Traefik is
+    /// missing would send someone to start a stack that cannot be started yet.
+    #[tokio::test]
+    async fn nothing_generated_reports_no_core_containers() {
+        let dir = std::env::temp_dir().join(format!("stackvo-doctor-core-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert!(core_containers(Some(&dir), false).await.is_empty());
+        assert!(core_containers(None, true).await.is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// With the engine down there is no answer to "is it running", and `Fail`
+    /// would send the user to start a stack when the problem is Docker.
+    #[tokio::test]
+    async fn the_engine_being_down_makes_the_answer_unknown_not_failed() {
+        let dir =
+            std::env::temp_dir().join(format!("stackvo-doctor-core-down-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("generated")).unwrap();
+        std::fs::write(dir.join("generated/stackvo.yml"), PROFILED).unwrap();
+
+        let found = core_containers(Some(&dir), false).await;
+        assert_eq!(found.len(), 2);
+        for c in &found {
+            assert_eq!(c.state, State::Unknown, "{} was not unknown", c.service);
+            assert!(!c.exists && !c.running);
+        }
+        assert_eq!(found[0].container, "stackvo-traefik");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn compose_ports_reads_the_generator_shape() {

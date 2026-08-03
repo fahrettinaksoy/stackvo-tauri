@@ -324,10 +324,15 @@ fn read_env_value(env_file: &Path, key: &str) -> Option<String> {
 ///
 /// Only read, and only once — see [`migrate_single_root`]. Nothing writes it
 /// any more.
+///
+/// Deliberately the *old* folder name and not the current one: this is a fact
+/// about installs that already exist on disk. Following the rename would mean
+/// looking for a file in a directory that, by definition, no install that wrote
+/// it ever had.
 fn legacy_state_file() -> Option<PathBuf> {
     Some(
         dirs::config_dir()?
-            .join("dev.stackvo.desktop")
+            .join(crate::appdir::LEGACY_DIR)
             .join("workspace.txt"),
     )
 }

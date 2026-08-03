@@ -92,6 +92,22 @@ async function act(service, fn) {
   }
 }
 
+/**
+ * The service waiting on the "this deletes its data" confirmation.
+ *
+ * Disabling used to only stop the container, so it needed no dialog. It now
+ * removes the container, its named volumes, its image and its log directory —
+ * turning a service off leaves nothing behind, which is what was asked for and
+ * is also irreversible. MySQL's volume is somebody's databases.
+ */
+const disableTarget = ref(null);
+
+async function confirmDisable() {
+  const service = disableTarget.value;
+  disableTarget.value = null;
+  if (service) await act(service, api.serviceDisable);
+}
+
 let teardown = null;
 
 onMounted(async () => {
@@ -273,13 +289,46 @@ onUnmounted(() => teardown?.());
             color="success"
             variant="tonal"
             :loading="ops.isBusy(item.id)"
-            @click="act(item, api.serviceDisable)"
+            @click="disableTarget = item"
           >
             <v-icon start>mdi-check-circle</v-icon>{{ t('servicesView.enabled') }}
           </v-btn>
         </template>
       </v-data-table>
     </div>
+
+    <!-- Disabling deletes data now, so it asks — the same shape the template
+         revert dialog uses, and for the same reason: there is no undo. -->
+    <v-dialog
+      :model-value="!!disableTarget"
+      max-width="520"
+      @update:model-value="disableTarget = null"
+    >
+      <v-card>
+        <v-card-title>{{
+          t('servicesView.disableTitle', { name: disableTarget?.id })
+        }}</v-card-title>
+        <v-card-text class="text-body-2">
+          <p>{{ t('servicesView.disableBody') }}</p>
+          <ul class="mt-2 ms-4">
+            <li>{{ t('servicesView.disableContainer') }}</li>
+            <li>{{ t('servicesView.disableVolumes') }}</li>
+            <li>{{ t('servicesView.disableImage') }}</li>
+            <li>{{ t('servicesView.disableLogs') }}</li>
+            <li v-if="domainOf(disableTarget ?? {})">
+              {{ t('servicesView.disableHosts', { domain: domainOf(disableTarget) }) }}
+            </li>
+          </ul>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="disableTarget = null">{{ t('app.cancel') }}</v-btn>
+          <v-btn color="error" variant="flat" @click="confirmDisable">
+            {{ t('servicesView.disableConfirm') }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
 
     <!-- One sheet for whichever row is open; `service` is what it reads. -->
     <ServiceDetailSheet

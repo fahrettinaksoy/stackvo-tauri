@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { api, StackvoError } from '@/lib/ipc';
+import { syncLocale } from '@/i18n';
 
 /**
  * Workspace + engine state — the two things every other view depends on.
@@ -158,7 +159,16 @@ export const useAppStore = defineStore('app', () => {
 
   async function boot() {
     booting.value = true;
-    await Promise.all([refreshWorkspace(), refreshEngine(), checkRequirements()]);
+    // The language first, and alongside the rest rather than before it: every
+    // screen the boot can land on — the requirements gate, the first-run setup
+    // — is one somebody reads, and reading it in the wrong language is worst on
+    // exactly the launch where nothing has been chosen yet.
+    await Promise.all([
+      syncLocale().catch(() => {}),
+      refreshWorkspace(),
+      refreshEngine(),
+      checkRequirements(),
+    ]);
     await refreshTld();
     booting.value = false;
   }

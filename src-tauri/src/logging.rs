@@ -20,34 +20,14 @@ use tracing_subscriber::EnvFilter;
 /// silently discards buffered lines.
 pub struct Guard(#[allow(dead_code)] tracing_appender::non_blocking::WorkerGuard);
 
-/// Where the log files live.
+/// Where the log files live — see [`crate::appdir`], which owns the choice and
+/// the reasoning behind it.
 ///
-/// Not beside `workspace.txt` and `preferences.json` in the config directory:
-/// those are things the user chose and would want to keep, and logs are
-/// neither. On macOS that distinction needs the platform's own convention,
-/// because `config_dir()` and `data_local_dir()` are the same folder there
-/// (`~/Library/Application Support`) — measured, not assumed. Apple puts logs
-/// in `~/Library/Logs`, which is also where Console.app looks for them.
+/// Kept as a name in this module because the callers here read as logging code:
+/// `newest_file` and `total_bytes` are about this directory in particular, not
+/// about the app's folders in general.
 pub fn dir() -> Option<PathBuf> {
-    #[cfg(target_os = "macos")]
-    {
-        Some(
-            dirs::home_dir()?
-                .join("Library")
-                .join("Logs")
-                .join("dev.stackvo.desktop"),
-        )
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        // Linux: ~/.local/share, Windows: %LOCALAPPDATA% — both already distinct
-        // from the config directory.
-        Some(
-            dirs::data_local_dir()?
-                .join("dev.stackvo.desktop")
-                .join("logs"),
-        )
-    }
+    crate::appdir::logs()
 }
 
 /// Start writing. Returns None when there is no writable location, which is a
@@ -230,20 +210,5 @@ mod tests {
         // Compose prefixes its echoes; the key is still the run before the `=`.
         let out = redact("stackvo-mysql | MYSQL_ROOT_PASSWORD=hunter2");
         assert_eq!(out, "stackvo-mysql | MYSQL_ROOT_PASSWORD=***");
-    }
-
-    /// Logs sitting next to `workspace.txt` would be swept up by anyone
-    /// clearing "settings" and kept by anyone backing them up. On macOS this
-    /// only holds because of the `~/Library/Logs` branch — `config_dir()` and
-    /// `data_local_dir()` are the same directory there.
-    #[test]
-    fn the_log_directory_is_not_the_config_directory() {
-        let logs = dir().expect("a log directory on every supported platform");
-        let config = dirs::config_dir().expect("a config directory");
-        assert!(
-            !logs.starts_with(config.join("dev.stackvo.desktop")),
-            "logs at {} sit inside the config directory",
-            logs.display()
-        );
     }
 }

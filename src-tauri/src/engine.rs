@@ -819,6 +819,78 @@ pub async fn remove_project_images(project: &str) -> Result<Vec<String>> {
     Ok(removed)
 }
 
+/// Drop one image by the tag a container was running.
+///
+/// A 409 — some other container still holds it — is not an error to raise, for
+/// the same reason as in `remove_project_images`: the image is not this
+/// service's alone, and leaving it is the correct outcome rather than a failure
+/// to report. Two services on the same `mysql:8.0` is an ordinary arrangement.
+pub async fn remove_image(tag: &str) -> Result<bool> {
+    use bollard::query_parameters::RemoveImageOptionsBuilder;
+
+    let docker = connect()?;
+    match docker
+        .remove_image(
+            tag,
+            Some(RemoveImageOptionsBuilder::default().build()),
+            None,
+        )
+        .await
+    {
+        Ok(_) => Ok(true),
+        Err(bollard::errors::Error::DockerResponseServerError {
+            status_code: 404 | 409,
+            ..
+        }) => Ok(false),
+        Err(e) => Err(lifecycle_error("remove image", tag, e)),
+    }
+}
+
+/// Every named volume whose name starts with `prefix`, as the engine has them.
+///
+/// Matched by name rather than by compose label because the compose file that
+/// declared them is regenerated without them the moment a service is switched
+/// off — by the time anything wants to clean up, the label's source is gone.
+pub async fn volumes_named(prefix: &str) -> Result<Vec<String>> {
+    use bollard::query_parameters::ListVolumesOptions;
+
+    let docker = connect()?;
+    let list = docker
+        .list_volumes(None::<ListVolumesOptions>)
+        .await
+        .map_err(|e| Error::new(Code::EngineUnreachable, format!("Cannot list volumes: {e}")))?;
+
+    Ok(list
+        .volumes
+        .unwrap_or_default()
+        .into_iter()
+        .map(|v| v.name)
+        .filter(|name| name.starts_with(prefix))
+        .collect())
+}
+
+/// Delete a named volume and everything in it.
+///
+/// Irreversible, and the only caller is behind an explicit confirmation. A 404
+/// is success — the state the caller asked for is the state on disk — and a 409
+/// means a container still has it mounted, which is a real failure here because
+/// this runs after the container has been removed.
+pub async fn remove_volume(name: &str) -> Result<()> {
+    use bollard::query_parameters::RemoveVolumeOptions;
+
+    let docker = connect()?;
+    match docker
+        .remove_volume(name, None::<RemoveVolumeOptions>)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(bollard::errors::Error::DockerResponseServerError {
+            status_code: 404, ..
+        }) => Ok(()),
+        Err(e) => Err(lifecycle_error("remove volume", name, e)),
+    }
+}
+
 pub async fn restart_container(id: &str) -> Result<()> {
     use bollard::query_parameters::RestartContainerOptions;
     let name = container_name(id);

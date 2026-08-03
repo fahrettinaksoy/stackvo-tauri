@@ -119,6 +119,14 @@ export default {
   },
 
   servicesView: {
+    disableTitle: 'Disable {name}?',
+    disableBody: 'Nothing of this service is left behind. These are deleted:',
+    disableContainer: 'The container (stopped, then removed)',
+    disableVolumes: 'Its named volumes — including database contents, with no undo',
+    disableImage: 'Its image, unless another container is using it',
+    disableLogs: 'Its log directory under logs/services',
+    disableHosts: 'The hosts entry for {domain} — an administrator password is asked for',
+    disableConfirm: 'Disable and delete',
     hide: 'Hide the value',
     colDetail: 'Detail',
     serviceInfo: 'Service information',
@@ -196,6 +204,7 @@ export default {
     portMappings: 'Port Mappings',
     notPublished: 'not published',
     copied: 'Copied',
+    applyToContainer: 'Recreate the container',
   },
 
   workspace: {
@@ -500,14 +509,16 @@ export default {
       'Catches dump() and dd() out of the response and shows them here instead. Symfony’s own dump server does the rendering, inside your project’s container.',
     unavailable:
       'This project has no {binary}. It ships with symfony/var-dumper, which Laravel depends on — run composer install.',
-    needsRestart:
-      'The running container does not have the dump settings yet. Restart the project to apply them.',
+    needsRecreate:
+      'The running container does not have the dump settings yet. They are fixed when a container is created, so restarting is not enough — the container has to be recreated.',
     needsRunning: 'The collector runs inside the project’s container. Start it first.',
     start: 'Start catching',
     stop: 'Stop',
     listening: 'Listening',
     clear: 'Clear',
     waiting: 'Waiting for a dump… call dump() anywhere in the app.',
+    ddEndsTheRequest:
+      'dump() lets the request continue. dd() takes the dump and ends it, and Symfony marks that as a 500 — so a dump appearing here while the browser shows an error is expected.',
   },
 
   release: {
@@ -541,7 +552,9 @@ export default {
       'One or the other. Stepping connects on every request; profiling waits for a trigger, so leaving both on would break one of them.',
     howToRecord:
       'Nothing is recorded until a request asks for it. Add ?{trigger}=1 to the URL, or set it as a cookie.',
-    needsRestart: 'The running container does not have this yet. Restart the project to apply it.',
+    modeMismatch: 'The container is in “{running}” mode; the setting says “{wanted}”.',
+    needsRecreate:
+      'The running container does not have this yet. Environment and mounts are fixed when a container is created, so restarting is not enough — the container has to be recreated.',
     recorded: 'Recorded profiles ({n})',
     noneYet: 'Nothing recorded yet.',
     clear: 'Delete all ({size})',
@@ -760,7 +773,7 @@ export default {
       applies: 'Where this applies',
       appliesDesc: 'Not every server is configured through a file.',
       supportNote:
-        'Apache is configured inside its own Dockerfile and Swoole by an inline script, so neither takes these directives.',
+        'Apache is configured inside its own Dockerfile and Swoole by an inline script, so neither has a file to add directives to. The request limits above reach nginx and caddy only — FrankenPHP’s Caddyfile does not carry them, so directives are all it takes.',
     },
     defaults: {
       title: 'Project defaults',
@@ -958,8 +971,9 @@ export default {
       aptHint: 'Installed with apt inside the container.',
     },
     about: 'About',
-    diagnostics: 'Diagnostics',
-    diagnosticsHint: 'Attach this folder when reporting a problem.',
+    diagnostics: 'Application log',
+    diagnosticsHint:
+      'StackVo’s own diagnostic record — not your projects’ server logs. Attach this folder when reporting a problem.',
     openLogs: 'Open folder',
     logsUnavailable: 'No writable log location was found on this system.',
     logsRedacted: 'Password and token values are masked as the log is written.',
@@ -984,6 +998,7 @@ export default {
     browserApp: 'Browser',
     browserAppHint: 'Used by every “visit” button — project and service domains open here.',
     appsHint: 'Applications that are not installed cannot be selected.',
+    appDefault: 'Default',
     startMinimized: 'Start minimized to tray',
     autostart: 'Start at login',
     save: 'Save {count} change(s)',
@@ -1105,6 +1120,15 @@ export default {
     requirements: 'Startup requirements',
     requirementsDesc: 'The same checks that gate the first screen, re-checkable from here.',
 
+    coreTitle: 'Core containers',
+    coreDesc:
+      'Every project and service domain is routed through these. With them down nothing answers by name, however correct the install is.',
+    coreRunning: 'Running.',
+    coreStopped: 'The container exists but is stopped.',
+    coreMissing: 'No container at all — the stack was never started, or was taken down.',
+    coreUnknown: 'Docker is not running, so this cannot be read.',
+    coreStart: 'Start the core stack',
+
     portsTitle: 'Host ports',
     portsDesc: 'Every port the generated stack will claim, and who holds it right now.',
     portsNone: 'The generated stack publishes no host ports — run the generator first.',
@@ -1189,6 +1213,7 @@ export default {
     template: 'Start from',
     templates: {
       empty: 'Empty project',
+      git: 'Clone a git repository',
       laravel: 'Laravel',
       wordpress: 'WordPress',
       symfony: 'Symfony',
@@ -1230,6 +1255,13 @@ export default {
       'The runtime, web server and document root come from the files the installer writes — Laravel serves from public/, WordPress from the project root. They are editable afterwards in the project’s settings.',
     templateHint:
       'The framework’s own installer runs in a throwaway container, then detection configures the project from what it wrote. The first run downloads the installer image — give it a few minutes.',
+    gitUrl: 'Repository URL',
+    gitUrlPlaceholder: 'git@server.example.com:group/subgroup/repo.git',
+    gitUrlHint: 'An SSH or HTTPS clone URL. Any host — including your own GitLab.',
+    gitAuthHint:
+      'Cloning uses the git on this machine. Your keys, ssh config and server permissions come from your own setup — StackVo manages none of them. A URL that works in your terminal works here.',
+    gitManifestHint:
+      'If the repository has a stackvo.json, its settings are used as they are — the team’s answer wins and the fields above are ignored. If it has none, the project is configured from what the clone contains.',
     domain: 'Domain',
     runtime: 'Runtime',
     phpVersion: 'PHP version',

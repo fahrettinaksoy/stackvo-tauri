@@ -128,7 +128,46 @@ const TEMPLATE_ICONS = {
   sinatra: 'mdi-microphone-variant',
   rocket: 'mdi-rocket-outline',
 };
-const scaffolding = computed(() => template.value !== 'empty');
+/**
+ * The third branch: code that already exists, on a remote.
+ *
+ * A pseudo-template rather than a fourth control, because it answers the same
+ * question the others do — what fills the directory — and a separate toggle
+ * beside a list of twenty-eight choices would be a second place to look for
+ * one answer.
+ */
+const CLONE = 'git';
+const cloning = computed(() => template.value === CLONE);
+const gitUrl = ref('');
+/** False hides the option entirely: there is nothing to explain about a
+ *  feature that cannot run, and a disabled card invites a support question. */
+const gitAvailable = ref(false);
+
+/**
+ * Keep the name field in step with the URL, without fighting the user.
+ *
+ * Overwritten only while it still holds what the last URL produced, so a name
+ * typed by hand survives the next paste. `git clone` names the directory after
+ * the repository and this shows the same answer rather than leaving the field
+ * blank and deciding silently in Rust.
+ */
+const derivedName = ref('');
+function nameFromUrl(url) {
+  const last = String(url).trim().replace(/\/+$/, '').split(/[/:]/).pop() ?? '';
+  const stripped = last.replace(/\.git$/, '').toLowerCase();
+  return /^[a-z0-9][a-z0-9._-]*$/.test(stripped) ? stripped : '';
+}
+watch(gitUrl, (url) => {
+  const next = nameFromUrl(url);
+  if (!form.value.name || form.value.name === derivedName.value) form.value.name = next;
+  derivedName.value = next;
+});
+
+// A clone is not a scaffold: nothing is installed, and the form's runtime
+// fields stay hidden for the same reason they do for a template — detection
+// reads them off what lands on disk.
+const scaffolding = computed(() => template.value !== 'empty' && !cloning.value);
+const detected = computed(() => scaffolding.value || cloning.value);
 
 /** Everything except the empty project, which is presented on its own. */
 const FRAMEWORK_GROUPS = TEMPLATE_GROUPS.filter((g) => g.key !== 'blank');
@@ -140,7 +179,8 @@ function choose(key) {
   // The template IS the runtime, so the form follows it rather than offering a
   // second, contradictable answer. It decides which fields are worth asking
   // for: PHP templates get version/server/extensions, the rest get neither.
-  form.value.runtime = TEMPLATE_RUNTIME[key] ?? 'php';
+  // A clone answers nothing — what arrives decides, and detection reads it.
+  form.value.runtime = key === CLONE ? 'php' : (TEMPLATE_RUNTIME[key] ?? 'php');
 }
 
 /** A scaffolded PHP project still has three choices its installer cannot make. */
@@ -154,7 +194,12 @@ async function load() {
   template.value = 'empty';
   openGroup.value = null;
   form.value = blankForm();
+  gitUrl.value = '';
+  derivedName.value = '';
   try {
+    // Its own call and its own failure: git missing is not a reason for the
+    // whole panel to error, it is a reason for one card not to be there.
+    gitAvailable.value = await api.gitAvailable().catch(() => false);
     catalog.value = await api.catalogGet();
     form.value.phpVersion = catalog.value.runtimes.find((r) => r.id === 'php')?.default ?? '8.4';
     form.value.nodeVersion = catalog.value.runtimes.find((r) => r.id === 'node')?.default ?? '22';
@@ -191,7 +236,22 @@ async function create() {
   busy.value = true;
   error.value = null;
   try {
-    if (scaffolding.value) {
+    if (cloning.value) {
+      // Clone, then one of two follow-ups. StackVo authenticates nothing here;
+      // the user's own git and ssh config do the work.
+      const { name, hasManifest } = await api.projectClone(gitUrl.value, form.value.name || null);
+      if (hasManifest) {
+        // The repository brought its own settings, which is what `stackvo.json`
+        // being commit-friendly is for. They are the team's answer and are not
+        // overwritten by a form field that was pre-filled, not chosen — the
+        // Manifest tab is where they get changed. Only the compose files, the
+        // hosts entry and the certificate are still owed.
+        await api.projectRegister(name);
+      } else {
+        // Nothing committed, so this is the same detection a scaffold gets.
+        await api.projectAdopt(name, null, { domain: form.value.domain || null });
+      }
+    } else if (scaffolding.value) {
       // Install first, adopt second: adoption is the same detection a git
       // clone gets, so the manifest reflects what the installer wrote.
       await api.projectScaffold(form.value.name, template.value);
@@ -244,6 +304,9 @@ watch(() => [form.value.name, form.value.runtime, form.value.phpVersion], valida
 const canCreate = computed(
   () =>
     !!form.value.name &&
+    // A clone with no URL is a button that would fail in Rust to say what the
+    // form could have said here.
+    (!cloning.value || !!gitUrl.value.trim()) &&
     !overExtensionLimit(form.value, catalog.value) &&
     report.value?.valid !== false &&
     !busy.value
@@ -276,7 +339,30 @@ const canCreate = computed(
              framework does not answer: PHP version, web server, extensions.
              The duplicate name and domain fields that used to live here were
              the same two fields written twice. -->
-        <ProjectFormFields ref="fields" v-model="form" :catalog="catalog" :scaffold="scaffolding" />
+        <ProjectFormFields ref="fields" v-model="form" :catalog="catalog" :scaffold="detected" />
+
+        <!-- The one thing a clone needs that nothing else does. Above the
+             hints, because with this empty the panel cannot do anything. -->
+        <v-text-field
+          v-if="cloning"
+          v-model="gitUrl"
+          class="mt-4"
+          variant="outlined"
+          density="comfortable"
+          spellcheck="false"
+          autocomplete="off"
+          prepend-inner-icon="mdi-source-branch"
+          :label="t('newProject.gitUrl')"
+          :placeholder="t('newProject.gitUrlPlaceholder')"
+          :hint="t('newProject.gitUrlHint')"
+          persistent-hint
+        />
+
+        <v-alert v-if="cloning" type="info" variant="tonal" class="mt-4">
+          <div class="text-caption">{{ t('newProject.gitAuthHint') }}</div>
+          <div class="text-caption mt-2">{{ t('newProject.gitManifestHint') }}</div>
+          <div class="text-caption mt-2">{{ t('newProject.detectedHint') }}</div>
+        </v-alert>
 
         <!-- Said rather than left as an absence: a Laravel document root typed
              by hand is a 404 nobody can explain. -->
@@ -316,6 +402,24 @@ const canCreate = computed(
           <div class="d-flex align-center ga-2">
             <v-icon size="20">{{ TEMPLATE_ICONS.empty }}</v-icon>
             <div class="text-body-2">{{ t('newProject.templates.empty') }}</div>
+          </div>
+        </v-card>
+
+        <!-- Beside the empty project rather than inside the accordion: a clone
+             is not a framework, and it is the other case where the directory is
+             filled by something that is not a scaffolder. Absent entirely when
+             git is not installed — there is nothing useful to say about a
+             disabled card. -->
+        <v-card
+          v-if="gitAvailable"
+          :variant="cloning ? 'tonal' : 'text'"
+          :color="cloning ? 'primary' : undefined"
+          class="template-card mb-2"
+          @click="choose(CLONE)"
+        >
+          <div class="d-flex align-center ga-2">
+            <v-icon size="20">mdi-git</v-icon>
+            <div class="text-body-2">{{ t('newProject.templates.git') }}</div>
           </div>
         </v-card>
 
