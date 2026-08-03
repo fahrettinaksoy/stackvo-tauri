@@ -686,6 +686,46 @@ async function saveRelease() {
  */
 const profiler = ref(null);
 const profilerBusy = ref('');
+
+/**
+ * Is the running container in the mode the app is set to?
+ *
+ * The warning under the mode switch asked `active === false`, and that never
+ * fired for the case it exists for. `active` means "both Xdebug variables are
+ * present", and after switching stepping to profiling they still are — with
+ * `XDEBUG_MODE=debug` in them. So the page reported profiling as applied, the
+ * trigger did nothing, and the recorded list stayed at zero with nothing on
+ * screen to say why.
+ *
+ * The container's own mode is the answer, compared against the configured one.
+ * `null` while nothing is running or nothing has been read yet, which is not a
+ * mismatch — a stopped project has no mode to disagree with.
+ */
+/**
+ * Put the overlay's settings into the running container.
+ *
+ * **Not a restart**, and the difference is the whole bug. `project_restart`
+ * calls Docker's `restart`, which restarts the process inside the container it
+ * already has — and a container's environment and mounts are fixed when it is
+ * *created*. So the "restart the project to apply them" that both the profiler
+ * and the dumps panes have been telling people to do could never work: the
+ * warning stayed up, `dd()` kept rendering into the response, and the profile
+ * list stayed at zero, no matter how many times it was clicked.
+ *
+ * `compose up -d` is the operation that can: compose compares each service
+ * against its definition and recreates the ones whose definition changed, which
+ * after an overlay is written is exactly this project.
+ */
+async function applyToContainer() {
+  await act(api.composeUpProject);
+}
+
+const profilerNeedsRestart = computed(() => {
+  const status = profiler.value;
+  if (!status?.xdebug?.running) return false;
+  if (status.xdebug.active === false) return true;
+  return !!status.xdebug.activeMode && status.xdebug.activeMode !== status.mode;
+});
 const profileReport = ref(null);
 const profileOpenId = ref('');
 
@@ -1841,13 +1881,30 @@ onUnmounted(() => {
                     {{ t('profiler.howToRecord', { trigger: profiler.trigger }) }}
                   </div>
                 </v-alert>
-                <v-alert
-                  v-if="profiler.mode === 'profile' && profiler.xdebug.active === false"
-                  type="warning"
-                  variant="tonal"
-                  class="mt-3"
-                >
-                  <div class="text-caption">{{ t('profiler.needsRestart') }}</div>
+                <!-- Fires for either mode, not just profiling: switching back
+                     to stepping leaves the container profiling, and that is the
+                     same silence pointing the other way. -->
+                <v-alert v-if="profilerNeedsRestart" type="warning" variant="tonal" class="mt-3">
+                  <div class="text-caption">{{ t('profiler.needsRecreate') }}</div>
+                  <div v-if="profiler.xdebug.activeMode" class="text-caption mt-1">
+                    {{
+                      t('profiler.modeMismatch', {
+                        running: profiler.xdebug.activeMode,
+                        wanted: profiler.mode,
+                      })
+                    }}
+                  </div>
+                  <v-btn
+                    size="small"
+                    color="warning"
+                    variant="tonal"
+                    class="mt-2"
+                    prepend-icon="mdi-autorenew"
+                    :loading="ops.isBusy(name)"
+                    @click="applyToContainer"
+                  >
+                    {{ t('projectDetail.applyToContainer') }}
+                  </v-btn>
                 </v-alert>
               </template>
 
@@ -1995,7 +2052,18 @@ onUnmounted(() => {
                 <!-- Read from the running container: `stackvo up` from the CLI
                      layers three compose files, not seven. -->
                 <v-alert v-if="!dumps.configured" type="warning" variant="tonal" class="mb-4">
-                  <div class="text-caption">{{ t('dumps.needsRestart') }}</div>
+                  <div class="text-caption">{{ t('dumps.needsRecreate') }}</div>
+                  <v-btn
+                    size="small"
+                    color="warning"
+                    variant="tonal"
+                    class="mt-2"
+                    prepend-icon="mdi-autorenew"
+                    :loading="ops.isBusy(name)"
+                    @click="applyToContainer"
+                  >
+                    {{ t('projectDetail.applyToContainer') }}
+                  </v-btn>
                 </v-alert>
 
                 <div class="d-flex ga-2 align-center">
@@ -2030,6 +2098,14 @@ onUnmounted(() => {
 
                 <div v-if="!running" class="text-caption text-medium-emphasis mt-2">
                   {{ t('dumps.needsRunning') }}
+                </div>
+
+                <!-- The one thing this pane cannot change and everybody trips
+                     over: `dd()` sets a 500 header itself, in Symfony's own
+                     code, so a caught dump arrives here *and* the browser shows
+                     an error. Said here rather than left to be rediscovered. -->
+                <div v-if="dumpStreamId" class="text-caption text-medium-emphasis mt-2">
+                  {{ t('dumps.ddEndsTheRequest') }}
                 </div>
 
                 <pre v-if="dumpLines.length" class="dump-stream mt-4">{{

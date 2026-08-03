@@ -72,6 +72,16 @@ const requirements = computed(() => report.value?.preflight?.requirements ?? [])
 const ports = computed(() => report.value?.ports ?? []);
 const hostsMissing = computed(() => report.value?.hostsMissing ?? []);
 const generated = computed(() => report.value?.generated ?? null);
+
+/**
+ * The containers every domain is routed through — Traefik, today.
+ *
+ * The gate says whether the app can run and the ports section says whether 80
+ * is free; neither answers "the proxy is down", which is the state that makes a
+ * correctly installed stack look broken.
+ */
+const core = computed(() => report.value?.core ?? []);
+const coreDown = computed(() => core.value.some((c) => c.state === 'fail'));
 const space = computed(() => report.value?.space ?? null);
 
 /**
@@ -148,6 +158,40 @@ async function dropExtension(row) {
   } finally {
     busy.value = null;
   }
+}
+
+/**
+ * Bring the core containers up — the same `minimal` mode the first-run setup
+ * uses, which is the `core` profile and nothing else.
+ *
+ * Not `all`: the finding is "the proxy is not running", and answering it by
+ * starting every enabled service would be a repair larger than the problem.
+ */
+async function startCore() {
+  busy.value = 'core';
+  error.value = null;
+  try {
+    await api.composeUp('minimal');
+    await load();
+  } catch (e) {
+    error.value = e;
+  } finally {
+    busy.value = null;
+  }
+}
+
+/**
+ * What one core-container row should say.
+ *
+ * "Missing" and "stopped" are deliberately different sentences. `compose down`
+ * removes containers, so the two states arrive from different actions and want
+ * different repairs — and reporting both as "not running" is what sent somebody
+ * looking for a stopped container that had never existed.
+ */
+function coreLabel(c) {
+  if (c.state === 'unknown') return t('doctor.coreUnknown');
+  if (c.running) return c.image || t('doctor.coreRunning');
+  return c.exists ? t('doctor.coreStopped') : t('doctor.coreMissing');
 }
 
 async function regenerate() {
@@ -236,6 +280,39 @@ onMounted(load);
         {{ t(`preflight.${r.id}Action`) }}
       </v-btn>
     </div>
+  </SettingsGroup>
+
+  <!-- ---- the containers everything is routed through ---------------------- -->
+  <!-- Above ports on purpose: "the proxy is not running" is the finding, and
+       "port 80 is free" is a symptom of it rather than a separate problem. -->
+  <SettingsGroup
+    v-if="core.length"
+    icon="mdi-swap-horizontal-bold"
+    :title="t('doctor.coreTitle')"
+    :description="t('doctor.coreDesc')"
+    class="mt-4"
+  >
+    <div v-for="c in core" :key="c.service" class="row">
+      <v-icon :color="STATE[c.state].color" size="18">{{ STATE[c.state].icon }}</v-icon>
+      <div class="min-w-0">
+        <span class="text-body-2">{{ c.container }}</span>
+        <div class="text-caption text-medium-emphasis detail">{{ coreLabel(c) }}</div>
+      </div>
+    </div>
+
+    <v-btn
+      v-if="coreDown"
+      size="small"
+      color="primary"
+      variant="tonal"
+      class="mt-3"
+      prepend-icon="mdi-play"
+      :loading="busy === 'core'"
+      :disabled="!app.engineUp"
+      @click="startCore"
+    >
+      {{ t('doctor.coreStart') }}
+    </v-btn>
   </SettingsGroup>
 
   <!-- ---- ports ----------------------------------------------------------- -->

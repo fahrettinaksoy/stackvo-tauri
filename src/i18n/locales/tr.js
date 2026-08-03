@@ -120,6 +120,14 @@ export default {
   },
 
   servicesView: {
+    disableTitle: '{name} devre dışı bırakılsın mı?',
+    disableBody: 'Bu servisten geriye hiçbir şey kalmaz. Şunlar silinir:',
+    disableContainer: 'Konteyner (durdurulup kaldırılır)',
+    disableVolumes: 'Adlandırılmış birimleri — veritabanı içeriği dâhil, geri dönüşü yok',
+    disableImage: 'İmajı (başka bir konteyner kullanmıyorsa)',
+    disableLogs: 'logs/services altındaki log klasörü',
+    disableHosts: '{domain} için hosts kaydı — yönetici parolası sorulur',
+    disableConfirm: 'Devre dışı bırak ve sil',
     hide: 'Değeri gizle',
     colDetail: 'Detay',
     serviceInfo: 'Servis bilgisi',
@@ -197,6 +205,7 @@ export default {
     portMappings: 'Port Eşlemeleri',
     notPublished: 'yayınlanmadı',
     copied: 'Kopyalandı',
+    applyToContainer: 'Konteyneri yeniden oluştur',
   },
 
   workspace: {
@@ -507,14 +516,16 @@ export default {
       'dump() ve dd() çıktılarını yanıttan alıp burada gösterir. Biçimlendirmeyi, projenizin konteyneri içinde çalışan Symfony’nin kendi dump sunucusu yapar.',
     unavailable:
       'Bu projede {binary} yok. symfony/var-dumper ile gelir, Laravel de ona bağlıdır — composer install çalıştırın.',
-    needsRestart:
-      'Çalışan konteynerde dump ayarları henüz yok. Uygulanması için projeyi yeniden başlatın.',
+    needsRecreate:
+      'Çalışan konteynerde dump ayarları henüz yok. Bunlar konteyner oluşturulurken sabitlenir, o yüzden yeniden başlatmak yetmez — konteyneri yeniden oluşturmak gerekir.',
     needsRunning: 'Toplayıcı projenin konteyneri içinde çalışır. Önce projeyi başlatın.',
     start: 'Yakalamaya başla',
     stop: 'Durdur',
     listening: 'Dinleniyor',
     clear: 'Temizle',
     waiting: 'Bir dump bekleniyor… uygulamada herhangi bir yerde dump() çağırın.',
+    ddEndsTheRequest:
+      'dump() isteği sürdürür. dd() ise dökümü alıp isteği bitirir ve Symfony bunu 500 olarak işaretler — tarayıcıda hata görürken dökümün burada belirmesi normaldir.',
   },
 
   release: {
@@ -548,7 +559,9 @@ export default {
       'Biri ya da diğeri. Adım ayıklama her istekte bağlanır, profilleme bir tetikleyici bekler; ikisini birden açık bırakmak birini bozar.',
     howToRecord:
       'Bir istek talep etmeden hiçbir şey kaydedilmez. URL’ye ?{trigger}=1 ekleyin veya çerez olarak tanımlayın.',
-    needsRestart: 'Çalışan konteynerde bu henüz yok. Uygulanması için projeyi yeniden başlatın.',
+    modeMismatch: 'Konteyner şu an “{running}” modunda, ayar “{wanted}”.',
+    needsRecreate:
+      'Çalışan konteynerde bu henüz yok. Ortam değişkenleri ve bağlamalar konteyner oluşturulurken sabitlenir, o yüzden yeniden başlatmak yetmez — konteyneri yeniden oluşturmak gerekir.',
     recorded: 'Kayıtlı profiller ({n})',
     noneYet: 'Henüz kayıt yok.',
     clear: 'Tümünü sil ({size})',
@@ -765,7 +778,7 @@ export default {
       applies: 'Nerede geçerli',
       appliesDesc: 'Her sunucu bir dosya üzerinden yapılandırılmıyor.',
       supportNote:
-        'Apache kendi Dockerfile’ı içinde, Swoole ise satır içi bir betikle yapılandırılıyor; ikisi de bu yönergeleri almıyor.',
+        'Apache kendi Dockerfile’ı içinde, Swoole ise satır içi bir betikle yapılandırılıyor; ikisinin de yönerge eklenecek bir dosyası yok. Yukarıdaki istek sınırları yalnızca nginx ve caddy’ye yazılır — FrankenPHP’nin Caddyfile’ı onları taşımıyor, ona yalnızca ek yönerge yazabilirsiniz.',
     },
     defaults: {
       title: 'Proje varsayılanları',
@@ -964,8 +977,9 @@ export default {
       aptHint: 'Konteyner içinde apt ile kurulur.',
     },
     about: 'Hakkında',
-    diagnostics: 'Tanılama',
-    diagnosticsHint: 'Bir sorun bildirirken bu klasörü ekleyin.',
+    diagnostics: 'Uygulama günlüğü',
+    diagnosticsHint:
+      'StackVo’nun kendi tanılama kaydı — projelerin sunucu logları değil. Bir sorun bildirirken bu klasörü ekleyin.',
     openLogs: 'Klasörü aç',
     logsUnavailable: 'Bu sistemde yazılabilir bir log konumu bulunamadı.',
     logsRedacted: 'Parola ve token değerleri log yazılırken maskelenir.',
@@ -991,6 +1005,7 @@ export default {
     browserAppHint:
       '“Ziyaret et” düğmelerinin tamamı bunu kullanır — proje ve servis alan adları burada açılır.',
     appsHint: 'Kurulu olmayanlar seçilemez.',
+    appDefault: 'Varsayılan',
     startMinimized: 'Tepsiye küçültülmüş başlat',
     autostart: 'Açılışta başlat',
     save: '{count} değişikliği kaydet',
@@ -1109,6 +1124,15 @@ export default {
     requirements: 'Başlangıç gereksinimleri',
     requirementsDesc: 'İlk ekranı tutan denetimlerin aynısı, buradan yeniden denetlenebilir.',
 
+    coreTitle: 'Çekirdek konteynerler',
+    coreDesc:
+      'Her proje ve servis alan adı bunların üzerinden geçer. Bunlar çalışmıyorsa hiçbir adres cevap vermez — kurulum doğru olsa bile.',
+    coreRunning: 'Çalışıyor.',
+    coreStopped: 'Konteyner var ama durdurulmuş.',
+    coreMissing: 'Konteyner hiç oluşturulmamış — yığın hiç başlatılmamış veya durdurulup silinmiş.',
+    coreUnknown: 'Docker çalışmadığı için durumu okunamıyor.',
+    coreStart: 'Çekirdek yığını başlat',
+
     portsTitle: 'Ana makine portları',
     portsDesc: 'Üretilen yığının talep edeceği her port ve şu anda kimde olduğu.',
     portsNone: 'Üretilen yığın hiç port yayınlamıyor — önce üreticiyi çalıştırın.',
@@ -1194,6 +1218,7 @@ export default {
     template: 'Başlangıç',
     templates: {
       empty: 'Boş proje',
+      git: 'Git deposundan çek',
       laravel: 'Laravel',
       wordpress: 'WordPress',
       symfony: 'Symfony',
@@ -1235,6 +1260,14 @@ export default {
       'Çalışma ortamı, web sunucusu ve doküman kökü kurucunun yazdığı dosyalardan belirlenir — Laravel public/ üzerinden, WordPress proje kökünden servis eder. Sonrasında proje ayarlarından değiştirilebilir.',
     templateHint:
       'Çerçevenin kendi kurucusu geçici bir konteynerde çalışır; sonra tespit, yazdıklarından projeyi yapılandırır. İlk çalıştırma kurucu imajını indirir — birkaç dakika verin.',
+    gitUrl: 'Depo adresi',
+    gitUrlPlaceholder: 'git@sunucu.example.com:grup/alt-grup/depo.git',
+    gitUrlHint:
+      'SSH veya HTTPS klon adresi. Herhangi bir sunucu olabilir — kendi GitLab’ınız da dâhil.',
+    gitAuthHint:
+      'Klonlama bilgisayarınızdaki git ile yapılır. Anahtar, ssh yapılandırması ve sunucu izinleri sizin kurulumunuzdan okunur — StackVo bunların hiçbirini yönetmez. Terminalde çalışan bir adres burada da çalışır.',
+    gitManifestHint:
+      'Depoda stackvo.json varsa ayarları olduğu gibi kullanılır — takımın cevabı sizindir, yukarıdaki alanlar yok sayılır. Yoksa proje, gelen dosyalardan tespit edilerek yapılandırılır.',
     domain: 'Alan adı',
     runtime: 'Çalışma ortamı',
     phpVersion: 'PHP sürümü',

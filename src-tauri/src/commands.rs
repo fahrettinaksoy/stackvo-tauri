@@ -622,12 +622,14 @@ pub fn server_config_set(
 /// the name anyway would write a file that is never read — the exact shape of
 /// `core/templates/servers/`, which is what this replaced.
 fn checked_server_config(root: &std::path::Path, server: &str) -> Result<std::path::PathBuf> {
-    if !matches!(server, "nginx" | "caddy") {
+    if !matches!(server, "nginx" | "caddy" | "frankenphp") {
         return Err(Error::new(
             Code::InvalidInput,
             format!("{server} is not configured through a file"),
         )
-        .with_hint("Only nginx and caddy have a generated config to add directives to."));
+        .with_hint(
+            "Only nginx, caddy and frankenphp have a generated config to add directives to.",
+        ));
     }
     Ok(crate::generator::server_config_path(root, server))
 }
@@ -1208,6 +1210,7 @@ pub async fn service_apply_settings(
                 program: "docker",
                 args: &args,
                 cwd: &root,
+                env: &[],
             },
         )
         .await
@@ -1255,6 +1258,7 @@ pub async fn service_enable(
                 program: "docker",
                 args: &args,
                 cwd: &root,
+                env: &[],
             },
         )
         .await
@@ -1279,6 +1283,101 @@ pub async fn service_enable(
     outcome.map(|_| operation_id)
 }
 
+/// The named volumes one service's template declares, as the engine has them.
+///
+/// Read from the template rather than matched by name prefix, and the
+/// difference is not cosmetic: `stackvo-mongo-` is a prefix of
+/// `stackvo-mongo-express-…`, so switching off Mongo would have taken
+/// Mongo Express's data with it. The template says exactly which volumes are
+/// this service's, and nothing else does.
+///
+/// Compose prefixes a declared volume with the project name — `base.yml` sets
+/// `name: stackvo`, so `stackvo-mysql-data` is `stackvo_stackvo-mysql-data` on
+/// the engine. Both spellings are returned because a workspace that has taken
+/// the template over can pin a `name:` and get the bare one.
+fn declared_volumes(root: &std::path::Path, service: &str) -> Vec<String> {
+    let relative = format!("core/templates/services/{service}/docker-compose.{service}.tpl");
+    let Some(text) = crate::skeleton::read_template(root, &relative) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    let mut in_volumes = false;
+    for line in text.lines() {
+        let indent = line.len() - line.trim_start().len();
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        if indent == 0 {
+            in_volumes = trimmed == "volumes:";
+            continue;
+        }
+        // Only the top-level `volumes:` block: a service's own `volumes:` list
+        // is bind mounts and named references, not declarations.
+        if in_volumes && indent == 2 && trimmed.ends_with(':') && !trimmed.starts_with('-') {
+            let declared = trimmed.trim_end_matches(':');
+            // A name still carrying `{{ }}` was never substituted, which means
+            // this is not a file the generator wrote and guessing is worse than
+            // leaving it.
+            if declared.contains("{{") {
+                continue;
+            }
+            out.push(format!("stackvo_{declared}"));
+            out.push(declared.to_string());
+        }
+    }
+    out
+}
+
+/// What a disabled service leaves behind, removed.
+///
+/// **This deletes data.** A service's named volume is its databases, and there
+/// is no undo — re-enabling MySQL after this gives an empty MySQL. That is the
+/// behaviour asked for, and the front end confirms it before calling; the
+/// destructive step must not become reachable without that dialog.
+///
+/// Best effort per item, and it returns what it managed rather than failing:
+/// the service is already gone by the time this runs, so an image another
+/// container happens to hold is a reason to leave that image, not a reason to
+/// report the whole operation as failed.
+async fn discard_service(
+    root: &std::path::Path,
+    service: &str,
+    image: Option<&str>,
+) -> Vec<String> {
+    let mut removed = Vec::new();
+
+    for volume in declared_volumes(root, service) {
+        // Ask the engine which of the two spellings exists rather than
+        // deleting blind; `remove_volume` treats a 404 as success, so a wrong
+        // guess would be indistinguishable from a real removal in the report.
+        let exists = engine::volumes_named(&volume)
+            .await
+            .is_ok_and(|found| found.iter().any(|v| v == &volume));
+        if exists && engine::remove_volume(&volume).await.is_ok() {
+            removed.push(format!("volume {volume}"));
+        }
+    }
+
+    if let Some(tag) = image {
+        if engine::remove_image(tag).await.unwrap_or(false) {
+            removed.push(format!("image {tag}"));
+        }
+    }
+
+    // The log directory the template bind-mounts. Confined by construction:
+    // `checked_service` has already vetted the name against the catalogue, so
+    // it cannot carry a separator.
+    let logs = root.join("logs").join("services").join(service);
+    if logs.is_dir() && std::fs::remove_dir_all(&logs).is_ok() {
+        removed.push(format!("logs {}", logs.display()));
+    }
+
+    removed
+}
+
 #[tauri::command]
 pub async fn service_disable(
     app: AppHandle,
@@ -1293,9 +1392,34 @@ pub async fn service_disable(
     events::emit(&app, "service:disabling", SubjectEvent::service(&name));
 
     let outcome = async {
-        // Stop first, then unconfigure: the reverse order regenerates the
-        // compose file without the service, leaving its container orphaned.
+        // The hosts entry first, and it is allowed to fail the whole thing.
+        //
+        // It needs an administrator password, and until now a cancelled prompt
+        // was written to the app log and nowhere else — the service went "off"
+        // while its domain kept resolving, which is the residue that is hardest
+        // to notice and hardest to explain. Doing it first means a cancelled
+        // password leaves everything intact rather than half-destroyed: nothing
+        // below this line has run yet.
+        sync_service_host(&root, &name, false).await?;
+
+        // Stop *and remove*, then unconfigure. The order is load-bearing: the
+        // reverse regenerates the compose file without the service, and compose
+        // can no longer see the container it is supposed to be taking down.
+        //
+        // Removal, not just a stop. Stopping left the container behind, and the
+        // next regenerate wrote it out of the compose file — so it stopped
+        // being anything's responsibility while still occupying its name, its
+        // disk and every container list in the app. Turning a service off has
+        // to mean it is not there, or "off" is a label rather than a state.
+        let image = engine::inspect(&name).await.ok().and_then(|c| c.image);
         let _ = engine::stop_container(&name).await;
+        let _ = engine::remove_container(&name).await;
+
+        // Then everything the container leaves behind. Read `discard_service`
+        // before changing any of this: it deletes data on purpose.
+        let discarded = discard_service(&root, &name, image.as_deref()).await;
+        tracing::info!(service = %name, ?discarded, "service disabled and its leftovers removed");
+
         env_writer::set_service_enabled(&root, &name, false)?;
         generate(&app, &root, &operation_id, "projects_and_services").await
     }
@@ -1312,13 +1436,6 @@ pub async fn service_disable(
             "service:error",
             SubjectEvent::service(&name).error(e.message.clone()),
         ),
-    }
-    // The name has to resolve for the service to be reachable, and stop
-    // resolving when it is not — asked for only when the file would change.
-    if outcome.is_ok() {
-        if let Err(e) = sync_service_host(&root, &name, false).await {
-            tracing::warn!(service = %name, error = %e.message, "hosts entry not updated");
-        }
     }
 
     outcome.map(|_| operation_id)
@@ -1448,6 +1565,7 @@ pub async fn compose_up(
             program: "docker",
             args: &args,
             cwd: &root,
+            env: &[],
         },
     )
     .await?;
@@ -1485,6 +1603,7 @@ pub async fn compose_down(app: AppHandle, state: State<'_, AppState>) -> Result<
             program: "docker",
             args: &args,
             cwd: &root,
+            env: &[],
         },
     )
     .await?;
@@ -1536,6 +1655,7 @@ pub async fn project_build(
                 program: "docker",
                 args: &args,
                 cwd: &root,
+                env: &[],
             },
         )
         .await?;
@@ -1560,6 +1680,7 @@ pub async fn project_build(
                 program: "docker",
                 args: &up,
                 cwd: &root,
+                env: &[],
             },
         )
         .await
@@ -2315,6 +2436,7 @@ pub async fn release_build(
                     program: "docker",
                     args: &argv,
                     cwd: &root,
+                    env: &[],
                 },
             )
             .await?;
@@ -2334,6 +2456,7 @@ pub async fn release_build(
                     program: "docker",
                     args: &argv,
                     cwd: &root,
+                    env: &[],
                 },
             )
             .await?;
@@ -2541,6 +2664,7 @@ pub async fn quick_command_run(
                 program: "docker",
                 args: &argv,
                 cwd: &root,
+                env: &[],
             },
         )
         .await;
@@ -3404,6 +3528,90 @@ pub async fn project_adopt(
     outcome.map(|_| operation_id)
 }
 
+/// Bring a project that already carries its own `stackvo.json` online.
+///
+/// The case `project_adopt` deliberately refuses, and refuses correctly: a
+/// directory that already has a manifest must not have one written over it.
+/// But refusing is only half an answer, because the *rest* of adoption — the
+/// compose files, the hosts entry, the certificate — has not happened either,
+/// and nothing else does it. The manifest watcher only reports a change; it
+/// regenerates nothing on purpose.
+///
+/// This is the other half. It is the intended path for a repository that ships
+/// its manifest, which is the arrangement the file was designed for — it is
+/// commit-friendly precisely so a teammate's clone arrives configured. Before
+/// this existed, cloning such a repository ended in "already has a
+/// stackvo.json" and a project that was never generated.
+///
+/// Writes nothing to the manifest. The repository's settings are the team's
+/// answer and win over anything the form was pre-filled with; the Manifest tab
+/// is where they are changed.
+#[tauri::command]
+pub async fn project_register(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<String> {
+    let root = state.root()?;
+    let dir = workspace::project_dir(&root, &name)?;
+
+    let manifest_path = dir.join("stackvo.json");
+    if !manifest_path.is_file() {
+        return Err(
+            Error::new(Code::NotFound, format!("{name} has no stackvo.json"))
+                .with_hint("Adopt it instead — that is the path that writes one."),
+        );
+    }
+
+    // Read and validate before anything is generated from it. A manifest that
+    // came off a remote is not one this app wrote, and the schema check is the
+    // same one every other path runs.
+    let raw = std::fs::read_to_string(&manifest_path)
+        .map_err(|e| Error::io(format!("reading {}", manifest_path.display()), e))?;
+    let spec: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+        Error::new(
+            Code::InvalidManifest,
+            format!("{name}/stackvo.json is not valid JSON: {e}"),
+        )
+        .with_hint("Fix the file, or delete it and adopt the folder instead.")
+    })?;
+    // A manifest that came off a remote is far likelier to fail the schema than
+    // one this app wrote, and the generic rejection says nothing a user can act
+    // on. The findings ride along in `details` either way; this adds where to
+    // go — the doctor already lists every unbuildable extension with the button
+    // that removes it, and an extension is the common failure by a distance.
+    let m = parse_spec(&spec, &name).map_err(|e| {
+        e.with_hint(
+            "Settings → Doctor lists what is wrong and can repair it; then clone or register again."
+                .to_string(),
+        )
+    })?;
+
+    let _busy = state.inflight.acquire(format!("project:{name}"))?;
+    let operation_id = events::next_operation_id("register");
+    events::emit(&app, "project:creating", SubjectEvent::project(&name));
+
+    let outcome = generate(&app, &root, &operation_id, "projects").await;
+
+    match &outcome {
+        Ok(()) => events::emit(&app, "project:created", SubjectEvent::project(&name)),
+        Err(e) => events::emit(
+            &app,
+            "project:error",
+            SubjectEvent::project(&name).error(e.message.clone()),
+        ),
+    }
+    // Nothing to roll back: the manifest was the repository's before this ran
+    // and is untouched either way.
+
+    if outcome.is_ok() {
+        sync_project_host(&app, m.domain.as_deref()).await;
+        sync_certificate(&app, &state, &root).await;
+    }
+
+    outcome.map(|_| operation_id)
+}
+
 /// Turn a detection into a manifest the schema accepts.
 fn detected_spec(name: &str, detected: &detect::Detected) -> serde_json::Value {
     let mut spec = serde_json::json!({
@@ -3768,6 +3976,7 @@ async fn compose_profile_up(
             program: "docker",
             args: &args,
             cwd: root,
+            env: &[],
         },
     )
     .await?;
@@ -3827,6 +4036,7 @@ pub async fn compose_restart(app: AppHandle, state: State<'_, AppState>) -> Resu
             program: "docker",
             args: &args,
             cwd: &root,
+            env: &[],
         },
     )
     .await?;
@@ -4222,6 +4432,7 @@ pub async fn project_scaffold(
                         program: "docker",
                         args: &args,
                         cwd: &root,
+                        env: &[],
                     },
                 )
                 .await
@@ -4263,6 +4474,120 @@ pub async fn project_scaffold(
     }
     outcome?;
     Ok(operation_id)
+}
+
+/// Is `git` on this machine? The clone option is hidden without it.
+///
+/// A query rather than something the front end infers, because "is a program
+/// installed" is not a question a webview can answer, and because the answer
+/// has to survive an app launched from the Dock — see [`crate::git::available`].
+#[tauri::command]
+pub fn git_available() -> bool {
+    crate::git::available()
+}
+
+/// Clone a repository into the project tree with the user's own git.
+///
+/// **This app does not do authentication.** No keys, no agent, no
+/// `known_hosts`, no tokens, no host trust — `git` and `ssh` read the config
+/// the user already has, and everything that makes their clone work in a
+/// terminal is what makes it work here. The two environment variables in
+/// [`crate::git::CLONE_ENV`] configure nothing except that the subprocess must
+/// fail rather than wait for an answer, because there is no terminal to answer
+/// in.
+///
+/// Ends where `project_scaffold` ends: with code on disk and no manifest. The
+/// front end follows with `project_adopt`, so detection, the manifest, the
+/// hosts entry and the certificate all come from the one path they already
+/// came from — a clone must not become a second way to create a project.
+#[tauri::command]
+pub async fn project_clone(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    url: String,
+    name: Option<String>,
+) -> Result<serde_json::Value> {
+    if !crate::git::available() {
+        return Err(Error::new(Code::NotFound, "git is not installed.")
+            .with_hint("Install git, or clone the repository yourself and adopt the folder."));
+    }
+
+    let repo = crate::git::parse(&url)?;
+    // An explicit name wins; otherwise the one git itself would use. Both go
+    // through the same canonicalisation as every other creation path.
+    let name = match name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        Some(given) => workspace::canonical_name(given),
+        None => repo.name.clone(),
+    };
+
+    let _busy = state.inflight.acquire(format!("project:{name}"))?;
+    let root = state.root()?;
+    // The path-safety gate, as everywhere else: a name is never joined directly.
+    let dir = workspace::project_dir(&root, &name)?;
+
+    if dir.exists() {
+        return Err(Error::new(
+            Code::AlreadyExists,
+            format!("projects/{name} already exists"),
+        )
+        .with_hint("Choose another name, or adopt the folder that is already there."));
+    }
+
+    // The parent has to exist; the target must not — git creates it, and
+    // creating it here would mean git cloning into a directory we made, which
+    // it accepts only while empty and which we would then have to clean up.
+    if let Some(parent) = dir.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| Error::io("creating the projects directory", e))?;
+    }
+
+    let operation_id = events::next_operation_id("clone");
+    let args = crate::git::clone_args(&repo, &dir);
+
+    let outcome = runner::run_operation(
+        &events::sink(&app),
+        runner::Operation {
+            operation_id: &operation_id,
+            subject: &name,
+            // The scaffold events, deliberately: this is the same step of the
+            // same flow — put code in a directory — and the console already
+            // subscribes to them.
+            progress_event: "scaffold:progress",
+            finished_event: "scaffold:done",
+            program: "git",
+            args: &args,
+            cwd: &root,
+            env: &crate::git::CLONE_ENV,
+        },
+    )
+    .await;
+
+    if outcome.is_err() {
+        // Git removes the directory it created when a clone fails, so this is
+        // only for the case where it left something behind. `remove_dir` and
+        // not `remove_dir_all`: whatever is in there came off a remote nobody
+        // has inspected yet, and a recursive delete on a path built from a
+        // user-supplied URL is not a line worth writing.
+        let _ = std::fs::remove_dir(&dir);
+    }
+    outcome?;
+
+    // Which of the two follow-ups the caller owes.
+    //
+    // A repository may or may not carry its own `stackvo.json`, and the two
+    // cases need opposite things: without one, adoption detects and writes;
+    // with one, the settings are already the team's answer and only need
+    // bringing online. Cloning used to end in "already has a stackvo.json" for
+    // the second case — the one the file was designed for.
+    let has_manifest = workspace::project_dir(&root, &name)
+        .map(|d| d.join("stackvo.json").is_file())
+        .unwrap_or(false);
+
+    Ok(serde_json::json!({
+        "operationId": operation_id,
+        "name": name,
+        "hasManifest": has_manifest,
+    }))
 }
 
 // ----------------------------------------------------------------- workers
@@ -4422,6 +4747,7 @@ pub async fn tunnel_start(
             program: "docker",
             args: &args,
             cwd: &root,
+            env: &[],
         },
     )
     .await?;
@@ -4638,21 +4964,28 @@ pub fn updater_status() -> serde_json::Value {
     })
 }
 
-/// The user's language for the native surfaces (the tray).
+/// The user's language: what they chose, else what the machine is set to.
 ///
-/// Falls back to the OS locale and then English. The front end owns the
-/// setting; this reads what it stored.
+/// The order and the detection live in [`crate::locale`], because the window
+/// needs the same answer as the tray and the two used to work it out
+/// separately — with different fallbacks, which is how a Turkish machine ended
+/// up with an English tray under a Turkish window.
 pub fn preferred_locale() -> String {
-    prefs_get()
+    let stored = prefs_get()
         .ok()
-        .and_then(|p| {
-            p.get("locale")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-        })
-        .or_else(|| std::env::var("LANG").ok())
-        .unwrap_or_else(|| "en".to_string())
+        .and_then(|p| p.get("locale").and_then(|v| v.as_str()).map(str::to_string));
+    crate::locale::resolve(stored.as_deref()).to_string()
+}
+
+/// The language the window should open in.
+///
+/// A command rather than letting the front end work it out from `prefs_get`:
+/// the fallback is a reading of the operating system, which a webview cannot
+/// do — `navigator.language` answers from the app bundle's localised
+/// resources, and this app ships none.
+#[tauri::command]
+pub fn locale_get() -> String {
+    preferred_locale()
 }
 
 /// Re-label the tray after a language change, so the setting takes effect
@@ -4823,8 +5156,8 @@ mod prefs_tests {
 }
 
 fn prefs_path() -> Result<std::path::PathBuf> {
-    dirs::config_dir()
-        .map(|d| d.join("dev.stackvo.desktop").join("preferences.json"))
+    crate::appdir::config()
+        .map(|d| d.join("preferences.json"))
         .ok_or_else(|| Error::new(Code::IoError, "cannot determine the OS config directory"))
 }
 
@@ -5559,6 +5892,53 @@ pub async fn generate_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The volumes a disable deletes, from the shipped templates.
+    ///
+    /// The prefix approach this replaced would have taken Mongo Express's data
+    /// with Mongo's, because `stackvo-mongo-` is a prefix of
+    /// `stackvo-mongo-express-…`. That is the whole reason the names are read
+    /// from the template, and it is asserted against the real ones in the
+    /// binary rather than a fixture — a template gaining a volume must show up
+    /// here.
+    #[test]
+    fn a_services_volumes_are_its_own_and_not_a_name_prefix_match() {
+        let root = std::env::temp_dir().join("stackvo-declared-volumes-none");
+
+        // Compose prefixes with the project name from base.yml; both spellings
+        // are offered because a pinned `name:` produces the bare one.
+        let mysql = declared_volumes(&root, "mysql");
+        assert!(mysql.contains(&"stackvo_stackvo-mysql-data".to_string()));
+        assert!(mysql.contains(&"stackvo-mysql-data".to_string()));
+
+        // Mongo's list must not reach into Mongo Express's namespace.
+        for volume in declared_volumes(&root, "mongo") {
+            assert!(
+                !volume.contains("mongo-express"),
+                "{volume} belongs to another service"
+            );
+        }
+
+        // A service that declares none gets none — not an empty-prefix match
+        // that would sweep every volume on the machine.
+        assert!(
+            declared_volumes(&root, "phpmyadmin").is_empty(),
+            "phpmyadmin declares no volumes"
+        );
+    }
+
+    /// A service's own `volumes:` list is bind mounts and references to
+    /// volumes declared elsewhere. Reading those as declarations would delete
+    /// paths on the host and volumes belonging to other services.
+    #[test]
+    fn only_the_top_level_volumes_block_declares_anything() {
+        for volume in declared_volumes(&std::env::temp_dir(), "mysql") {
+            assert!(
+                !volume.contains('/'),
+                "{volume} is a bind mount, not a named volume"
+            );
+        }
+    }
 
     /// The stack answers on more than its projects.
     ///

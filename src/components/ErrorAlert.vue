@@ -53,6 +53,23 @@ const detail = computed(() => {
     return String(e);
   }
 });
+
+/**
+ * The findings behind a rejected manifest, which were being thrown away.
+ *
+ * `parse_spec` attaches every one of them — code, path and a sentence naming
+ * the field — and nothing rendered them, so a project refused over a single
+ * unbuildable extension said only "the project definition is not valid". That
+ * is a message you cannot act on: it does not say which of thirty-two
+ * extensions, or that the subject is an extension at all.
+ *
+ * Shaped like the New Project sheet's own validation list, because it is the
+ * same data from the same function.
+ */
+const findings = computed(() => {
+  const list = props.error?.details?.errors;
+  return Array.isArray(list) ? list.filter((f) => f && (f.message || f.path)) : [];
+});
 </script>
 
 <template>
@@ -65,6 +82,13 @@ const detail = computed(() => {
   >
     <div v-if="headline" class="text-body-2 font-weight-medium">{{ headline }}</div>
     <div class="text-caption" :class="{ 'mt-1': headline }">{{ detail }}</div>
+    <ul v-if="findings.length" class="text-caption mt-2 ms-4">
+      <li v-for="(f, i) in findings" :key="i">
+        <strong v-if="f.code">{{ f.code }}</strong>
+        <span v-if="f.path" class="text-medium-emphasis"> {{ f.path }}</span>
+        <template v-if="f.message"> — {{ f.message }}</template>
+      </li>
+    </ul>
     <div v-if="error.hint" class="text-caption mt-1 text-medium-emphasis">{{ error.hint }}</div>
   </v-alert>
 </template>

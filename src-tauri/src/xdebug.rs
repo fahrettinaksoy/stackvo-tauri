@@ -325,6 +325,25 @@ pub fn env_is_active(env: &[String]) -> bool {
     has("XDEBUG_MODE") && has("XDEBUG_CONFIG")
 }
 
+/// Which mode the *running* container is in, as opposed to the one configured.
+///
+/// The two come apart every time the switch is flipped, because the overlay is
+/// re-rendered for the next compose command and the container that is already
+/// up keeps what it was created with. `env_is_active` cannot see that: it asks
+/// whether both variables are present, and after a switch from stepping to
+/// profiling they both still are — with `XDEBUG_MODE=debug` in them.
+///
+/// The consequence was silent and is the reason this exists. Profiling would
+/// report itself applied, the trigger would do nothing, and the recorded list
+/// stayed at zero with no warning anywhere on the page.
+pub fn env_mode(env: &[String]) -> Option<String> {
+    env.iter()
+        .find_map(|line| line.strip_prefix("XDEBUG_MODE="))
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct XdebugStatus {
@@ -334,6 +353,14 @@ pub struct XdebugStatus {
     pub enabled: bool,
     /// What the running container carries. None when nothing is running.
     pub active: Option<bool>,
+    /// The mode that container is actually in — `debug`, `profile`, or None.
+    ///
+    /// Separate from `active` because they answer different questions and only
+    /// this one catches a switch that has not been applied yet: after flipping
+    /// stepping to profiling, both variables are still present, so `active`
+    /// stays true while `XDEBUG_MODE` still says `debug`. Compared against
+    /// `mode` below, which is what the app is configured for.
+    pub active_mode: Option<String>,
     pub running: bool,
     /// The extension is compiled in, so the manifest can be ahead of the image.
     pub needs_rebuild: bool,
@@ -579,6 +606,7 @@ pub async fn status(root: &Path, name: &str) -> Result<XdebugStatus> {
         supported,
         enabled,
         active,
+        active_mode: details.as_ref().and_then(|d| env_mode(&d.env)),
         running,
         needs_rebuild: needs_rebuild(
             enabled,
@@ -843,6 +871,45 @@ mod tests {
         assert!(!env_is_active(&s(&["XDEBUG_CONFIG=client_port=9003"])));
         assert!(!env_is_active(&s(&["XDEBUG_MODE=", "XDEBUG_CONFIG="])));
         assert!(!env_is_active(&[]));
+    }
+
+    /// The bug `env_mode` exists for, stated as the state that produced it.
+    ///
+    /// A container created while stepping, then switched to profiling in the
+    /// app: both variables are still there, so `active` is true and the page
+    /// reported profiling as applied — while `XDEBUG_MODE` still said `debug`,
+    /// the trigger did nothing, and the recorded list stayed at zero with no
+    /// warning anywhere.
+    #[test]
+    fn a_container_that_has_not_been_restarted_still_reports_its_old_mode() {
+        let stepping = s(&[
+            "XDEBUG_MODE=debug",
+            "XDEBUG_CONFIG=client_host=host.docker.internal client_port=9003",
+        ]);
+
+        assert!(
+            env_is_active(&stepping),
+            "this is exactly why `active` alone could not catch it"
+        );
+        assert_eq!(env_mode(&stepping).as_deref(), Some("debug"));
+        assert_ne!(
+            env_mode(&stepping).as_deref(),
+            Some(Mode::Profile.as_str()),
+            "a container in debug mode must not read as profiling"
+        );
+    }
+
+    #[test]
+    fn the_running_mode_is_read_from_the_variable_and_nothing_else() {
+        assert_eq!(
+            env_mode(&s(&["PATH=/usr/bin", "XDEBUG_MODE=profile"])).as_deref(),
+            Some("profile")
+        );
+        // Absent, empty, and a name that merely starts the same way.
+        assert_eq!(env_mode(&s(&["PATH=/usr/bin"])), None);
+        assert_eq!(env_mode(&s(&["XDEBUG_MODE="])), None);
+        assert_eq!(env_mode(&s(&["XDEBUG_MODE_EXTRA=profile"])), None);
+        assert_eq!(env_mode(&[]), None);
     }
 
     /// Shaped like the real generated file, down to the `networks:` block that

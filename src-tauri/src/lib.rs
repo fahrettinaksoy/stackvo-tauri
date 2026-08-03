@@ -1,3 +1,4 @@
+pub mod appdir;
 pub mod applog;
 pub mod apps;
 pub mod atomic;
@@ -16,8 +17,10 @@ pub mod env_writer;
 pub mod error;
 pub mod events;
 pub mod generator;
+pub mod git;
 pub mod hosts;
 pub mod inflight;
+pub mod locale;
 pub mod logging;
 pub mod mail;
 pub mod manifest;
@@ -60,6 +63,12 @@ pub fn run() {
     // that used to leave no trace. Held for the process lifetime — dropping the
     // guard stops the writer and discards whatever is buffered.
     let _log_guard = logging::init();
+
+    // After the log, so the move has somewhere to be recorded, and before the
+    // first command can read a preference: the folders these live in were named
+    // after the bundle identifier until this release, and an install that came
+    // through the old name has settings worth keeping.
+    appdir::migrate_config();
 
     tauri::Builder::default()
         // A second launch focuses the existing window instead of opening a
@@ -324,6 +333,9 @@ pub fn run() {
             commands::worker_start,
             commands::worker_stop,
             commands::project_scaffold,
+            commands::project_clone,
+            commands::project_register,
+            commands::git_available,
             commands::project_start,
             commands::project_stop,
             commands::project_restart,
@@ -421,6 +433,7 @@ pub fn run() {
             commands::updater_status,
             commands::system_accent,
             commands::logs_info,
+            commands::locale_get,
             commands::tray_relabel,
             commands::window_close_action,
             commands::apps_available,

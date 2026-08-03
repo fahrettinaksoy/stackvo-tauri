@@ -24,6 +24,21 @@ pub struct App {
     pub icon: String,
     /// Present on this machine.
     pub available: bool,
+    /// The one this app would use when the user has chosen nothing.
+    ///
+    /// Without it the picker was blank on a fresh install and said nothing
+    /// about what "Open in terminal" would actually start — the fallback lives
+    /// in `resolve_terminal` and the editor loop, where nobody can see it. Set
+    /// on exactly one entry per list, and computed by the same rule those use.
+    pub default: bool,
+}
+
+/// The entry that wins when no preference is stored: the first installed one.
+fn mark_default(mut apps: Vec<App>) -> Vec<App> {
+    if let Some(first) = apps.iter_mut().find(|a| a.available) {
+        first.default = true;
+    }
+    apps
 }
 
 /// Terminals worth offering, in the order a user is likely to prefer them.
@@ -204,21 +219,27 @@ const BROWSERS: &[(&str, &str, &str, &str)] = &[
 ];
 
 pub fn browsers() -> Vec<App> {
-    BROWSERS
-        .iter()
-        .map(|(id, name, icon, bundle)| App {
-            id: (*id).to_string(),
-            name: (*name).to_string(),
-            icon: (*icon).to_string(),
-            // The system default is always available — it is the absence of a
-            // choice, and something always answers a URL.
-            available: id.is_empty()
-                || is_available(id)
-                || (cfg!(target_os = "macos")
-                    && !bundle.is_empty()
-                    && std::path::Path::new(bundle).exists()),
-        })
-        .collect()
+    // The system default heads the list and is always available, so it is also
+    // the entry `mark_default` lands on — which is exactly right: an unset
+    // browserCommand means `resolve_browser` returns None and the OS decides.
+    mark_default(
+        BROWSERS
+            .iter()
+            .map(|(id, name, icon, bundle)| App {
+                id: (*id).to_string(),
+                name: (*name).to_string(),
+                icon: (*icon).to_string(),
+                // The system default is always available — it is the absence of a
+                // choice, and something always answers a URL.
+                available: id.is_empty()
+                    || is_available(id)
+                    || (cfg!(target_os = "macos")
+                        && !bundle.is_empty()
+                        && std::path::Path::new(bundle).exists()),
+                default: false,
+            })
+            .collect(),
+    )
 }
 
 /// How to open a URL in the chosen browser, or `None` for the system default.
@@ -284,30 +305,39 @@ pub fn is_available(probe: &str) -> bool {
 }
 
 pub fn terminals() -> Vec<App> {
-    TERMINALS
-        .iter()
-        .map(|(id, name, icon, probe)| App {
-            id: (*id).to_string(),
-            name: (*name).to_string(),
-            icon: (*icon).to_string(),
-            available: is_available(probe),
-        })
-        .collect()
+    // First installed one, the same choice `resolve_terminal` makes.
+    mark_default(
+        TERMINALS
+            .iter()
+            .map(|(id, name, icon, probe)| App {
+                id: (*id).to_string(),
+                name: (*name).to_string(),
+                icon: (*icon).to_string(),
+                available: is_available(probe),
+                default: false,
+            })
+            .collect(),
+    )
 }
 
 pub fn editors() -> Vec<App> {
-    EDITORS
-        .iter()
-        .map(|(id, name, icon, bundle)| App {
-            id: (*id).to_string(),
-            name: (*name).to_string(),
-            icon: (*icon).to_string(),
-            available: is_available(id)
-                || (cfg!(target_os = "macos")
-                    && !bundle.is_empty()
-                    && std::path::Path::new(bundle).exists()),
-        })
-        .collect()
+    // First installed one, the same order `open_editor` walks when no editor
+    // is configured.
+    mark_default(
+        EDITORS
+            .iter()
+            .map(|(id, name, icon, bundle)| App {
+                id: (*id).to_string(),
+                name: (*name).to_string(),
+                icon: (*icon).to_string(),
+                available: is_available(id)
+                    || (cfg!(target_os = "macos")
+                        && !bundle.is_empty()
+                        && std::path::Path::new(bundle).exists()),
+                default: false,
+            })
+            .collect(),
+    )
 }
 
 /// The chosen terminal, or the first one that is actually installed.
@@ -405,6 +435,46 @@ mod tests {
         // silently omits entries reads as "this app does not support iTerm".
         assert_eq!(terminals().len(), TERMINALS.len());
         assert_eq!(editors().len(), EDITORS.len());
+    }
+
+    /// The picker showed nothing selected on a fresh install, while the app
+    /// happily opened *some* terminal. Exactly one entry per list carries the
+    /// flag, and it is one that exists.
+    #[test]
+    fn one_entry_per_list_is_the_default_and_it_is_installed() {
+        for list in [terminals(), editors(), browsers()] {
+            let defaults: Vec<_> = list.iter().filter(|a| a.default).collect();
+            assert!(defaults.len() <= 1, "at most one default per list");
+            if let Some(d) = defaults.first() {
+                assert!(d.available, "{} is the default but is not installed", d.id);
+            } else {
+                assert!(
+                    list.iter().all(|a| !a.available),
+                    "a list with something installed must name a default"
+                );
+            }
+        }
+    }
+
+    /// The flag has to describe what actually launches, or it is a label that
+    /// lies. `resolve_terminal(None)` is the code path the button takes.
+    #[test]
+    fn the_default_terminal_is_the_one_resolution_picks() {
+        let flagged = terminals().into_iter().find(|a| a.default);
+        match (flagged, resolve_terminal(None)) {
+            (Some(app), Ok(entry)) => assert_eq!(app.id, entry.0),
+            (None, Err(e)) => assert_eq!(e.code, Code::NotFound),
+            _ => panic!("the flagged default and the resolved terminal disagree"),
+        }
+    }
+
+    /// An unset browser means the OS decides, so the default entry must be the
+    /// one that stands for that — not whichever browser happens to be first.
+    #[test]
+    fn the_default_browser_is_the_system_default() {
+        let flagged = browsers().into_iter().find(|a| a.default).unwrap();
+        assert_eq!(flagged.id, "", "the system default entry has the empty id");
+        assert!(resolve_browser(Some(&flagged.id)).is_none());
     }
 
     #[test]

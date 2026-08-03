@@ -32,11 +32,37 @@ pub struct Output {
 /// stdout and stderr are merged in arrival order: `docker compose` writes its
 /// progress to stderr and its results to stdout, and splitting them makes the
 /// log read out of sequence.
-pub async fn stream<F>(program: &str, args: &[String], cwd: &Path, mut on_line: F) -> Result<Output>
+pub async fn stream<F>(program: &str, args: &[String], cwd: &Path, on_line: F) -> Result<Output>
 where
     F: FnMut(&str) + Send,
 {
-    let mut child = Command::new(program)
+    stream_with_env(program, args, cwd, &[], on_line).await
+}
+
+/// The same, with environment variables added to the child's own.
+///
+/// Added rather than replaced, and that is the whole design: `git` reaches the
+/// user's `~/.ssh/config`, their agent and their `known_hosts` through the
+/// environment it inherits, and a run that scrubbed it would break exactly the
+/// setup this app is supposed to be borrowing. The pairs here only pin the
+/// handful of variables that decide whether a subprocess may stop and ask a
+/// human something — which it must not, since nobody is there to answer.
+pub async fn stream_with_env<F>(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    env: &[(&str, &str)],
+    mut on_line: F,
+) -> Result<Output>
+where
+    F: FnMut(&str) + Send,
+{
+    let mut command = Command::new(program);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+
+    let mut child = command
         .args(args)
         .current_dir(cwd)
         .stdout(Stdio::piped())
@@ -62,23 +88,8 @@ where
     let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(256);
     let tx_err = tx.clone();
 
-    tokio::spawn(async move {
-        let mut lines = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if tx.send(line).await.is_err() {
-                break;
-            }
-        }
-    });
-
-    tokio::spawn(async move {
-        let mut lines = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if tx_err.send(line).await.is_err() {
-                break;
-            }
-        }
-    });
+    tokio::spawn(pump(stdout, tx));
+    tokio::spawn(pump(stderr, tx_err));
 
     let mut collected = Vec::new();
     while let Some(line) = rx.recv().await {
@@ -104,6 +115,48 @@ where
     })
 }
 
+/// Read one pipe and send each finished line on.
+///
+/// Split on `\r` as well as `\n`, which `BufReader::lines()` does not do — and
+/// that is not a nicety. A progress bar is written by redrawing one line with
+/// carriage returns and no newline until the phase ends, so a `\n`-only reader
+/// buffers the whole thing and emits it as a single line with every percentage
+/// concatenated into it. Measured on a real `git clone --progress`, whose
+/// "Receiving objects" phase arrived as one 400-character line reading
+/// `7% (1/13)Receiving objects: 15% (2/13)…`.
+///
+/// A `\r` is therefore treated as ending a line rather than as text. The empty
+/// segment a `\r\n` pair leaves behind is dropped, so Windows line endings do
+/// not double every line.
+async fn pump<R>(reader: R, tx: tokio::sync::mpsc::Sender<String>)
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut reader = BufReader::new(reader);
+    let mut buf = Vec::new();
+
+    loop {
+        buf.clear();
+        // Read to the next newline, then break that chunk on carriage returns.
+        // Reading to `\r` instead would be wrong the other way: a tool that
+        // never writes one would never flush.
+        match reader.read_until(b'\n', &mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+
+        let text = String::from_utf8_lossy(&buf);
+        for segment in text.split(['\r', '\n']) {
+            if segment.is_empty() {
+                continue;
+            }
+            if tx.send(segment.to_string()).await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
 /// What to run and how to report it. A struct rather than eight positional
 /// arguments: at that count, two adjacent `&str` parameters swapped by mistake
 /// compile cleanly and emit the wrong event name.
@@ -115,6 +168,12 @@ pub struct Operation<'a> {
     pub program: &'a str,
     pub args: &'a [String],
     pub cwd: &'a Path,
+    /// Added to the child's inherited environment; empty for almost everything.
+    ///
+    /// Spelled out at every call site rather than defaulted, for the reason
+    /// this struct exists at all: which variables a subprocess runs with is
+    /// worth seeing where it is launched, not somewhere else.
+    pub env: &'a [(&'a str, &'a str)],
 }
 
 /// Run a command and report it as an operation: progress events per line, one
@@ -128,11 +187,12 @@ pub async fn run_operation(sink: &events::Sink, op: Operation<'_>) -> Result<()>
         program,
         args,
         cwd,
+        env,
     } = op;
 
     let started = std::time::Instant::now();
 
-    let result = stream(program, args, cwd, |line| {
+    let result = stream_with_env(program, args, cwd, env, |line| {
         sink.emit(
             progress_event,
             ProgressEvent {
@@ -629,6 +689,74 @@ mod tests {
             .ends_with("docker-compose.devserver.yml"));
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A redrawn progress bar arrives as separate lines, not as one long one.
+    ///
+    /// Measured against a real `git clone --progress`: its "Receiving objects"
+    /// phase writes one line over and over with carriage returns and no newline
+    /// until the phase ends, so a `\n`-only reader emitted the whole phase as a
+    /// single 400-character line with every percentage run together.
+    #[tokio::test]
+    async fn a_carriage_return_ends_a_line_like_a_newline_does() {
+        let mut seen = Vec::new();
+        let out = stream(
+            "sh",
+            &[
+                "-c".into(),
+                // No trailing newline on the CR run, exactly as git leaves it.
+                "printf 'a: 10%%\\ra: 50%%\\ra: 100%%\\ndone\\n'".into(),
+            ],
+            Path::new("/tmp"),
+            |line| seen.push(line.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert!(out.success);
+        assert_eq!(seen, vec!["a: 10%", "a: 50%", "a: 100%", "done"]);
+    }
+
+    /// Windows line endings must not double every line — the empty segment a
+    /// `\r\n` pair leaves between the two is not a line.
+    #[tokio::test]
+    async fn crlf_output_is_not_read_as_blank_lines() {
+        let mut seen = Vec::new();
+        stream(
+            "sh",
+            &["-c".into(), "printf 'one\\r\\ntwo\\r\\n'".into()],
+            Path::new("/tmp"),
+            |line| seen.push(line.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(seen, vec!["one", "two"]);
+    }
+
+    /// The environment reaches the child, and only what was asked for: a clone
+    /// borrows the user's `ssh` setup through everything it inherits, so a run
+    /// that replaced the environment would break the one thing it depends on.
+    #[tokio::test]
+    async fn extra_environment_is_added_to_the_inherited_one() {
+        std::env::set_var("STACKVO_RUNNER_INHERITED", "yes");
+
+        let mut seen = Vec::new();
+        stream_with_env(
+            "sh",
+            &[
+                "-c".into(),
+                "echo \"$STACKVO_RUNNER_PINNED $STACKVO_RUNNER_INHERITED\"".into(),
+            ],
+            Path::new("/tmp"),
+            &[("STACKVO_RUNNER_PINNED", "pinned")],
+            |line| seen.push(line.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(seen, vec!["pinned yes"]);
+        std::env::remove_var("STACKVO_RUNNER_INHERITED");
     }
 
     #[tokio::test]

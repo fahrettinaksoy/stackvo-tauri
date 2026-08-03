@@ -905,6 +905,19 @@ impl ServerSettings {
 pub struct ServerExtras {
     pub nginx: String,
     pub caddy: String,
+    /// FrankenPHP writes a Caddyfile of its own, so it takes directives too.
+    ///
+    /// It was left out when this was built, and the omission was invisible: the
+    /// settings pane greyed it out beside Apache and Swoole and explained the
+    /// two of them, so the third looked like it had been considered. It had
+    /// not. Apache and Swoole genuinely have no file — Apache is configured by
+    /// `sed` inside its own Dockerfile and Swoole by an inline script — while
+    /// FrankenPHP has `Caddyfile`, in the same place, for the same reason.
+    ///
+    /// A separate file from `caddy` rather than a shared one: the two grammars
+    /// overlap but the servers do not. `php_fastcgi` belongs in the Caddy one
+    /// and means nothing to FrankenPHP, which serves PHP itself.
+    pub frankenphp: String,
 }
 
 impl ServerExtras {
@@ -912,6 +925,7 @@ impl ServerExtras {
         Self {
             nginx: server_extra(root, "nginx", env),
             caddy: server_extra(root, "caddy", env),
+            frankenphp: server_extra(root, "frankenphp", env),
         }
     }
 }
@@ -1081,6 +1095,16 @@ pub fn render_caddyfile_with(document_root: &str, limits: &ServerSettings, extra
 /// FrankenPHP's Caddyfile — `php_server`, no FPM, and (unlike the caddy one)
 /// genuinely empty blank lines.
 pub fn render_frankenphp_caddyfile(document_root: &str) -> String {
+    render_frankenphp_caddyfile_with(document_root, "")
+}
+
+/// The same, with the workspace's extra directives appended to the site block.
+///
+/// `extra` is empty for any workspace that has not written directives — see
+/// [`server_extra`] — so the bytes are unchanged for everyone who has not asked
+/// for a change, and the byte-for-byte comparison against the Bash generator
+/// still holds.
+pub fn render_frankenphp_caddyfile_with(document_root: &str, extra: &str) -> String {
     format!(
         "{{\n\
          \x20   # FrankenPHP global options\n\
@@ -1105,6 +1129,7 @@ pub fn render_frankenphp_caddyfile(document_root: &str) -> String {
          \x20       output stdout\n\
          \x20       format console\n\
          \x20   }}\n\
+         {extra}\
          }}\n"
     )
 }
@@ -1117,6 +1142,10 @@ pub fn render_frankenphp_caddyfile(document_root: &str) -> String {
 /// and for node, which has no config files at all. That emptiness is data,
 /// not a gap: a caller comparing the set against disk learns there is nothing
 /// to compare, rather than skipping silently.
+///
+/// The three that do write a file — nginx, caddy, frankenphp — are exactly the
+/// three that accept extra directives. That is not a coincidence to maintain by
+/// hand: `a_server_that_writes_a_config_file_accepts_directives` asserts it.
 pub fn render_project_config_files(manifest: &Manifest) -> Vec<(&'static str, String)> {
     render_project_config_files_with(
         manifest,
@@ -1162,7 +1191,10 @@ pub fn render_project_config_files_with(
                 ),
             ),
         ],
-        Server::FrankenPhp => vec![("Caddyfile", render_frankenphp_caddyfile(document_root))],
+        Server::FrankenPhp => vec![(
+            "Caddyfile",
+            render_frankenphp_caddyfile_with(document_root, &extra.frankenphp),
+        )],
         Server::Apache | Server::Swoole => Vec::new(),
     }
 }
@@ -1789,6 +1821,60 @@ mod tests {
         let mut node = php_manifest("nginx");
         node.runtime = "node".into();
         assert!(render_project_config_files(&node).is_empty());
+    }
+
+    /// The rule the settings pane shows as ticks and dashes, asserted here so
+    /// the two cannot drift.
+    ///
+    /// FrankenPHP is why this exists. It writes a `Caddyfile` exactly as caddy
+    /// does, and directives were wired up for nginx and caddy only — so the
+    /// pane greyed it out next to Apache and Swoole and explained *those two*,
+    /// which made a plain omission look like a considered decision.
+    #[test]
+    fn a_server_that_writes_a_config_file_accepts_directives() {
+        // A directive nobody could mistake for something the renderer emits.
+        const MARK: &str = "\n    header X-Probe \"1\"\n";
+
+        for server in ["nginx", "caddy", "frankenphp"] {
+            let extras = ServerExtras {
+                nginx: MARK.into(),
+                caddy: MARK.into(),
+                frankenphp: MARK.into(),
+            };
+            let files = render_project_config_files_with(
+                &php_manifest(server),
+                &ServerSettings::from_env(&crate::config::Env::default()),
+                &extras,
+            );
+            assert!(
+                !files.is_empty(),
+                "{server} writes a config file, so it has somewhere to put directives"
+            );
+            assert!(
+                files.iter().any(|(_, body)| body.contains(MARK)),
+                "{server} writes a config file but dropped the directives"
+            );
+        }
+
+        // And the two that write nothing cannot take them, which is why the
+        // pane says so rather than offering a box that does nothing.
+        for server in ["apache", "swoole"] {
+            assert!(
+                render_project_config_files(&php_manifest(server)).is_empty(),
+                "{server} grew a config file — it can take directives now"
+            );
+        }
+    }
+
+    /// The byte-for-byte contract, for the branch just added: a workspace that
+    /// has written no directives must produce exactly what it produced before
+    /// FrankenPHP could take any.
+    #[test]
+    fn frankenphp_without_directives_is_unchanged() {
+        assert_eq!(
+            render_frankenphp_caddyfile_with("public", ""),
+            render_frankenphp_caddyfile("public")
+        );
     }
 
     #[test]

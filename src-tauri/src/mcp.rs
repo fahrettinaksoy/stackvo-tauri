@@ -582,6 +582,7 @@ async fn run_headless(
             program,
             args,
             cwd,
+            env: &[],
         },
     )
     .await

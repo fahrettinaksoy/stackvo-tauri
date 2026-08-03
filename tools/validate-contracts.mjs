@@ -493,11 +493,22 @@ for (const id of templateIds) {
     continue;
   }
 
-  // C-09: the CLI lowercases the env key's service part; the template declares the real profile.
-  const derivedProfile = envKey
-    .replace(/^SERVICE_/, '')
-    .replace(/_ENABLE$/, '')
-    .toLowerCase();
+  // The profiles a template has to declare, checked against what actually
+  // starts it.
+  //
+  // This used to assert the *Bash CLI's* derivation — lowercase the env key's
+  // service part, so `SERVICE_MONGO_EXPRESS_ENABLE` yields `mongo_express`
+  // while the template declares `mongo-express`. That is C-09, and it was a
+  // real bug in a program this repo no longer contains: the shell was deleted,
+  // and `compose_up_service` passes the service id straight through
+  // (`--profile mongo-express`), which is the mapping CONFLICTS.md decided on —
+  // "the reverse mapping MUST use the service catalog, never a naive
+  // tr '_' '-'". So the check kept failing the desktop app for a bug the
+  // desktop app does not have, on the one service whose id contains a dash.
+  //
+  // What matters now is the rule the app relies on, and both halves of it: the
+  // id itself, for starting one service alone, and `services`, for starting the
+  // enabled set. A template missing either really does never start that way.
   const tplFile = join(templatesDir, id, `docker-compose.${id}.tpl`);
   if (existsSync(tplFile)) {
     const tpl = readFileSync(tplFile, 'utf8');
@@ -505,13 +516,22 @@ for (const id of templateIds) {
     const profiles = match
       ? match[1].split(',').map((s) => s.trim().replace(/^["']|["']$/g, ''))
       : [];
-    if (profiles.length && !profiles.includes(derivedProfile))
-      err(
-        'C',
-        `templates/services/${id}`,
-        'C-09',
-        `\`stackvo up\` derives --profile "${derivedProfile}" from ${envKey}, but the template declares [${profiles.join(', ')}] — this service never starts in minimal mode`
-      );
+    if (profiles.length) {
+      if (!profiles.includes(id))
+        err(
+          'C',
+          `templates/services/${id}`,
+          'PROFILE_NOT_SERVICE_ID',
+          `starting this service alone passes --profile "${id}", but the template declares [${profiles.join(', ')}] — nothing would start`
+        );
+      if (!profiles.includes('services'))
+        err(
+          'C',
+          `templates/services/${id}`,
+          'PROFILE_NOT_IN_SERVICES',
+          `the template declares [${profiles.join(', ')}] — "services" is missing, so starting the enabled set skips it`
+        );
+    }
   }
 }
 
