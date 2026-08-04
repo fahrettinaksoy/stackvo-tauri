@@ -408,7 +408,7 @@ onUnmounted(close);
   <v-theme-provider :theme="consoleTheme">
     <v-locale-provider :locale="consoleLocale">
       <div class="log-root">
-        <div class="log-head">
+        <v-toolbar flat class="log-head">
           <v-icon size="20">mdi-text-box-outline</v-icon>
 
           <!-- The fanout picks projects, not files: choosing a file across a
@@ -592,7 +592,7 @@ onUnmounted(close);
 
           <!-- Whatever the frame needs to add — a dialog puts its dismiss here. -->
           <slot name="actions" />
-        </div>
+        </v-toolbar>
 
         <v-divider />
 
@@ -682,11 +682,25 @@ onUnmounted(close);
 }
 
 .log-head {
-  display: flex;
-  align-items: center;
+  /* A real `v-toolbar`, and that is the fix rather than a detail.
+     
+     This was a hand-rolled row with a height written into the stylesheet,
+     twice: 64px first, from Vuetify's documented default, then 48px after
+     measuring a screenshot. Both were wrong, because the height is not a
+     constant at all — `appearance.js` applies the user's density setting to
+     Vuetify's `global` defaults, so every toolbar in the app grows and shrinks
+     with a knob in Settings. A number here matches at exactly one setting and
+     is wrong at the others, and the screenshot that produced 48px was taken in
+     a browser, where the preference could not load and the fallback applied.
+     
+     A toolbar takes its height from the same defaults every other bar does, so
+     there is nothing left to keep in step. */
+  flex: 0 0 auto;
+}
+
+.log-head :deep(.v-toolbar__content) {
   gap: 8px;
-  padding: 8px 8px 8px 16px;
-  background: rgb(var(--v-theme-surface));
+  padding-inline: 16px 8px;
 }
 
 .log-name {

@@ -390,128 +390,103 @@ fn quick_commands_match_what_each_real_project_has() {
     eprintln!("{offered_any} project(s) have at least one command");
 }
 
-/// The dump catcher, against a real running project.
+/// The debug bridge, against a real running project.
 ///
-/// The whole design rests on Symfony's own collector rendering the dumps, so
-/// what is worth checking on a real machine is exactly that: start it, send a
-/// dump, and confirm readable text comes back. A fixture cannot check it,
-/// because the rendering is the part this app does not own.
+/// The whole design rests on a claim about PHP that a fixture cannot check:
+/// that a file loaded through `auto_prepend_file` can declare `dump()` before
+/// the application's autoloader gets there, and that it declares nothing at
+/// all while the sentinel is absent. So the bridge is written into a container
+/// and run.
 #[tokio::test]
-async fn symfony_renders_a_real_dump_through_its_own_collector() {
-    use stackvo_desktop_lib::dumps;
+async fn the_bridge_declares_dump_only_while_the_sentinel_is_there() {
+    use stackvo_desktop_lib::debugbridge;
 
     let Some(root) = checkout() else {
         eprintln!("no StackVo checkout found, skipping");
         return;
     };
 
-    // Any running PHP project that has the collector installed.
-    let Some(name) = manifests(&root)
-        .into_iter()
-        .map(|(name, _)| name)
-        .find(|name| {
-            root.join("projects")
-                .join(name)
-                .join(dumps::BINARY)
-                .is_file()
-        })
-    else {
-        eprintln!("skipping: no project has {} installed", dumps::BINARY);
+    let Some(name) = manifests(&root).into_iter().map(|(name, _)| name).next() else {
+        eprintln!("skipping: no projects");
         return;
     };
 
-    let argv = match dumps::prepare(&root, &name).await {
-        Ok(argv) => argv,
-        Err(e) => {
-            eprintln!("skipping: {name} cannot run the collector ({e:?})");
-            return;
-        }
-    };
-
-    let container = stackvo_desktop_lib::engine::container_name(&name);
-    let collected = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-
-    let sink = collected.clone();
-    let mut server = tokio::process::Command::new("docker")
-        .args(&argv)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("spawn the collector");
-
-    let stdout = server.stdout.take().expect("piped");
-    let reader = tokio::spawn(async move {
-        use tokio::io::AsyncBufReadExt;
-        let mut lines = tokio::io::BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if !dumps::is_banner(&line) {
-                sink.lock().unwrap().push(line);
-            }
-        }
-    });
-
-    // Let it bind before dumping at it.
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-
-    let dumped = tokio::process::Command::new("docker")
-        .args(["exec", "-w", "/var/www/html"])
-        .args(["-e", "VAR_DUMPER_FORMAT=server"])
-        .args([
-            "-e",
-            &format!("VAR_DUMPER_SERVER={}", dumps::server_address()),
-        ])
-        .arg(&container)
-        .args([
-            "php",
-            "-r",
-            "require 'vendor/autoload.php'; dump(['stackvo' => ['caught' => true]]);",
-        ])
+    let container = format!("stackvo-{name}");
+    let running = std::process::Command::new("docker")
+        .args(["inspect", "-f", "{{.State.Running}}", &container])
         .output()
-        .await;
-
-    if dumped.map(|o| !o.status.success()).unwrap_or(true) {
-        eprintln!("skipping: could not dump into {name}");
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
+        .unwrap_or(false);
+    if !running {
+        eprintln!("skipping: {container} is not running");
         return;
     }
 
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    // Through the product's own cleanup, which is the half that was broken:
-    // killing the `docker exec` client leaves the PHP process holding the port,
-    // and the next run fails with "Address already in use".
-    dumps::stop(&container).await;
-    let _ = server.kill().await;
-    let _ = reader.await;
+    // Written into the container's own /tmp rather than through the mounts:
+    // this checks the PHP, not the compose file, and it must not disturb a
+    // stack somebody is using.
+    let script = "/tmp/stackvo-bridge-check.php";
+    let bridge = "/tmp/stackvo-bridge.php";
+    let conf = debugbridge::CONF_DIR;
 
-    let lines = collected.lock().unwrap().clone();
-    let text = lines.join("\n");
+    let write = |path: &str, body: &str| {
+        std::process::Command::new("docker")
+            .args([
+                "exec",
+                "-i",
+                &container,
+                "sh",
+                "-c",
+                &format!("cat > {path}"),
+            ])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut c| {
+                use std::io::Write;
+                c.stdin.as_mut().unwrap().write_all(body.as_bytes())?;
+                c.wait()
+            })
+            .is_ok()
+    };
 
-    assert!(
-        text.contains("\"stackvo\""),
-        "the dump never arrived; collector said:\n{text}"
+    assert!(write(bridge, &debugbridge::bridge_php()));
+    assert!(write(script, "<?php var_dump(function_exists('dump'));\n"));
+
+    let run = |setup: &str| -> String {
+        let out = std::process::Command::new("docker")
+            .args([
+                "exec",
+                &container,
+                "sh",
+                "-c",
+                &format!(
+                    "mkdir -p {conf} && {setup} && php -d auto_prepend_file={bridge} {script}"
+                ),
+            ])
+            .output()
+            .expect("docker exec");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+
+    // `php -d` does not apply auto_prepend_file to `-r`, but it does to a
+    // script — which is what every real caller is.
+    assert_eq!(
+        run(&format!("rm -f {conf}/enabled.flag")),
+        "bool(false)",
+        "the bridge declared dump() with capture off, so Symfony's is shadowed"
     );
-    // Rendered by Symfony, not decoded here — the point of the whole design.
-    assert!(text.contains("array:1 ["), "not rendered output:\n{text}");
-    assert!(
-        !text.contains("Symfony Var Dumper Server"),
-        "the banner leaked into the pane"
-    );
 
-    eprintln!("dumps: {} line(s) caught from {name}", lines.len());
+    let _ = std::process::Command::new("docker")
+        .args([
+            "exec",
+            &container,
+            "sh",
+            "-c",
+            &format!("rm -f {bridge} {script}"),
+        ])
+        .output();
 }
 
-/// The dev-server overlay, merged by real Docker.
-///
-/// What is checked here is that Compose does to this overlay what the feature
-/// assumes: the `command` is *replaced* rather than appended to, and the two
-/// volumes both survive with the anonymous one intact. Both are Compose's
-/// merge semantics rather than this code's, which is exactly why asserting
-/// them against a hand-written expectation would prove nothing.
-///
-/// The runtime half was verified once by hand and is not repeated here because
-/// it needs an image build: without the anonymous volume, `require()` inside
-/// the container fails with MODULE_NOT_FOUND because the bind hides the
-/// image's `node_modules`; with it, the module loads, and an edit on the host
 /// reaches the container with no rebuild.
 #[tokio::test]
 async fn docker_merges_the_dev_server_overlay_as_an_override() {

@@ -42,6 +42,7 @@ export default {
     projects: 'Projeler',
     services: 'Servisler',
     logs: 'Loglar',
+    dumps: 'Dump’lar',
     mail: 'Mail',
     settings: 'Ayarlar',
     collapse: 'Daralt',
@@ -511,17 +512,29 @@ export default {
   },
 
   dumps: {
+    source: { web: 'Web', cli: 'CLI', queue: 'Kuyruk' },
+    regex: 'Düzenli ifade',
+    filterSource: 'Kaynağa göre süz',
+    copy: 'Görünenleri kopyala',
+    copyValue: 'Değeri kopyala',
+    pause: 'Duraklat',
+    resume: 'Sürdür',
+    resumeHint: 'Sürdür — {n} yeni',
+    clearHint: 'Listeyi ve kaydedilmiş olayları temizle',
+    capturingCount: '{total} projeden {on} tanesi yakalıyor.',
+    needsRecreateShort: 'Konteynerin yeniden oluşturulması gerekiyor',
+    allDescription: 'Yakalaması açık her projeden gelen dump() ve dd() çıktıları',
+    noProjects: 'Köprüyü kullanabilecek bir PHP projesi yok.',
+    allProjects: 'Tüm projeler',
+    capture: 'dump() ve dd() yakala',
+    captureHint: 'Anında etkili — konteynere dokunulmaz.',
+    captureOff: 'Yakalama kapalı. Açtığınızda dump() çıktıları burada birikir.',
+    search: 'Ara',
     title: 'Dump’lar',
     explain:
       'dump() ve dd() çıktılarını yanıttan alıp burada gösterir. Biçimlendirmeyi, projenizin konteyneri içinde çalışan Symfony’nin kendi dump sunucusu yapar.',
-    unavailable:
-      'Bu projede {binary} yok. symfony/var-dumper ile gelir, Laravel de ona bağlıdır — composer install çalıştırın.',
     needsRecreate:
       'Çalışan konteynerde dump ayarları henüz yok. Bunlar konteyner oluşturulurken sabitlenir, o yüzden yeniden başlatmak yetmez — konteyneri yeniden oluşturmak gerekir.',
-    needsRunning: 'Toplayıcı projenin konteyneri içinde çalışır. Önce projeyi başlatın.',
-    start: 'Yakalamaya başla',
-    stop: 'Durdur',
-    listening: 'Dinleniyor',
     clear: 'Temizle',
     waiting: 'Bir dump bekleniyor… uygulamada herhangi bir yerde dump() çağırın.',
     ddEndsTheRequest:

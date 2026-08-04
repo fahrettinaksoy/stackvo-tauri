@@ -58,6 +58,9 @@ const routes = [
   // Belongs to no project, which is the point: it is where you look before you
   // know which project to open.
   { path: '/logs', name: 'Logs', component: view(() => import('@/views/Logs.vue')) },
+  // Beside the log page and for the same reason: you look here before you know
+  // which project to open, and it is somewhere you leave open while working.
+  { path: '/dumps', name: 'Dumps', component: view(() => import('@/views/Dumps.vue')) },
   // The inbox as a destination, not a service-sheet tab: "my app just sent a
   // mail — show me" names a place, the way Herd's Mail page does.
   { path: '/mail', name: 'Mail', component: view(() => import('@/views/Mail.vue')) },

@@ -127,6 +127,7 @@ const NAV = [
     icon: 'mdi-text-box-multiple-outline',
     label: 'nav.logs',
   },
+  { key: 'dumps', to: '/dumps', icon: 'mdi-bug-outline', label: 'nav.dumps' },
   { key: 'mail', to: '/mail', icon: 'mdi-email-outline', label: 'nav.mail' },
   { key: 'settings', to: '/settings', icon: 'mdi-cog-outline', label: 'nav.settings' },
 ];
