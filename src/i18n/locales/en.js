@@ -41,6 +41,7 @@ export default {
     projects: 'Projects',
     services: 'Services',
     logs: 'Logs',
+    dumps: 'Dumps',
     mail: 'Mail',
     settings: 'Settings',
     collapse: 'Collapse',
@@ -504,17 +505,29 @@ export default {
   },
 
   dumps: {
+    source: { web: 'Web', cli: 'CLI', queue: 'Queue' },
+    regex: 'Regular expression',
+    filterSource: 'Filter by source',
+    copy: 'Copy what is shown',
+    copyValue: 'Copy the value',
+    pause: 'Pause',
+    resume: 'Resume',
+    resumeHint: 'Resume — {n} new',
+    clearHint: 'Clear the list and the recorded events',
+    capturingCount: '{on} of {total} projects capturing.',
+    needsRecreateShort: 'The container has to be recreated',
+    allDescription: 'dump() and dd() from every project that is capturing',
+    noProjects: 'No PHP project can carry the bridge.',
+    allProjects: 'All projects',
+    capture: 'Catch dump() and dd()',
+    captureHint: 'Takes effect immediately — no container is touched.',
+    captureOff: 'Capture is off. Switch it on and dump() output collects here.',
+    search: 'Search',
     title: 'Dumps',
     explain:
       'Catches dump() and dd() out of the response and shows them here instead. Symfony’s own dump server does the rendering, inside your project’s container.',
-    unavailable:
-      'This project has no {binary}. It ships with symfony/var-dumper, which Laravel depends on — run composer install.',
     needsRecreate:
       'The running container does not have the dump settings yet. They are fixed when a container is created, so restarting is not enough — the container has to be recreated.',
-    needsRunning: 'The collector runs inside the project’s container. Start it first.',
-    start: 'Start catching',
-    stop: 'Stop',
-    listening: 'Listening',
     clear: 'Clear',
     waiting: 'Waiting for a dump… call dump() anywhere in the app.',
     ddEndsTheRequest:

@@ -7,10 +7,10 @@ pub mod commands;
 pub mod config;
 pub mod contracts;
 pub mod db;
+pub mod debugbridge;
 pub mod detect;
 pub mod devserver;
 pub mod doctor;
-pub mod dumps;
 pub mod elevate;
 pub mod engine;
 pub mod env_writer;
@@ -379,9 +379,10 @@ pub fn run() {
             commands::php_ini_status,
             commands::php_ini_set,
             commands::doctor_drop_extension,
-            commands::dumps_status,
-            commands::dumps_open,
-            commands::dumps_close,
+            commands::debug_bridge_set,
+            commands::debug_bridge_events,
+            commands::debug_bridge_clear,
+            commands::debug_bridge_overview,
             commands::release_plan,
             commands::release_build,
             commands::release_save,

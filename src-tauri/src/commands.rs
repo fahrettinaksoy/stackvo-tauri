@@ -2282,101 +2282,101 @@ pub async fn xdebug_set(
     Ok(status)
 }
 
-// ------------------------------------------------------------ dump catcher
+// ------------------------------------------------------------ debug bridge
 
+/// Turn capture on or off, with no container involved.
+///
+/// A file appears in a directory that is already mounted, and the next request
+/// reads it. That is the whole operation — no compose command, no recreate, no
+/// waiting for a worker to cycle. It is the difference this feature exists for.
 #[tauri::command]
-pub async fn dumps_status(
-    state: State<'_, AppState>,
-    name: String,
-) -> Result<crate::dumps::Status> {
-    crate::dumps::status(&state.root()?, &name).await
+pub fn debug_bridge_set(state: State<'_, AppState>, name: String, enabled: bool) -> Result<()> {
+    crate::debugbridge::set_enabled(&state.root()?, &name, enabled)
 }
 
-/// Start Symfony's own dump server in the project's container and stream what
-/// it renders.
+/// Events recorded after the `since`th one.
 ///
-/// The rendering is Symfony's, not this app's — see `dumps.rs`. Reusing the log
-/// stream's events on purpose: the viewer already renders one kind of line, and
-/// a second event pair would be a second listener that could drift from the
-/// first.
+/// A cursor rather than a stream, because the producer is a file a container
+/// appends to and there is nothing to subscribe to. The count the caller last
+/// saw is enough: events are only ever appended, so everything past that index
+/// is new, and a caller that missed a poll catches up rather than losing them.
 #[tauri::command]
-pub async fn dumps_open(
-    app: AppHandle,
+pub fn debug_bridge_events(
     state: State<'_, AppState>,
     name: String,
-) -> Result<String> {
+    since: Option<usize>,
+) -> Result<serde_json::Value> {
     let root = state.root()?;
-    let argv = crate::dumps::prepare(&root, &name).await?;
+    crate::debugbridge::rotate_if_large(&root, &name);
 
-    let stream_id = events::next_operation_id("dumps");
+    let all = crate::debugbridge::read_events(&root, &name);
+    let since = since.unwrap_or(0);
 
-    let handle = {
-        let app = app.clone();
-        let stream_id = stream_id.clone();
-        let container = name.clone();
+    // A cursor past the end means the file was cleared or rotated under the
+    // caller. Starting again beats returning nothing for ever.
+    let start = if since > all.len() { 0 } else { since };
+    Ok(serde_json::json!({
+        "total": all.len(),
+        "events": &all[start..],
+    }))
+}
 
-        tokio::spawn(async move {
-            // `stream` returns when the process exits; aborting this task drops
-            // the child, and `kill_on_drop` stops the collector with it.
-            let _ = runner::stream("docker", &argv, std::path::Path::new("."), |line| {
-                if crate::dumps::is_banner(line) {
-                    return;
-                }
-                events::emit(
-                    &app,
-                    "logs:line",
-                    events::LogLineEvent {
-                        historic: None,
-                        stream_id: stream_id.clone(),
-                        container: container.clone(),
-                        line: line.to_string(),
-                        stream: "stdout".to_string(),
-                        source: Some("dumps".to_string()),
-                    },
-                );
-            })
-            .await;
+#[tauri::command]
+pub fn debug_bridge_clear(state: State<'_, AppState>, name: String) -> Result<()> {
+    crate::debugbridge::clear(&state.root()?, &name)
+}
 
-            events::emit(
-                &app,
-                "logs:closed",
-                serde_json::json!({ "streamId": stream_id }),
-            );
-        })
-        .abort_handle()
+/// Every project the bridge could serve, and which of them are capturing.
+///
+/// The question the per-project pane cannot answer: *which* of eight projects
+/// just dumped something. That is the same reason the log viewer grew a page —
+/// you ask it before you know which project to open — and it is what a page
+/// needs in order to poll only the projects worth polling.
+///
+/// Reads files and one container inspection per project; no engine, no
+/// compose. With Docker down every row still reports whether capture is on,
+/// because that is a file on the host and true either way.
+#[tauri::command]
+pub async fn debug_bridge_overview(state: State<'_, AppState>) -> Result<serde_json::Value> {
+    let root = state.root()?;
+    let mut out = Vec::new();
+
+    let Some(projects) = workspace::projects_root(&root) else {
+        return Ok(serde_json::json!([]));
+    };
+    let Ok(dirs) = std::fs::read_dir(&projects) else {
+        return Ok(serde_json::json!([]));
     };
 
-    if let Ok(mut streams) = state.log_streams.lock() {
-        streams.insert(stream_id.clone(), handle);
-    }
+    let mut names: Vec<String> = dirs
+        .flatten()
+        .filter(|d| d.path().is_dir())
+        .filter_map(|d| d.file_name().to_str().map(str::to_string))
+        .filter(|n| !n.starts_with('.'))
+        .collect();
+    names.sort();
 
-    Ok(stream_id)
-}
-
-/// Stop the collector and the stream together.
-///
-/// Not `container_logs_close`: aborting the task kills the local `docker exec`
-/// client, and the PHP process inside the container carries on holding the
-/// port. The next `dumps_open` then fails with Symfony's own "Address already
-/// in use", which is how this was found.
-#[tauri::command]
-pub async fn dumps_close(
-    state: State<'_, AppState>,
-    name: String,
-    stream_id: String,
-) -> Result<()> {
-    if let Ok(mut streams) = state.log_streams.lock() {
-        if let Some(handle) = streams.remove(&stream_id) {
-            handle.abort();
+    for name in names {
+        // A project the bridge cannot serve is not a row: the page is a list of
+        // places dumps can come from, and a Node project is not one.
+        let Ok(status) = crate::debugbridge::status(&root, &name).await else {
+            continue;
+        };
+        if !status.supported {
+            continue;
         }
+        out.push(serde_json::json!({
+            "project": name,
+            "enabled": status.enabled,
+            "mounted": status.mounted,
+            "running": status.running,
+            "events": status.events,
+        }));
     }
-    crate::dumps::stop(&crate::engine::container_name(&name)).await;
-    Ok(())
+
+    Ok(serde_json::Value::Array(out))
 }
 
-// ------------------------------------------------------- production images
-
-/// What building a production image would do, before it does it.
 #[tauri::command]
 pub fn release_plan(
     state: State<'_, AppState>,

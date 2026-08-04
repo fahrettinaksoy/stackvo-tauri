@@ -209,18 +209,21 @@ export const api = {
   // The stack, as something a teammate can be handed. `stackvo.json` is already
   // in their clone; which services are on and at which versions is not — that
   // lives in .env, the one file nobody commits.
-  // dump()/dd() caught out of the response. Symfony's own collector ships with
-  // Laravel and renders the dumps itself — nothing here parses its internals.
   /** Removes an extension the build cannot install. Changes nothing about what
    *  runs — it is already being dropped silently. */
   doctorDropExtension: (subject, extension) =>
     call('doctor_drop_extension', { subject, extension }),
 
-  dumpsStatus: (name) => call('dumps_status', { name }),
+  // dump()/dd() caught out of the response by a PHP file mounted into the
+  // container. Toggling is a file appearing in a directory that is already
+  // mounted, so it costs no container — which is the whole reason this
+  // replaced Symfony's own collector run through `docker exec`.
+  debugBridgeSet: (name, enabled) => call('debug_bridge_set', { name, enabled }),
+  debugBridgeEvents: (name, since = 0) => call('debug_bridge_events', { name, since }),
+  debugBridgeClear: (name) => call('debug_bridge_clear', { name }),
+  debugBridgeOverview: () => call('debug_bridge_overview'),
   /** Streams as `logs:line`; close it with containerLogsClose. */
-  dumpsOpen: (name) => call('dumps_open', { name }),
   /** Stops the in-container collector too — killing `docker exec` does not. */
-  dumpsClose: (name, streamId) => call('dumps_close', { name, streamId }),
 
   // A deployable image from the one the project already runs. The dev image
   // has no application code for PHP (it is bind-mounted) and carries Xdebug,

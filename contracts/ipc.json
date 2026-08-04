@@ -1094,6 +1094,36 @@
       "why": "One switch instead of three manual steps: adding the extension to the manifest, configuring the client host and port, and telling the IDE where the code is mounted.",
       "notes": "Writes `php.extensions` in the manifest and re-renders `generated/docker-compose.xdebug.yml`. The extension is COMPILED IN, so enabling it needs a rebuild before it takes effect — `needsRebuild` says so rather than letting the toggle look finished. Writing the manifest canonicalises it the same way project_manifest_write does (`webserver` becomes `server`); that is the contract's rule for writers, not a side effect of this command."
     },
+    "debug_bridge_set": {
+      "new": true,
+      "kind": "command",
+      "args": { "name": "string", "enabled": "boolean" },
+      "returns": "void",
+      "why": "Catching dumps used to cost a container recreate, because the mechanism was two environment variables and a container's environment is fixed at creation. Every debugging session started with a wait.",
+      "notes": "Creates or removes one file in a directory the container already has mounted. No compose command, no recreate, no worker cycle. The bridge re-reads the flag on every request AND inside every emit, so a long-running queue worker stops writing the moment it is switched off rather than at its next restart."
+    },
+    "debug_bridge_events": {
+      "new": true,
+      "kind": "query",
+      "args": { "name": "string", "since": "number?" },
+      "returns": "{ total: number, events: Event[] }",
+      "notes": "A cursor, not a stream: the producer is a container appending newline-delimited JSON to a file, and there is nothing to subscribe to. Events are only appended, so everything past `since` is new and a missed poll costs nothing. A `since` past the end means the file was cleared or rotated underneath the caller, and the answer starts again rather than being empty for ever. Each Event carries { at, kind, label?, file?, line?, request?, sapi?, value } — `kind` exists so queries and jobs need no second file when they arrive."
+    },
+    "debug_bridge_overview": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "{ project: string, enabled: boolean, mounted: boolean, running: boolean, events: number }[]",
+      "why": "The per-project pane cannot answer \"which of my eight projects just dumped something\" — the question you have before you know which project to open. It is the same argument that made the log viewer a page, and it is what lets that page poll only the projects worth polling.",
+      "notes": "One row per PHP project the bridge can serve; a Node project is not a place a dump can come from and is not listed. Reads files plus one container inspection each — no compose, no engine required for `enabled`, which is a file on the host and true whether or not Docker is running."
+    },
+    "debug_bridge_clear": {
+      "new": true,
+      "kind": "command",
+      "args": { "name": "string" },
+      "returns": "void",
+      "notes": "Removes the file rather than truncating it: the container may write as a different user, and a host process can always delete an entry from a directory it owns even when it cannot write the file."
+    },
     "doctor_drop_extension": {
       "new": true,
       "kind": "mutation",
@@ -1105,38 +1135,6 @@
       "emits": ["manifest:changed"],
       "why": "The doctor's design rule is a repair next to every finding — hosts get the reviewed diff, stale output gets regenerate, disk gets prune. The extension check shipped without one, which left the panel naming a problem and offering nothing.",
       "notes": "**Removing the extension changes nothing about what runs, and that is the point.** The generator already drops one it cannot install — silently, which is the bug CONFLICTS.md C-06 records — so it is already absent from every built container. This does not remove a capability; it stops the manifest claiming one the container never had. No alternative is offered because the catalog leaves none: `imap` is `install: core` with `removedIn: 8.2` and no PECL package, so on 8.2+ there is nothing StackVo could install instead. If the project genuinely needs it the answer is an older PHP version, which is the project owner's decision and not a button. Writes through the paths the rest of the app uses — manifest::write for a project, env_writer for .env, which backs the file up and serialises against the other writers. Removing an extension that is already gone is a no-op rather than an error: the state the caller wanted is the state on disk."
-    },
-    "dumps_status": {
-      "new": true,
-      "kind": "query",
-      "args": {
-        "name": "string"
-      },
-      "returns": "DumpsStatus",
-      "why": "P3-18 was rated expensive on the grounds that it \"needs a collector service and a Composer package\". Checked against real projects, neither half holds for Laravel: symfony/var-dumper is a laravel/framework dependency and is present in every checkout here that has a vendor/ at all, and `vendor/bin/var-dump-server` — the collector — ships with it.",
-      "notes": "What IS expensive is the thing that looks obvious: writing the collector. VAR_DUMPER_FORMAT=server sends base64(serialize([Data, context])) over a socket — a PHP object graph. Reading that in Rust means a serialize() parser PLUS Symfony's internal Cloner\\Data representation, where a nested value is an indirection into a per-depth slot table and every object is a Stub. That is a lot of code sitting on an internal Symfony is free to change, and the failure mode when it does is a viewer that renders nonsense. So the collector is not written: Symfony's own runs inside the project container and renders the dumps itself, and this app streams the text. `available` is false when the vendor tree has no collector — usually a checkout whose dependencies were never installed. `configured` is read from the RUNNING container, not inferred, because `stackvo up` from the Bash CLI layers three compose files and will recreate it without the variables."
-    },
-    "dumps_open": {
-      "new": true,
-      "kind": "stream",
-      "args": {
-        "name": "string"
-      },
-      "returns": "StreamId",
-      "emits": ["logs:line", "logs:closed"],
-      "closedBy": "container_logs_close",
-      "notes": "Reuses the log stream's events and its close command on purpose: the viewer already renders one kind of line, and a second event pair would be a second listener that could drift from the first. `source` is `dumps`. The server's four-line opening banner is filtered — in a pane whose whole job is to show dumps it would be the first thing on screen and the only thing there until somebody dumped something. Started with `docker exec -w /var/www/html` and NO `-t`: the process is driven by the app, not a person, and `docker exec -t` without a TTY fails on the input device. Aborting the task drops the child, and kill_on_drop stops the collector with it."
-    },
-    "dumps_close": {
-      "new": true,
-      "kind": "mutation",
-      "args": {
-        "name": "string",
-        "stream_id": "string"
-      },
-      "returns": "void",
-      "why": "**Killing `docker exec` does not kill what it exec'd.** The client goes away; the PHP collector inside the container keeps running and keeps port 9912. The next dumps_open then fails with Symfony's own `stream_socket_server(): Address already in use` — which is exactly how this was found, by the integration test failing its second run.",
-      "notes": "This is why dumps do NOT close through container_logs_close like every other stream: aborting the task is only half of it. The same `pkill` also runs inside dumps_open's prepare step, so a collector left behind by a crash — or by a `docker exec` that died with the app — does not block the next attempt. Self-healing beats depending on a clean shutdown that cannot be guaranteed. Verified by running the integration test twice back to back, which is the case that used to fail, and by confirming no `var-dump-server` process survives in any container afterwards."
     },
     "release_plan": {
       "new": true,

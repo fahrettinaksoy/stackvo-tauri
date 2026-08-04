@@ -349,12 +349,14 @@ pub fn compose_base_args(root: &Path) -> Vec<String> {
         args.push("-f".to_string());
         args.push(crate::phpini::overlay_path(root).display().to_string());
     }
-    // Two environment variables, and nothing else. Safe to layer for every
-    // eligible project because a dump with no collector listening falls back to
-    // rendering into the response — verified, not assumed.
-    if crate::dumps::sync(root) {
+    // Three mounts, for every PHP project, whether or not anyone has switched
+    // capture on. That is the point of it: the mounts are the part that needs a
+    // container, so they go in once and the switch afterwards is a file
+    // appearing in a directory that is already mounted. A project nobody
+    // debugs pays one `is_file` per request.
+    if crate::debugbridge::sync(root) {
         args.push("-f".to_string());
-        args.push(crate::dumps::overlay_path(root).display().to_string());
+        args.push(crate::debugbridge::overlay_path(root).display().to_string());
     }
     // Last of the three, and it is the only one that overrides rather than
     // adds: it replaces the container's `command` with the dev server. Anything
@@ -437,6 +439,25 @@ mod tests {
         );
     }
 
+    /// The `-f` file names, in the order compose will read them.
+    ///
+    /// These tests counted `-f` occurrences until the debug bridge added a
+    /// seventh overlay and broke six assertions at once, none of which was
+    /// about how many files there are. A count is the wrong assertion for
+    /// "is this overlay layered, and where": it fails for reasons that have
+    /// nothing to do with what the test is checking, and it says nothing when
+    /// it passes.
+    fn overlays(args: &[String]) -> Vec<String> {
+        args.windows(2)
+            .filter(|w| w[0] == "-f")
+            .filter_map(|w| {
+                std::path::Path::new(&w[1])
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+            })
+            .collect()
+    }
+
     #[test]
     fn compose_args_reference_all_three_generated_files() {
         // A path with no projects/ directory: no project asks for Xdebug, so
@@ -495,8 +516,7 @@ mod tests {
         .unwrap();
 
         let args = compose_base_args(&dir);
-        assert_eq!(args.iter().filter(|a| *a == "-f").count(), 4);
-        assert!(args.last().unwrap().ends_with("docker-compose.xdebug.yml"));
+        assert!(overlays(&args).contains(&"docker-compose.xdebug.yml".to_string()));
 
         // And it disappears again once nothing asks for it.
         std::fs::write(
@@ -506,7 +526,7 @@ mod tests {
         )
         .unwrap();
         let args = compose_base_args(&dir);
-        assert_eq!(args.iter().filter(|a| *a == "-f").count(), 3);
+        assert!(!overlays(&args).contains(&"docker-compose.xdebug.yml".to_string()));
         assert!(!crate::xdebug::overlay_path(&dir).exists());
 
         std::fs::remove_dir_all(&dir).ok();
@@ -541,12 +561,13 @@ mod tests {
         )
         .unwrap();
 
-        // php.ini alone: four files, and the last one is the mount.
+        // php.ini alone: the mount is layered, Xdebug is not.
         let args = compose_base_args(&dir);
-        assert_eq!(args.iter().filter(|a| *a == "-f").count(), 4);
-        assert!(args.last().unwrap().ends_with("docker-compose.phpini.yml"));
+        let names = overlays(&args);
+        assert!(names.contains(&"docker-compose.phpini.yml".to_string()));
+        assert!(!names.contains(&"docker-compose.xdebug.yml".to_string()));
 
-        // Both: five, with php.ini still last.
+        // Both, and neither depends on the other.
         std::fs::write(
             project.join("stackvo.json"),
             r#"{"name":"shop","domain":"shop.loc","runtime":"php",
@@ -554,57 +575,68 @@ mod tests {
         )
         .unwrap();
         let args = compose_base_args(&dir);
-        assert_eq!(args.iter().filter(|a| *a == "-f").count(), 5);
+        let names = overlays(&args);
+        assert!(names.contains(&"docker-compose.phpini.yml".to_string()));
+        assert!(names.contains(&"docker-compose.xdebug.yml".to_string()));
 
         // And the mount goes when the file does — a stale overlay pointing at a
         // path that no longer exists mounts an empty directory into conf.d.
         std::fs::remove_file(project.join(".stackvo").join("php.ini")).unwrap();
         let args = compose_base_args(&dir);
-        assert_eq!(args.iter().filter(|a| *a == "-f").count(), 4);
+        assert!(!overlays(&args).contains(&"docker-compose.phpini.yml".to_string()));
         assert!(!crate::phpini::overlay_path(&dir).exists());
 
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// The dumps overlay reaches a PHP project that has the collector in its
-    /// vendor tree, and nothing else — a project with no `var-dump-server`
-    /// would be pointed at a server it can never run.
+    /// The bridge is layered for every PHP project, switched on or not.
+    ///
+    /// That asymmetry is the design: the mounts are the part that needs a
+    /// container, so they go in once for everybody and turning capture on
+    /// afterwards is a file appearing in a directory that is already mounted.
+    /// An overlay that appeared only when somebody wanted to debug would put a
+    /// container recreate in front of every debugging session, which is the
+    /// thing this replaced.
     #[test]
-    fn the_dumps_overlay_needs_the_collector_to_be_installed() {
-        let dir = std::env::temp_dir().join("stackvo-dumps-overlay-test");
+    fn the_debug_bridge_is_layered_for_php_and_not_for_node() {
+        let dir = std::env::temp_dir().join("stackvo-bridge-overlay-test");
         let _ = std::fs::remove_dir_all(&dir);
-        let shop = dir.join("projects").join("shop");
-        std::fs::create_dir_all(&shop).unwrap();
+        let php = dir.join("projects").join("shop");
+        let node = dir.join("projects").join("site");
+        std::fs::create_dir_all(&php).unwrap();
+        std::fs::create_dir_all(&node).unwrap();
         std::fs::create_dir_all(dir.join("generated")).unwrap();
         crate::workspace::point_at_projects(&dir, &dir.join("projects")).unwrap();
 
         std::fs::write(
             dir.join("generated").join("docker-compose.projects.yml"),
-            "name: stackvo\n\nservices:\n  shop:\n    image: x\n\nnetworks:\n  stackvo-net:\n",
+            "name: stackvo\n\nservices:\n  shop:\n    image: x\n  site:\n    image: y\n\nnetworks:\n  stackvo-net:\n",
         )
         .unwrap();
         std::fs::write(
-            shop.join("stackvo.json"),
+            node.join("stackvo.json"),
+            r#"{"name":"site","domain":"site.loc","runtime":"node","node":{"version":"22"}}"#,
+        )
+        .unwrap();
+
+        // Node only: nothing to prepend to, so no overlay at all.
+        let args = compose_base_args(&dir);
+        assert!(!overlays(&args).contains(&"docker-compose.debug.yml".to_string()));
+
+        std::fs::write(
+            php.join("stackvo.json"),
             r#"{"name":"shop","domain":"shop.loc","runtime":"php",
                 "php":{"version":"8.4","extensions":["gd"]}}"#,
         )
         .unwrap();
 
-        // No vendor tree yet: three files, no dumps overlay.
-        assert_eq!(
-            compose_base_args(&dir)
-                .iter()
-                .filter(|a| *a == "-f")
-                .count(),
-            3
-        );
-
-        std::fs::create_dir_all(shop.join("vendor").join("bin")).unwrap();
-        std::fs::write(shop.join(crate::dumps::BINARY), "#!/usr/bin/env php\n").unwrap();
-
         let args = compose_base_args(&dir);
-        assert_eq!(args.iter().filter(|a| *a == "-f").count(), 4);
-        assert!(args.iter().any(|a| a.ends_with("docker-compose.dumps.yml")));
+        assert!(overlays(&args).contains(&"docker-compose.debug.yml".to_string()));
+
+        // And only the PHP service is named in it.
+        let yaml = std::fs::read_to_string(crate::debugbridge::overlay_path(&dir)).unwrap();
+        assert!(yaml.contains("  shop:"));
+        assert!(!yaml.contains("  site:"));
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -651,9 +683,8 @@ mod tests {
         )
         .unwrap();
         let args = compose_base_args(&dir);
-        assert_eq!(
-            args.iter().filter(|a| *a == "-f").count(),
-            3,
+        assert!(
+            !overlays(&args).contains(&"docker-compose.devserver.yml".to_string()),
             "a PHP project got a dev-server overlay"
         );
 
@@ -663,11 +694,11 @@ mod tests {
         )
         .unwrap();
         let args = compose_base_args(&dir);
-        assert_eq!(args.iter().filter(|a| *a == "-f").count(), 4);
-        assert!(args
-            .last()
-            .unwrap()
-            .ends_with("docker-compose.devserver.yml"));
+        assert_eq!(
+            overlays(&args).last().map(String::as_str),
+            Some("docker-compose.devserver.yml"),
+            "the one overlay that overrides rather than adds must be last"
+        );
 
         // And it stays last with the others present.
         std::fs::write(
@@ -682,11 +713,14 @@ mod tests {
         )
         .unwrap();
         let args = compose_base_args(&dir);
-        assert_eq!(args.iter().filter(|a| *a == "-f").count(), 6);
-        assert!(args
-            .last()
-            .unwrap()
-            .ends_with("docker-compose.devserver.yml"));
+        let names = overlays(&args);
+        assert!(names.contains(&"docker-compose.phpini.yml".to_string()));
+        assert!(names.contains(&"docker-compose.xdebug.yml".to_string()));
+        assert_eq!(
+            names.last().map(String::as_str),
+            Some("docker-compose.devserver.yml"),
+            "another overlay was layered after the one that overrides the command"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

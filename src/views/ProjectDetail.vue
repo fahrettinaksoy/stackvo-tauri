@@ -8,6 +8,7 @@ import { api } from '@/lib/ipc';
 import { bytes, percent } from '@/lib/format';
 import PageLayout from '@/components/PageLayout.vue';
 import ErrorAlert from '@/components/ErrorAlert.vue';
+import DumpView from '@/components/DumpView.vue';
 import LogView from '@/components/LogView.vue';
 import HostsDialog from '@/components/HostsDialog.vue';
 import ProjectSettingsSheet from '@/components/ProjectSettingsSheet.vue';
@@ -451,7 +452,6 @@ async function load() {
   loadQuickCommands();
   loadProfiler();
   loadRelease();
-  loadDumps();
 
   loading.value = false;
   startStats();
@@ -555,71 +555,6 @@ const phpIniWouldRemoveFile = computed(
     PHP_INI_FIELDS.every((k) => !(phpIniDraft.value[k] ?? '').trim()) &&
     !Object.keys(phpIni.value?.unmanaged ?? {}).length
 );
-
-/**
- * `dump()` and `dd()`, caught out of the response.
- *
- * Symfony's own dump server runs inside the container and renders the output
- * itself, so nothing here parses its internals — the lines arrive already
- * formatted. There is no on/off switch because there is nothing to switch: with
- * the environment set and no collector listening, a dump renders into the page
- * exactly as it does today.
- */
-const dumps = ref(null);
-const dumpLines = ref([]);
-const dumpStreamId = ref('');
-const dumpsBusy = ref(false);
-let stopDumpListener = null;
-
-async function loadDumps() {
-  if (project.value?.runtime !== 'php') {
-    dumps.value = null;
-    return;
-  }
-  try {
-    dumps.value = await api.dumpsStatus(props.name);
-  } catch {
-    dumps.value = null;
-  }
-}
-
-async function openDumps() {
-  dumpsBusy.value = true;
-  error.value = null;
-  try {
-    dumpStreamId.value = await api.dumpsOpen(props.name);
-
-    const { listen } = await import('@tauri-apps/api/event');
-    const offLine = await listen('logs:line', (event) => {
-      // Filtered by stream id, not by source: two panes can be open on two
-      // projects, and both send `dumps`.
-      if (event.payload.streamId !== dumpStreamId.value) return;
-      dumpLines.value.push(event.payload.line);
-      // The pane is a live tail, not an archive; the log viewer has the archive.
-      if (dumpLines.value.length > 2000) dumpLines.value.splice(0, 500);
-    });
-    const offClosed = await listen('logs:closed', (event) => {
-      if (event.payload.streamId === dumpStreamId.value) dumpStreamId.value = '';
-    });
-    stopDumpListener = () => {
-      offLine();
-      offClosed();
-    };
-  } catch (e) {
-    error.value = e;
-    dumpStreamId.value = '';
-  } finally {
-    dumpsBusy.value = false;
-  }
-}
-
-async function closeDumps() {
-  const id = dumpStreamId.value;
-  dumpStreamId.value = '';
-  stopDumpListener?.();
-  stopDumpListener = null;
-  if (id) await api.dumpsClose(props.name, id).catch(() => {});
-}
 
 /**
  * A deployable image, built from the one this project already runs.
@@ -964,9 +899,6 @@ watch(() => props.name, load);
 onMounted(load);
 onUnmounted(() => {
   clearInterval(statsTimer);
-  // The collector is a process in somebody's container. Leaving the view must
-  // not leave it running with nothing reading it.
-  closeDumps();
 });
 </script>
 
@@ -2031,9 +1963,9 @@ onUnmounted(() => {
         </template>
 
         <!-- DUMPS ---------------------------------------------------------- -->
-        <!-- Symfony's own dump server, running in the project's container and
-             rendering its own output. Nothing here parses its internals, so
-             nothing here breaks when they change. -->
+        <!-- One renderer, two scopes: this pane and the Dumps page share
+             `DumpView`, so search, the source link and the capture switch
+             cannot drift between them. -->
         <template v-if="shows('debug')">
           <v-card variant="flat" class="pane">
             <div class="section-head mb-1">
@@ -2041,81 +1973,24 @@ onUnmounted(() => {
             </div>
             <p class="text-caption text-medium-emphasis mb-4">{{ t('dumps.explain') }}</p>
 
-            <template v-if="dumps">
-              <v-alert v-if="!dumps.available" type="info" variant="tonal" class="mb-4">
-                <div class="text-caption">
-                  {{ t('dumps.unavailable', { binary: dumps.binary }) }}
-                </div>
-              </v-alert>
-
-              <template v-else>
-                <!-- Read from the running container: `stackvo up` from the CLI
-                     layers three compose files, not seven. -->
-                <v-alert v-if="!dumps.configured" type="warning" variant="tonal" class="mb-4">
-                  <div class="text-caption">{{ t('dumps.needsRecreate') }}</div>
-                  <v-btn
-                    size="small"
-                    color="warning"
-                    variant="tonal"
-                    class="mt-2"
-                    prepend-icon="mdi-autorenew"
-                    :loading="ops.isBusy(name)"
-                    @click="applyToContainer"
-                  >
-                    {{ t('projectDetail.applyToContainer') }}
-                  </v-btn>
-                </v-alert>
-
-                <div class="d-flex ga-2 align-center">
-                  <v-btn
-                    v-if="!dumpStreamId"
-                    color="primary"
-                    variant="flat"
-                    prepend-icon="mdi-play"
-                    :loading="dumpsBusy"
-                    :disabled="!running"
-                    @click="openDumps"
-                  >
-                    {{ t('dumps.start') }}
-                  </v-btn>
-                  <v-btn v-else variant="tonal" prepend-icon="mdi-stop" @click="closeDumps">
-                    {{ t('dumps.stop') }}
-                  </v-btn>
-
-                  <v-chip v-if="dumpStreamId" size="small" color="success" variant="tonal">
-                    <v-icon start size="small">mdi-pulse</v-icon>{{ t('dumps.listening') }}
-                  </v-chip>
-                  <v-spacer />
-                  <v-btn
-                    v-if="dumpLines.length"
-                    size="small"
-                    variant="text"
-                    @click="dumpLines = []"
-                  >
-                    {{ t('dumps.clear') }}
-                  </v-btn>
-                </div>
-
-                <div v-if="!running" class="text-caption text-medium-emphasis mt-2">
-                  {{ t('dumps.needsRunning') }}
-                </div>
-
-                <!-- The one thing this pane cannot change and everybody trips
-                     over: `dd()` sets a 500 header itself, in Symfony's own
-                     code, so a caught dump arrives here *and* the browser shows
-                     an error. Said here rather than left to be rediscovered. -->
-                <div v-if="dumpStreamId" class="text-caption text-medium-emphasis mt-2">
-                  {{ t('dumps.ddEndsTheRequest') }}
-                </div>
-
-                <pre v-if="dumpLines.length" class="dump-stream mt-4">{{
-                  dumpLines.join('\n')
-                }}</pre>
-                <div v-else-if="dumpStreamId" class="text-caption text-medium-emphasis mt-4">
-                  {{ t('dumps.waiting') }}
-                </div>
+            <DumpView :project="name" scope="project">
+              <!-- The recreate button belongs to the project page: it is the
+                   same operation the profiler warning offers, and this is
+                   where the project's lifecycle controls live. -->
+              <template #recreate>
+                <v-btn
+                  size="small"
+                  color="warning"
+                  variant="tonal"
+                  class="mt-2"
+                  prepend-icon="mdi-autorenew"
+                  :loading="ops.isBusy(name)"
+                  @click="applyToContainer"
+                >
+                  {{ t('projectDetail.applyToContainer') }}
+                </v-btn>
               </template>
-            </template>
+            </DumpView>
           </v-card>
         </template>
 
@@ -3097,18 +2972,6 @@ onUnmounted(() => {
 /* Symfony renders the dump with its own alignment and box drawing, so this has
    to be monospaced and must not reflow — a wrapped `array:2 [` tree is unreadable
    in a way that a scrollbar is not. */
-.dump-stream {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.5;
-  margin: 0;
-  padding: 12px;
-  border-radius: 6px;
-  max-height: 60vh;
-  overflow: auto;
-  background: rgb(var(--v-theme-surface-bright));
-  user-select: text;
-}
 
 /* One command per row, the same shape as the worker rows above it. */
 .cmd-row {
