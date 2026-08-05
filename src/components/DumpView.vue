@@ -3,7 +3,9 @@ import { computed, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { api } from '@/lib/ipc';
 import { useAppStore } from '@/stores/app';
+import { isFlat, summary, text as valueText } from '@/lib/dumpnode';
 import ErrorAlert from '@/components/ErrorAlert.vue';
+import DumpValue from '@/components/DumpValue.vue';
 
 /**
  * `dump()` and `dd()`, caught out of the response — one renderer, two scopes.
@@ -53,6 +55,18 @@ const error = ref(null);
 const paused = ref(false);
 const pending = ref([]);
 const copied = ref(false);
+
+/**
+ * Which rows are open, by `seq`.
+ *
+ * Held beside the list rather than on the row itself, so that reading the list
+ * never rewrites it — a row is data the poll owns, and what the reader has
+ * opened is not something the next poll should be able to overwrite. `seq` and
+ * not the timestamp: two workers can dump the same value from the same line in
+ * the same microsecond, and it only ever counts up, so a row that leaves the
+ * bounded buffer cannot hand its state to a later one.
+ */
+const open = ref(new Set());
 
 /**
  * Per-project cursors: how many events each project had at the last poll.
@@ -135,7 +149,16 @@ async function poll() {
         continue;
       }
       cursors[project] = total;
-      const arrived = events.map((e) => ({ ...e, project, seq: seq++ }));
+      // The value is flattened to text once, on arrival, rather than per
+      // keystroke: search runs over every row on every character typed, and
+      // walking five hundred trees to answer one keypress is work that only
+      // ever produces the same answer.
+      const arrived = events.map((e) => ({
+        ...e,
+        project,
+        seq: seq++,
+        text: valueText(e.value),
+      }));
       if (paused.value) pending.value.unshift(...arrived.reverse());
       else for (const e of arrived) rows.value.unshift(e);
     } catch {
@@ -156,6 +179,7 @@ async function tick() {
 function restart() {
   clearInterval(timer);
   rows.value = [];
+  open.value.clear();
   cursors = {};
   timer = setInterval(tick, 1000);
   tick();
@@ -191,7 +215,7 @@ async function copyVisible() {
       const where = [r.file && `${r.file}${r.line ? `:${r.line}` : ''}`, r.request]
         .filter(Boolean)
         .join('  ');
-      return [`# ${clock(r.at)}  ${r.project}${where ? `  ${where}` : ''}`, r.value].join('\n');
+      return [`# ${clock(r.at)}  ${r.project}${where ? `  ${where}` : ''}`, r.text].join('\n');
     })
     .join('\n\n');
   await copyText(text);
@@ -199,7 +223,7 @@ async function copyVisible() {
 
 /** One dump's value, which is the thing that gets pasted into an issue. */
 async function copyRow(row) {
-  await copyText(String(row.value ?? ''));
+  await copyText(String(row.text ?? ''));
 }
 
 async function copyText(text) {
@@ -221,6 +245,7 @@ async function clearAll() {
     }
   }
   rows.value = [];
+  open.value.clear();
   cursors = {};
 }
 
@@ -268,9 +293,25 @@ const visible = computed(() => {
         !match ||
         // Across everything on the row: "where did I dump that" is answered by
         // the request or the file as often as by the value.
-        [r.value, r.label, r.file, r.request, r.project].some((f) => match(f ?? ''))
+        [r.text, r.label, r.file, r.request, r.project].some((f) => match(f ?? ''))
     );
 });
+
+function toggle(row) {
+  if (open.value.has(row.seq)) open.value.delete(row.seq);
+  else open.value.add(row.seq);
+}
+
+/**
+ * Rows whose summary is already the whole value.
+ *
+ * `dump(503)` used to be a row saying `503` that opened onto a panel saying
+ * `503`. There is nothing behind a scalar, so it gets no disclosure and no
+ * second copy of itself — the row *is* the value.
+ */
+function flat(row) {
+  return isFlat(row.value);
+}
 
 /**
  * Web, CLI or queue — the three places a dump comes from.
@@ -290,12 +331,6 @@ const counts = computed(() => {
   for (const r of rows.value) out[sapiGroup(r)] += 1;
   return out;
 });
-
-/** The first line of a value, for the collapsed row. */
-function peek(value) {
-  const first = String(value ?? '').split('\n')[0];
-  return first.length > 120 ? `${first.slice(0, 120)}…` : first;
-}
 
 function shortFile(file) {
   return String(file ?? '')
@@ -486,6 +521,33 @@ function openSource(row) {
         <v-tooltip activator="parent">{{ t('dumps.clearHint') }}</v-tooltip>
       </v-btn>
 
+      <!-- Both of these used to sit above the list, on every visit, for the
+           life of the pane. They are each learned once — that the switch costs
+           no container, and that a `dd()` shows a 500 in the browser while the
+           dump lands here — and a sentence that is read once should not hold a
+           band of the pane forever. Behind a control that says it is help, the
+           second time somebody wants it is the only time they pay for it. -->
+      <v-menu location="bottom end" :close-on-content-click="false">
+        <template #activator="{ props: helpProps }">
+          <v-btn
+            v-bind="helpProps"
+            icon
+            variant="text"
+            size="small"
+            :aria-label="t('dumps.help')"
+          >
+            <v-icon>mdi-help-circle-outline</v-icon>
+            <v-tooltip activator="parent">{{ t('dumps.help') }}</v-tooltip>
+          </v-btn>
+        </template>
+        <v-card max-width="380">
+          <v-card-text class="text-caption d-flex flex-column ga-3">
+            <div>{{ t('dumps.captureHint') }}</div>
+            <div>{{ t('dumps.ddEndsTheRequest') }}</div>
+          </v-card-text>
+        </v-card>
+      </v-menu>
+
       <slot name="actions" />
     </v-toolbar>
 
@@ -510,74 +572,89 @@ function openSource(row) {
         <slot name="recreate" />
       </v-alert>
 
-      <template v-else>
-        <div class="text-caption text-medium-emphasis">
-          <template v-if="scope === 'all' && !only">
-            {{ t('dumps.capturingCount', { on: followed.length, total: overview.length }) }}
-          </template>
-          <template v-else-if="target?.mounted || mine?.mounted">
-            {{ t('dumps.captureHint') }}
-          </template>
+      <!-- Nothing yet: the only moment the pane has room to explain itself, and
+           the only moment anybody wants it to. -->
+      <div v-else-if="!visible.length" class="dump-empty text-caption text-medium-emphasis">
+        <div>{{ waitingForSomething ? t('dumps.waiting') : t('dumps.captureOff') }}</div>
+        <div v-if="scope === 'all' && !only" class="mt-1">
+          {{ t('dumps.capturingCount', { on: followed.length, total: overview.length }) }}
         </div>
+      </div>
 
-        <!-- `dd()` sets a 500 header in Symfony's own code, so a caught dump
-             arrives here *and* the browser shows an error. -->
-        <div v-if="waitingForSomething" class="text-caption text-medium-emphasis mt-1">
-          {{ t('dumps.ddEndsTheRequest') }}
+      <div v-else class="dump-list">
+        <div
+          v-for="row in visible"
+          :key="row.seq"
+          class="dump-row"
+          :class="{ 'dump-row--open': open.has(row.seq) }"
+        >
+          <!-- One line, always. What it says about itself before it is opened
+               is the summary, the line it came from and the request — the three
+               things somebody scanning for a dump is scanning *for*. -->
+          <div
+            class="dump-line"
+            :class="{ 'dump-line--clickable': !flat(row) }"
+            @click="!flat(row) && toggle(row)"
+          >
+            <span v-if="flat(row)" class="dump-chev dump-chev--none" />
+            <span v-else class="dump-chev" :class="{ 'dump-chev--open': open.has(row.seq) }">▸</span>
+
+            <span class="text-caption text-medium-emphasis dump-time">{{ clock(row.at) }}</span>
+
+            <v-chip v-if="scope === 'all'" size="x-small" variant="tonal">
+              {{ row.project }}
+            </v-chip>
+            <v-chip v-if="row.label" size="x-small" variant="tonal" color="primary">
+              {{ row.label }}
+            </v-chip>
+
+            <!-- A value with nothing behind it is rendered in place, typed and
+                 coloured like it would be in the tree. Anything else shows what
+                 it is and how big — never the first line of a formatting, which
+                 for every array in existence was `[`. -->
+            <DumpValue v-if="flat(row)" :node="row.value" class="dump-flat" />
+            <span v-else class="dump-peek">{{ summary(row.value) }}</span>
+
+            <v-spacer />
+
+            <!-- Where it came from, on the collapsed row: it was behind a click
+                 before, and it is the first thing anybody wants from a dump
+                 they did not expect to see. -->
+            <button
+              v-if="row.file"
+              type="button"
+              class="dump-where"
+              :title="`${row.file}${row.line ? `:${row.line}` : ''}`"
+              @click.stop="openSource(row)"
+            >
+              {{ shortFile(row.file) }}{{ row.line ? `:${row.line}` : '' }}
+            </button>
+
+            <v-chip v-if="sapiGroup(row) !== 'web'" size="x-small" variant="tonal">
+              {{ t(`dumps.source.${sapiGroup(row)}`) }}
+            </v-chip>
+            <span v-if="row.request" class="text-caption text-medium-emphasis dump-req">
+              {{ row.request }}
+            </span>
+
+            <v-btn
+              icon
+              size="x-small"
+              variant="text"
+              class="dump-copy"
+              :aria-label="t('dumps.copyValue')"
+              @click.stop="copyRow(row)"
+            >
+              <v-icon size="14">mdi-content-copy</v-icon>
+              <v-tooltip activator="parent" location="left">{{ t('dumps.copyValue') }}</v-tooltip>
+            </v-btn>
+          </div>
+
+          <div v-if="!flat(row) && open.has(row.seq)" class="dump-detail">
+            <DumpValue :node="row.value" />
+          </div>
         </div>
-
-        <div v-if="!visible.length" class="text-caption text-medium-emphasis mt-4">
-          {{ waitingForSomething ? t('dumps.waiting') : t('dumps.captureOff') }}
-        </div>
-
-        <v-expansion-panels v-else variant="accordion" class="mt-3" multiple>
-          <v-expansion-panel v-for="row in visible" :key="row.seq" elevation="0">
-            <v-expansion-panel-title class="dump-title">
-              <div class="dump-head-row">
-                <span class="text-caption text-medium-emphasis">{{ clock(row.at) }}</span>
-                <v-chip v-if="scope === 'all'" size="x-small" variant="tonal">
-                  {{ row.project }}
-                </v-chip>
-                <v-chip v-if="row.label" size="x-small" variant="tonal" color="primary">
-                  {{ row.label }}
-                </v-chip>
-                <span class="text-body-2 dump-peek">{{ peek(row.value) }}</span>
-                <v-spacer />
-                <v-chip v-if="sapiGroup(row) !== 'web'" size="x-small" variant="tonal">
-                  {{ t(`dumps.source.${sapiGroup(row)}`) }}
-                </v-chip>
-                <span v-if="row.request" class="text-caption text-medium-emphasis dump-req">
-                  {{ row.request }}
-                </span>
-              </div>
-            </v-expansion-panel-title>
-            <v-expansion-panel-text>
-              <div class="d-flex align-center ga-1 mb-2">
-                <v-btn
-                  v-if="row.file"
-                  size="x-small"
-                  variant="text"
-                  prepend-icon="mdi-file-code-outline"
-                  @click="openSource(row)"
-                >
-                  {{ shortFile(row.file) }}{{ row.line ? `:${row.line}` : '' }}
-                </v-btn>
-                <v-spacer />
-                <!-- The value alone: what actually gets pasted into an issue. -->
-                <v-btn
-                  size="x-small"
-                  variant="text"
-                  prepend-icon="mdi-content-copy"
-                  @click="copyRow(row)"
-                >
-                  {{ t('dumps.copyValue') }}
-                </v-btn>
-              </div>
-              <pre class="dump-stream">{{ row.value }}</pre>
-            </v-expansion-panel-text>
-          </v-expansion-panel>
-        </v-expansion-panels>
-      </template>
+      </div>
     </div>
   </div>
 </template>
@@ -643,23 +720,105 @@ function openSource(row) {
   flex: 1 1 280px;
 }
 
+.dump-empty {
+  padding-top: 12px;
+}
+
+/* Rules between rows rather than cards around them. A stream of forty dumps
+   drawn as forty cards is forty borders and thirty-nine gaps, and the eye reads
+   the chrome before it reads a single value. */
+.dump-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.dump-row + .dump-row {
+  border-top: thin solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.dump-row--open {
+  background: rgba(var(--v-theme-on-surface), 0.03);
+}
+
 /* A dump row has to stay one line whatever is in it: the value can be a
    thousand characters and the request a long URL, and a row that wraps to four
    lines turns a list into a wall. Everything shrinks, the value first. */
-.dump-head-row {
+.dump-line {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
   width: 100%;
+  padding: 6px 4px;
 }
 
-.dump-peek {
+.dump-line--clickable {
+  cursor: pointer;
+}
+
+.dump-line:hover {
+  background: rgba(var(--v-theme-on-surface), 0.04);
+}
+
+/* Held even when there is nothing to disclose, so the times, the chips and the
+   values all start on the same column whatever the row turned out to be. */
+.dump-chev {
+  flex: 0 0 auto;
+  width: 10px;
+  font-size: 10px;
+  opacity: 0.5;
+  transition: transform 120ms ease;
+}
+
+.dump-chev--open {
+  transform: rotate(90deg);
+}
+
+.dump-chev--none {
+  visibility: hidden;
+}
+
+.dump-time {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Two classes, and that is the point rather than an accident: a flat value is
+   rendered by `DumpValue`, which styles a value from the older bridge as a
+   wrapping block. In a row that must stay one line tall it has to lose, and it
+   only loses on specificity. */
+.dump-peek,
+.dump-line .dump-flat {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+}
+
+/* The source is a link to a line of code, and reads as one. It keeps its whole
+   tail — `Controller.php:41` truncated from the right loses the line number,
+   which is the half somebody came for. */
+.dump-where {
+  flex: 0 0 auto;
+  max-width: 30%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: right;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: rgb(var(--v-theme-primary));
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.dump-where:hover {
+  text-decoration: underline;
 }
 
 /* The request is context, not the subject — it gives up its space last, but it
@@ -668,16 +827,28 @@ function openSource(row) {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 40%;
+  max-width: 30%;
   flex-shrink: 0;
 }
 
-.dump-stream {
+/* Present on every row so the column does not reflow on hover, and quiet until
+   the row is under the pointer. */
+.dump-copy {
+  flex: 0 0 auto;
+  opacity: 0;
+}
+
+.dump-line:hover .dump-copy,
+.dump-copy:focus-visible {
+  opacity: 1;
+}
+
+.dump-detail {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
-  line-height: 1.5;
-  margin: 0;
-  padding: 12px;
+  line-height: 1.6;
+  margin: 0 0 8px 22px;
+  padding: 10px 12px;
   border-radius: 6px;
   max-height: 60vh;
   overflow: auto;

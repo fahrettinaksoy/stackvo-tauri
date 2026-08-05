@@ -528,6 +528,7 @@ export default {
     allProjects: 'Tüm projeler',
     capture: 'dump() ve dd() yakala',
     captureHint: 'Anında etkili — konteynere dokunulmaz.',
+    help: 'Bu bölüm hakkında',
     captureOff: 'Yakalama kapalı. Açtığınızda dump() çıktıları burada birikir.',
     search: 'Ara',
     title: 'Dump’lar',

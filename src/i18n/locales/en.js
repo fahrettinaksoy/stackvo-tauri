@@ -521,6 +521,7 @@ export default {
     allProjects: 'All projects',
     capture: 'Catch dump() and dd()',
     captureHint: 'Takes effect immediately — no container is touched.',
+    help: 'About this pane',
     captureOff: 'Capture is off. Switch it on and dump() output collects here.',
     search: 'Search',
     title: 'Dumps',

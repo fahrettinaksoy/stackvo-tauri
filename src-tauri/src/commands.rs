@@ -2341,6 +2341,12 @@ pub async fn debug_bridge_overview(state: State<'_, AppState>) -> Result<serde_j
     let root = state.root()?;
     let mut out = Vec::new();
 
+    // The first thing the pane does is ask for this, so it is where a bridge
+    // left behind by an older build gets replaced — before the first poll comes
+    // back, and without anybody having to restart a container or know that a
+    // bridge is a file at all.
+    crate::debugbridge::refresh(&root);
+
     let Some(projects) = workspace::projects_root(&root) else {
         return Ok(serde_json::json!([]));
     };

@@ -354,6 +354,17 @@ onUnmounted(() => teardown?.());
   height: 100%;
 }
 
+/* Column labels are short phrases, and wrapping them onto a second line makes
+   the header band twice the height of a row for no gain. They stay on one line
+   and take the width they need. */
+.table-wrap :deep(thead th) {
+  white-space: nowrap;
+}
+
+.table-wrap :deep(.v-data-table-header__content) {
+  flex-wrap: nowrap;
+}
+
 /* A bind-mount source is an absolute host path; without this it runs out of
    the column and under the next one. */
 .path-chip {

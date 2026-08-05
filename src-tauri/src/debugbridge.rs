@@ -156,8 +156,18 @@ pub struct Event {
     /// `fpm-fcgi`, `cli`, … — what tells a queue worker from a web request.
     #[serde(default)]
     pub sapi: Option<String>,
-    /// The rendered value. Bounded by the bridge, not here.
-    pub value: String,
+    /// The captured value: a tree of typed nodes, bounded by the bridge.
+    ///
+    /// Untyped here on purpose, and not only to avoid restating the bridge's
+    /// shape in two languages. This file is the one thing in the system that
+    /// cannot be upgraded in step with what wrote it — a queue worker started
+    /// before an update keeps the old bridge loaded for as long as it lives,
+    /// and the events it already wrote are on disk regardless. Every version of
+    /// the node shape has to survive the trip, including the formatted string
+    /// the bridge emitted before it captured trees at all, which the pane still
+    /// renders. A stricter type here would turn "an old event" into "a line
+    /// that fails to parse", which [`read_events`] silently drops.
+    pub value: serde_json::Value,
 }
 
 /// The ini that loads the bridge. Written once and never changed at runtime.
@@ -207,66 +217,81 @@ if (!@is_file('{CONF_DIR}/enabled.flag')) {{
 
 if (!function_exists('__stackvo_emit')) {{
     /**
-     * Render a value with hard bounds.
+     * Capture a value as a tree, with hard bounds.
      *
      * Not Symfony's cloner: it is not loaded yet and cannot be. The bounds are
      * the point — an Eloquent model graph or a container instance will happily
      * serialise to megabytes, and a debug pane that stalls the request it is
      * observing is worse than no debug pane.
+     *
+     * A tree rather than the formatted block this used to return. The block was
+     * cheaper here and cost the reader everything: a type is not recoverable
+     * from text once a string that contains a newline is in it, so the pane
+     * could not colour a value, fold a branch, or say "array of 8" without
+     * re-parsing prose. What is a type here stays a type all the way to the
+     * screen. `n` is the real size and `items` is what survived the bound, so
+     * the pane can say what it is not showing instead of pretending it showed
+     * everything.
      */
-    function __stackvo_render($value, int $depth = 0): string
+    function __stackvo_capture($value, int $depth = 0): array
     {{
         if ($depth > 4) {{
-            return '…';
+            return ['t' => 'deep'];
         }}
         if ($value === null) {{
-            return 'null';
+            return ['t' => 'null'];
         }}
         if (is_bool($value)) {{
-            return $value ? 'true' : 'false';
+            return ['t' => 'bool', 'v' => $value];
         }}
         if (is_int($value) || is_float($value)) {{
-            return (string) $value;
+            // NAN and INF are floats that json_encode refuses, and a line that
+            // fails to encode is an event nobody ever sees. They arrive as the
+            // text PHP prints for them instead of taking the dump down.
+            if (is_float($value) && !is_finite($value)) {{
+                return ['t' => 'num', 's' => (string) $value];
+            }}
+            return ['t' => 'num', 'v' => $value];
         }}
         if (is_string($value)) {{
-            $cut = strlen($value) > 512;
-            return '"' . ($cut ? substr($value, 0, 512) . '…' : $value) . '"';
+            $len = strlen($value);
+            $node = ['t' => 'str', 'len' => $len];
+            $node['v'] = $len > 512 ? substr($value, 0, 512) : $value;
+            if ($len > 512) {{
+                $node['cut'] = true;
+            }}
+            return $node;
         }}
         if (is_array($value)) {{
-            $out = [];
+            $node = ['t' => 'arr', 'n' => count($value), 'items' => []];
             $n = 0;
             foreach ($value as $k => $v) {{
                 if ($n++ >= 50) {{
-                    $out[] = str_repeat('  ', $depth + 1) . '… ' . (count($value) - 50) . ' more';
                     break;
                 }}
-                $out[] = str_repeat('  ', $depth + 1) . var_export($k, true)
-                    . ' => ' . __stackvo_render($v, $depth + 1);
+                $node['items'][] = ['k' => $k, 'v' => __stackvo_capture($v, $depth + 1)];
             }}
-            return $out ? "[\n" . implode(",\n", $out) . "\n" . str_repeat('  ', $depth) . ']' : '[]';
+            return $node;
         }}
         if (is_object($value)) {{
-            $class = get_class($value);
-            // Closures and resources have nothing worth walking into.
+            // Closures have nothing worth walking into.
             if ($value instanceof \Closure) {{
-                return 'Closure';
+                return ['t' => 'fn'];
             }}
-            $props = [];
+            $props = (array) $value;
+            $node = ['t' => 'obj', 'class' => get_class($value), 'n' => count($props), 'items' => []];
             $n = 0;
-            foreach ((array) $value as $k => $v) {{
+            foreach ($props as $k => $v) {{
                 if ($n++ >= 50) {{
-                    $props[] = str_repeat('  ', $depth + 1) . '…';
                     break;
                 }}
                 // Private and protected keys arrive NUL-padded from the cast.
                 $name = str_replace("\0", '·', (string) $k);
-                $props[] = str_repeat('  ', $depth + 1) . $name . ': '
-                    . __stackvo_render($v, $depth + 1);
+                $node['items'][] = ['k' => $name, 'v' => __stackvo_capture($v, $depth + 1)];
             }}
-            return $class . ($props ? " {{\n" . implode(",\n", $props) . "\n"
-                . str_repeat('  ', $depth) . '}}' : ' {{}}');
+            return $node;
         }}
-        return gettype($value);
+        return ['t' => 'other', 'v' => gettype($value)];
     }}
 
     /** Where the call came from, skipping this file's own frames. */
@@ -327,7 +352,7 @@ if (!function_exists('dump')) {{
         foreach ($vars as $key => $value) {{
             __stackvo_emit('dump', [
                 'label' => is_string($key) ? $key : null,
-                'value' => __stackvo_render($value),
+                'value' => __stackvo_capture($value),
             ]);
         }}
         return count($vars) === 1 ? $vars[array_key_first($vars)] : $vars;
@@ -348,7 +373,7 @@ if (!function_exists('dd')) {{
         foreach ($vars as $key => $value) {{
             __stackvo_emit('dump', [
                 'label' => is_string($key) ? $key : null,
-                'value' => __stackvo_render($value),
+                'value' => __stackvo_capture($value),
             ]);
         }}
 
@@ -486,6 +511,39 @@ fn entries(root: &Path) -> Vec<Entry> {
     out
 }
 
+/// Bring every project's bridge up to date with this build, once per run.
+///
+/// The bridge is a generated file that lives on the host and is mounted into a
+/// container as part of a *directory*, so rewriting it reaches a container that
+/// is already running — no recreate, no restart, nothing for anybody to know
+/// about. But it was only ever rewritten on the way into a compose command, and
+/// a stack that nobody has started since the app updated therefore keeps
+/// running the bridge it was created with. That is not a rare case; it is the
+/// normal one. Somebody who leaves their stack up sees the pane render an old
+/// event shape and has no way to find out why, because everything about the
+/// app is new and the only stale thing is a file they have never heard of.
+///
+/// Once per root rather than once per process: the workspace can be pointed
+/// somewhere else while the app runs, and the projects in the new one deserve
+/// the same treatment. Once rather than per call because this is polled — the
+/// pane asks for the overview every second, and rewriting eleven files a second
+/// to discover that none of them changed is a strange way to spend a disk.
+pub fn refresh(root: &Path) {
+    static DONE: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+    let Ok(mut done) = DONE.lock() else {
+        return;
+    };
+    if done.as_deref() == Some(root) {
+        return;
+    }
+    // `entries` rewrites the bridge and the ini for every project it finds
+    // eligible, which is the whole of the work; its return value is the
+    // overlay's input and nothing here needs it.
+    let _ = entries(root);
+    *done = Some(root.to_path_buf());
+}
+
 /// Re-render the overlay. True when it exists and should be layered.
 pub fn sync(root: &Path) -> bool {
     let path = overlay_path(root);
@@ -569,6 +627,17 @@ pub fn set_enabled(root: &Path, name: &str, on: bool) -> Result<()> {
             std::fs::create_dir_all(parent)
                 .map_err(|e| Error::io("creating the debug directory", e))?;
         }
+
+        // Refreshed here and not only before a compose command, because this is
+        // the one moment the bridge is known to matter and the only one that
+        // does not cost a container. `conf` is mounted as a *directory*, so a
+        // rewrite is seen by a container that is already running — which is
+        // what makes an updated bridge reach a stack nobody has restarted since
+        // the app updated. Without this, turning capture on after an update
+        // loads whatever bridge was written when the containers were made, and
+        // the pane renders last release's shape until something recreates them.
+        let _ = crate::atomic::write(&conf_dir(root, name).join("bridge.php"), &bridge_php());
+
         std::fs::write(&flag, "")
             .map_err(|e| Error::io(format!("writing {}", flag.display()), e))?;
     } else {
@@ -717,9 +786,45 @@ mod tests {
 
         let found = read_events(&dir, "shop");
         assert_eq!(found.len(), 2, "a bad line took a good one with it");
-        assert_eq!(found[0].value, "one");
-        assert_eq!(found[1].value, "two");
+        assert_eq!(found[0].value, serde_json::json!("one"));
+        assert_eq!(found[1].value, serde_json::json!("two"));
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An event written by an older bridge is still an event.
+    ///
+    /// The bridge used to render values to a formatted string, and a worker
+    /// that was already running when this app updated goes on writing that
+    /// shape until it is restarted. Both have to parse, or the pane loses
+    /// everything that project dumped before the change.
+    #[test]
+    fn a_value_from_either_bridge_parses() {
+        let old: Event =
+            serde_json::from_str(r#"{"at":1.0,"kind":"dump","value":"App\\Models\\User {…}"}"#)
+                .expect("the formatted-string shape no longer parses");
+        assert!(old.value.is_string());
+
+        let new: Event = serde_json::from_str(
+            r#"{"at":1.0,"kind":"dump","value":{"t":"arr","n":2,"items":[]}}"#,
+        )
+        .expect("the tree shape does not parse");
+        assert_eq!(new.value["t"], serde_json::json!("arr"));
+    }
+
+    /// The bounds are the reason this renderer exists rather than a cloner, and
+    /// they are what stops a dump of the service container from writing
+    /// megabytes into the events file mid-request.
+    #[test]
+    fn the_capture_keeps_its_bounds_and_reports_what_it_cut() {
+        let php = bridge_php();
+        assert!(php.contains("$depth > 4"), "the depth bound is gone");
+        assert!(php.contains("$n++ >= 50"), "the item bound is gone");
+        assert!(php.contains("strlen($value)"), "the string bound is gone");
+        // `n` is the real size and `items` is what survived it. Without the
+        // count the pane can only show what it was given and has no way to say
+        // that anything is missing.
+        assert!(php.contains("'n' => count($value)"));
+        assert!(php.contains("'n' => count($props)"));
     }
 }
