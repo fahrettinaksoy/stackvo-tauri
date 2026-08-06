@@ -14,6 +14,11 @@ import en from '@/i18n/locales/en.js';
 
 const SRC = resolve(import.meta.dirname, '../src');
 
+/** The value at a dotted path, for the compilation check below. */
+function resolve_(object, path) {
+  return path.split('.').reduce((node, key) => (node == null ? node : node[key]), object);
+}
+
 function flatten(object, prefix = '') {
   return Object.entries(object).flatMap(([key, value]) =>
     value !== null && typeof value === 'object'
@@ -188,5 +193,51 @@ describe('unused translations', () => {
     });
 
     expect(dead, 'translated but unreachable').toEqual([]);
+  });
+});
+
+/**
+ * Every message actually compiles.
+ *
+ * vue-i18n reads `{…}` as an interpolation placeholder, so a string containing
+ * literal braces — `{{ VAR }} is substituted from .env` — is a *nested*
+ * placeholder, which is not allowed. It does not fail loudly: the compiler logs
+ * "Not allowed nest placeholder" and falls back to the raw string, so the text
+ * looks right and every render writes an error to the console. Noise like that
+ * is what a real error hides in.
+ *
+ * It shipped that way and was only noticed because the pane it lives in was
+ * extracted and mounted (§14.16). The escape is vue-i18n's own literal syntax,
+ * `{'{{ VAR }}'}`, and this is what stops the next one going unnoticed.
+ */
+describe('message compilation', () => {
+  it('produces no compiler diagnostics in either locale', async () => {
+    const { createI18n } = await import('vue-i18n');
+    const complaints = [];
+    const original = console.error;
+    console.error = (...args) => complaints.push(args.join(' '));
+
+    try {
+      for (const [name, messages] of [
+        ['en', en],
+        ['tr', tr],
+      ]) {
+        const i18n = createI18n({ legacy: false, locale: name, messages: { [name]: messages } });
+        // Compilation is lazy — a message is only parsed when it is asked
+        // for, so every one has to be resolved for this to mean anything.
+        //
+        // Strings only. `flatten` walks arrays too, which turns an index into
+        // a key like `nav.items.0` and makes vue-i18n warn about a key that
+        // was never meant to be one — noise this assertion would then read as
+        // a finding.
+        for (const key of flatten(messages)) {
+          if (typeof resolve_(messages, key) === 'string') i18n.global.t(key);
+        }
+      }
+    } finally {
+      console.error = original;
+    }
+
+    expect(complaints, `vue-i18n rejected ${complaints.length} message(s)`).toEqual([]);
   });
 });

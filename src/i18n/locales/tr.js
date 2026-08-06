@@ -429,7 +429,7 @@ export default {
     compatTab: 'Uyumluluk',
     linksTab: 'Bağlantılar',
     save: 'Kaydet',
-    searchPlaceholder: 'Ara — from:a@b.c subject:"fatura"',
+    searchPlaceholder: 'Ara — from:a{\'@\'}b.c subject:"fatura"',
     matching: '{n} eşleşme',
     compatSupported: '{n} mail istemcisi özelliğinde tam destekleniyor',
     compatLegend: 'Yeşil tam destek · turuncu kısmi · kırmızı desteklenmiyor.',
@@ -779,7 +779,7 @@ export default {
       extraDesc:
         'Bu sunucu için üretilen her yapılandırmaya eklenir. Yorumlar ve boş satırlar atılır, yani yalnızca not içeren bir dosya hiçbir şeyi değiştirmez.',
       extraPlaceholder: 'client_body_timeout 120s;',
-      extraHint: '{{ VAR }} .env üzerinden yerine konur. Bir sonraki üretimde etkili olur.',
+      extraHint: "{'{{ VAR }}'} .env üzerinden yerine konur. Bir sonraki üretimde etkili olur.",
       title: 'Web sunucuları',
       desc: 'PHP’nin önündeki sunucunun neyi kabul edeceği.',
       limits: 'İstek sınırları',
@@ -1280,7 +1280,7 @@ export default {
     templateHint:
       'Çerçevenin kendi kurucusu geçici bir konteynerde çalışır; sonra tespit, yazdıklarından projeyi yapılandırır. İlk çalıştırma kurucu imajını indirir — birkaç dakika verin.',
     gitUrl: 'Depo adresi',
-    gitUrlPlaceholder: 'git@sunucu.example.com:grup/alt-grup/depo.git',
+    gitUrlPlaceholder: "git{'@'}sunucu.example.com:grup/alt-grup/depo.git",
     gitUrlHint:
       'SSH veya HTTPS klon adresi. Herhangi bir sunucu olabilir — kendi GitLab’ınız da dâhil.',
     gitAuthHint:

@@ -422,7 +422,11 @@ export default {
     compatTab: 'Compatibility',
     linksTab: 'Links',
     save: 'Save',
-    searchPlaceholder: 'Search — from:a@b.c subject:"invoice"',
+    // `{'@'}` is vue-i18n's literal escape: a bare `@` starts a linked-message
+    // reference, so this logged "Invalid linked format" on every render and fell
+    // back to the raw string. Caught by the compilation gate in
+    // `tests/i18n.spec.js`.
+    searchPlaceholder: 'Search — from:a{\'@\'}b.c subject:"invoice"',
     matching: '{n} matching',
     compatSupported: 'fully supported across {n} mail-client features',
     compatLegend: 'Green fully supported · amber partial · red unsupported.',
@@ -774,7 +778,12 @@ export default {
       extraDesc:
         'Added to every generated config for this server. Comments and blank lines are dropped, so a file of nothing but notes changes nothing.',
       extraPlaceholder: 'client_body_timeout 120s;',
-      extraHint: '{{ VAR }} is substituted from .env. Takes effect on the next generate.',
+      // `{'…'}` is vue-i18n's literal escape. Without it the compiler reads
+      // `{{ VAR }}` as a nested placeholder, logs "Not allowed nest
+      // placeholder" on every render and falls back to the raw string — the
+      // text survives, the console noise does not, and noise is what hides a
+      // real error.
+      extraHint: "{'{{ VAR }}'} is substituted from .env. Takes effect on the next generate.",
       title: 'Web servers',
       desc: 'What the server in front of PHP will accept.',
       limits: 'Request limits',
@@ -1277,7 +1286,7 @@ export default {
     templateHint:
       'The framework’s own installer runs in a throwaway container, then detection configures the project from what it wrote. The first run downloads the installer image — give it a few minutes.',
     gitUrl: 'Repository URL',
-    gitUrlPlaceholder: 'git@server.example.com:group/subgroup/repo.git',
+    gitUrlPlaceholder: "git{'@'}server.example.com:group/subgroup/repo.git",
     gitUrlHint: 'An SSH or HTTPS clone URL. Any host — including your own GitLab.',
     gitAuthHint:
       'Cloning uses the git on this machine. Your keys, ssh config and server permissions come from your own setup — StackVo manages none of them. A URL that works in your terminal works here.',
