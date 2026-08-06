@@ -17,13 +17,18 @@ import {
   FONT_FAMILIES,
   STATUS_PALETTES,
 } from '@/lib/appearance';
-import { api, asList } from '@/lib/ipc';
+import { api } from '@/lib/ipc';
 import { HTTPS_ONLY_SUFFIXES } from '@/lib/manifest';
 import { bytes } from '@/lib/format';
 import { setLocale } from '@/i18n';
 import { checkForUpdate, updatesConfigured } from '@/lib/updates';
 import { getVersion } from '@tauri-apps/api/app';
 import ErrorAlert from '@/components/ErrorAlert.vue';
+import CertificatesPane from '@/components/settings/CertificatesPane.vue';
+import TemplateOverridesPane from '@/components/settings/TemplateOverridesPane.vue';
+import ServerDirectivesPane from '@/components/settings/ServerDirectivesPane.vue';
+import { useCertificates } from '@/composables/useCertificates';
+import { useEnvEditor } from '@/composables/useEnvEditor';
 import PageLayout from '@/components/PageLayout.vue';
 import SettingsSection from '@/components/SettingsSection.vue';
 import ServiceSettingsSheet from '@/components/ServiceSettingsSheet.vue';
@@ -36,11 +41,38 @@ const inventory = useInventoryStore();
 const appearance = useAppearanceStore();
 const theme = useTheme();
 
-const env = ref({});
-const envError = ref(null);
-const edits = ref({});
-const saving = ref(false);
-const saved = ref(false);
+/**
+ * The `.env` editor, shared by six panes on this screen.
+ *
+ * Lifted into `useEnvEditor` under §14.16: it is the machinery that kept those
+ * panes from being extracted one at a time, because they all edit one file
+ * through one set of refs. Destructured here so the existing template bindings
+ * keep their names.
+ */
+const {
+  edits,
+  error: envError,
+  saving,
+  saved,
+  lastSaved,
+  dirty,
+  routingChanged,
+  suffixChanged,
+  loadDefaults: loadEnvDefaults,
+  load: loadEnv,
+  edit,
+  effective,
+  isDefault,
+  resetToDefault,
+  boolOf,
+  setBool,
+  onOff,
+  setOnOff,
+  listOf,
+  setList,
+  save: saveEnv,
+  clearPending,
+} = useEnvEditor();
 
 const prefs = ref(null);
 const generatorReport = ref(null);
@@ -417,8 +449,6 @@ async function runGenerate() {
 }
 const autostart = ref(false);
 
-const dirty = computed(() => Object.keys(edits.value).length > 0);
-
 /**
  * The stack-shaping settings, as controls rather than as rows in a key table.
  *
@@ -428,7 +458,6 @@ const dirty = computed(() => Object.keys(edits.value).length > 0);
  * `ture`, a list edits as chips, and the domain suffix is checked before it
  * reaches a routing label nobody would think to look at.
  */
-const defaults = ref({});
 /**
  * The proxy, which the app never named.
  *
@@ -629,140 +658,6 @@ async function copySystemInfo() {
  * rather than hidden, because a setting that silently does nothing for two of
  * five choices is worse than one that says so.
  */
-/**
- * The per-server directive file, edited here rather than only on disk.
- *
- * A text area and not a set of fields: what goes in is nginx's own grammar,
- * and pretending otherwise would mean a form that can express a fraction of it
- * and silently drops the rest.
- */
-const CONFIGURABLE_SERVERS = ['nginx', 'caddy', 'frankenphp'];
-const serverTab = ref('nginx');
-const serverConfig = ref('');
-const serverConfigSaved = ref('');
-const serverConfigBusy = ref(false);
-const serverConfigDirty = computed(() => serverConfig.value !== serverConfigSaved.value);
-
-async function loadServerConfig() {
-  serverConfigBusy.value = true;
-  envError.value = null;
-  try {
-    serverConfig.value = await api.serverConfigGet(serverTab.value);
-    serverConfigSaved.value = serverConfig.value;
-  } catch (e) {
-    envError.value = e;
-  } finally {
-    serverConfigBusy.value = false;
-  }
-}
-
-async function saveServerConfig() {
-  serverConfigBusy.value = true;
-  envError.value = null;
-  try {
-    await api.serverConfigSet(serverTab.value, serverConfig.value);
-    serverConfigSaved.value = serverConfig.value;
-    // Directives reach a container only through a regenerate, the same as the
-    // limits above — saying so is the difference between a feature that worked
-    // and one the user believes did nothing.
-    lastSaved.value = ['SERVER_CONFIG'];
-  } catch (e) {
-    envError.value = e;
-  } finally {
-    serverConfigBusy.value = false;
-  }
-}
-
-watch(serverTab, loadServerConfig);
-
-/**
- * Which shipped templates this workspace has taken over.
- *
- * The app renders from the copies compiled into its binary and reads the
- * workspace first, so a file under `core/` is an override and nothing else —
- * installing writes none. That is what makes this list answerable, and the
- * question it answers is a real one: an edit made months ago is invisible
- * until the stack stops matching what the documentation says it does.
- */
-const templates = ref([]);
-const templatesBusy = ref(false);
-const templatesError = ref(null);
-const templateBusy = ref(null);
-const templateToOverride = ref(null);
-const revertTarget = ref(null);
-
-const overriddenTemplates = computed(() => templates.value.filter((f) => f.overridden));
-const shippedTemplates = computed(() => templates.value.filter((f) => !f.overridden));
-
-/**
- * Is this particular template the one being worked on?
- *
- * The emptiness check is the point. `templateBusy === templateToOverride` read
- * correctly and was wrong for the state the pane opens in: both are null, null
- * equals null, and the button sat there spinning before anyone had chosen a
- * file — and again after every successful override, which clears the selection.
- * Idle is not a path, so it can never be the busy one.
- */
-const busyWith = (path) => !!path && templateBusy.value === path;
-
-async function loadTemplates() {
-  templatesBusy.value = true;
-  templatesError.value = null;
-  try {
-    templates.value = asList(await api.templatesList());
-  } catch (e) {
-    templatesError.value = e;
-  } finally {
-    templatesBusy.value = false;
-  }
-}
-
-/**
- * Copy the shipped file in, then open it in the user's own editor.
- *
- * Not a textarea in this pane: these are compose fragments and server configs,
- * and the tool for editing YAML is the one they already have open.
- */
-async function overrideTemplate() {
-  const path = templateToOverride.value;
-  if (!path) return;
-
-  templateBusy.value = path;
-  templatesError.value = null;
-  try {
-    const absolute = await api.templateOverride(path);
-    await loadTemplates();
-    templateToOverride.value = null;
-    await api.openInEditor(absolute).catch(() => {});
-  } catch (e) {
-    templatesError.value = e;
-  } finally {
-    templateBusy.value = null;
-  }
-}
-
-function openTemplate(path) {
-  const root = app.workspace?.root;
-  if (root) api.openInEditor(`${root}/${path}`).catch(() => {});
-}
-
-/** Deletes the user's edit. Confirmed in the dialog, not here. */
-async function revertTemplate() {
-  const path = revertTarget.value;
-  revertTarget.value = null;
-  if (!path) return;
-
-  templateBusy.value = path;
-  templatesError.value = null;
-  try {
-    await api.templateRevert(path);
-    await loadTemplates();
-  } catch (e) {
-    templatesError.value = e;
-  } finally {
-    templateBusy.value = null;
-  }
-}
 
 /**
  * The nginx directives the form offers, mirroring the table in the generator.
@@ -785,8 +680,6 @@ const NGINX_SWITCHES = [
   { key: 'SERVER_GZIP', on: 'on', off: 'off' },
 ];
 
-const onOff = (key) => effective(key) === 'on';
-const setOnOff = (key, value) => edit(key, value ? 'on' : 'off');
 const gzipOn = computed(() => onOff('SERVER_GZIP'));
 
 /**
@@ -830,27 +723,6 @@ const RUNTIME_DEFAULTS = [
   { id: 'node', key: 'SUPPORTED_LANGUAGES_NODEJS_DEFAULT', icon: 'mdi-nodejs' },
 ];
 const runtimeItems = (runtime) => itemsFor(runtime.key, runtimeVersions(runtime.id));
-
-const effective = (key) => edits.value[key] ?? env.value[key] ?? defaults.value[key] ?? '';
-const isDefault = (key) => effective(key) === defaults.value[key];
-const resetToDefault = (key) => edit(key, defaults.value[key] ?? '');
-
-const boolOf = (key) => effective(key) === 'true';
-const setBool = (key, on) => edit(key, on ? 'true' : 'false');
-
-const listOf = (key) =>
-  effective(key)
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-const setList = (key, items) =>
-  edit(
-    key,
-    items
-      .map((s) => String(s).trim())
-      .filter(Boolean)
-      .join(',')
-  );
 
 /**
  * A suffix, not a URL. It is concatenated straight into `Host(\`x.SUFFIX\`)`,
@@ -938,25 +810,13 @@ async function pickWorkspace() {
   }
 }
 
+/**
+ * The shipped defaults and the service catalog, read together because the two
+ * panes that need them open together. The `.env` half is the composable's.
+ */
 async function loadDefaults() {
-  defaults.value = await api.envDefaults().catch(() => ({}));
+  await loadEnvDefaults();
   catalog.value = await api.catalogGet().catch(() => null);
-}
-
-async function loadEnv() {
-  envError.value = null;
-  edits.value = {};
-  try {
-    env.value = await api.envGet();
-  } catch (e) {
-    envError.value = e;
-    env.value = {};
-  }
-}
-
-function edit(key, value) {
-  if (value === env.value[key]) delete edits.value[key];
-  else edits.value[key] = value;
 }
 
 /**
@@ -967,40 +827,18 @@ function edit(key, value) {
  * the files are regenerated. Saving and staying silent is how a setting looks
  * like it did nothing.
  */
-const lastSaved = ref([]);
-const ROUTING_KEYS = [
-  'DEFAULT_TLD_SUFFIX',
-  'DOCKER_DEFAULT_NETWORK',
-  'SSL_ENABLE',
-  'REDIRECT_TO_HTTPS',
-];
-const routingChanged = computed(() => lastSaved.value.some((k) => ROUTING_KEYS.includes(k)));
 /** Clears the notice only if the regenerate actually succeeded. */
 async function regenerateAfterChange() {
   await stackAction(() => api.generateRun('all'));
-  if (!envError.value) lastSaved.value = [];
+  if (!envError.value) clearPending();
 }
 
-const suffixChanged = computed(() => lastSaved.value.includes('DEFAULT_TLD_SUFFIX'));
-
-async function save() {
-  saving.value = true;
-  envError.value = null;
-  saved.value = false;
-  try {
-    const keys = Object.keys(edits.value);
-    await api.envSet({ ...edits.value });
-    lastSaved.value = keys;
-    await loadEnv();
-    await app.refreshTld();
-    saved.value = true;
-    setTimeout(() => (saved.value = false), 2500);
-  } catch (e) {
-    envError.value = e;
-  } finally {
-    saving.value = false;
-  }
-}
+/**
+ * The store's cached TLD has to follow the file, or every domain the app shows
+ * is the previous suffix until a reload. Passed to the composable rather than
+ * done after it, so it lands before the "saved" confirmation appears.
+ */
+const save = () => saveEnv(() => app.refreshTld());
 
 async function loadPrefs() {
   try {
@@ -1039,101 +877,20 @@ async function verifyGenerator() {
 }
 
 /**
- * Certificate state.
+ * The certificate state, shared with `CertificatesPane`.
  *
- * Read on mount rather than on opening the pane: `certStale` badges the rail
- * entry, and a badge that only appears once you have already navigated to the
- * thing it is pointing at is decoration.
+ * Only `stale` is read here — it badges the rail entry, and a badge that only
+ * appears once you have navigated to the pane it points at is decoration. The
+ * pane owns the loading and the two actions; see `useCertificates`.
  */
-const certs = ref(null);
-const certPlan = ref(null);
-const certBusy = ref(false);
-
-/**
- * Trust the CA by opening a terminal.
- *
- * The app cannot do it: macOS grants the authorization for trust settings only
- * interactively, and a background child process of a windowed app is not
- * somewhere it will ask.
- */
-async function trustCaInTerminal() {
-  try {
-    await api.certTrustInTerminal();
-  } catch (e) {
-    envError.value = e;
-  }
-}
-const certError = ref(null);
-
-async function loadCerts() {
-  try {
-    certs.value = await api.certStatus();
-    // The plan is what says which names a reissue would *drop* — the status
-    // only computes what is missing. A user who deleted a project and sees its
-    // domain vanish from the certificate should have been told first.
-    certPlan.value = await api.certPlan(certs.value.caTrusted !== true);
-    certError.value = null;
-  } catch (e) {
-    // A missing workspace is reported by the requirements gate already; a
-    // second copy of it here would be noise.
-    certs.value = null;
-    certPlan.value = null;
-    if (!e.needsWorkspace) certError.value = e;
-  }
-}
-
-/**
- * Reissue for the domains the projects actually have.
- *
- * The plan is shown before this runs, so there is no confirmation step here —
- * the button's label is the plan. `installCa` follows what the status reported:
- * asking for the trust store when it is already trusted would raise a password
- * prompt for nothing.
- */
-/**
- * True when the certificate was reissued but the running proxy is still
- * serving the old one — see `reload_proxy` in `certs.rs`. Cleared by the next
- * reissue, because the state it describes belongs to the last one.
- */
-const certNotReloaded = ref(false);
-
-async function reissueCerts() {
-  certBusy.value = true;
-  certError.value = null;
-  certNotReloaded.value = false;
-  try {
-    // `false`: the trust write is its own button now. Asking for it here made
-    // every reissue return an error about something the user had not asked for.
-    const applied = await api.certApply(false);
-    // A certificate nothing serves is not a certificate the user has.
-    certNotReloaded.value = applied?.reloaded === false;
-    await loadCerts();
-  } catch (e) {
-    certError.value = e;
-  } finally {
-    certBusy.value = false;
-  }
-}
-
-/** The one fact worth surfacing outside this pane. */
-const certStale = computed(() => certs.value?.sslEnabled && certs.value?.stale);
-
-/** Expiry as a date in the user's locale — the Rust side sends epoch seconds. */
-const certExpiry = computed(() => {
-  const seconds = certs.value?.notAfter;
-  if (!seconds) return null;
-  return new Date(seconds * 1000).toLocaleDateString(locale.value);
-});
+const { stale: certStale } = useCertificates();
 
 onMounted(async () => {
   loadEnv();
   loadDefaults();
   loadProxy();
   loadHosts();
-  loadServerConfig();
-  loadTemplates();
   loadPrefs();
-  loadCerts();
   verifyGenerator();
   appVersion.value = await getVersion().catch(() => '');
   updaterReady.value = await updatesConfigured();
@@ -2164,41 +1921,7 @@ onMounted(async () => {
               />
             </SettingsGroup>
 
-            <SettingsGroup
-              icon="mdi-file-code-outline"
-              :title="t('settings.servers.extra')"
-              :description="t('settings.servers.extraDesc')"
-            >
-              <template #append>
-                <v-btn
-                  size="small"
-                  variant="tonal"
-                  color="primary"
-                  prepend-icon="mdi-content-save-outline"
-                  :disabled="!serverConfigDirty"
-                  :loading="serverConfigBusy"
-                  @click="saveServerConfig"
-                >
-                  {{ t('settings.save', { count: 1 }) }}
-                </v-btn>
-              </template>
-
-              <v-tabs v-model="serverTab" density="compact" bg-color="transparent" class="mb-3">
-                <v-tab v-for="srv in CONFIGURABLE_SERVERS" :key="srv" :value="srv">{{ srv }}</v-tab>
-              </v-tabs>
-
-              <v-textarea
-                v-model="serverConfig"
-                :placeholder="t('settings.servers.extraPlaceholder')"
-                :hint="t('settings.servers.extraHint')"
-                persistent-hint
-                rows="12"
-                variant="outlined"
-                density="comfortable"
-                class="server-config"
-                spellcheck="false"
-              />
-            </SettingsGroup>
+            <ServerDirectivesPane @saved="(keys) => (lastSaved = keys)" />
 
             <SettingsGroup
               icon="mdi-server-network"
@@ -2362,108 +2085,7 @@ onMounted(async () => {
               </v-btn>
             </SettingsGroup>
 
-            <!-- The templates are in the binary; a copy under `core/` exists
-                 only because somebody made one here. That is what makes this
-                 list possible at all — every workspace used to hold all thirty
-                 files, so "has a copy" said nothing. -->
-            <SettingsGroup
-              icon="mdi-file-replace-outline"
-              :title="t('settings.templates.title')"
-              :description="t('settings.templates.description')"
-            >
-              <template #append>
-                <v-btn
-                  size="small"
-                  variant="text"
-                  prepend-icon="mdi-refresh"
-                  :loading="templatesBusy"
-                  @click="loadTemplates"
-                >
-                  {{ t('settings.templates.reload') }}
-                </v-btn>
-              </template>
-
-              <v-alert
-                v-if="templatesError"
-                type="error"
-                variant="tonal"
-                density="comfortable"
-                class="mb-3"
-                :text="templatesError.message || String(templatesError)"
-              />
-
-              <div class="text-body-2 mb-3">
-                {{
-                  overriddenTemplates.length
-                    ? t('settings.templates.count', {
-                        count: overriddenTemplates.length,
-                        total: templates.length,
-                      })
-                    : t('settings.templates.none', { total: templates.length })
-                }}
-              </div>
-
-              <!-- Overridden ones first and always visible: they are the
-                   answer to "why does my stack not match the docs", and a
-                   forgotten edit is the reason that question gets asked. -->
-              <v-list v-if="overriddenTemplates.length" density="compact" class="pa-0 mb-2">
-                <v-list-item
-                  v-for="file in overriddenTemplates"
-                  :key="file.path"
-                  class="px-0"
-                  :title="file.path"
-                >
-                  <template #prepend>
-                    <v-icon size="18" color="warning" class="mr-2">mdi-pencil</v-icon>
-                  </template>
-                  <template #append>
-                    <v-btn
-                      size="x-small"
-                      variant="text"
-                      prepend-icon="mdi-open-in-new"
-                      @click="openTemplate(file.path)"
-                    >
-                      {{ t('settings.templates.open') }}
-                    </v-btn>
-                    <v-btn
-                      size="x-small"
-                      variant="text"
-                      color="error"
-                      prepend-icon="mdi-undo-variant"
-                      :loading="busyWith(file.path)"
-                      @click="revertTarget = file.path"
-                    >
-                      {{ t('settings.templates.revert') }}
-                    </v-btn>
-                  </template>
-                </v-list-item>
-              </v-list>
-
-              <v-select
-                v-model="templateToOverride"
-                :items="shippedTemplates"
-                item-title="path"
-                item-value="path"
-                :label="t('settings.templates.pick')"
-                :hint="t('settings.templates.pickHint')"
-                persistent-hint
-                variant="outlined"
-                density="comfortable"
-                hide-no-data
-              />
-              <v-btn
-                size="small"
-                variant="tonal"
-                color="primary"
-                prepend-icon="mdi-file-edit-outline"
-                class="mt-3"
-                :disabled="!templateToOverride"
-                :loading="busyWith(templateToOverride)"
-                @click="overrideTemplate"
-              >
-                {{ t('settings.templates.override') }}
-              </v-btn>
-            </SettingsGroup>
+            <TemplateOverridesPane />
 
             <SettingsGroup
               icon="mdi-play-box-multiple-outline"
@@ -2820,213 +2442,7 @@ onMounted(async () => {
                question a browser warning raises — "is my domain in the
                certificate?" — had no answer anywhere in the app. -->
           <template v-if="tab === 'certificates'">
-            <ErrorAlert v-if="certError" :error="certError" class="mb-4" />
-
-            <SettingsGroup
-              icon="mdi-certificate-outline"
-              :title="t('certs.title')"
-              :description="t('certs.subtitle')"
-            >
-              <template #append>
-                <v-btn
-                  size="x-small"
-                  variant="text"
-                  icon="mdi-refresh"
-                  :aria-label="t('app.refresh')"
-                  :loading="certBusy"
-                  @click="loadCerts"
-                />
-              </template>
-
-              <!-- SSL off is a choice, not a fault: without it the generator
-                   emits no `websecure` entry point and nothing below applies. -->
-              <v-alert v-if="certs && !certs.sslEnabled" type="info" variant="tonal" class="mb-3">
-                <div class="text-caption">{{ t('certs.sslOff') }}</div>
-              </v-alert>
-
-              <template v-else-if="certs">
-                <div class="d-flex align-center ga-2 mb-3 flex-wrap">
-                  <v-chip size="small" :color="certs.stale ? 'warning' : 'success'">
-                    {{ certs.stale ? t('certs.stale') : t('certs.current') }}
-                  </v-chip>
-                  <v-chip
-                    size="small"
-                    :color="
-                      certs.caTrusted === true
-                        ? 'success'
-                        : certs.caTrusted === false
-                          ? 'warning'
-                          : undefined
-                    "
-                  >
-                    {{
-                      certs.caTrusted === true
-                        ? t('certs.caTrusted')
-                        : certs.caTrusted === false
-                          ? t('certs.caUntrusted')
-                          : t('certs.caUnknown')
-                    }}
-                  </v-chip>
-                  <span v-if="certExpiry" class="text-caption text-medium-emphasis">
-                    {{
-                      certs.expired
-                        ? t('certs.expiredOn', { date: certExpiry })
-                        : t('certs.expiresOn', {
-                            date: certExpiry,
-                            days: certs.daysRemaining,
-                          })
-                    }}
-                  </span>
-                </div>
-
-                <!-- mkcert is the whole mechanism; without it nothing here can
-                     be repaired, so it is said plainly rather than left for the
-                     reissue button to fail on. -->
-                <v-alert v-if="!certs.mkcertAvailable" type="warning" variant="tonal" class="mb-3">
-                  <div class="text-caption">{{ t('certs.noMkcert') }}</div>
-                </v-alert>
-
-                <v-alert v-if="certs.error" type="error" variant="tonal" class="mb-3">
-                  <div class="text-caption">{{ certs.error }}</div>
-                </v-alert>
-
-                <!-- The point of the pane: which domains the file on disk does
-                     not vouch for. -->
-                <template v-if="certs.missing.length">
-                  <div class="text-caption text-medium-emphasis mb-1">
-                    {{ t('certs.missing') }}
-                  </div>
-                  <div class="mb-3">
-                    <v-chip
-                      v-for="d in certs.missing"
-                      :key="d"
-                      size="x-small"
-                      color="warning"
-                      class="mr-1 mb-1"
-                    >
-                      {{ d }}
-                    </v-chip>
-                  </div>
-                </template>
-
-                <template v-if="certPlan?.remove?.length">
-                  <div class="text-caption text-medium-emphasis mb-1">
-                    {{ t('certs.dropping') }}
-                  </div>
-                  <div class="mb-3">
-                    <v-chip
-                      v-for="d in certPlan.remove"
-                      :key="d"
-                      size="x-small"
-                      variant="outlined"
-                      class="mr-1 mb-1"
-                    >
-                      {{ d }}
-                    </v-chip>
-                  </div>
-                </template>
-
-                <template v-if="certs.rejected.length">
-                  <div class="text-caption text-error mb-1">{{ t('certs.rejected') }}</div>
-                  <div class="mb-3">
-                    <v-chip
-                      v-for="d in certs.rejected"
-                      :key="d"
-                      size="x-small"
-                      color="error"
-                      class="mr-1 mb-1"
-                    >
-                      {{ d }}
-                    </v-chip>
-                  </div>
-                </template>
-
-                <div class="text-caption text-medium-emphasis mb-1">
-                  {{ t('certs.covered', { n: certs.covered.length }) }}
-                </div>
-                <div class="mb-3">
-                  <v-chip v-for="d in certs.covered" :key="d" size="x-small" class="mr-1 mb-1">
-                    {{ d }}
-                  </v-chip>
-                </div>
-
-                <v-btn
-                  size="small"
-                  variant="tonal"
-                  block
-                  prepend-icon="mdi-autorenew"
-                  :loading="certBusy"
-                  :disabled="!certs.mkcertAvailable"
-                  @click="reissueCerts"
-                >
-                  {{ t('certs.reissue') }}
-                </v-btn>
-
-                <!-- Trusting the CA is a separate button because it is a
-                     separate thing, and on macOS it is the only one this app
-                     cannot do for itself: `sudo` needs a terminal, root through
-                     AppleScript is refused, and the user-domain write exits 0
-                     and changes nothing. So it opens a terminal — which is
-                     honest, and works. -->
-                <v-btn
-                  v-if="certs.caTrusted !== true"
-                  size="small"
-                  variant="tonal"
-                  color="warning"
-                  block
-                  class="mt-2"
-                  prepend-icon="mdi-console"
-                  :disabled="!certs.mkcertAvailable"
-                  @click="trustCaInTerminal"
-                >
-                  {{ t('certs.trustInTerminal') }}
-                </v-btn>
-                <div v-if="certs.caTrusted !== true" class="text-caption text-medium-emphasis mt-2">
-                  {{ t('certs.trustInTerminalHint') }}
-                </div>
-
-                <!-- The certificate is on disk and the browser is still getting
-                     the old one. Silence here is what made this bug survive:
-                     the reissue reports success either way. -->
-                <v-alert v-if="certNotReloaded" type="warning" variant="tonal" class="mt-3">
-                  <div class="text-caption">{{ t('certs.notReloaded') }}</div>
-                </v-alert>
-
-                <!-- Both paths, each said to be what it is.
-                     They were reported as "the certificate is in two places",
-                     three times, because only one of them was ever shown and
-                     the other was found by looking. They are two different
-                     files with two different jobs, and the reason they are not
-                     in one directory is the line below the second one. -->
-                <div class="mt-3">
-                  <div v-if="certs.certPath" class="text-caption text-medium-emphasis">
-                    <strong>{{ t('certs.leafLabel') }}</strong> · {{ certs.certPath }}
-                  </div>
-                  <div v-if="certs.caPath" class="text-caption text-medium-emphasis mt-1">
-                    <strong>{{ t('certs.caLabel') }}</strong> · {{ certs.caPath }}
-                    <!-- The reason they are not one directory is worth having
-                         and is not worth three lines of a settings pane. It was
-                         three lines here, and read as a lecture attached to two
-                         file paths.
-                         The `#activator` slot rather than `activator="parent"`:
-                         the first version nested the tooltip inside `v-icon`
-                         alongside the icon's own name, so the slot held two
-                         things and the hover reached neither. This is the shape
-                         every other tooltip in this app already uses. -->
-                    <v-tooltip :text="t('certs.whySeparate')" location="top" max-width="420">
-                      <template #activator="{ props }">
-                        <v-icon
-                          v-bind="props"
-                          size="14"
-                          class="ml-1 why-separate"
-                          icon="mdi-information-outline"
-                        />
-                      </template>
-                    </v-tooltip>
-                  </div>
-                </div>
-              </template>
-            </SettingsGroup>
+            <CertificatesPane />
           </template>
 
           <!-- ---- .env ------------------------------------------------------ -->
@@ -3215,42 +2631,9 @@ onMounted(async () => {
     </div>
   </PageLayout>
   <ServiceSettingsSheet v-model="sheetOpen" :service="sheetService" @applied="onServiceApplied" />
-
-  <!-- Reverting deletes the file the user edited. There is no copy of it
-       anywhere — the binary holds the shipped version, not theirs. -->
-  <v-dialog :model-value="!!revertTarget" max-width="520" @update:model-value="revertTarget = null">
-    <v-card v-if="revertTarget">
-      <v-card-item>
-        <template #prepend><v-icon color="error">mdi-undo-variant</v-icon></template>
-        <v-card-title class="text-body-1">{{ t('settings.templates.revertTitle') }}</v-card-title>
-      </v-card-item>
-      <v-card-text>
-        <p class="text-body-2 mb-2">{{ t('settings.templates.revertBody') }}</p>
-        <code class="text-caption break">{{ revertTarget }}</code>
-      </v-card-text>
-      <v-card-actions>
-        <v-spacer />
-        <v-btn variant="text" @click="revertTarget = null">{{ t('hosts.cancel') }}</v-btn>
-        <v-btn color="error" variant="flat" @click="revertTemplate">
-          {{ t('settings.templates.revert') }}
-        </v-btn>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
 </template>
 
 <style scoped>
-/* Config is read in columns — an alignment that a proportional face destroys. */
-.why-separate {
-  cursor: help;
-}
-
-.server-config :deep(textarea) {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.8125rem;
-  line-height: 1.6;
-}
-
 /* The identity card reads as the page's masthead, so it sits on the surface
    rather than in a group card — a heading inside a bordered box would look
    like one more setting. */

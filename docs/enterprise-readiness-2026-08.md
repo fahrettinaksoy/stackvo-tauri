@@ -1255,3 +1255,324 @@ Geriye `Settings.vue` ve `ProjectDetail.vue` kaldı — ikisi de **%0**, ve ikis
   çözümü.
 - **§14.16** — `Settings.vue` ve `ProjectDetail.vue`.
 
+---
+
+## 23. §14.16 — tanrı bileşeni bölmek, ilk iki dilim
+
+### 23.1 Neden bu iki panel
+
+`Settings.vue` 3.433 satır ve **%0** kapsamdı. Rapor §2.3'te bunun en pahalı
+sonucunu doğru tespit etmişti: iki test — `certificates-pane.spec.js` ve
+`template-overrides.spec.js` — paneli **mount etmiyor**, markup'ın bir
+*kopyasını* test dosyasında yeniden kuruyor, sonra gerçek dosyayı metin olarak
+okuyup kopyanın hâlâ eşleştiğini doğruluyordu.
+
+Bu ikisiyle başlandı çünkü ikisi de **gerçekten kırık gönderilmiş** bir davranış
+için yazılmıştı:
+
+- **Sertifikalar:** `v-tooltip`, `v-icon`'un içine ikonun kendi adıyla birlikte
+  yerleştirilmişti; slot iki şey tutuyordu ve hover hiçbirine ulaşmıyordu.
+  Hiçbir şey yakalamadı, çünkü hiçbir şeye render olan markup temiz lint'lenir
+  ve temiz derlenir.
+- **Şablonlar:** düğme **dönerek** gönderildi. Bağlama
+  `templateBusy === templateToOverride` idi — doğru okunur, ve panelin
+  açıldığı durumda yanlıştır: ikisi de `null` başlar, `null === null`, ve düğme
+  kimse dosya seçmeden önce kendini meşgul ilan eder — ve her başarılı
+  devralmadan sonra tekrar, çünkü seçim `null`'a döner.
+
+Yani kopya-testler **doğru soruyu soruyordu**; sorun cevabı üründe değil
+kopyada aramalarıydı.
+
+### 23.2 Ne yapıldı
+
+| | |
+| --- | --- |
+| `composables/useCertificates.js` | Durum + `load` / `reissue` / `trustInTerminal`. Modül kapsamlı, çünkü panel **ve** ayar rayının "sertifika bayat" rozeti aynı veriyi okur ve aynı cevabı vermek zorundadır. |
+| `composables/useTemplates.js` | Çağrı başına kendi durumu — tek tüketici var. `busyWith` burada, düzeltmesiyle birlikte. |
+| `components/settings/CertificatesPane.vue` | 242 satır, **%100 kapsam** |
+| `components/settings/TemplateOverridesPane.vue` | 158 satır, **%100 kapsam** |
+
+Kopya-testlerin ikisi de silindi; yerlerine gerçek bileşeni mount eden
+`settings-certificates.spec.js` (8 test) ve `settings-templates.spec.js`
+(9 test) geldi.
+
+### 23.3 Yeni testler eskisinin ölçemediğini ölçüyor
+
+Kopya-testler yalnızca **bir** davranışa bakabiliyordu: hover, ve dönen düğme.
+Panelin geri kalanı erişilemezdi. Gerçek bileşen mount edilince aynı dosyalar
+şunları da kapsıyor:
+
+- SSL kapalıyken panelin hiçbir şeyin geçerli olmadığını söylemesi
+- mkcert yokken yeniden üretme düğmesinin **disabled** olması
+- CA güvenilirken terminal düğmesinin *görünmemesi*
+- Yeniden üretme başarılı ama proxy eskisini servis ediyorken uyarı
+- Workspace yokken sessiz kalıp başka her hatayı göstermesi
+- Şablon listesinde devralınanların ayrılması, sınır bozuk cevap verdiğinde
+  fırlatmak yerine boş liste
+- Devralmanın dosyayı kopyalayıp editörde açması ve seçimi temizlemesi
+- Geri almanın **diyalog onaylanmadan** çalışmaması
+
+`busyWith` kılavuzu mutasyonla denendi: bozuk hâline döndürüldüğünde iki test
+birden düşüyor — hem "seçim yokken dönüyor" hem "bitince tekrar dönüyor".
+
+### 23.4 Ve iki test kalıbı düzeltildi
+
+- **Kaynak metnine yapılan iddialar gitti.** Eski test
+  `const busyWith = (path) => !!path && templateBusy.value === path` satırının
+  birebir varlığını iddia ediyordu. Çalışıyordu ve bir string'e çakılıydı:
+  kılavuz taşınsa, yeniden adlandırılsa ya da sarmalansa test düğmeyle hiç
+  ilgisi olmayan bir sebeple düşerdi.
+- **İlk yazdığım hâli de yanlıştı.** Dönme testini `wrapper.vm.working = …`
+  diye iç duruma dokunarak yazmıştım — kopyanın yaptığı hatanın aynısı, şekle
+  bakmak. Gerçek akışa çevrildi: sınır açık tutuluyor, düğmeye tıklanıyor,
+  spinner DOM'dan okunuyor, sonra sınır serbest bırakılıp **idle'a dönüş**
+  doğrulanıyor — ki asıl hata oydu.
+
+### 23.5 Sayılar
+
+| | Önce | Sonra |
+| --- | --: | --: |
+| `Settings.vue` | 3.433 satır | **2.938** |
+| Shape-mirror testi | 2 | **0** |
+| `CertificatesPane` / `TemplateOverridesPane` | — | **%100 / %100** |
+| `src/composables` | — | **%95.31** |
+| Frontend toplam kapsam | %50.71 | **%53.74** |
+| Frontend testleri | 228 | **241** |
+
+Kalan dokuz panel ve `ProjectDetail.vue` aynı kalıpla devam eder. `Settings.vue`
+hâlâ %0 — onu mount etmek bütün panellerin çıkmasını bekliyor.
+
+---
+
+## 24. §14.16 devam — üçüncü dilim, ve onun bulduğu i18n hatası
+
+### 24.1 Yalnızca yarısı çıkarılabildi, ve bu bir bulgu
+
+`servers` sekmesi iki gruptan oluşuyor. İkincisi — sunucu başına ek direktif
+dosyası — kendi kendine yetiyor ve çıkarıldı. **Birincisi çıkarılamadı:** limit
+formu, altı panelin paylaştığı `.env` düzenleme makinesini (`dirty`, `saving`,
+`edits`, `effective`, `edit`, `onOff`) sürüyor.
+
+Bu, raporun §2.3'te adını koyduğu `useEnvEditor()`'ün ta kendisi ve ayrı bir iş.
+Kaydedilmeye değer, çünkü bölmenin kalan maliyetinin nerede toplandığını
+gösteriyor: kalan sekizden dördü aynı makineye bağlı, yani sıradaki tek büyük
+adım o makineyi çıkarmak.
+
+Çıkarılan: `useServerConfig` + `ServerDirectivesPane.vue`, **%100 kapsam**,
+6 test.
+
+### 24.2 Test, markup'ta izi olmayan davranışa bakıyor
+
+Bu panelin ilk ikisinden farkı, arkasında bir shape-mirror **olmaması** — o
+ikisi biri hata yaşadığı için vardı. Buranın ne testi ne hatası vardı, ama en
+kırılgan davranışı gözle görülmüyor: **sekme değişince dosyanın yeniden
+yüklenmesi.** Unutan bir sürüm nginx'in direktiflerini caddy sekmesinde
+gösterir ve sonra **oraya kaydeder** — yanlış sunucunun config'ini doğrusunun
+içeriğiyle sessizce ezer. Markup'ta bunun olabileceğini ima eden hiçbir şey yok.
+
+### 24.3 Bu dilimin asıl getirisi: 4 bozuk çeviri dizesi
+
+Paneli mount edince vitest her render'da şunu bastı:
+
+```
+Message compilation error: Not allowed nest placeholder
+1  |  {{ VAR }} is substituted from .env. …
+```
+
+vue-i18n `{…}`'i placeholder okur, yani `{{ VAR }}` **iç içe** bir
+placeholder'dır ve yasaktır. Gürültülü değil, *sessiz*: derleyici hatayı
+loglar, ham dizeye düşer, metin doğru görünür ve her render konsola hata yazar.
+
+Bunu bir teste bağladım — `tests/i18n.spec.js` artık **her mesajı** iki dilde
+derletiyor — ve kapı açılır açılmaz **üç tane daha** çıktı:
+
+| Anahtar | Sorun |
+| --- | --- |
+| `settings.servers.extraHint` | `{{ VAR }}` — iç içe placeholder |
+| `mail.searchPlaceholder` | `from:a@b.c` — çıplak `@` bağlı-mesaj başlatır |
+| `newProject.gitUrlPlaceholder` | `git@server…` — aynısı |
+
+Dördü de iki dilde, yani **8 dize**. Hepsi vue-i18n'in literal kaçışıyla
+(`{'@'}`, `{'{{ VAR }}'}`) düzeltildi ve render edilen metnin **birebir aynı**
+kaldığı doğrulandı.
+
+Bu, §11'in tezinin bir örneği daha: yanlış olduğunda hiçbir şeyin şikâyet
+etmediği bir yüzey, yanlış olduğunda hiçbir şeyin şikâyet etmediği için yanlış
+kalır. Panelin mount edilmesi tek bir tanesini görünür yaptı; **kapı geri
+kalanını buldu.**
+
+*(Testin ilk hâli de yanlıştı: `flatten` dizileri de düzleştirdiği için
+`nav.items.0` gibi sahte anahtarlar üretip vue-i18n'e "böyle bir anahtar yok"
+uyarısı bastırıyordu — kapının kendi gürültüsü, bulgu diye okunabilirdi. Yalnızca
+string yapraklara bakacak şekilde daraltıldı.)*
+
+### 24.4 Ve iki sahipsiz stil
+
+`.why-separate` (sertifika ikonunun `cursor: help`'i) ve `.server-config`
+(monospace textarea) `Settings.vue`'nun scoped bloğunda kalmıştı. **Scoped stil
+bir elemanı başka bir bileşene takip etmez**, yani ilk çıkarma sessizce imlecin
+değişmesine yol açmıştı — hiçbir testin ve lint'in göremeyeceği bir gerileme.
+İkisi de bileşenlerine taşındı.
+
+### 24.5 Sayılar
+
+| | §23 sonrası | Şimdi |
+| --- | --: | --: |
+| `Settings.vue` | 2.938 satır | **2.848** |
+| Çıkarılan panel | 2 | **3** |
+| Bozuk i18n dizesi | 8 | **0** |
+| Frontend kapsam | %53.74 | **%54.37** |
+| Frontend testleri | 241 | **248** |
+
+Kalan sekiz panelin dördü paylaşılan `.env` editörüne bağlı — sıradaki adım o.
+
+---
+
+## 25. §14.16 — `useEnvEditor`, bölmenin kilidi
+
+### 25.1 Neden bu, sıradaki panel değil
+
+§24.1'de kaydedilmişti: kalan sekiz panelin dördü aynı `.env` düzenleme
+makinesine bağlı — dört ref (`env`, `defaults`, `edits`, `saving`) ve on
+yardımcı üzerinden **aynı dosyayı** yazıyorlar. Yani hiçbiri tek başına
+`Settings.vue`'dan çıkamıyordu. Bir sonraki paneli çıkarmak yerine kilidi
+açmak, kalan işin şeklini değiştiriyor.
+
+`useEnvEditor` çıkarıldı, **%100 kapsam**, 17 test. `Settings.vue` yalnızca
+32 satır kısaldı — ama bu sayı yanıltıcı: çıkan şey satır değil, **bağımlılık**.
+
+### 25.2 Test edilmemiş olması en dikkat çekici kısmıydı
+
+Bu makinenin hiç testi yoktu. Altı panel stack'in yapılandırma dosyasını
+üzerinden yazıyor, ve *ne yazılacağına* karar veren parçalar üç satırlık ok
+fonksiyonları — yani hata verene kadar hiç hata vermeyen, verdiğinde de aynı
+anda her yerde veren kod sınıfı.
+
+Üçü mutasyonla denendi, üçü de yakalanıyor:
+
+| Karar | Yanlış olduğunda |
+| --- | --- |
+| Üç katmanlı okuma (`edits → env → defaults`) | Form "bu varsayılan" diyemez; her değer eşit derecede seçilmiş görünür. |
+| `edit()`'in değer geri geldiğinde anahtarı **silmesi** | Bir karakter yazıp geri silmek diff'te iz bırakır; kaydet düğmesi yanar, kayıt diskteki değerin aynısını yazar, ve yönlendirme anahtarıysa **kimsenin yapmadığı bir değişiklik için** "yeniden üret" uyarısı çıkar. |
+| İki boolean yazımının ayrı tutulması | `.env`'de compose `true`/`false`, üretilen nginx ve php.ini parçaları `on`/`off` okur. Yanlışını yazmak, **parse edilen ve anahtarın söylediğinin tersini yapan** bir dosya üretir. |
+
+Sonuncusu bu kod tabanının en sessiz hata sınıfı: dosya geçerli, uygulama
+çalışıyor, ve ayar tam tersini yapıyor.
+
+### 25.3 Bir davranış açıkça sözleşmeye bağlandı
+
+Eski `save()` içinde `await app.refreshTld()` gömülüydü. Composable'a taşınırken
+bu bir **geri çağırma** oldu (`save(onSaved)`) ve sırası teste bağlandı: mağazanın
+önbelleklediği TLD, "kaydedildi" onayı ekrana gelmeden **önce** güncellenmeli —
+yoksa uygulamanın gösterdiği her alan adı, bir yeniden yüklemeye kadar önceki
+son ekte kalır.
+
+### 25.4 Sayılar
+
+| | §24 sonrası | Şimdi |
+| --- | --: | --: |
+| `Settings.vue` | 2.848 satır | **2.816** |
+| Composable | 3 | **4** |
+| `useEnvEditor` kapsamı | — | **%100** |
+| Frontend kapsam | %54.37 | **%54.96** |
+| Frontend testleri | 248 | **265** |
+
+Kilit açıldı: kalan sekiz panel artık teker teker çıkarılabilir, çünkü hepsi
+aynı composable'ı çağırıp kendi markup'ını taşıyabilir. `Settings.vue` hâlâ %0 —
+son panel çıkana kadar öyle kalacak.
+
+---
+
+## 26. Kaldığımız yer
+
+Bu bölüm, işi devralmak için okunması gereken tek yer. §12'nin "bus factor 1"
+teşhisine verilen cevabın kendisi: bir sonraki oturum — kim olursa olsun —
+buradan başlar.
+
+### 26.1 §14 durum tablosu
+
+| # | Madde | Durum | Nerede |
+| --: | --- | --- | --- |
+| 1 | Panic hook + crash dosyası | ✅ | §17.1 |
+| 2 | Release blokajları | ⚠️ **yarım** | §17.5 — anahtar üretildi, **endpoint hâlâ 404** |
+| 3 | SECURITY.md 404 linki | ✅ | §17.1 |
+| 4 | README'deki iki yanlış sayı | ✅ | §17.1, §21.5 |
+| 5 | Kapsam ölçümü | ✅ (eşiksiz) | §17.1 |
+| 6 | Sürüm eşitliği + macOS imza uyarısı | ✅ | §17.1 |
+| 7 | `elevate` quoting | ✅ | §17.1 |
+| 8 | macOS sistem proxy'si | ✅ | §17.2 |
+| 9 | `ProgressSink` | ✅ (iki dilim) | §18.1 |
+| 10 | `tauri-specta` | ⛔ **ertelendi** | §18.4 — ölçüldü, ayrı dal |
+| 11 | `hint` i18n | ✅ | §20 |
+| 12 | E2E | ⛔ **engelli** | §22.1 — `tauri-driver` macOS'ta çalışmıyor, Linux runner gerekiyor |
+| 13 | SBOM + provenance | ✅ | §21.3 |
+| 14 | Tanılama paketi + vitest-axe | ✅ | §19.5, §21 |
+| 15 | Bozuk prefs + `schemaVersion` | ✅ | §18.2 |
+| 16 | **Settings/ProjectDetail bölme** | 🔄 **devam ediyor** | §23–25 |
+| 17 | `ARCHITECTURE.md` + ADR | ⬜ başlanmadı | — |
+| 18 | Merkezî politika + private registry | ⬜ başlanmadı | — |
+| 19 | Docker trait + proptest + criterion | ⬜ başlanmadı | — |
+| 20 | Keystore ile sır yönetimi | ⬜ başlanmadı | — |
+
+### 26.2 Sıradaki adım: §14.16'nın kalanı
+
+`useEnvEditor` çıkarıldığı için (§25) **kilit açık** — kalan panellerin her biri
+artık tek başına çıkarılabilir. Kalıp üç kez uygulandı ve sabit:
+
+1. Panelin durumunu ve eylemlerini `src/composables/useX.js`'e taşı.
+   Durum modül kapsamlı **yalnızca** iki tüketici varsa (`useCertificates`, ray
+   rozeti yüzünden); aksi halde çağrı başına.
+2. Markup'ı `src/components/settings/XPane.vue`'ya taşı.
+   **Scoped stilleri de taşı** — bir scoped stil elemanı başka bir bileşene
+   takip etmez, ve bunu unutmak sessizce görünümü bozar (§24.4).
+3. `Settings.vue`'da `<XPane />` ile değiştir, ölü script'i sil,
+   `onMounted`'daki yükleyici çağrısını kaldır.
+4. `tests/settings-x.spec.js` yaz — gerçek bileşeni mount et, sınırı mock'la.
+   **İç duruma dokunma**, gerçek akışı sür (§23.4).
+5. Paneli `tests/a11y-axe.spec.js`'in "extracted Settings panes" bloğuna ekle,
+   **veriyle** — boş panel taramak boş durumu taramaktır (§22.5).
+
+Kalan paneller, büyükten küçüğe:
+
+| Panel | Satır | Not |
+| --- | --: | --- |
+| `workspace` | ~321 | Preset dışa/içe aktarma, compose fiilleri, tanılama paketi düğmesi |
+| `domain` | ~312 | TLD/SSL/hosts — `routingChanged` uyarısını kullanan panel |
+| `appearance` | ~276 | Tema/yoğunluk/vurgu rengi; `useAppearanceStore`'a bağlı |
+| `php` | ~163 | `useEnvEditor` ile |
+| `servers` (limitler yarısı) | ~155 | `useEnvEditor` ile — direktif yarısı çıktı (§24) |
+| `preferences` | ~94 | `prefs` get/set |
+| `doctor` | ~94 | Çoğu zaten `<DoctorPanel />` |
+| `services` | ~79 | `useEnvEditor` ile |
+| `localisation` | ~55 | En küçüğü; ısınmak için iyi |
+
+Sonra `ProjectDetail.vue` (3.007 satır) aynı kalıpla.
+
+**Bitiş çizgisi:** son panel çıktığında `Settings.vue` mount edilebilir hale
+gelir ve `%0`'dan çıkar — bugün `src/views/`'i `%26`'da tutan tek şey o ve
+`ProjectDetail.vue`.
+
+### 26.3 Devralan için üç uyarı
+
+1. **`Settings.vue` %0 kapsamda ve öyle kalacak** — bölme bitene kadar. Bu bir
+   gerileme değil, ölçünün dürüst hâli.
+2. **Mount testleri gerçek hata buluyor.** Bu oturumda dört ayrı sınıf çıktı:
+   tipsiz IPC sınırı (§22.3), `hintKey`'in düşmesi (§22.4), erişilebilirlik
+   (§22.5), ve bozuk i18n dizeleri (§24.3). Bir paneli çıkarırken çıkan hatayı
+   *susturmayın* — o, çıkarmanın getirisidir.
+3. **`git stash` ile "bu benim mi?" kontrolü yapın.** Bu oturumda üç kez
+   kullanıldı ve üçünde de cevap "hayır, önceden vardı" idi (§19.1, §19.2).
+   Kaydedilmemiş bir hatayı kendi değişikliğine yazmak, iki turu boşa harcar.
+
+### 26.4 Sahibine kalanlar — hâlâ açık
+
+§17.5 değişmedi:
+
+1. **Güncelleme endpoint'i 404** — `tauri.conf.json` `stackvo/stackvo-tauri`'yi
+   gösteriyor, o repo yok. **Uygulama hâlâ güncelleme alamaz.**
+2. **`TAURI_SIGNING_PRIVATE_KEY`** GitHub secret'ı girilmedi. Özel anahtar
+   `~/.tauri/stackvo.key`'de (mod 600, repoya girmedi), parolasız.
+3. **Apple / Windows imzalama secret'ları** girilmedi — artık eksikse release
+   log'unda uyarı çıkıyor (§17.1), ama hâlâ eksikler.
+4. **Kapsam eşiği** yok. Sayılar var (§25.4); eşik bir politika kararı.
+

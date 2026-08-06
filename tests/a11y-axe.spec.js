@@ -266,3 +266,78 @@ describe('axe over the pages that can be mounted', () => {
     document.body.innerHTML = '';
   });
 });
+
+/**
+ * The Settings panes extracted in §14.16.
+ *
+ * Mounted **with data**, through a mocked boundary. Scanning an empty pane is
+ * scanning the empty state and calling it the pane: most of the markup is
+ * behind a `v-if`, and Vuetify's own combobox markup is incomplete when a
+ * select has no items to open — which reads as an app defect and is not one.
+ * The list, the chips and the buttons are the part worth checking.
+ */
+describe('axe over the extracted Settings panes', () => {
+  const replies = {};
+
+  async function renderPane(name, seed) {
+    vi.resetModules();
+    Object.keys(replies).forEach((k) => delete replies[k]);
+    Object.assign(replies, seed);
+
+    vi.doMock('@/lib/ipc', () => ({
+      StackvoError: class extends Error {},
+      call: vi.fn(),
+      asList: (value) => (Array.isArray(value) ? value : []),
+      api: new Proxy({}, { get: (_t, key) => () => Promise.resolve(replies[key]) }),
+    }));
+
+    const { createPinia } = await import('pinia');
+    const pane = (await import(`@/components/settings/${name}.vue`)).default;
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+
+    const wrapper = mount(pane, {
+      attachTo: host,
+      global: { plugins: [createPinia(), vuetify, i18n] },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+    return wrapper;
+  }
+
+  it('CertificatesPane has no violations', async () => {
+    const wrapper = await renderPane('CertificatesPane', {
+      certStatus: {
+        sslEnabled: true,
+        stale: true,
+        caTrusted: false,
+        mkcertAvailable: true,
+        notAfter: 1_800_000_000,
+        daysRemaining: 90,
+        missing: ['new.loc'],
+        rejected: [],
+        covered: ['stackvo.loc'],
+        certPath: '/ws/certs/wildcard.pem',
+        caPath: '/ws/ca/rootCA.pem',
+      },
+      certPlan: { remove: ['gone.loc'] },
+    });
+
+    expect(await scan(wrapper)).toHaveNoViolations();
+    document.body.innerHTML = '';
+  });
+
+  it('TemplateOverridesPane has no violations', async () => {
+    const wrapper = await renderPane('TemplateOverridesPane', {
+      templatesList: [
+        { path: 'core/servers/nginx.conf', overridden: true },
+        { path: 'services/redis/docker-compose.redis.tpl', overridden: false },
+      ],
+    });
+
+    expect(await scan(wrapper)).toHaveNoViolations();
+    document.body.innerHTML = '';
+  });
+});
