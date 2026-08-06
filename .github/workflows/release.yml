@@ -48,6 +48,11 @@ jobs:
     needs: preflight
     permissions:
       contents: write
+      # Both are required by `attest-build-provenance`: the OIDC token is what
+      # proves to the attestation service that this really is a run of this
+      # workflow, and without the second the attestation cannot be stored.
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -140,7 +145,77 @@ jobs:
         if: matrix.os == 'windows-latest' && steps.winsign.outcome == 'skipped'
         run: echo "::warning::WINDOWS_CERTIFICATE is not set — Windows users will see a SmartScreen warning."
 
+      # The other half of the check above, which was missing. Windows announced
+      # its unsigned builds; macOS said nothing at all, so a release could go out
+      # with an unsigned bundle and the only evidence was a user being told the
+      # developer is unidentified.
+      #
+      # A warning, not a failure — deliberately the same trade the Windows step
+      # makes. Blocking every platform's release over one absent secret is worse
+      # than shipping unsigned, as long as shipping unsigned is never silent.
+      #
+      # Signed-but-not-notarised is called out separately because it is the state
+      # people miss: the bundle carries a valid signature and Gatekeeper still
+      # refuses it, because notarisation is a separate round trip to Apple.
+      - name: Note whether macOS artifacts will be signed and notarised
+        if: matrix.os == 'macos-latest'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          unsigned=""
+          [ -n "$APPLE_CERTIFICATE" ] || unsigned="$unsigned APPLE_CERTIFICATE"
+          [ -n "$APPLE_SIGNING_IDENTITY" ] || unsigned="$unsigned APPLE_SIGNING_IDENTITY"
+          if [ -n "$unsigned" ]; then
+            echo "::warning::macOS artifacts will be UNSIGNED —$unsigned not set. Gatekeeper will refuse to open them without a right-click override."
+            exit 0
+          fi
+
+          missing=""
+          [ -n "$APPLE_ID" ] || missing="$missing APPLE_ID"
+          [ -n "$APPLE_PASSWORD" ] || missing="$missing APPLE_PASSWORD"
+          [ -n "$APPLE_TEAM_ID" ] || missing="$missing APPLE_TEAM_ID"
+          if [ -n "$missing" ]; then
+            echo "::warning::macOS artifacts will be signed but NOT notarised —$missing not set. Gatekeeper still blocks a signed bundle that Apple has not notarised."
+          else
+            echo "macOS artifacts will be signed and notarised."
+          fi
+
+      # A bill of materials, because a corporate buyer asks for one.
+      #
+      # Two files, because this app is two dependency graphs and neither tool
+      # can see the other's: `cargo` owns everything behind the IPC boundary and
+      # `npm` owns everything in the webview. A single-language SBOM for a Tauri
+      # app is a document that omits half the software it describes.
+      #
+      # Linux only — the graphs are the same on every platform, and three
+      # identical documents attached to one release is three chances to attach
+      # the wrong one.
+      - name: Build the SBOM
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cargo install cargo-cyclonedx --locked
+          cargo cyclonedx --manifest-path src-tauri/Cargo.toml --format json --spec-version 1.5
+          # `cargo-cyclonedx` writes beside the manifest it read; collect both
+          # here so the upload does not have to know either tool's layout.
+          mkdir -p sbom
+          find src-tauri -maxdepth 1 -name '*.cdx.json' -exec cp {} sbom/rust.cdx.json \;
+          npm sbom --sbom-format cyclonedx --omit dev > sbom/npm.cdx.json
+          ls -l sbom/
+
+      - name: Attach the SBOM to the release
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom/
+          if-no-files-found: error
+
       - uses: tauri-apps/tauri-action@v0
+        id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -162,3 +237,40 @@ jobs:
           # tauri-action writes latest.json alongside the artifacts; the
           # endpoint in tauri.conf.json has to point at wherever it is served.
           includeUpdaterJson: true
+
+      # ---------------------------------------------------------------- trust
+      #
+      # `latest.json` is signed, so the *updater* can prove an update came from
+      # us. Nothing covered the other route: a person who downloads an installer
+      # from the releases page by hand had no way to check they got what we
+      # built. These two steps close that, and they are what a corporate
+      # security review asks for by name.
+
+      # Cryptographic proof of which workflow, commit and runner produced each
+      # file, verifiable with `gh attestation verify <file> --repo <owner>/<repo>`.
+      - name: Attest what built these artifacts
+        uses: actions/attest-build-provenance@v2
+        with:
+          # `artifactPaths` is a JSON array; the action takes a comma- or
+          # newline-separated list.
+          subject-path: ${{ join(fromJSON(steps.tauri.outputs.artifactPaths), ',') }}
+
+      # A plain checksum list, for the reviewer who has no `gh` and no interest
+      # in SLSA — the lowest common denominator, and the one most people use.
+      - name: Publish checksums
+        shell: bash
+        run: |
+          mkdir -p checksums
+          for path in $(echo '${{ steps.tauri.outputs.artifactPaths }}' | node -e 'JSON.parse(require("fs").readFileSync(0,"utf8")).forEach(p=>console.log(p))'); do
+            [ -f "$path" ] || continue
+            # `basename` in the output, not the runner's absolute path: the
+            # person checking has the file in their downloads folder.
+            ( cd "$(dirname "$path")" && shasum -a 256 "$(basename "$path")" )
+          done | tee "checksums/SHA256SUMS-${{ matrix.target }}.txt"
+
+      - name: Attach the checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksums-${{ matrix.target }}
+          path: checksums/
+          if-no-files-found: error

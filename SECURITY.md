@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Please report privately, not as a public issue: open a
-[security advisory](https://github.com/stackvo/stackvo-tauri/security/advisories/new),
+[security advisory](https://github.com/stackvo/stackvo/security/advisories/new),
 or email **backend@cyh.com.tr**.
 
 Include what you did, what happened, and which version and platform. A proof of

@@ -261,7 +261,7 @@ fn settings(root: &Path, service: &str) -> Result<Settings> {
             Code::Unsupported,
             format!("{service} is not a database this app can dump"),
         )
-        .with_hint("Supported: mysql, mariadb, postgres, mongo.")
+        .with_hint(crate::hints::SUPPORTED_DATABASES)
     })?;
 
     let env = crate::config::Env::load(root)?;

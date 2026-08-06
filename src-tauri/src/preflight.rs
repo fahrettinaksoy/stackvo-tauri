@@ -485,12 +485,26 @@ mod tests {
     /// entries — for two containers that had never been created. The question
     /// is whether the thing exists, not whether it is listed in a profile.
     ///
-    /// Nothing here starts Docker, and that is the point: `stackvo_containers`
-    /// fails, nothing is running, and the answer has to be the two core names
-    /// and no more.
-    #[tokio::test]
-    async fn a_fresh_install_asks_for_the_two_core_names_and_nothing_else() {
-        let dir = std::env::temp_dir().join(format!("stackvo-fresh-{}", std::process::id()));
+    /// ## Why the world is stated rather than read
+    ///
+    /// This test used to call `missing_hosts_by_owner`, which reaches the real
+    /// Docker daemon and the real `/etc/hosts`. Its comment said "nothing here
+    /// starts Docker, and that is the point" — true, and not the same as
+    /// nothing being *running*. On a CI runner nothing is, so it passed. On the
+    /// machine of anyone actually developing against the stack, phpMyAdmin and
+    /// RabbitMQ are running, so the code correctly listed them and the test
+    /// failed — announcing a bug in the rule when the bug was in the test.
+    ///
+    /// Both worlds are stated here now: nothing running, nothing written down.
+    /// That is what "a fresh install" *means*, and it is the only way to say it
+    /// that does not depend on which machine the suite is run from.
+    #[test]
+    fn a_fresh_install_asks_for_the_two_core_names_and_nothing_else() {
+        let dir = std::env::temp_dir().join(format!(
+            "stackvo-fresh-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("projects")).unwrap();
         crate::workspace::point_at_projects(&dir, &dir.join("projects")).unwrap();
@@ -504,34 +518,42 @@ mod tests {
         )
         .unwrap();
 
-        let missing = crate::commands::missing_hosts_by_owner(&dir).await;
+        let env = crate::config::Env::load(&dir).expect("the .env just written");
+        let nothing = std::collections::HashSet::new();
+
+        // Enabled, and never started: not an address anyone is missing.
+        assert!(
+            crate::commands::service_domains_for_test(&env, &nothing, &nothing).is_empty(),
+            "a service nobody has started is not a missing address"
+        );
+
+        // The core two are unconditional — they are what the stack answers on
+        // before anything else exists.
         assert_eq!(
-            missing.core,
+            crate::commands::core_domains_for_test(&dir),
             vec![
                 "example.test".to_string(),
                 "traefik.example.test".to_string()
             ]
         );
-        assert!(
-            missing.rest.is_empty(),
-            "a service nobody has started is not a missing address: {:?}",
-            missing.rest
+
+        // The other half of the rule, and the half a "nothing is running" test
+        // can never reach on its own: once a service *is* running, its name is
+        // wanted. Asserting only the empty case would pass just as well against
+        // a function that always returned nothing.
+        let running = std::collections::HashSet::from(["phpmyadmin".to_string()]);
+        assert_eq!(
+            crate::commands::service_domains_for_test(&env, &running, &nothing),
+            vec!["phpmyadmin.example.test".to_string()]
         );
 
-        // And the settings pane sees the same thing. It is a separate screen
-        // reading a separate function, and while that function had its own
-        // wider idea of "wanted" it went on listing phpMyAdmin and RabbitMQ
-        // after the dashboard had stopped — the same complaint, a third time,
-        // because the fix had been applied to consumers rather than to the
-        // definition.
-        let listed = crate::commands::wanted_domains_for_test(&dir).await;
+        // And so is a name already written down, running or not — that is what
+        // keeps this one list instead of two, and stops anything offering to
+        // delete a stopped service's line as stale.
+        let written = std::collections::HashSet::from(["rabbitmq.example.test".to_string()]);
         assert_eq!(
-            listed,
-            vec![
-                "example.test".to_string(),
-                "traefik.example.test".to_string()
-            ],
-            "the settings pane lists names for services that have never run"
+            crate::commands::service_domains_for_test(&env, &nothing, &written),
+            vec!["rabbitmq.example.test".to_string()]
         );
 
         let _ = std::fs::remove_dir_all(&dir);

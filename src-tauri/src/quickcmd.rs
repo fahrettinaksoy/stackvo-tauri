@@ -275,7 +275,7 @@ pub fn for_project(root: &Path, name: &str) -> Result<Vec<QuickCommand>> {
 pub fn resolve(id: &str) -> Result<&'static Spec> {
     find(id).ok_or_else(|| {
         Error::new(Code::NotFound, format!("\"{id}\" is not a known command"))
-            .with_hint("Commands come from the fixed catalog; ids are not arbitrary.")
+            .with_hint(crate::hints::QUICK_COMMANDS_ARE_FIXED)
     })
 }
 

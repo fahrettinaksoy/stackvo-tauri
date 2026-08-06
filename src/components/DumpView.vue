@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { api } from '@/lib/ipc';
+import { api, asList } from '@/lib/ipc';
 import { useAppStore } from '@/stores/app';
 import { isFlat, summary, text as valueText } from '@/lib/dumpnode';
 import ErrorAlert from '@/components/ErrorAlert.vue';
@@ -130,7 +130,7 @@ function projectItemProps(item) {
 
 async function loadOverview() {
   try {
-    overview.value = await api.debugBridgeOverview();
+    overview.value = asList(await api.debugBridgeOverview());
   } catch {
     overview.value = [];
   }
@@ -369,11 +369,15 @@ function openSource(row) {
            wrapping onto a second row, which reads as a settings screen rather
            than a filter. The select answers "which project" and the switch
            beside it answers "should it be capturing". -->
+      <!-- Named, because it has no visible label at all: the selected value is
+           the only text in it, so a screen reader had nothing to announce the
+           control *as*. -->
       <v-select
         v-if="scope === 'all'"
         v-model="only"
         :items="projectItems"
         :item-props="projectItemProps"
+        :aria-label="t('dumps.allProjects')"
         density="compact"
         variant="solo-filled"
         flat
@@ -413,6 +417,7 @@ function openSource(row) {
       <v-text-field
         v-model="search"
         :placeholder="t('dumps.search')"
+        :aria-label="t('dumps.search')"
         density="compact"
         variant="solo-filled"
         flat
@@ -529,13 +534,7 @@ function openSource(row) {
            second time somebody wants it is the only time they pay for it. -->
       <v-menu location="bottom end" :close-on-content-click="false">
         <template #activator="{ props: helpProps }">
-          <v-btn
-            v-bind="helpProps"
-            icon
-            variant="text"
-            size="small"
-            :aria-label="t('dumps.help')"
-          >
+          <v-btn v-bind="helpProps" icon variant="text" size="small" :aria-label="t('dumps.help')">
             <v-icon>mdi-help-circle-outline</v-icon>
             <v-tooltip activator="parent">{{ t('dumps.help') }}</v-tooltip>
           </v-btn>
@@ -597,7 +596,9 @@ function openSource(row) {
             @click="!flat(row) && toggle(row)"
           >
             <span v-if="flat(row)" class="dump-chev dump-chev--none" />
-            <span v-else class="dump-chev" :class="{ 'dump-chev--open': open.has(row.seq) }">▸</span>
+            <span v-else class="dump-chev" :class="{ 'dump-chev--open': open.has(row.seq) }"
+              >▸</span
+            >
 
             <span class="text-caption text-medium-emphasis dump-time">{{ clock(row.at) }}</span>
 

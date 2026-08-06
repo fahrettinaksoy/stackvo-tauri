@@ -380,7 +380,7 @@ pub async fn call(name: &str, args: &Value, allow_writes: bool) -> Result<Value>
             Code::PermissionDenied,
             format!("{name} changes the stack and this server was started read-only"),
         )
-        .with_hint("Restart it with --allow-writes to enable the writing tools."));
+        .with_hint(crate::hints::MCP_NEEDS_ALLOW_WRITES));
     }
 
     let ws = crate::workspace::resolve();
@@ -496,7 +496,7 @@ pub async fn call(name: &str, args: &Value, allow_writes: bool) -> Result<Value>
         // ---- operations, headless ------------------------------------------
         //
         // These were unreachable from this server while the runner was welded
-        // to AppHandle. `Sink::Headless` drops the progress events (there is
+        // to AppHandle. `progress::Null` drops the progress events (there is
         // no window to receive them); the outcome is the return value, which
         // is what an MCP client wants anyway. `run_operation` awaits the
         // process to completion, so a reply here means the work is done, not
@@ -571,8 +571,11 @@ async fn run_headless(
     cwd: &std::path::Path,
 ) -> Result<()> {
     let operation_id = crate::events::next_operation_id(prefix);
+    // The Tauri-free sink, so this whole path names no Tauri type at all —
+    // `events::Sink::Headless` did the same job but dragged `AppHandle` into
+    // the signature it lives in.
     crate::runner::run_operation(
-        &crate::events::Sink::Headless,
+        &crate::progress::Null,
         crate::runner::Operation {
             operation_id: &operation_id,
             subject,

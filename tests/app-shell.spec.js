@@ -50,6 +50,8 @@ const ipc = vi.hoisted(() => ({ preflight: null }));
 const calls = vi.hoisted(() => ({}));
 
 vi.mock('@/lib/ipc', () => ({
+  // The real guard, not a stub — see views-render.spec.js.
+  asList: (value) => (Array.isArray(value) ? value : []),
   StackvoError: class extends Error {},
   call: vi.fn(),
   api: new Proxy(

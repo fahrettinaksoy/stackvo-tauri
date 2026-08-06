@@ -149,3 +149,7 @@ src-tauri/gen/schemas/
 
 # macOS
 .DS_Store
+
+# CycloneDX SBOMs. Produced by the release workflow and uploaded as an
+# artifact; a local `cargo cyclonedx` run leaves one beside the manifest.
+*.cdx.json

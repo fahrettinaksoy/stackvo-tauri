@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import { api } from '@/lib/ipc';
+import { api, asList } from '@/lib/ipc';
 import { useAppStore } from '@/stores/app';
 import ErrorAlert from '@/components/ErrorAlert.vue';
 import HostsDialog from '@/components/HostsDialog.vue';
@@ -119,7 +119,7 @@ async function fix(id) {
   // those plus the admin UI of every enabled service — four lines from a
   // prompt that had been opened for two.
   if (id === 'hosts') {
-    missingDomains.value = await api.hostsMissingCore().catch(() => []);
+    missingDomains.value = asList(await api.hostsMissingCore().catch(() => []));
     hostsOpen.value = missingDomains.value.length > 0;
     return;
   }

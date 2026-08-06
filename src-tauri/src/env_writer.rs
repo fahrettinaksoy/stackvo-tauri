@@ -144,7 +144,7 @@ fn validate(patch: &BTreeMap<String, String>) -> Result<()> {
                 Code::InvalidInput,
                 format!("`{key}` is not a valid .env key"),
             )
-            .with_hint("Keys must match ^[A-Z_][A-Z0-9_]*$ so Compose can interpolate them."));
+            .with_hint(crate::hints::ENV_KEY_CHARSET));
         }
 
         if value.contains('\n') || value.contains('\r') {
@@ -152,9 +152,7 @@ fn validate(patch: &BTreeMap<String, String>) -> Result<()> {
                 Code::InvalidInput,
                 format!("the value for `{key}` contains a line break"),
             )
-            .with_hint(
-                "The .env format is one key per line; multi-line values cannot be read back.",
-            ));
+            .with_hint(crate::hints::ENV_IS_ONE_KEY_PER_LINE));
         }
     }
 

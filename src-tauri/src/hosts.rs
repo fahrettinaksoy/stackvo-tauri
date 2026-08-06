@@ -171,7 +171,7 @@ fn check_domains(domains: &[String]) -> crate::error::Result<()> {
                 Code::InvalidInput,
                 format!("{domain:?} is not a valid hostname"),
             )
-            .with_hint("Hostnames may contain letters, digits, dots and hyphens."));
+            .with_hint(crate::hints::HOSTNAME_CHARSET));
         }
     }
     Ok(())
@@ -310,7 +310,7 @@ pub fn apply(add: &[String], remove: &[String]) -> crate::error::Result<HostsPla
     if !ok {
         return Err(
             Error::new(Code::PermissionDenied, "The hosts file was not updated.")
-                .with_hint("Administrator rights are required to edit the hosts file."),
+                .with_hint(crate::hints::HOSTS_NEEDS_ADMIN),
         );
     }
 
@@ -319,15 +319,22 @@ pub fn apply(add: &[String], remove: &[String]) -> crate::error::Result<HostsPla
 
 /// Copy `from` over `to` with administrator rights.
 ///
-/// Both paths are ones we constructed, never user input — the domains live
-/// inside the staged file's contents, not in this command line.
+/// The domains live inside the staged file's contents, not in this command line.
+/// The paths still do, though — `from` is under `TMPDIR` and `to` comes from
+/// `hosts_path()` — so they are passed as separate arguments rather than
+/// hand-quoted into one string. `elevate::run` explains why that stopped being
+/// the caller's job.
 #[cfg(target_os = "macos")]
 fn elevated_copy(from: &Path, to: &Path) -> crate::error::Result<bool> {
-    // The elevation itself lives in `elevate`, shared with the certificate
-    // trust-store write — the other place this app needs a password, and the
-    // place where letting a child process ask for one hung the whole app.
-    crate::elevate::shell(&format!("/bin/cp '{}' '{}'", from.display(), to.display()))
-        .map_err(|e| e.with_hint("The hosts file could not be replaced."))
+    // The elevation itself lives in `elevate`, which is the one place in this
+    // app that asks for a password — and the place where letting a child
+    // process ask for one instead hung the whole app.
+    crate::elevate::run(&[
+        "/bin/cp",
+        &from.display().to_string(),
+        &to.display().to_string(),
+    ])
+    .map_err(|e| e.with_hint(crate::hints::HOSTS_NOT_REPLACED))
 }
 
 #[cfg(target_os = "linux")]
@@ -343,7 +350,7 @@ fn elevated_copy(from: &Path, to: &Path) -> crate::error::Result<bool> {
                 Code::PermissionDenied,
                 format!("pkexec is unavailable: {e}"),
             )
-            .with_hint("Install polkit, or edit /etc/hosts manually.")
+            .with_hint(crate::hints::INSTALL_POLKIT)
         })?;
 
     // 126/127 are polkit's "dismissed" and "not authorised" exits.

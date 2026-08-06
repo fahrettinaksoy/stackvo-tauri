@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { useOperationsStore } from '@/stores/operations';
 import { useAppStore } from '@/stores/app';
-import { api } from '@/lib/ipc';
+import { api, asList } from '@/lib/ipc';
 import { bytes, percent } from '@/lib/format';
 import PageLayout from '@/components/PageLayout.vue';
 import ErrorAlert from '@/components/ErrorAlert.vue';
@@ -440,7 +440,7 @@ async function load() {
   }
 
   try {
-    history.value = await api.containerStatsHistory(container);
+    history.value = asList(await api.containerStatsHistory(container));
     cpuSeries.value = history.value.map((s) => s.cpu);
   } catch {
     history.value = [];
@@ -772,7 +772,7 @@ const quickCommandBusy = ref('');
 
 async function loadQuickCommands() {
   try {
-    quickCommands.value = await api.quickCommands(props.name);
+    quickCommands.value = asList(await api.quickCommands(props.name));
   } catch {
     // A project with none of the marker files is the common case, not a fault.
     quickCommands.value = [];

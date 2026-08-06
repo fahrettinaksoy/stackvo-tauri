@@ -167,7 +167,7 @@ pub fn connect() -> Result<Docker> {
     let Some(socket) = socket else {
         return Err(
             Error::new(Code::EngineUnreachable, "No Docker socket found.")
-                .with_hint("Start Docker Desktop, or set DOCKER_HOST if the engine is elsewhere."),
+                .with_hint(crate::hints::START_DOCKER_OR_SET_HOST),
         );
     };
 
@@ -179,7 +179,7 @@ pub fn connect() -> Result<Docker> {
                     Code::EngineUnreachable,
                     format!("Cannot reach the Docker engine: {e}"),
                 )
-                .with_hint("Start Docker Desktop and try again.")
+                .with_hint(crate::hints::START_DOCKER)
             },
         );
     }
@@ -189,7 +189,7 @@ pub fn connect() -> Result<Docker> {
             Code::EngineUnreachable,
             format!("Cannot reach the Docker engine: {e}"),
         )
-        .with_hint("Start Docker Desktop and try again.")
+        .with_hint(crate::hints::START_DOCKER)
         .with_details(serde_json::json!({ "socket": socket }))
     })
 }
@@ -254,7 +254,7 @@ pub fn start() -> Result<()> {
             Code::EngineUnreachable,
             format!("Could not start Docker: {e}"),
         )
-        .with_hint("Start Docker manually, then retry.")
+        .with_hint(crate::hints::START_DOCKER_MANUALLY)
     })
 }
 
@@ -691,7 +691,7 @@ fn lifecycle_error(action: &str, name: &str, err: bollard::errors::Error) -> Err
     } = err
     {
         return Error::not_found(format!("container {name}"))
-            .with_hint("The project may not be built yet.");
+            .with_hint(crate::hints::PROJECT_MAY_NOT_BE_BUILT);
     }
     Error::new(
         Code::EngineUnreachable,

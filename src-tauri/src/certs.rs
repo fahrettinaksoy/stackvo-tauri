@@ -712,10 +712,7 @@ pub async fn apply(root: &Path, install_ca: bool) -> Result<CertPlan> {
             Code::Unsupported,
             "mkcert is not installed, so certificates cannot be issued.",
         )
-        .with_hint(
-            "Install it with `brew install mkcert` (macOS), your package manager (Linux), \
-             or `choco install mkcert` (Windows), then try again.",
-        ));
+        .with_hint(crate::hints::INSTALL_MKCERT));
     }
 
     if plan.domains.is_empty() {
@@ -723,7 +720,7 @@ pub async fn apply(root: &Path, install_ca: bool) -> Result<CertPlan> {
             Code::InvalidInput,
             "There are no valid domains to issue a certificate for.",
         )
-        .with_hint("Check DEFAULT_TLD_SUFFIX in .env and the `domain` in each stackvo.json."));
+        .with_hint(crate::hints::CHECK_TLD_AND_DOMAINS));
     }
 
     let dir = cert_dir(root);
@@ -785,11 +782,7 @@ async fn trust_ca(_mkcert: &Mkcert) -> Result<()> {
         Code::Unsupported,
         "macOS will not let a windowed app change the certificate trust settings.",
     )
-    .with_hint(
-        "The certificate is issued either way and the stack serves — the browser warns \
-         about the issuer until the authority is trusted. Settings \u{2192} Certificates has a \
-         button that does it in your terminal, where the password prompt can be answered.",
-    ))
+    .with_hint(crate::hints::CERTIFICATE_ISSUED_BUT_UNTRUSTED))
 }
 
 /// Elsewhere, hand it back to mkcert.
@@ -801,12 +794,7 @@ async fn trust_ca(_mkcert: &Mkcert) -> Result<()> {
 async fn trust_ca(_mkcert: &Mkcert) -> Result<()> {
     run("mkcert", &["-install".to_string()], None)
         .await
-        .map_err(|e| {
-            e.with_hint(
-                "Run `mkcert -install` once in a terminal — it needs a password for the \
-                 system trust store, and a windowed app has no terminal to ask in.",
-            )
-        })
+        .map_err(|e| e.with_hint(crate::hints::RUN_MKCERT_INSTALL))
 }
 
 /// The Traefik dynamic configuration directory — watched, unlike the certs.

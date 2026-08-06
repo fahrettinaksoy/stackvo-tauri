@@ -558,10 +558,7 @@ pub async fn read(path: &Path) -> Result<Migration> {
             Code::InvalidInput,
             format!("Docker could not read this compose file: {}", stderr.trim()),
         )
-        .with_hint(
-            "The file is resolved by `docker compose config`, so it has to be valid Compose — \
-             including any variables it interpolates.",
-        ));
+        .with_hint(crate::hints::COMPOSE_FILE_MUST_BE_VALID));
     }
 
     let config: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|e| {

@@ -126,3 +126,76 @@ describe('the api surface', () => {
     expect(invoke).toHaveBeenCalledWith('project_delete', { name: 'shop', removeFiles: true });
   });
 });
+
+/**
+ * The field that decides whether a hint is translated.
+ *
+ * `src-tauri/src/hints.rs` sends `hintKey` beside the English `hint`, and
+ * `ErrorAlert` renders `errorHints.<hintKey>` from the locale. `StackvoError`
+ * is the only path a real error takes to that component — the constructor
+ * destructures the payload, so a field it does not name is a field the UI never
+ * sees.
+ *
+ * It was omitted, and nothing noticed: every test of the rendering passed a
+ * plain object literal, which has whatever fields the test wrote. The whole
+ * translation would have been a no-op in the built app while the suite stayed
+ * green. That is why this asserts on the class rather than on a shape.
+ */
+describe('the fields StackvoError carries across', () => {
+  it('keeps hintKey, which is what makes a hint translatable', () => {
+    const error = new StackvoError({
+      code: 'ENGINE_UNREACHABLE',
+      message: 'no socket',
+      hint: 'Start Docker Desktop and try again.',
+      hintKey: 'startDocker',
+    });
+
+    expect(error.hintKey).toBe('startDocker');
+    expect(error.hint).toBe('Start Docker Desktop and try again.');
+  });
+
+  it('carries it through `call`, which is where a real one is built', async () => {
+    rejectWith({
+      code: 'NO_WORKSPACE',
+      message: 'none selected',
+      hint: 'Choose an empty folder.',
+      hintKey: 'chooseWorkspace',
+      details: { field: 'root' },
+    });
+
+    const error = await call('workspace_get').catch((e) => e);
+
+    expect(error).toBeInstanceOf(StackvoError);
+    expect(error.hintKey).toBe('chooseWorkspace');
+    expect(error.details).toEqual({ field: 'root' });
+  });
+
+  it('leaves hintKey undefined when Rust sent none — the runtime-built hints', () => {
+    const error = new StackvoError({
+      code: 'GENERATE_FAILED',
+      message: 'could not run git',
+      hint: '`git` is not on PATH.',
+    });
+
+    expect(error.hintKey).toBeUndefined();
+    expect(error.hint).toBe('`git` is not on PATH.');
+  });
+});
+
+/**
+ * The guard three separate places needed before it was made one function.
+ */
+describe('asList', () => {
+  it('passes an array through untouched', async () => {
+    const { asList } = await import('@/lib/ipc');
+    const list = [{ id: 'mysql' }];
+    expect(asList(list)).toBe(list);
+  });
+
+  it('turns everything the boundary can answer badly into an empty list', async () => {
+    const { asList } = await import('@/lib/ipc');
+    for (const bad of [null, undefined, 0, 'nope', { projects: [] }, true]) {
+      expect(asList(bad)).toEqual([]);
+    }
+  });
+});

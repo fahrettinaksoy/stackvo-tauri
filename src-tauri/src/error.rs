@@ -54,6 +54,14 @@ pub struct Error {
     pub code: Code,
     pub message: String,
     pub hint: Option<String>,
+    /// The locale key for [`Self::hint`], when the hint came from the
+    /// [`crate::hints`] catalogue.
+    ///
+    /// `None` for the handful of hints built at runtime from a value only the
+    /// caller has — a program name, a git failure. Those stay English, and the
+    /// frontend falls back to `hint`, which is exactly what it did for all of
+    /// them before.
+    pub hint_key: Option<&'static str>,
     pub details: Option<serde_json::Value>,
 }
 
@@ -63,12 +71,23 @@ impl Error {
             code,
             message: message.into(),
             hint: None,
+            hint_key: None,
             details: None,
         }
     }
 
-    pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
-        self.hint = Some(hint.into());
+    /// Attach a suggestion.
+    ///
+    /// Takes either a [`crate::hints::Hint`] — which carries its own locale key
+    /// and is what nearly every call site passes — or a plain string, for a hint
+    /// assembled at runtime. Both fill `hint`; only the first fills `hint_key`.
+    ///
+    /// One method rather than two so the untranslatable case has to be written
+    /// deliberately rather than reached for by habit.
+    pub fn with_hint(mut self, hint: impl Into<Suggestion>) -> Self {
+        let Suggestion { text, key } = hint.into();
+        self.hint = Some(text);
+        self.hint_key = key;
         self
     }
 
@@ -79,7 +98,7 @@ impl Error {
 
     pub fn no_workspace() -> Self {
         Self::new(Code::NoWorkspace, "No StackVo directory selected yet.")
-            .with_hint("Choose an empty folder for StackVo to set up, or one it already manages.")
+            .with_hint(crate::hints::CHOOSE_WORKSPACE)
     }
 
     pub fn not_found(what: impl std::fmt::Display) -> Self {
@@ -88,6 +107,40 @@ impl Error {
 
     pub fn io(context: impl std::fmt::Display, err: std::io::Error) -> Self {
         Self::new(Code::IoError, format!("{context}: {err}"))
+    }
+}
+
+/// What [`Error::with_hint`] accepts.
+///
+/// Not a public vocabulary type — nothing constructs one by name. It exists so
+/// that one method can take a catalogued hint or a runtime string without the
+/// call sites having to say which they are handing over.
+pub struct Suggestion {
+    text: String,
+    key: Option<&'static str>,
+}
+
+impl From<crate::hints::Hint> for Suggestion {
+    fn from(hint: crate::hints::Hint) -> Self {
+        Self {
+            text: hint.english.to_string(),
+            key: Some(hint.key),
+        }
+    }
+}
+
+impl From<String> for Suggestion {
+    fn from(text: String) -> Self {
+        Self { text, key: None }
+    }
+}
+
+impl From<&str> for Suggestion {
+    fn from(text: &str) -> Self {
+        Self {
+            text: text.to_string(),
+            key: None,
+        }
     }
 }
 
@@ -111,6 +164,12 @@ impl Serialize for Error {
         m.serialize_entry("message", &self.message)?;
         if let Some(h) = &self.hint {
             m.serialize_entry("hint", h)?;
+        }
+        // Added beside `hint`, never instead of it. An MCP client and the log
+        // want the English; only the webview has a locale to look a key up in,
+        // and it falls back to `hint` when the key is absent.
+        if let Some(k) = &self.hint_key {
+            m.serialize_entry("hintKey", k)?;
         }
         if let Some(d) = &self.details {
             m.serialize_entry("details", d)?;

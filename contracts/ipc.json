@@ -18,6 +18,7 @@
       "code": "string",
       "message": "string (user-facing, localised key when possible)",
       "hint": "string?",
+      "hintKey": "string? — set when the hint came from the catalogue in src-tauri/src/hints.rs. The frontend renders errorHints.<hintKey> from its locale and falls back to `hint` when the key is absent or untranslated; `hint` always carries the English, which is what the log and the MCP surface get. src-tauri/tests/hint_translations.rs fails the build if a catalogued hint has no translation in en.js or tr.js.",
       "details": "object?"
     },
     "codes": {
@@ -830,6 +831,16 @@
       "args": {},
       "returns": "{ directory: string|null, newestFile: string|null, totalBytes: number }",
       "notes": "Where the diagnostic log lives. New to the desktop app — the container UI wrote to stdout, which docker logs captured and nobody kept. The path differs per platform (~/Library/Logs on macOS, %LOCALAPPDATA% on Windows, XDG_STATE_HOME on Linux — which is where the specification puts logs, and where this moved once ~/.local/share was noticed to be the wrong half of XDG) and none is somewhere a user would look unprompted. The folder is named for the app, not for its bundle identifier; `appdir` owns that choice for both this and the config directory."
+    },
+    "diagnostics_bundle": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "path": "string"
+      },
+      "returns": "{ path: string, bytes: number, entries: Array<{ name: string, bytes: number, truncated: boolean }> }",
+      "why": "Settings could open the log folder and nothing more, which leaves the reporter to find the right file among seven daily ones, know that the doctor output is separate, and remember the version and platform. One archive gets the maintainer the same set every time.",
+      "notes": "path comes from the system save dialog, as mail_attachment_save's does \u2014 the front end names no destination this process did not receive from the user. Contents: about.txt, preflight.json, doctor.json, engine.json, the rotating log and any crash reports. Every log line is passed through logging::redact a second time on the way in, because a bundle built today may hold lines written by a build whose redaction rule was narrower. Logs are capped at 1 MiB each and `truncated` says which were cut. Nothing is read from .env and no project source is included."
     },
     "updater_status": {
       "new": true,

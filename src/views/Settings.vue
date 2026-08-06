@@ -17,7 +17,7 @@ import {
   FONT_FAMILIES,
   STATUS_PALETTES,
 } from '@/lib/appearance';
-import { api } from '@/lib/ipc';
+import { api, asList } from '@/lib/ipc';
 import { HTTPS_ONLY_SUFFIXES } from '@/lib/manifest';
 import { bytes } from '@/lib/format';
 import { setLocale } from '@/i18n';
@@ -70,6 +70,42 @@ const updateProgress = ref(null);
 /** Null until asked; false means this build has no key to verify against. */
 const updaterReady = ref(null);
 const logs = ref(null);
+
+// The diagnostic archive. `bundle` holds the last result so the pane can name
+// what went in — a success toast that says "saved" leaves the user to open the
+// zip to find out whether the thing they were asked for is in it.
+const bundling = ref(false);
+const bundle = ref(null);
+const bundleError = ref(null);
+
+/**
+ * Collect the bundle to a path the user picks.
+ *
+ * The save dialog rather than a fixed location, for the reason
+ * `mail_attachment_save` uses one: this writes a file outside everything the
+ * app owns, and the only acceptable authority for that is the person at the
+ * keyboard. A cancelled dialog is an answer, not a failure — it returns null
+ * and nothing is reported.
+ */
+async function saveDiagnosticBundle() {
+  bundleError.value = null;
+  bundle.value = null;
+  try {
+    const { save } = await import('@tauri-apps/plugin-dialog');
+    const path = await save({
+      defaultPath: `stackvo-diagnostics.zip`,
+      filters: [{ name: 'Zip archive', extensions: ['zip'] }],
+    });
+    if (!path) return;
+
+    bundling.value = true;
+    bundle.value = await api.diagnosticsBundle(path);
+  } catch (e) {
+    bundleError.value = e;
+  } finally {
+    bundling.value = false;
+  }
+}
 const apps = ref({ terminals: [], editors: [], browsers: [] });
 
 /**
@@ -673,7 +709,7 @@ async function loadTemplates() {
   templatesBusy.value = true;
   templatesError.value = null;
   try {
-    templates.value = await api.templatesList();
+    templates.value = asList(await api.templatesList());
   } catch (e) {
     templatesError.value = e;
   } finally {
@@ -2737,6 +2773,20 @@ onMounted(async () => {
                   >
                     {{ t('settings.openLogs') }}
                   </v-btn>
+                  <!-- The folder button leaves the reporter to find the right
+                       file among seven and to know the doctor output is a
+                       separate thing. This is the one that answers the whole
+                       question. -->
+                  <v-btn
+                    size="small"
+                    variant="flat"
+                    color="primary"
+                    prepend-icon="mdi-package-variant-closed"
+                    :loading="bundling"
+                    @click="saveDiagnosticBundle"
+                  >
+                    {{ t('settings.saveBundle') }}
+                  </v-btn>
                 </div>
                 <!-- Said out loud because the alternative is a user who assumes
                      the opposite and attaches nothing, or one who assumes it is
@@ -2744,6 +2794,23 @@ onMounted(async () => {
                 <div class="text-caption text-medium-emphasis mt-2">
                   {{ t('settings.logsRedacted') }}
                 </div>
+                <div class="text-caption text-medium-emphasis mt-1">
+                  {{ t('settings.saveBundleHint') }}
+                </div>
+                <!-- Named, not counted. "Saved 6 files" tells nobody whether
+                     the thing they were asked for is in there. -->
+                <ErrorAlert v-if="bundleError" :error="bundleError" class="mt-3" />
+                <v-alert
+                  v-if="bundle"
+                  type="success"
+                  variant="tonal"
+                  density="compact"
+                  class="mt-3 text-caption"
+                >
+                  <div>{{ t('settings.saveBundleDone', { bytes: bytes(bundle.bytes) }) }}</div>
+                  <code class="text-caption log-path d-block mt-1">{{ bundle.path }}</code>
+                  <div class="mt-1">{{ bundle.entries.map((e) => e.name).join(', ') }}</div>
+                </v-alert>
               </template>
             </SettingsGroup>
           </template>

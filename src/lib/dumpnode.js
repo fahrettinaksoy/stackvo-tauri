@@ -149,8 +149,11 @@ export function isFlat(node) {
     case 'str':
       // A long string has more to show even with nowhere to fold: the row can
       // only ellipsize it, and the expanded view wraps it.
-      return !node.cut && !String(node.v ?? '').includes('\n')
-        && String(node.v ?? '').length <= FLAT_STRING_LIMIT;
+      return (
+        !node.cut &&
+        !String(node.v ?? '').includes('\n') &&
+        String(node.v ?? '').length <= FLAT_STRING_LIMIT
+      );
     default:
       return true;
   }

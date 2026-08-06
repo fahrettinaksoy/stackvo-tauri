@@ -31,6 +31,32 @@ const headline = computed(() => {
 });
 
 /**
+ * The suggestion, translated.
+ *
+ * This is the line that tells someone what to *do* — start Docker, choose a
+ * folder, adopt the directory instead — and it was printed raw. A Turkish user
+ * got a translated heading over an English explanation over an English
+ * instruction, which is the one of the three worst left in English.
+ *
+ * `hintKey` comes from the catalogue in `src-tauri/src/hints.rs`; `hint` is the
+ * English the Rust side carries either way. Three hints are still built at
+ * runtime from a value only the caller has — a program name, a git failure —
+ * and those arrive with no key and fall through to the English, exactly as
+ * every hint did before.
+ *
+ * `te` guards the lookup rather than trusting it: a locale missing the key must
+ * show the English sentence, not the key itself. The Rust test
+ * `hint_translations.rs` is what stops that from happening quietly, but the
+ * fallback is what stops it from being ugly if it ever does.
+ */
+const hint = computed(() => {
+  const e = props.error;
+  if (!e || typeof e === 'string') return null;
+  if (e.hintKey && te(`errorHints.${e.hintKey}`)) return t(`errorHints.${e.hintKey}`);
+  return e.hint || null;
+});
+
+/**
  * Whatever was thrown, said out loud.
  *
  * It read `error.message` and nothing else, which is right for this app's own
@@ -89,7 +115,7 @@ const findings = computed(() => {
         <template v-if="f.message"> — {{ f.message }}</template>
       </li>
     </ul>
-    <div v-if="error.hint" class="text-caption mt-1 text-medium-emphasis">{{ error.hint }}</div>
+    <div v-if="hint" class="text-caption mt-1 text-medium-emphasis">{{ hint }}</div>
   </v-alert>
 </template>
 

@@ -353,7 +353,7 @@ fn checked_id(id: &str) -> Result<&str> {
             Code::InvalidInput,
             format!("\"{id}\" is not a profile file"),
         )
-        .with_hint("Profile ids are the cachegrind.out.* names from profile_list."));
+        .with_hint(crate::hints::PROFILE_IDS_FROM_LIST));
     }
     Ok(id)
 }
@@ -421,10 +421,8 @@ pub fn read(root: &std::path::Path, name: &str, id: &str) -> Result<Report> {
     // profiling was turned on here — can still be gzipped.
     if is_gzip(&path) {
         return Err(
-            Error::new(Code::Unsupported, format!("{id} is gzip-compressed")).with_hint(
-                "Xdebug compresses by default; StackVo turns that off when it enables profiling. \
-             Re-record this profile, or gunzip the file yourself.",
-            ),
+            Error::new(Code::Unsupported, format!("{id} is gzip-compressed"))
+                .with_hint(crate::hints::PROFILE_IS_COMPRESSED),
         );
     }
 

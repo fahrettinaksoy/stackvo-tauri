@@ -627,9 +627,7 @@ fn checked_server_config(root: &std::path::Path, server: &str) -> Result<std::pa
             Code::InvalidInput,
             format!("{server} is not configured through a file"),
         )
-        .with_hint(
-            "Only nginx, caddy and frankenphp have a generated config to add directives to.",
-        ));
+        .with_hint(crate::hints::SERVER_DIRECTIVES_UNSUPPORTED));
     }
     Ok(crate::generator::server_config_path(root, server))
 }
@@ -669,8 +667,13 @@ use tauri::AppHandle;
 
 /// Shared body for the six start/stop/restart commands, which differ only by
 /// verb, subject kind and event prefix.
-#[tracing::instrument(skip(app, phase), fields(action = phase.pending))]
-async fn lifecycle(app: &AppHandle, kind: &'static str, id: &str, phase: Lifecycle) -> Result<()> {
+#[tracing::instrument(skip(sink, phase), fields(action = phase.pending))]
+async fn lifecycle(
+    sink: &dyn crate::progress::ProgressSink,
+    kind: &'static str,
+    id: &str,
+    phase: Lifecycle,
+) -> Result<()> {
     // Validated even though no path is built here: the id becomes a container
     // name and a compose service name, and one rule applied at every entry
     // point is easier to keep true than five rules applied at some of them.
@@ -695,7 +698,7 @@ async fn lifecycle(app: &AppHandle, kind: &'static str, id: &str, phase: Lifecyc
         }
     };
 
-    events::emit(app, &subject(phase.pending), make(id));
+    crate::progress::emit(sink, &subject(phase.pending), make(id));
 
     let result = match phase.pending {
         "starting" => engine::start_container(id).await,
@@ -705,15 +708,15 @@ async fn lifecycle(app: &AppHandle, kind: &'static str, id: &str, phase: Lifecyc
 
     match result {
         Ok(()) => {
-            events::emit(
-                app,
+            crate::progress::emit(
+                sink,
                 &subject(phase.done),
                 make(id).running(phase.running_after),
             );
             Ok(())
         }
         Err(e) => {
-            events::emit(app, &subject("error"), make(id).error(e.message.clone()));
+            crate::progress::emit(sink, &subject("error"), make(id).error(e.message.clone()));
             Err(e)
         }
     }
@@ -722,13 +725,13 @@ async fn lifecycle(app: &AppHandle, kind: &'static str, id: &str, phase: Lifecyc
 #[tauri::command]
 pub async fn project_start(app: AppHandle, state: State<'_, AppState>, name: String) -> Result<()> {
     let _busy = state.inflight.acquire(format!("project:{name}"))?;
-    lifecycle(&app, "project", &name, events::START).await
+    lifecycle(&events::sink(&app), "project", &name, events::START).await
 }
 
 #[tauri::command]
 pub async fn project_stop(app: AppHandle, state: State<'_, AppState>, name: String) -> Result<()> {
     let _busy = state.inflight.acquire(format!("project:{name}"))?;
-    lifecycle(&app, "project", &name, events::STOP).await
+    lifecycle(&events::sink(&app), "project", &name, events::STOP).await
 }
 
 #[tauri::command]
@@ -738,19 +741,19 @@ pub async fn project_restart(
     name: String,
 ) -> Result<()> {
     let _busy = state.inflight.acquire(format!("project:{name}"))?;
-    lifecycle(&app, "project", &name, events::RESTART).await
+    lifecycle(&events::sink(&app), "project", &name, events::RESTART).await
 }
 
 #[tauri::command]
 pub async fn service_start(app: AppHandle, state: State<'_, AppState>, name: String) -> Result<()> {
     let _busy = state.inflight.acquire(format!("service:{name}"))?;
-    lifecycle(&app, "service", &name, events::START).await
+    lifecycle(&events::sink(&app), "service", &name, events::START).await
 }
 
 #[tauri::command]
 pub async fn service_stop(app: AppHandle, state: State<'_, AppState>, name: String) -> Result<()> {
     let _busy = state.inflight.acquire(format!("service:{name}"))?;
-    lifecycle(&app, "service", &name, events::STOP).await
+    lifecycle(&events::sink(&app), "service", &name, events::STOP).await
 }
 
 #[tauri::command]
@@ -760,7 +763,7 @@ pub async fn service_restart(
     name: String,
 ) -> Result<()> {
     let _busy = state.inflight.acquire(format!("service:{name}"))?;
-    lifecycle(&app, "service", &name, events::RESTART).await
+    lifecycle(&events::sink(&app), "service", &name, events::RESTART).await
 }
 
 // ---------------------------------------------------------------- inspect
@@ -1081,7 +1084,7 @@ fn checked_service(name: &str) -> Result<()> {
         return Ok(());
     }
     Err(Error::not_found(format!("service {name}"))
-        .with_hint("Only services listed in contracts/env.schema.json can be managed."))
+        .with_hint(crate::hints::SERVICE_MUST_BE_IN_CATALOG))
 }
 
 /// Is every key in `patch` a setting this service owns, and is every value one
@@ -1117,7 +1120,7 @@ fn check_service_patch(
                 Code::InvalidInput,
                 format!("\"{key}\" would be saved as its own mask"),
             )
-            .with_hint("Reveal the value first, or leave the field untouched."));
+            .with_hint(crate::hints::REVEAL_VALUE_FIRST));
         }
     }
     Ok(())
@@ -1458,39 +1461,57 @@ async fn generate(
     let lock = app.state::<AppState>().generate_lock.clone();
     let _serialised = lock.lock().await;
 
-    // In-process since the Bash CLI was retired. It used to shell out to
-    // `stackvo generate`, which is why this function still reports through the
-    // operation events: callers await it and watch the same stream either way.
-    let sink = events::sink(app);
-    let operation = operation_id.to_string();
-    let subject = scope.to_string();
+    // Everything below the lock is the reporting half, and it needs no window —
+    // see the function it now calls. This one keeps the two things only Tauri
+    // can give it: the managed state the lock lives in, and the window sink.
+    generate_reported(&events::sink(app), root, operation_id, scope)
+}
 
-    let report = {
-        let sink = sink.clone();
-        let operation = operation.clone();
-        let subject = subject.clone();
-        write_generated(root, scope, move |label| {
-            sink.emit(
-                "generate:progress",
-                events::ProgressEvent {
-                    operation_id: operation.clone(),
-                    subject: subject.clone(),
-                    line: label.to_string(),
-                },
-            );
-        })
-    };
+/// Write the generated files and narrate it, with no `AppHandle` in sight.
+///
+/// Split out of [`generate`] so it can be tested. What is being pinned is the
+/// *event contract*, not the file writing — `write_generated` is a separate,
+/// already-testable function, and this is the layer the UI's progress pane
+/// actually consumes: one `generate:progress` per file, then exactly one
+/// `generate:done` carrying the outcome.
+///
+/// That contract had never been verified anywhere, and it has a failure mode
+/// that no type catches: returning `Err` without emitting `generate:done`
+/// leaves the console showing an operation that never finishes. The tests below
+/// assert the terminal event on **both** paths for that reason.
+///
+/// In-process since the Bash CLI was retired. It used to shell out to
+/// `stackvo generate`, which is why this still reports through the operation
+/// events: callers await it and watch the same stream either way.
+fn generate_reported(
+    sink: &dyn crate::progress::ProgressSink,
+    root: &std::path::Path,
+    operation_id: &str,
+    scope: &str,
+) -> Result<()> {
+    let report = write_generated(root, scope, |label| {
+        crate::progress::emit(
+            sink,
+            "generate:progress",
+            events::ProgressEvent {
+                operation_id: operation_id.to_string(),
+                subject: scope.to_string(),
+                line: label.to_string(),
+            },
+        );
+    });
 
     let (success, error) = match &report {
         Ok(_) => (true, None),
         Err(e) => (false, Some(e.message.clone())),
     };
 
-    sink.emit(
+    crate::progress::emit(
+        sink,
         "generate:done",
         events::FinishedEvent {
-            operation_id: operation,
-            subject,
+            operation_id: operation_id.to_string(),
+            subject: scope.to_string(),
             success,
             duration_ms: 0,
             error,
@@ -1968,23 +1989,62 @@ async fn service_domains(root: &std::path::Path) -> Vec<String> {
     let Ok(env) = Env::load(root) else {
         return Vec::new();
     };
-    let tld = env.get("DEFAULT_TLD_SUFFIX").unwrap_or("stackvo.loc");
 
     // A dead engine means nothing is running, which is the right answer here
     // rather than a reason to fail.
-    let containers = engine::stackvo_containers().await.unwrap_or_default();
+    let running: std::collections::HashSet<String> = engine::stackvo_containers()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, c)| c.running)
+        .map(|(id, _)| id)
+        .collect();
     let (_, managed) = crate::hosts::mapped_domains();
+
+    service_domains_from(&env, &running, &managed)
+}
+
+/// The decision itself, with both ambient reads passed in.
+///
+/// Split out because the test that guards this rule **was not hermetic** and
+/// nobody noticed for as long as it only ever ran where the rule was already
+/// satisfied. It called the whole chain, which reaches the real Docker daemon
+/// and the real `/etc/hosts`, and asserted that a fresh install asks for
+/// nothing but the two core names. That is true on a CI runner with no StackVo
+/// containers. On the machine of anyone actually running the stack, phpMyAdmin
+/// and RabbitMQ *are* running, so they are correctly included and the test
+/// fails — reporting a bug in the code when the bug is in the test.
+///
+/// A test that only passes where the daemon is idle is a test the maintainer
+/// cannot run. Both inputs are arguments now, so the rule can be checked
+/// against a stated world rather than against whichever one the machine
+/// happens to be in.
+fn service_domains_from(
+    env: &Env,
+    running: &std::collections::HashSet<String>,
+    managed: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    let tld = env.get("DEFAULT_TLD_SUFFIX").unwrap_or("stackvo.loc");
 
     env_schema()
         .service_catalog()
         .into_iter()
         .filter_map(|(id, _)| env.service_url(&id).map(|url| (id, format!("{url}.{tld}"))))
         .filter(|(id, domain)| {
-            containers.get(id).is_some_and(|c| c.running)
-                || managed.contains(&domain.to_ascii_lowercase())
+            running.contains(id) || managed.contains(&domain.to_ascii_lowercase())
         })
         .map(|(_, domain)| domain)
         .collect()
+}
+
+/// The rule under test, reachable without a Docker daemon or an `/etc/hosts`.
+#[cfg(test)]
+pub(crate) fn service_domains_for_test(
+    env: &Env,
+    running: &std::collections::HashSet<String>,
+    managed: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    service_domains_from(env, running, managed)
 }
 
 /// The two names the stack answers on before anything else exists.
@@ -2001,11 +2061,13 @@ pub(crate) fn core_domains_for_test(root: &std::path::Path) -> Vec<String> {
     core_domains(root)
 }
 
-/// What the settings pane lists, for a test that has to see the same list.
-#[cfg(test)]
-pub(crate) async fn wanted_domains_for_test(root: &std::path::Path) -> Vec<String> {
-    wanted_domains(root).await
-}
+// `wanted_domains_for_test` used to live here, so a test could check that the
+// settings pane and the dashboard banner agreed on the list. They cannot
+// disagree any more: `missing_hosts_by_owner` is written in terms of
+// `wanted_domains` rather than restating it, so the two-definitions bug that
+// helper was added to catch is now prevented by construction. A test that can
+// only fail if someone reintroduces the duplication is a test of a shape the
+// compiler already holds.
 
 fn core_domains(root: &std::path::Path) -> Vec<String> {
     let Ok(env) = Env::load(root) else {
@@ -2629,7 +2691,7 @@ pub async fn quick_command_run(
         .unwrap_or(false);
     if !running {
         return Err(Error::new(Code::Conflict, format!("{name} is not running"))
-            .with_hint("Start the project first — these commands run inside its container."));
+            .with_hint(crate::hints::START_PROJECT_FOR_COMMANDS));
     }
 
     if spec.interactive {
@@ -2825,11 +2887,8 @@ pub async fn migrate_scan(state: State<'_, AppState>, name: String) -> Result<Mi
     }
 
     let Some(compose) = detect::compose_file(&dir) else {
-        return Err(
-            Error::not_found(format!("a compose file in {name}")).with_hint(
-                "Looked for compose.yaml, compose.yml, docker-compose.yaml and docker-compose.yml.",
-            ),
-        );
+        return Err(Error::not_found(format!("a compose file in {name}"))
+            .with_hint(crate::hints::COMPOSE_FILE_NOT_FOUND));
     };
 
     let migration = crate::migrate::read(&compose).await?;
@@ -3469,7 +3528,7 @@ pub async fn project_adopt(
             Code::AlreadyExists,
             format!("\"{name}\" already has a stackvo.json"),
         )
-        .with_hint("Edit it from the project's Manifest tab instead."));
+        .with_hint(crate::hints::EDIT_FROM_MANIFEST_TAB));
     }
 
     // Detection fills the form; it does not bypass validation. An adopted
@@ -3565,7 +3624,7 @@ pub async fn project_register(
     if !manifest_path.is_file() {
         return Err(
             Error::new(Code::NotFound, format!("{name} has no stackvo.json"))
-                .with_hint("Adopt it instead — that is the path that writes one."),
+                .with_hint(crate::hints::ADOPT_INSTEAD),
         );
     }
 
@@ -3579,19 +3638,15 @@ pub async fn project_register(
             Code::InvalidManifest,
             format!("{name}/stackvo.json is not valid JSON: {e}"),
         )
-        .with_hint("Fix the file, or delete it and adopt the folder instead.")
+        .with_hint(crate::hints::FIX_OR_ADOPT)
     })?;
     // A manifest that came off a remote is far likelier to fail the schema than
     // one this app wrote, and the generic rejection says nothing a user can act
     // on. The findings ride along in `details` either way; this adds where to
     // go — the doctor already lists every unbuildable extension with the button
     // that removes it, and an extension is the common failure by a distance.
-    let m = parse_spec(&spec, &name).map_err(|e| {
-        e.with_hint(
-            "Settings → Doctor lists what is wrong and can repair it; then clone or register again."
-                .to_string(),
-        )
-    })?;
+    let m =
+        parse_spec(&spec, &name).map_err(|e| e.with_hint(crate::hints::RUN_DOCTOR_THEN_RETRY))?;
 
     let _busy = state.inflight.acquire(format!("project:{name}"))?;
     let operation_id = events::next_operation_id("register");
@@ -4179,7 +4234,7 @@ pub fn open_in_browser(url: String) -> Result<()> {
 
     opened.map(|_| ()).map_err(|e| {
         Error::new(Code::NotFound, format!("could not open a browser: {e}"))
-            .with_hint("Choose a browser in Settings → External applications.")
+            .with_hint(crate::hints::CHOOSE_A_BROWSER)
     })
 }
 
@@ -4412,7 +4467,7 @@ pub async fn project_scaffold(
             Code::AlreadyExists,
             format!("projects/{name} already exists and is not empty"),
         )
-        .with_hint("Use adoption for existing code — scaffolding is for a brand-new project."));
+        .with_hint(crate::hints::ADOPT_EXISTING_CODE));
     }
     std::fs::create_dir_all(&dir).map_err(|e| Error::io("creating the project directory", e))?;
 
@@ -4515,7 +4570,7 @@ pub async fn project_clone(
 ) -> Result<serde_json::Value> {
     if !crate::git::available() {
         return Err(Error::new(Code::NotFound, "git is not installed.")
-            .with_hint("Install git, or clone the repository yourself and adopt the folder."));
+            .with_hint(crate::hints::INSTALL_GIT_OR_ADOPT));
     }
 
     let repo = crate::git::parse(&url)?;
@@ -4536,7 +4591,7 @@ pub async fn project_clone(
             Code::AlreadyExists,
             format!("projects/{name} already exists"),
         )
-        .with_hint("Choose another name, or adopt the folder that is already there."));
+        .with_hint(crate::hints::CHOOSE_ANOTHER_NAME));
     }
 
     // The parent has to exist; the target must not — git creates it, and
@@ -4636,7 +4691,7 @@ pub async fn worker_start(state: State<'_, AppState>, name: String, kind: String
             Code::Unsupported,
             format!("{name} does not offer a {} worker", kind.as_str()),
         )
-        .with_hint("Workers are detected from artisan and composer.json."));
+        .with_hint(crate::hints::WORKERS_ARE_DETECTED));
     }
 
     // The image comes from the project's web container: the one image that is
@@ -4647,7 +4702,7 @@ pub async fn worker_start(state: State<'_, AppState>, name: String, kind: String
         .and_then(|c| c.image.clone())
         .ok_or_else(|| {
             Error::new(Code::Conflict, format!("{name} has no built container"))
-                .with_hint("Build and start the project first — the worker runs its image.")
+                .with_hint(crate::hints::BUILD_AND_START_FOR_WORKER)
         })?;
 
     let network = Env::load(&root)
@@ -4798,12 +4853,103 @@ pub async fn docker_prune(
 /// Replaces the localStorage-backed `usePreferences` composable: a webview's
 /// localStorage is cleared by a cache reset, and the editor command needs to be
 /// readable from Rust anyway.
+/// The shape `preferences.json` is written in.
+///
+/// There was no version field, so there was no handle to migrate by: a future
+/// release that renamed a key would have to guess whether an absent key meant
+/// "old file" or "never set". One number now costs nothing and is the only
+/// thing that makes the answer knowable later.
+const PREFS_SCHEMA_VERSION: u64 = 1;
+
 #[tauri::command]
 pub fn prefs_get() -> Result<serde_json::Value> {
-    let path = prefs_path()?;
-    match std::fs::read_to_string(&path) {
-        Ok(text) => Ok(serde_json::from_str(&text).unwrap_or_else(|_| default_prefs())),
-        Err(_) => Ok(default_prefs()),
+    Ok(read_prefs(&prefs_path()?))
+}
+
+/// The reading half, with the path passed in.
+///
+/// Split out only so it can be tested: `prefs_path()` resolves the real OS
+/// config directory, and a test that exercised recovery through it would move
+/// the preferences of whoever ran `cargo test`.
+fn read_prefs(path: &std::path::Path) -> serde_json::Value {
+    // No file is a fresh install, not a fault — the one case that must stay
+    // silent.
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return default_prefs();
+    };
+
+    match serde_json::from_str::<serde_json::Value>(&text) {
+        Ok(value) if value.is_object() => migrated(value),
+
+        // Two failures, one answer. The `Ok` arm is the one that was missing:
+        // `from_str` accepts a bare `3` or `"x"` as valid JSON, and the old code
+        // returned it. Every later `prefs_set` then found `as_object_mut() ==
+        // None`, merged into nothing, and wrote the same scalar back — so every
+        // setting the user changed was silently discarded, for ever, with a
+        // parseable file on disk.
+        Ok(_) | Err(_) => {
+            preserve_corrupt(path);
+            default_prefs()
+        }
+    }
+}
+
+/// Bring a stored preferences object up to the current shape.
+///
+/// Only stamps the version today. It exists now so that the release that *does*
+/// need to rename a key has somewhere to put the migration, rather than
+/// inventing this function under time pressure and guessing at the old shape.
+fn migrated(mut value: serde_json::Value) -> serde_json::Value {
+    let stored = value.get("schemaVersion").and_then(|v| v.as_u64());
+
+    if let Some(object) = value.as_object_mut() {
+        // Absent means "written before versioning existed", which is shape 1 —
+        // no key has been renamed yet, so nothing has to move.
+        if stored != Some(PREFS_SCHEMA_VERSION) {
+            object.insert(
+                "schemaVersion".into(),
+                serde_json::json!(PREFS_SCHEMA_VERSION),
+            );
+        }
+    }
+    value
+}
+
+/// Move an unparseable preferences file aside instead of overwriting it.
+///
+/// The old behaviour was `unwrap_or_else(|_| default_prefs())`: not crashing was
+/// right, and losing the file was not. Every setting the user had chosen went
+/// back to default with no warning and no copy — and the first `prefs_set`
+/// afterwards wrote defaults over the evidence.
+///
+/// Renamed rather than copied, deliberately. A copy would be re-made on every
+/// launch for as long as the bad file sat there; a rename leaves no file at all,
+/// so the next launch is an ordinary fresh start. It is safe because this only
+/// runs on *malformed* JSON — a file from a future release carrying keys this
+/// version does not know is still a valid object, so it parses and reaches
+/// [`migrated`] untouched.
+fn preserve_corrupt(path: &std::path::Path) {
+    let stamp = crate::crash::stamp(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
+    );
+    let backup = path.with_file_name(format!("preferences.corrupt-{stamp}.json"));
+
+    match std::fs::rename(path, &backup) {
+        Ok(()) => tracing::error!(
+            from = %path.display(),
+            to = %backup.display(),
+            "preferences.json could not be parsed; it was kept and defaults were loaded"
+        ),
+        // Nothing else to do: returning defaults is still better than failing to
+        // start, and the file is left where the user can find it.
+        Err(e) => tracing::error!(
+            path = %path.display(),
+            error = %e,
+            "preferences.json could not be parsed and could not be moved aside"
+        ),
     }
 }
 
@@ -4836,6 +4982,29 @@ pub fn prefs_set(patch: serde_json::Value) -> Result<serde_json::Value> {
     crate::atomic::write(&path, &serde_json::to_string_pretty(&current)?)?;
 
     Ok(current)
+}
+
+/// Everything a bug report needs, written to a file the user chose.
+///
+/// `logs_info` above can point at the log folder, and that was the whole of the
+/// support story: find the newest of seven daily files, know that the doctor
+/// output is a separate thing, remember the version and the platform. Most
+/// people attach one log and the first reply asks for the other four things.
+///
+/// `path` comes from the system save dialog, like `mail_attachment_save`'s —
+/// the front end names no destination this process did not receive from the
+/// user. Everything that goes in is masked on the way; `diagnostics` explains
+/// why it is masked twice.
+#[tauri::command]
+pub async fn diagnostics_bundle(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<crate::diagnostics::Bundle> {
+    // Best effort on the workspace: a bundle from a machine with no workspace
+    // selected is exactly the bundle somebody needs when the app will not get
+    // that far, so a missing root narrows the contents rather than refusing.
+    let root = state.root().ok();
+    crate::diagnostics::write(root.as_deref(), std::path::Path::new(&path)).await
 }
 
 /// Where the log is, how big it is, and whether there is one at all.
@@ -5169,6 +5338,7 @@ fn prefs_path() -> Result<std::path::PathBuf> {
 
 fn default_prefs() -> serde_json::Value {
     serde_json::json!({
+        "schemaVersion": PREFS_SCHEMA_VERSION,
         "locale": null,
         "theme": "system",
         "editorCommand": null,
@@ -5211,7 +5381,7 @@ pub fn open_in_editor(state: State<'_, AppState>, path: String) -> Result<()> {
             Code::InvalidInput,
             "refusing to open a path outside the StackVo directory",
         )
-        .with_hint("Only project folders inside the selected workspace can be opened."));
+        .with_hint(crate::hints::ONLY_PROJECT_FOLDERS));
     }
 
     // An explicit preference wins; otherwise walk the catalogue in order. Both
@@ -5256,8 +5426,7 @@ pub fn open_in_editor(state: State<'_, AppState>, path: String) -> Result<()> {
         }
     }
 
-    Err(Error::new(Code::NotFound, "No editor found.")
-        .with_hint("Choose an editor in Settings, or open the folder manually."))
+    Err(Error::new(Code::NotFound, "No editor found.").with_hint(crate::hints::CHOOSE_AN_EDITOR))
 }
 
 /// Ask the OS for a folder.
@@ -5873,7 +6042,7 @@ pub async fn generate_with(
             Code::Unsupported,
             "The Bash engine was retired after the Rust port reached byte parity on every file.",
         )
-        .with_hint("Use generate_run; `verify` mode still reports drift against what is on disk.")),
+        .with_hint(crate::hints::USE_GENERATE_RUN)),
 
         // Verify without writing: now a *drift* check — does what is on disk
         // still match what this generator would write? Catches hand-edited
@@ -6191,5 +6360,294 @@ mod tests {
             seen >= 2,
             "expected to be checking real calls, matched {seen} of the list"
         );
+    }
+
+    // ------------------------------------------------- generate reporting
+    //
+    // The first tests for the generate operation's event contract. It could not
+    // be reached before `progress::Recording` existed: `generate` took an
+    // `AppHandle` for two unrelated reasons — the managed lock and the sink —
+    // and neither is available outside a running app. `generate_reported` is
+    // the half that needed neither.
+
+    /// A workspace the generator can actually run in: the skeleton the binary
+    /// carries, plus a projects pointer, which is exactly what `independence`
+    /// asserts is enough to render from nothing.
+    fn generated_workspace(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "stackvo-generate-events-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::skeleton::install(&dir).expect("install the embedded skeleton");
+        crate::workspace::point_at_projects(&dir, &dir.join("projects")).expect("projects pointer");
+        dir
+    }
+
+    #[test]
+    fn generating_reports_progress_then_exactly_one_terminal_event() {
+        let root = generated_workspace("ok");
+        let sink = crate::progress::Recording::new();
+
+        generate_reported(&sink, &root, "generate-7", "all").expect("a skeleton must render");
+
+        let names = sink.names();
+        assert!(
+            names.len() > 1,
+            "the generator wrote nothing worth reporting: {names:?}"
+        );
+        assert!(
+            names[..names.len() - 1]
+                .iter()
+                .all(|n| n == "generate:progress"),
+            "something other than progress arrived before the end: {names:?}"
+        );
+        assert_eq!(
+            names.iter().filter(|n| *n == "generate:done").count(),
+            1,
+            "the terminal event must arrive exactly once"
+        );
+        assert_eq!(
+            names.last().map(String::as_str),
+            Some("generate:done"),
+            "the terminal event must be last"
+        );
+
+        // Both fields are what the operation console keys on: without the
+        // subject the opening event fell through its `subject ?? project ??
+        // service ?? \"stack\"` chain and opened an operation its own finish
+        // never closed. That bug is what this assertion exists to prevent.
+        for event in sink.events() {
+            assert_eq!(event.str("operationId"), Some("generate-7"));
+            assert_eq!(event.str("subject"), Some("all"));
+        }
+
+        let done = sink.last("generate:done").unwrap();
+        assert_eq!(done.get("success"), Some(&serde_json::Value::Bool(true)));
+        assert_eq!(done.get("error"), Some(&serde_json::Value::Null));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The failure mode no type catches: returning `Err` without emitting the
+    /// terminal event leaves the console showing an operation that never ends.
+    #[test]
+    fn a_failed_generate_still_closes_its_operation() {
+        // A path with no skeleton and no projects pointer — the generator has
+        // nothing to read and no directory to write into.
+        let root = std::env::temp_dir().join(format!(
+            "stackvo-generate-events-missing-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let sink = crate::progress::Recording::new();
+
+        let error = generate_reported(&sink, &root, "generate-8", "all")
+            .expect_err("a workspace that does not exist cannot render");
+
+        let done = sink
+            .last("generate:done")
+            .expect("a failed operation must still emit its terminal event");
+        assert_eq!(done.get("success"), Some(&serde_json::Value::Bool(false)));
+        assert_eq!(
+            done.str("error"),
+            Some(error.message.as_str()),
+            "the event and the returned error must say the same thing"
+        );
+    }
+
+    /// The premise of the whole module: the same call with nowhere to report to
+    /// does the same work. This is the path `stackvo-mcp` takes.
+    #[test]
+    fn generating_without_a_sink_produces_the_same_files() {
+        let root = generated_workspace("headless");
+        generate_reported(&crate::progress::Null, &root, "generate-9", "all")
+            .expect("headless must not change the outcome");
+
+        assert!(
+            root.join("generated").join("stackvo.yml").is_file(),
+            "the generator did not write with a silent sink"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ------------------------------------------------- preferences recovery
+
+    fn prefs_scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "stackvo-prefs-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A file that never existed is a fresh install. It must not leave a
+    /// "corrupt" backup implying something went wrong.
+    #[test]
+    fn a_missing_preferences_file_is_not_a_corruption() {
+        let dir = prefs_scratch("missing");
+        let prefs = read_prefs(&dir.join("preferences.json"));
+
+        assert_eq!(prefs["theme"], "system");
+        assert_eq!(prefs["schemaVersion"], PREFS_SCHEMA_VERSION);
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            0,
+            "a fresh install wrote something"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The finding: settings went back to default with no warning and no copy,
+    /// and the next write put defaults over the evidence.
+    #[test]
+    fn an_unparseable_file_is_kept_rather_than_lost() {
+        let dir = prefs_scratch("corrupt");
+        let path = dir.join("preferences.json");
+        std::fs::write(&path, "{\"theme\": \"dark\", trunca").unwrap();
+
+        let prefs = read_prefs(&path);
+        assert_eq!(prefs["theme"], "system", "defaults are loaded");
+
+        assert!(
+            !path.exists(),
+            "the bad file must be moved, not left in place"
+        );
+        let kept: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("preferences.corrupt-"))
+            .collect();
+        assert_eq!(kept.len(), 1, "the user's settings were not preserved");
+        assert!(std::fs::read_to_string(dir.join(&kept[0]))
+            .unwrap()
+            .contains("dark"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Valid JSON that is not an object was the silent one: it parsed, so the
+    /// old code returned it, and every `prefs_set` afterwards merged into
+    /// nothing and wrote the same scalar back. The user changed settings and
+    /// none of them ever persisted.
+    #[test]
+    fn valid_json_that_is_not_an_object_is_treated_as_corrupt() {
+        for content in ["3", "\"dark\"", "[1,2,3]", "null"] {
+            let dir = prefs_scratch("scalar");
+            let path = dir.join("preferences.json");
+            std::fs::write(&path, content).unwrap();
+
+            let prefs = read_prefs(&path);
+            assert!(
+                prefs.is_object(),
+                "{content} was returned as-is and would swallow every later write"
+            );
+            assert_eq!(prefs["theme"], "system");
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// A file written before versioning existed is not corrupt — it is shape 1.
+    /// Stamping it is what gives a later release something to migrate from.
+    #[test]
+    fn an_unversioned_file_is_stamped_and_otherwise_untouched() {
+        let dir = prefs_scratch("unversioned");
+        let path = dir.join("preferences.json");
+        std::fs::write(&path, r#"{"theme":"dark","editorCommand":"code"}"#).unwrap();
+
+        let prefs = read_prefs(&path);
+        assert_eq!(prefs["schemaVersion"], PREFS_SCHEMA_VERSION);
+        assert_eq!(prefs["theme"], "dark", "the user\'s choice survived");
+        assert_eq!(prefs["editorCommand"], "code");
+        assert!(path.exists(), "a readable file must not be moved aside");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file from a *newer* release carries keys this build does not know.
+    /// It is still a valid object, so it must be read, not quarantined —
+    /// quarantining it would delete a newer version\'s settings on a downgrade.
+    #[test]
+    fn an_unknown_future_shape_is_read_rather_than_quarantined() {
+        let dir = prefs_scratch("future");
+        let path = dir.join("preferences.json");
+        std::fs::write(
+            &path,
+            r#"{"schemaVersion":99,"theme":"dark","somethingNew":true}"#,
+        )
+        .unwrap();
+
+        let prefs = read_prefs(&path);
+        assert!(path.exists(), "a newer file was destroyed");
+        assert_eq!(prefs["theme"], "dark");
+        assert_eq!(prefs["somethingNew"], true);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ------------------------------------------------- lifecycle validation
+
+    /// The six start/stop/restart commands share one body, and its first act is
+    /// to refuse a name it does not like. That gate had never been exercised:
+    /// `lifecycle` took an `AppHandle`, so reaching it from a test meant
+    /// running a Tauri app.
+    ///
+    /// Worth a test rather than trusted to the comment above it, because the id
+    /// does not stay an id — it becomes a container name and a compose service
+    /// name. Nothing downstream re-checks it.
+    #[tokio::test]
+    async fn a_rejected_name_touches_neither_docker_nor_the_event_stream() {
+        for bad in [
+            "../etc",
+            "a; rm -rf ~",
+            "shop project",
+            "",
+            "-leading-dash",
+            "a/b",
+        ] {
+            let sink = crate::progress::Recording::new();
+            let error = lifecycle(&sink, "project", bad, events::START)
+                .await
+                .expect_err(&format!("{bad:?} was accepted as a project name"));
+
+            assert_eq!(error.code, Code::InvalidInput, "for {bad:?}");
+            assert!(
+                sink.is_empty(),
+                "{bad:?} was announced to the UI before it was refused: {:?}",
+                sink.names()
+            );
+        }
+    }
+
+    /// A service id has to be in the shipped catalog. A name that merely looks
+    /// like one is not, and the difference is what stops an arbitrary string
+    /// reaching `docker start`.
+    ///
+    /// `NotFound` rather than `InvalidInput`, and deliberately so: the name is
+    /// well-formed, it just names nothing. The two codes reach the user as
+    /// different translated headings, so which one this is counts as behaviour.
+    #[tokio::test]
+    async fn an_unknown_service_is_refused_before_anything_is_emitted() {
+        let sink = crate::progress::Recording::new();
+        let error = lifecycle(&sink, "service", "not-a-real-service", events::START)
+            .await
+            .expect_err("an id outside the catalog must be refused");
+
+        assert_eq!(error.code, Code::NotFound);
+        assert!(
+            error.hint.is_some(),
+            "a refusal the user can act on needs to say what is allowed"
+        );
+        assert!(sink.is_empty(), "got {:?}", sink.names());
     }
 }

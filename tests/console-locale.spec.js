@@ -22,6 +22,8 @@ globalThis.visualViewport = undefined;
 
 vi.mock('@tauri-apps/api/event', () => ({ listen: async () => () => {} }));
 vi.mock('@/lib/ipc', () => ({
+  // The real guard, not a stub — see views-render.spec.js.
+  asList: (value) => (Array.isArray(value) ? value : []),
   StackvoError: class extends Error {},
   call: vi.fn(),
   api: new Proxy({}, { get: () => () => Promise.resolve(null) }),

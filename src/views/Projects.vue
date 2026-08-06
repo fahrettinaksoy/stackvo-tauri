@@ -7,7 +7,7 @@ import { useOperationsStore } from '@/stores/operations';
 import { useAppStore } from '@/stores/app';
 import { parentDomain } from '@/lib/manifest';
 import { listenAll, REFRESH_TRIGGERS } from '@/lib/events';
-import { api } from '@/lib/ipc';
+import { api, asList } from '@/lib/ipc';
 import PageLayout from '@/components/PageLayout.vue';
 import ErrorAlert from '@/components/ErrorAlert.vue';
 import HostsDialog from '@/components/HostsDialog.vue';
@@ -243,7 +243,7 @@ const adopting = ref(null);
 
 async function loadAdoptable() {
   try {
-    adoptable.value = await api.projectAdoptable();
+    adoptable.value = asList(await api.projectAdoptable());
   } catch {
     // A missing workspace is already reported by the requirements gate.
     adoptable.value = [];

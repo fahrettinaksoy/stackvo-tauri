@@ -261,7 +261,7 @@ pub fn validate(patch: &BTreeMap<String, Option<String>>) -> Result<()> {
                 Code::InvalidInput,
                 format!("`{key}` is not a valid php.ini directive name"),
             )
-            .with_hint("Directive names are letters, digits, underscores and dots."));
+            .with_hint(crate::hints::PHP_INI_DIRECTIVE_CHARSET));
         }
 
         let Some(value) = value else { continue };
@@ -271,7 +271,7 @@ pub fn validate(patch: &BTreeMap<String, Option<String>>) -> Result<()> {
                 Code::InvalidInput,
                 format!("the value for `{key}` contains a line break"),
             )
-            .with_hint("php.ini is one directive per line."));
+            .with_hint(crate::hints::PHP_INI_IS_ONE_PER_LINE));
         }
 
         let ok = match key.as_str() {
@@ -287,10 +287,7 @@ pub fn validate(patch: &BTreeMap<String, Option<String>>) -> Result<()> {
                 Code::InvalidInput,
                 format!("`{value}` is not a valid value for {key}"),
             )
-            .with_hint(
-                "Sizes are a number with an optional K, M or G — 256M, 1G, 512. \
-                 Times are whole seconds. -1 means unlimited.",
-            ));
+            .with_hint(crate::hints::PHP_INI_SIZE_FORMAT));
         }
     }
 

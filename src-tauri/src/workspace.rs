@@ -276,9 +276,7 @@ pub fn project_dir(root: &Path, name: &str) -> Result<PathBuf> {
             Code::InvalidInput,
             format!("\"{name}\" is not a valid project name"),
         )
-        .with_hint(
-            "Names may contain letters, digits, dot, underscore and dash, and must start with a letter or digit.",
-        ));
+        .with_hint(crate::hints::PROJECT_NAME_CHARSET));
     }
 
     let projects = require_projects_root(root)?;
@@ -294,7 +292,7 @@ pub fn project_dir(root: &Path, name: &str) -> Result<PathBuf> {
                 Code::InvalidInput,
                 format!("project \"{name}\" resolves outside the workspace"),
             )
-            .with_hint("Refusing to operate on a path that leaves projects/."));
+            .with_hint(crate::hints::PATH_LEAVES_PROJECTS));
         }
     }
 

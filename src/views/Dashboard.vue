@@ -7,7 +7,7 @@ import { useMetricsStore } from '@/stores/metrics';
 import { useInventoryStore } from '@/stores/inventory';
 import PageLayout from '@/components/PageLayout.vue';
 import HostsDialog from '@/components/HostsDialog.vue';
-import { api } from '@/lib/ipc';
+import { api, asList } from '@/lib/ipc';
 import { bytes, bytesPerSecond, percent } from '@/lib/format';
 
 const { t } = useI18n();
@@ -169,7 +169,7 @@ const missingDomainsLabel = computed(() => {
 
 async function refreshMissing() {
   try {
-    missingDomains.value = await api.hostsMissing();
+    missingDomains.value = asList(await api.hostsMissing());
   } catch {
     missingDomains.value = [];
   }
@@ -305,7 +305,7 @@ onMounted(() => {
             <div class="text-subtitle-2 text-grey mb-2">{{ t('dashboard.cpuLoad') }}</div>
 
             <div v-if="loading" class="flex-grow-1 d-flex align-center justify-center">
-              <v-progress-circular indeterminate size="28" />
+              <v-progress-circular indeterminate size="28" :aria-label="t('a11y.loading')" />
             </div>
 
             <!-- No "waiting for a second sample" branch any more. That
@@ -385,7 +385,7 @@ onMounted(() => {
           <v-card elevation="1" class="pa-4 d-flex flex-column metric-card">
             <div class="text-subtitle-2 text-grey mb-2">{{ t('stats.memory') }}</div>
             <div v-if="loading" class="flex-grow-1 d-flex align-center justify-center">
-              <v-progress-circular indeterminate size="28" />
+              <v-progress-circular indeterminate size="28" :aria-label="t('a11y.loading')" />
             </div>
             <div v-else class="flex-grow-1 d-flex align-center justify-center">
               <v-pie
@@ -440,7 +440,7 @@ onMounted(() => {
           <v-card elevation="1" class="pa-4 d-flex flex-column metric-card">
             <div class="text-subtitle-2 text-grey mb-2">{{ t('stats.storage') }}</div>
             <div v-if="loading" class="flex-grow-1 d-flex align-center justify-center">
-              <v-progress-circular indeterminate size="28" />
+              <v-progress-circular indeterminate size="28" :aria-label="t('a11y.loading')" />
             </div>
             <div v-else class="flex-grow-1 d-flex align-center justify-center">
               <v-pie

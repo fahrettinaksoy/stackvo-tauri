@@ -40,6 +40,18 @@ bollard = "0.21"
 include_dir = "0.7"
 sysinfo = "0.39"
 
+# The diagnostic bundle in `diagnostics.rs`. One archive is the difference
+# between "send me your log" and a person hunting through ~/Library/Logs for
+# the right file and remembering to add the doctor output.
+#
+# Measured before adding: this brings in exactly **one** new crate. `flate2` and
+# `miniz_oxide` are already in the graph, and `deflate-flate2` is the one
+# compression feature that reuses them — the default feature set would have
+# added aes, bzip2, zstd, xz, lzma and ppmd for an archive that only ever holds
+# text. `zip` itself is already built on Windows, where `tauri-plugin-updater`
+# takes it to unpack an update.
+zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
+
 # CPU time breakdown (user/nice/system/idle). sysinfo only exposes an aggregate
 # percentage, and the dashboard shows the split — so this fills the one gap that
 # would otherwise force the UI to display a number nobody measured.
@@ -85,8 +97,21 @@ time = { version = "0.3.44", default-features = false, features = ["parsing"] }
 # the point — widening it to reach one localhost port would widen it for every
 # page the app ever renders. Already in the tree via the updater plugin, and
 # taken here without default features: this only ever talks to 127.0.0.1, so it
-# needs no TLS stack, no cookie store and no proxy resolution.
-reqwest = { version = "0.13.3", default-features = false, features = ["json", "rustls"] }
+# needs no TLS stack and no cookie store.
+#
+# `system-proxy` is here for the updater, not for the mail catcher. There is one
+# reqwest in the graph — `cargo tree -e features -i reqwest` — so this crate's
+# feature set is also `tauri-plugin-updater`'s, and without it the only proxy
+# reqwest resolves is `HTTPS_PROXY`/`HTTP_PROXY`. On a managed macOS machine the
+# proxy is usually set in System Settings and nowhere else, so update checks
+# failed silently on exactly the fleet that most needs them.
+#
+# It is not free, and `mail.rs` pays for it: the feature is process-wide, and
+# hyper-util's macOS reader takes the proxy host and port without the system's
+# exceptions list. Every client that does not opt out would route 127.0.0.1 at
+# the company proxy — so `mail::client` builds with `no_proxy()`. Read that
+# comment before adding a second reqwest caller.
+reqwest = { version = "0.13.3", default-features = false, features = ["json", "rustls", "system-proxy"] }
 
 # Desktop-only plugins: single-instance and autostart are meaningless on mobile.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
@@ -101,4 +126,10 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 panic = "abort"
-strip = true
+
+# `true` here — which is what this said — strips the symbol table along with the
+# debug info, and a stripped symbol table makes the backtrace in `crash.rs` a
+# column of bare addresses. `"debuginfo"` keeps the names and drops the part
+# that actually costs the megabytes: file-and-line is gone from a crash report,
+# function names are not.
+strip = "debuginfo"
