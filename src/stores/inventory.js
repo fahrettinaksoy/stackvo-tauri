@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
-import { api } from '@/lib/ipc';
+import { api, asList } from '@/lib/ipc';
 
 /**
  * Projects and services.
@@ -30,7 +30,10 @@ export const useInventoryStore = defineStore('inventory', () => {
 
   /** Services enabled but missing a dependency they need to actually work. */
   const brokenDependencies = computed(() =>
-    services.value.filter((s) => s.enabled && s.unmetDependencies.length > 0)
+    // `?.` for the same reason `asList` exists: the field is read off whatever
+    // the boundary handed back, and a service without it would throw here
+    // rather than simply not be broken.
+    services.value.filter((s) => s.enabled && s.unmetDependencies?.length > 0)
   );
 
   const servicesByCategory = computed(() => {
@@ -45,7 +48,7 @@ export const useInventoryStore = defineStore('inventory', () => {
     loadingProjects.value = true;
     projectsError.value = null;
     try {
-      projects.value = await api.projectsList();
+      projects.value = asList(await api.projectsList());
     } catch (e) {
       projectsError.value = e;
       projects.value = [];
@@ -58,7 +61,7 @@ export const useInventoryStore = defineStore('inventory', () => {
     loadingServices.value = true;
     servicesError.value = null;
     try {
-      services.value = await api.servicesList();
+      services.value = asList(await api.servicesList());
     } catch (e) {
       servicesError.value = e;
       services.value = [];

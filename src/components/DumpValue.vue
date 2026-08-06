@@ -94,12 +94,7 @@ function keyClass(item) {
   <span v-else-if="empty" class="tok-punct">{{ head }}{{ tail }}</span>
 
   <div v-else class="branch">
-    <button
-      type="button"
-      class="twist"
-      :aria-expanded="open"
-      @click="open = !open"
-    >
+    <button type="button" class="twist" :aria-expanded="open" @click="open = !open">
       <span class="chev" :class="{ 'chev-open': open }">▸</span>
       <span :class="node.t === 'obj' ? 'tok-class' : 'tok-punct'">{{ head }}</span>
       <span v-if="!open" class="tok-punct"> … {{ tail }}</span>

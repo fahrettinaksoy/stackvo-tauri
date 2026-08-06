@@ -236,7 +236,7 @@ onUnmounted(() => clearInterval(timer));
 
       <!-- First load: nothing is known yet, claim nothing. -->
       <div v-if="!status" class="mail-center">
-        <v-progress-circular indeterminate color="primary" />
+        <v-progress-circular indeterminate color="primary" :aria-label="t('a11y.loading')" />
       </div>
 
       <!-- The catcher is off or stopped: the situation IS the content. -->
@@ -267,7 +267,14 @@ onUnmounted(() => clearInterval(timer));
                 </v-btn>
               </div>
               <div v-if="activating" class="text-caption text-medium-emphasis mail-enabling">
-                <v-progress-linear indeterminate color="primary" height="2" rounded class="mb-2" />
+                <v-progress-linear
+                  indeterminate
+                  color="primary"
+                  height="2"
+                  rounded
+                  class="mb-2"
+                  :aria-label="t('a11y.loading')"
+                />
                 {{ t('mail.enabling') }}
               </div>
             </div>
@@ -500,7 +507,11 @@ onUnmounted(() => clearInterval(timer));
                       {{ t('mail.compatSupported', { n: htmlCheck.tests }) }}
                     </div>
                   </div>
+                  <!-- A meter, not a spinner: it reports the share of email
+                       clients this markup survives, and without a name a screen
+                       reader reads the percentage with nothing attached. -->
                   <v-progress-linear
+                    :aria-label="t('mail.compatTab')"
                     :model-value="htmlCheck.supported"
                     :buffer-value="htmlCheck.supported + htmlCheck.partial"
                     color="success"
@@ -576,7 +587,13 @@ onUnmounted(() => clearInterval(timer));
                 </v-list>
               </div>
               <div v-else class="mail-center">
-                <v-progress-circular indeterminate size="20" width="2" color="primary" />
+                <v-progress-circular
+                  indeterminate
+                  size="20"
+                  width="2"
+                  color="primary"
+                  :aria-label="t('a11y.loading')"
+                />
               </div>
             </template>
           </div>

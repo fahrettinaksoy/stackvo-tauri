@@ -190,7 +190,7 @@ fn checked(relative: &str) -> Result<()> {
         Code::InvalidInput,
         format!("{relative} is not a file this workspace can override"),
     )
-    .with_hint("Only the templates the app ships can be overridden."))
+    .with_hint(crate::hints::ONLY_SHIPPED_TEMPLATES))
 }
 
 /// Copy the embedded file into the workspace so it can be edited.
@@ -208,7 +208,7 @@ pub fn materialize(root: &Path, relative: &str) -> Result<String> {
             Code::InvalidInput,
             format!("{relative} is already overridden in this workspace"),
         )
-        .with_hint("Revert it first if you want the shipped version back."));
+        .with_hint(crate::hints::REVERT_TEMPLATE_FIRST));
     }
 
     let text = SKELETON

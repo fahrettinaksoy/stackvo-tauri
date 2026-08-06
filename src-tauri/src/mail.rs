@@ -29,6 +29,39 @@ use serde::Serialize;
 use serde_json::Value;
 use std::path::Path;
 
+/// The client every call in this module uses.
+///
+/// **`no_proxy()` is the point of it.** `reqwest` now has its `system-proxy`
+/// feature on, so the updater can reach the release endpoint from a machine
+/// whose proxy is configured in macOS System Settings rather than in
+/// `HTTPS_PROXY` — see the note beside the dependency in `Cargo.toml`. That
+/// feature is global to the process: every `Client` built with defaults picks
+/// the system proxy up, including these.
+///
+/// Which would be wrong here. `base_url` always resolves to `127.0.0.1`, and
+/// the reader hyper-util uses on macOS takes the proxy's host and port and
+/// *nothing else* — it does not read the system's exceptions list and does not
+/// honour "Exclude simple hostnames". Only `NO_PROXY` narrows it. So on exactly
+/// the corporate machine the feature was turned on for, the mail catcher's
+/// loopback traffic would be sent to the company proxy, which has no route to
+/// the user's own laptop, and the Mail page would report the catcher as
+/// unreachable while it was running perfectly.
+///
+/// Built once rather than per call, which is also what `Client` is for: each
+/// `Client::new()` was a fresh connection pool that lived for one request.
+fn client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            // The builder only fails on TLS backend setup, and nothing here
+            // speaks TLS. A default client is a better answer than refusing to
+            // read the inbox.
+            .unwrap_or_default()
+    })
+}
+
 /// Which catcher is installed. They speak different APIs under the same job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -535,7 +568,7 @@ fn base_url(env: &crate::config::Env, kind: Kind) -> String {
 }
 
 async fn get(url: &str) -> Result<Value> {
-    let response = reqwest::Client::new()
+    let response = client()
         .get(url)
         .timeout(std::time::Duration::from_secs(5))
         .send()
@@ -545,7 +578,7 @@ async fn get(url: &str) -> Result<Value> {
                 Code::EngineUnreachable,
                 format!("the mail API did not answer: {e}"),
             )
-            .with_hint("The container may still be starting, or its UI port may be taken.")
+            .with_hint(crate::hints::MAIL_UI_MAY_BE_STARTING)
         })?;
 
     if !response.status().is_success() {
@@ -619,7 +652,7 @@ fn resolve(root: &Path) -> Result<(Kind, String)> {
     let env = crate::config::Env::load(root)?;
     let kind = detect(&env).ok_or_else(|| {
         Error::new(Code::NotFound, "this checkout has no mail catcher")
-            .with_hint("Enable mailhog (or mailpit) in .env, then regenerate.")
+            .with_hint(crate::hints::ENABLE_A_MAIL_CATCHER)
     })?;
     Ok((kind, base_url(&env, kind)))
 }
@@ -697,7 +730,7 @@ pub async fn link_check(root: &Path, id: &str) -> Result<Option<LinkCheck>> {
         return Ok(None);
     }
     // Longer than the module default: this waits on third-party servers.
-    let response = reqwest::Client::new()
+    let response = client()
         .get(format!("{base}/api/v1/message/{id}/link-check"))
         .timeout(std::time::Duration::from_secs(30))
         .send()
@@ -722,7 +755,7 @@ pub async fn link_check(root: &Path, id: &str) -> Result<Option<LinkCheck>> {
 /// destination this process did not receive from the user.
 pub async fn save_attachment(root: &Path, id: &str, part_id: &str, path: &Path) -> Result<u64> {
     let (_, base) = resolve(root)?;
-    let response = reqwest::Client::new()
+    let response = client()
         .get(format!("{base}/api/v1/message/{id}/part/{part_id}"))
         .timeout(std::time::Duration::from_secs(30))
         .send()
@@ -754,7 +787,7 @@ pub async fn save_attachment(root: &Path, id: &str, part_id: &str, path: &Path) 
 pub async fn clear(root: &Path) -> Result<()> {
     let (kind, base) = resolve(root)?;
 
-    let response = reqwest::Client::new()
+    let response = client()
         .delete(format!("{base}{}", kind.clear_path()))
         .timeout(std::time::Duration::from_secs(5))
         .send()
@@ -782,8 +815,8 @@ pub async fn delete(root: &Path, id: &str) -> Result<()> {
     let (kind, base) = resolve(root)?;
 
     let request = match kind {
-        Kind::Mailhog => reqwest::Client::new().delete(format!("{base}/api/v1/messages/{id}")),
-        Kind::Mailpit => reqwest::Client::new()
+        Kind::Mailhog => client().delete(format!("{base}/api/v1/messages/{id}")),
+        Kind::Mailpit => client()
             .delete(format!("{base}/api/v1/messages"))
             .json(&serde_json::json!({ "IDs": [id] })),
     };

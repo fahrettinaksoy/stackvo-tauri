@@ -179,9 +179,15 @@ onMounted(run);
 
       <v-card>
         <div class="px-4 pt-4 pb-3">
+          <!-- Named for the same reason `RequirementsGate` names its bar, and
+               `StatCard` now does: Vuetify emits `role="progressbar"` with a
+               value and no name, so a screen reader announces a number with
+               nothing attached to it. This one matters most of the three — it
+               is the first-run screen, and the user is waiting on it. -->
           <v-progress-linear
             :model-value="progress"
             :indeterminate="running"
+            :aria-label="t('bootstrap.title')"
             height="6"
             rounded
             color="primary"

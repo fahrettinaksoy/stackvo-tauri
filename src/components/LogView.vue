@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n';
 import { listen } from '@tauri-apps/api/event';
 import { useAppearanceStore } from '@/stores/appearance';
 import { useAppStore } from '@/stores/app';
-import { api } from '@/lib/ipc';
+import { api, asList } from '@/lib/ipc';
 import { LEVELS, countByLevel, filterLines, highlight, withLevels } from '@/lib/logs';
 import ErrorAlert from '@/components/ErrorAlert.vue';
 
@@ -248,7 +248,7 @@ const projectItems = computed(() => {
 async function loadFiles() {
   if (fanout.value) {
     try {
-      files.value = await api.appLogsAll();
+      files.value = asList(await api.appLogsAll());
     } catch {
       files.value = [];
     }
@@ -259,7 +259,7 @@ async function loadFiles() {
     return;
   }
   try {
-    files.value = await api.appLogs(props.project);
+    files.value = asList(await api.appLogs(props.project));
   } catch {
     // A project with no log directories is the common case, not a failure.
     files.value = [];
@@ -413,12 +413,18 @@ onUnmounted(close);
 
           <!-- The fanout picks projects, not files: choosing a file across a
                whole workspace is the question this view exists to avoid having
-               to answer. Empty means every project. -->
+               to answer. Empty means every project.
+
+               `aria-label` as well as `placeholder`: a placeholder is a hint
+               that disappears the moment anything is typed, not an accessible
+               name, so a screen reader announced this as an unlabelled
+               combobox. -->
           <v-select
             v-if="fanout"
             v-model="chosen"
             :items="projectItems"
             :placeholder="tc('logs.allProjects')"
+            :aria-label="tc('logs.allProjects')"
             multiple
             chips
             closable-chips
@@ -460,6 +466,7 @@ onUnmounted(close);
           <v-text-field
             v-model="query"
             :placeholder="tc('logs.search')"
+            :aria-label="tc('logs.search')"
             density="compact"
             variant="solo-filled"
             flat

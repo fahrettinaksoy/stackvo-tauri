@@ -3,7 +3,11 @@ import pluginVue from 'eslint-plugin-vue';
 import skipFormatting from '@vue/eslint-config-prettier/skip-formatting';
 
 export default [
-  { ignores: ['dist/**', 'src-tauri/**', 'node_modules/**'] },
+  // `coverage/**` is the v8 reporter's own HTML bundle — hundreds of generated
+  // files carrying their own eslint-disable comments, which this config then
+  // reports as unused directives. Linting a report about the code is not
+  // linting the code.
+  { ignores: ['dist/**', 'src-tauri/**', 'node_modules/**', 'coverage/**'] },
 
   js.configs.recommended,
   ...pluginVue.configs['flat/recommended'],
@@ -57,7 +61,16 @@ export default [
   {
     files: ['tests/**/*.js', 'src/**/*.spec.js', '*.config.js', 'tools/**/*.mjs'],
     languageOptions: {
-      globals: { process: 'readonly', __dirname: 'readonly', console: 'readonly' },
+      globals: {
+        process: 'readonly',
+        __dirname: 'readonly',
+        console: 'readonly',
+        // `tests/setup.js` fills in the browser APIs jsdom lacks, so it names
+        // the very globals the app is never allowed to assume — and one it
+        // patches a prototype on.
+        globalThis: 'readonly',
+        SVGElement: 'readonly',
+      },
     },
   },
 

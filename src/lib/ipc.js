@@ -15,11 +15,16 @@ import { invoke } from '@tauri-apps/api/core';
 
 /** Error carrying the contract's machine-readable code, so callers can branch. */
 export class StackvoError extends Error {
-  constructor({ code, message, hint, details }) {
+  constructor({ code, message, hint, hintKey, details }) {
     super(message || 'Unknown error');
     this.name = 'StackvoError';
     this.code = code || 'UNKNOWN';
     this.hint = hint;
+    // The locale key for `hint`, from the catalogue in src-tauri/src/hints.rs.
+    // Dropping it here would have made the whole hint translation a no-op in
+    // production while every test that built a plain object still passed —
+    // this class is the only path a real error takes.
+    this.hintKey = hintKey;
     this.details = details;
   }
 
@@ -43,13 +48,31 @@ export async function call(command, args = {}) {
   try {
     return await invoke(command, args);
   } catch (raw) {
-    // Rust's Error serialises to { code, message, hint?, details? }. A panic or
-    // a missing command arrives as a bare string instead.
+    // Rust's Error serialises to { code, message, hint?, hintKey?, details? }.
+    // A panic or a missing command arrives as a bare string instead.
     if (raw && typeof raw === 'object' && 'code' in raw) {
       throw new StackvoError(raw);
     }
     throw new StackvoError({ code: 'UNKNOWN', message: String(raw) });
   }
+}
+
+/**
+ * A list from the boundary, or an empty one.
+ *
+ * Nothing checks that a Rust command still returns the shape the frontend
+ * believes it returns — `ipc.js` is hand-written and stays that way until types
+ * are generated. A command that answers `null` or a bare object used to be
+ * assigned straight into a `ref`, and the next `computed` read `.filter` or
+ * iterated it and threw. In a desktop app that is not a missing list; the
+ * render throws and the window is blank.
+ *
+ * Found three times before it was made one function: the inventory store, then
+ * `LogView`, then `DumpView`. Anything downstream that assigns a boundary reply
+ * into a list belongs here too.
+ */
+export function asList(value) {
+  return Array.isArray(value) ? value : [];
 }
 
 // The command surface, one thin wrapper each. Keeping them enumerated here —
@@ -329,6 +352,8 @@ export const api = {
   /** The desktop's own accent colour, so the app can match it. */
   systemAccent: () => call('system_accent'),
   logsInfo: () => call('logs_info'),
+  /** Writes the diagnostic archive to a path the user chose in the save dialog. */
+  diagnosticsBundle: (path) => call('diagnostics_bundle', { path }),
   localeGet: () => call('locale_get'),
   trayRelabel: () => call('tray_relabel'),
   appsAvailable: () => call('apps_available'),

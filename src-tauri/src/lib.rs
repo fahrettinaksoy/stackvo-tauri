@@ -6,10 +6,12 @@ pub mod certs;
 pub mod commands;
 pub mod config;
 pub mod contracts;
+pub mod crash;
 pub mod db;
 pub mod debugbridge;
 pub mod detect;
 pub mod devserver;
+pub mod diagnostics;
 pub mod doctor;
 pub mod elevate;
 pub mod engine;
@@ -18,6 +20,7 @@ pub mod error;
 pub mod events;
 pub mod generator;
 pub mod git;
+pub mod hints;
 pub mod hosts;
 pub mod inflight;
 pub mod locale;
@@ -32,6 +35,7 @@ pub mod phpini;
 pub mod preflight;
 pub mod preset;
 pub mod profile;
+pub mod progress;
 pub mod pty;
 pub mod quickcmd;
 pub mod release;
@@ -59,6 +63,12 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // First, before the log itself: `logging::init` can fail, and a panic
+    // inside it would otherwise be the one crash with nowhere to be recorded.
+    // The hook needs no subscriber — it writes its report with `fs::write`,
+    // and `logging::dir()` is a path, not state that `init` sets up.
+    crash::install();
+
     // Before anything else: a failure during plugin setup is exactly the kind
     // that used to leave no trace. Held for the process lifetime — dropping the
     // guard stops the writer and discards whatever is buffered.
@@ -434,6 +444,7 @@ pub fn run() {
             commands::updater_status,
             commands::system_accent,
             commands::logs_info,
+            commands::diagnostics_bundle,
             commands::locale_get,
             commands::tray_relabel,
             commands::window_close_action,

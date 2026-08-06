@@ -135,7 +135,7 @@ fn parse_id(id: &str) -> Result<(Root, PathBuf)> {
             Code::InvalidInput,
             format!("\"{rest}\" is not a path inside the project"),
         )
-        .with_hint("Log ids are relative, with no parent or root segments."));
+        .with_hint(crate::hints::LOG_IDS_ARE_RELATIVE));
     }
 
     Ok((root, relative))

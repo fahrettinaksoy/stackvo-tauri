@@ -159,7 +159,7 @@ pub async fn ensure_project_running(project: &str) -> Result<()> {
         Some(info) if info.running => Ok(()),
         Some(_) => Err(
             Error::new(Code::Conflict, format!("{project} is not running"))
-                .with_hint("Start the project first — the tunnel forwards to its container."),
+                .with_hint(crate::hints::START_PROJECT_FOR_TUNNEL),
         ),
         None => Err(Error::not_found(format!("container for {project}"))),
     }

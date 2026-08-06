@@ -136,10 +136,13 @@ cargo build --release --bin stackvo-mcp
 { "mcpServers": { "stackvo": { "command": "/path/to/stackvo-mcp" } } }
 ```
 
-**Read-only by default.** Two tools change things (Xdebug on a project,
-reissuing the certificate) and appear only with `--allow-writes`. Every tool is
-annotated `readOnlyHint` / `destructiveHint`, so a client can require
-confirmation for a tool it has never seen.
+**Read-only by default.** 7 of the 17 tools change things and appear only with
+`--allow-writes`: `xdebug_set`, `certificates_reissue`, `project_start`,
+`project_stop`, `stack_up`, `stack_down`, `generate`. Read that list before
+passing the flag — it grants an assistant the ability to **stop the whole
+stack**, not just to toggle Xdebug. Every tool is annotated `readOnlyHint` /
+`destructiveHint`, so a client can require confirmation for a tool it has never
+seen.
 
 The tool table names, for each tool, the `contracts/ipc.json` command it
 implements, and three tests cross-check the two: a tool naming a command that
@@ -149,8 +152,8 @@ guarding nothing. Generating the list outright was the obvious move and is the
 wrong one: dispatch cannot be generated, so a generated list advertises tools
 that fail when called.
 
-**Not exposed:** the rest of the mutating surface. Thirty-four commands take an
-`AppHandle` because they report progress through Tauri's event system, and a
+**Not exposed:** the rest of the mutating surface. 48 of the 144 commands take
+an `AppHandle` because they report progress through Tauri's event system, and a
 stdio subprocess has no app to emit into. Decoupling that is a refactor of its
 own; pretending otherwise would mean advertising `project_build` and having it
 fail.

@@ -997,6 +997,10 @@ export default {
     openLogs: 'Klasörü aç',
     logsUnavailable: 'Bu sistemde yazılabilir bir log konumu bulunamadı.',
     logsRedacted: 'Parola ve token değerleri log yazılırken maskelenir.',
+    saveBundle: 'Tanılama paketi kaydet',
+    saveBundleHint:
+      'Log, başlangıç kontrolleri, doktor raporu ve varsa çökme raporları tek bir arşivde — bir hata bildirimi için gereken her şey, yalnızca log yerine.',
+    saveBundleDone: 'Kaydedildi ({bytes}). İçi düz metindir; göndermeden önce bir bakın.',
     verifyNow: 'Üreteci şimdi doğrula',
     checkForUpdates: 'Güncellemeleri denetle',
     updates: 'Güncellemeler',
@@ -1032,6 +1036,7 @@ export default {
     followOutput: 'Çıktıyı takip et',
     stopFollowing: 'Çıktıyı takip etme',
     toggleConsole: 'Konsolu aç/kapat',
+    loading: 'Yükleniyor',
     close: 'Kapat',
   },
   actions: {
@@ -1341,6 +1346,100 @@ export default {
     strict: 'Katı',
     compat: 'Uyumlu',
     silentlySkipped: 'Bash bunları sessizce atlıyor',
+  },
+
+  // Suggestions, keyed by `hintKey` on the error the Rust side raised.
+  //
+  // The catalogue is `src-tauri/src/hints.rs`; these are its translations, and
+  // `src-tauri/tests/hint_translations.rs` fails the build if the two sets ever
+  // differ in either direction — a hint with no translation, or a translation
+  // for a hint nothing raises any more.
+  //
+  // The English in en.js is a copy of what the Rust carries as its fallback,
+  // and the same test pins the two equal. Deliberate: it turns an edit to the
+  // English into a change that has to pass through the translations, instead of
+  // one that silently leaves Turkish describing the old behaviour.
+  errorHints: {
+    startDocker: "Docker Desktop'ı başlatıp tekrar deneyin.",
+    startDockerOrSetHost:
+      "Docker Desktop'ı başlatın; motor başka bir yerdeyse DOCKER_HOST değişkenini ayarlayın.",
+    startDockerManually: "Docker'ı elle başlatıp tekrar deneyin.",
+    projectMayNotBeBuilt: 'Proje henüz derlenmemiş olabilir.',
+    chooseWorkspace:
+      "StackVo'nun kuracağı boş bir klasör seçin ya da hâlihazırda yönettiği bir klasörü gösterin.",
+    projectNameCharset:
+      'Adlar harf, rakam, nokta, alt çizgi ve tire içerebilir; harf veya rakamla başlamalıdır.',
+    pathLeavesProjects: 'projects/ dizininin dışına çıkan bir yol üzerinde işlem yapılmıyor.',
+    onlyProjectFolders: 'Yalnızca seçili çalışma alanı içindeki proje klasörleri açılabilir.',
+    adoptInstead: 'Bunun yerine projeyi devralın — manifesti yazan yol odur.',
+    fixOrAdopt: 'Dosyayı düzeltin ya da silip klasörü devralın.',
+    runDoctorThenRetry:
+      'Ayarlar → Doktor neyin bozuk olduğunu listeler ve onarabilir; sonra tekrar klonlayın veya kaydedin.',
+    adoptExistingCode:
+      'Mevcut kod için devralmayı kullanın — iskelet kurma sıfırdan bir proje içindir.',
+    chooseAnotherName: 'Başka bir ad seçin ya da orada duran klasörü devralın.',
+    installGitOrAdopt: 'git kurun ya da depoyu kendiniz klonlayıp klasörü devralın.',
+    editFromManifestTab: 'Bunun yerine projenin Manifest sekmesinden düzenleyin.',
+    startProjectForCommands: "Önce projeyi başlatın — bu komutlar onun container'ı içinde çalışır.",
+    buildAndStartForWorker: 'Önce projeyi derleyip başlatın — worker onun imajıyla çalışır.',
+    workersAreDetected: "Worker'lar artisan ve composer.json üzerinden tespit edilir.",
+    startProjectForTunnel: "Önce projeyi başlatın — tünel onun container'ına yönlendirir.",
+    installMkcert:
+      "mkcert'i kurun: macOS'ta `brew install mkcert`, Linux'ta paket yöneticinizle, Windows'ta `choco install mkcert`. Sonra tekrar deneyin.",
+    checkTldAndDomains:
+      '.env içindeki DEFAULT_TLD_SUFFIX değerini ve her stackvo.json dosyasındaki `domain` alanını kontrol edin.',
+    certificateIssuedButUntrusted:
+      'Sertifika her hâlükârda üretildi ve stack hizmet veriyor — otorite güvenilir sayılana kadar tarayıcı yayıncı hakkında uyarır. Ayarlar → Sertifikalar altında bunu sizin terminalinizde yapan bir düğme var; parola sorusu orada yanıtlanabilir.',
+    runMkcertInstall:
+      'Bir terminalde bir kez `mkcert -install` çalıştırın — sistem güven deposu için parola ister ve pencereli bir uygulamanın soracağı bir terminali yoktur.',
+    hostnameCharset: 'Alan adları harf, rakam, nokta ve tire içerebilir.',
+    hostsNeedsAdmin: 'hosts dosyasını düzenlemek için yönetici yetkisi gerekiyor.',
+    hostsNotReplaced: 'hosts dosyası değiştirilemedi.',
+    installPolkit: 'polkit kurun ya da /etc/hosts dosyasını elle düzenleyin.',
+    serviceMustBeInCatalog:
+      'Yalnızca contracts/env.schema.json içinde listelenen servisler yönetilebilir.',
+    supportedDatabases: 'Desteklenenler: mysql, mariadb, postgres, mongo.',
+    enableAMailCatcher:
+      '.env içinde mailhog (ya da mailpit) servisini etkinleştirip yeniden üretin.',
+    mailUiMayBeStarting:
+      'Container hâlâ başlıyor olabilir ya da arayüz portu başkası tarafından tutuluyor olabilir.',
+    envKeyCharset:
+      'Anahtarlar ^[A-Z_][A-Z0-9_]*$ kalıbına uymalı ki Compose onları yerine koyabilsin.',
+    envIsOneKeyPerLine:
+      '.env biçimi satır başına bir anahtardır; çok satırlı değerler geri okunamaz.',
+    revealValueFirst: 'Önce değeri görünür yapın ya da alana dokunmayın.',
+    phpIniDirectiveCharset: 'Direktif adları harf, rakam, alt çizgi ve noktadan oluşur.',
+    phpIniIsOnePerLine: 'php.ini satır başına bir direktiftir.',
+    phpIniSizeFormat:
+      'Boyutlar, isteğe bağlı K, M veya G ekiyle bir sayıdır — 256M, 1G, 512. Süreler tam saniyedir. -1 sınırsız demektir.',
+    serverDirectivesUnsupported:
+      'Yalnızca nginx, caddy ve frankenphp için direktif eklenebilecek üretilmiş bir yapılandırma var.',
+    presetIsExportedJson:
+      'Bir hazır ayar, Ayarlar → Hazır ayarlar bölümünün dışa aktardığı JSON dosyasıdır.',
+    presetWrongFile:
+      'İçe aktarıcıya başka bir JSON dosyası gösterilmiş olması en sık görülen sebeptir.',
+    presetTooNew:
+      "StackVo Desktop'ı güncelleyin ya da daha eski bir sürümle dışa aktarılmış bir hazır ayar isteyin.",
+    onlyShippedTemplates: 'Yalnızca uygulamanın birlikte geldiği şablonlar geçersiz kılınabilir.',
+    revertTemplateFirst: 'Uygulamayla gelen sürümü geri istiyorsanız önce değişikliği geri alın.',
+    profileIdsFromList: 'Profil kimlikleri, profile_list çıktısındaki cachegrind.out.* adlarıdır.',
+    profileIsCompressed:
+      'Xdebug varsayılan olarak sıkıştırır; StackVo profillemeyi açarken bunu kapatır. Bu profili yeniden kaydedin ya da dosyayı kendiniz gunzip ile açın.',
+    logIdsAreRelative: 'Günlük kimlikleri görecelidir; üst dizin ya da kök parçası içeremez.',
+    installATerminal: 'Birini kurun ya da yerleşik terminali kullanın.',
+    chooseABrowser: 'Ayarlar → Dış uygulamalar bölümünden bir tarayıcı seçin.',
+    chooseAnEditor: "Ayarlar'dan bir düzenleyici seçin ya da klasörü elle açın.",
+    waitForOperation: 'Bitmesini bekleyin ya da ilerlemeyi işlem konsolundan izleyin.',
+    quickCommandsAreFixed: 'Komutlar sabit katalogdan gelir; kimlikler serbest değildir.',
+    imageReferenceCharset: 'Yalnızca küçük harf, rakam ve . _ - / : karakterleri.',
+    composeFileNotFound:
+      'compose.yaml, compose.yml, docker-compose.yaml ve docker-compose.yml dosyalarına bakıldı.',
+    composeFileMustBeValid:
+      'Dosya `docker compose config` ile çözümleniyor, dolayısıyla geçerli bir Compose dosyası olmalı — içinde yerine koyduğu değişkenler dahil.',
+    useGenerateRun:
+      'generate_run kullanın; `verify` modu diskteki duruma göre sapmayı yine de raporlar.',
+    mcpNeedsAllowWrites:
+      'Yazma araçlarını etkinleştirmek için --allow-writes ile yeniden başlatın.',
   },
 
   errors: {

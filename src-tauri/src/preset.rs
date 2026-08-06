@@ -212,7 +212,7 @@ pub fn parse(text: &str) -> Result<Preset> {
             Code::InvalidInput,
             format!("this is not a valid preset: {e}"),
         )
-        .with_hint("A preset is the JSON that Settings → Presets exports.")
+        .with_hint(crate::hints::PRESET_IS_EXPORTED_JSON)
     })?;
 
     if preset.kind != KIND {
@@ -220,7 +220,7 @@ pub fn parse(text: &str) -> Result<Preset> {
             Code::InvalidInput,
             format!("expected a `{KIND}` file, found `{}`", preset.kind),
         )
-        .with_hint("Pointing the importer at another JSON file is the usual cause."));
+        .with_hint(crate::hints::PRESET_WRONG_FILE));
     }
 
     // Refused rather than half-read. A newer preset may mean something
@@ -234,7 +234,7 @@ pub fn parse(text: &str) -> Result<Preset> {
                 preset.version
             ),
         )
-        .with_hint("Update StackVo Desktop, or ask for a preset exported by an older version."));
+        .with_hint(crate::hints::PRESET_TOO_NEW));
     }
 
     Ok(preset)

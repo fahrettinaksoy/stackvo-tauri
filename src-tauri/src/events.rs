@@ -55,6 +55,25 @@ impl Sink {
     }
 }
 
+/// The window sink, seen as the Tauri-free abstraction in [`crate::progress`].
+///
+/// This impl is the whole seam. Everything below `commands.rs` now asks for a
+/// `&dyn ProgressSink`, so it compiles without Tauri in scope and can be handed
+/// a `Recording` by a test — while the desktop app keeps handing it this, and
+/// the webview receives byte-identical payloads.
+///
+/// `to_value` in `progress::emit` and Tauri's own serialisation produce the same
+/// JSON for these payload structs, `#[serde(rename_all)]` and
+/// `skip_serializing_if` included — pinned by a test in `progress`, because "the
+/// same JSON" is exactly the kind of claim that is true until it is not.
+impl crate::progress::ProgressSink for Sink {
+    fn event(&self, name: &str, payload: serde_json::Value) {
+        if let Sink::App(app) = self {
+            let _ = app.emit(name, payload);
+        }
+    }
+}
+
 /// The window-backed sink, spelled as a helper so thirteen call sites read
 /// `&events::sink(app)` rather than each constructing the variant.
 pub fn sink(app: &AppHandle) -> Sink {

@@ -25,6 +25,11 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 #[tokio::main]
 async fn main() {
+    // This process is launched by a client that usually hides its stderr, so a
+    // panic here reads as "the server stopped responding" with nothing to go
+    // on. The report lands in the same directory the app writes its own to.
+    stackvo_desktop_lib::crash::install();
+
     let allow_writes = std::env::args().any(|arg| arg == "--allow-writes");
 
     eprintln!(

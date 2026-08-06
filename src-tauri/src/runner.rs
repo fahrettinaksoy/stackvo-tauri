@@ -14,7 +14,8 @@
 //!      line by line and emitted as they arrive.
 
 use crate::error::{Code, Error, Result};
-use crate::events::{self, FinishedEvent, ProgressEvent};
+use crate::events::{FinishedEvent, ProgressEvent};
+use crate::progress;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -178,7 +179,17 @@ pub struct Operation<'a> {
 
 /// Run a command and report it as an operation: progress events per line, one
 /// terminal event carrying success or failure.
-pub async fn run_operation(sink: &events::Sink, op: Operation<'_>) -> Result<()> {
+///
+/// Takes `&dyn ProgressSink` rather than `&events::Sink`. Every long operation
+/// in this app funnels through here — eleven commands, every compose run, every
+/// build, every clone — and until the trait existed this function had no tests,
+/// because its only two possible arguments were "needs a running Tauri app" and
+/// "throws everything away". The desktop call sites are unchanged: `&Sink`
+/// coerces to `&dyn ProgressSink` on the way in.
+pub async fn run_operation(
+    sink: &dyn crate::progress::ProgressSink,
+    op: Operation<'_>,
+) -> Result<()> {
     let Operation {
         operation_id,
         subject,
@@ -193,7 +204,8 @@ pub async fn run_operation(sink: &events::Sink, op: Operation<'_>) -> Result<()>
     let started = std::time::Instant::now();
 
     let result = stream_with_env(program, args, cwd, env, |line| {
-        sink.emit(
+        progress::emit(
+            sink,
             progress_event,
             ProgressEvent {
                 operation_id: operation_id.to_string(),
@@ -215,7 +227,8 @@ pub async fn run_operation(sink: &events::Sink, op: Operation<'_>) -> Result<()>
                 duration_ms,
                 "operation succeeded"
             );
-            sink.emit(
+            progress::emit(
+                sink,
                 finished_event,
                 FinishedEvent {
                     operation_id: operation_id.to_string(),
@@ -261,7 +274,8 @@ pub async fn run_operation(sink: &events::Sink, op: Operation<'_>) -> Result<()>
                 "operation failed"
             );
 
-            sink.emit(
+            progress::emit(
+                sink,
                 finished_event,
                 FinishedEvent {
                     operation_id: operation_id.to_string(),
@@ -281,7 +295,8 @@ pub async fn run_operation(sink: &events::Sink, op: Operation<'_>) -> Result<()>
         Err(e) => {
             // Could not even start: a missing binary, a bad cwd, no permission.
             tracing::error!(operation_id, subject, program, error = %e, "operation could not start");
-            sink.emit(
+            progress::emit(
+                sink,
                 finished_event,
                 FinishedEvent {
                     operation_id: operation_id.to_string(),
@@ -810,6 +825,145 @@ mod tests {
         // Both streams are captured; order between them is arrival order.
         assert!(seen.contains(&"one".to_string()));
         assert!(seen.contains(&"two".to_string()));
+    }
+
+    // ------------------------------------------------- run_operation
+    //
+    // These are the first tests this function has ever had. It is the funnel
+    // every long operation in the app goes through — eleven commands, every
+    // compose run, every build, every clone — and it was untestable until
+    // `progress::Recording` existed, because the only two sinks available were
+    // "needs a running Tauri app" and "discards everything".
+    //
+    // What they pin is the event *contract*: the UI's progress panes, the
+    // operation console and `contracts/ipc.json` all depend on the name, the
+    // order and the fields, and none of that was verified anywhere.
+
+    fn operation<'a>(program: &'a str, args: &'a [String]) -> Operation<'a> {
+        Operation {
+            operation_id: "op-1",
+            subject: "shop",
+            progress_event: "generate:progress",
+            finished_event: "generate:finished",
+            program,
+            args,
+            cwd: Path::new("/tmp"),
+            env: &[],
+        }
+    }
+
+    #[tokio::test]
+    async fn a_successful_run_reports_every_line_then_one_finished_event() {
+        let sink = progress::Recording::new();
+        let args = vec!["-c".into(), "echo one; echo two".into()];
+
+        run_operation(&sink, operation("sh", &args)).await.unwrap();
+
+        assert_eq!(
+            sink.names(),
+            [
+                "generate:progress",
+                "generate:progress",
+                "generate:finished"
+            ],
+            "the terminal event must come last and exactly once"
+        );
+
+        let lines: Vec<String> = sink
+            .named("generate:progress")
+            .iter()
+            .filter_map(|e| e.str("line").map(str::to_string))
+            .collect();
+        assert_eq!(lines, ["one", "two"]);
+
+        // Correlation is the whole reason these carry an id: the console
+        // demultiplexes concurrent operations by it.
+        for event in sink.events() {
+            assert_eq!(event.str("operationId"), Some("op-1"));
+            assert_eq!(event.str("subject"), Some("shop"));
+        }
+
+        let finished = sink.last("generate:finished").unwrap();
+        assert_eq!(
+            finished.get("success"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert_eq!(finished.get("error"), Some(&serde_json::Value::Null));
+        assert!(
+            finished
+                .get("durationMs")
+                .and_then(|v| v.as_u64())
+                .is_some(),
+            "durationMs is what the UI shows when the operation ends"
+        );
+    }
+
+    /// A non-zero exit has to *both* emit a failed terminal event and return
+    /// `Err`. Emitting without returning would leave the caller thinking it
+    /// succeeded; returning without emitting would leave a progress pane
+    /// spinning for ever.
+    #[tokio::test]
+    async fn a_failing_run_emits_a_failure_and_returns_an_error() {
+        let sink = progress::Recording::new();
+        let args = vec!["-c".into(), "echo working; echo boom >&2; exit 3".into()];
+
+        let error = run_operation(&sink, operation("sh", &args))
+            .await
+            .expect_err("exit 3 must not read as success");
+        assert!(error.message.contains("code 3"), "{}", error.message);
+
+        let finished = sink.last("generate:finished").unwrap();
+        assert_eq!(
+            finished.get("success"),
+            Some(&serde_json::Value::Bool(false))
+        );
+
+        // The tail is what makes a failed build diagnosable after the fact, so
+        // the failure message has to carry the output rather than only the code.
+        let reported = finished.str("error").unwrap_or_default();
+        assert!(
+            reported.contains("boom"),
+            "the failure event dropped the output that explains it: {reported:?}"
+        );
+    }
+
+    /// A program that never starts is a different branch: there is no exit code
+    /// and no output, and the terminal event still has to arrive.
+    #[tokio::test]
+    async fn a_program_that_cannot_start_still_reports_a_terminal_event() {
+        let sink = progress::Recording::new();
+        let args: Vec<String> = vec![];
+
+        let error = run_operation(&sink, operation("stackvo-no-such-program", &args))
+            .await
+            .expect_err("a missing binary is an error");
+
+        assert_eq!(
+            sink.names(),
+            ["generate:finished"],
+            "no progress can have been reported, but the operation must still end"
+        );
+        let finished = sink.last("generate:finished").unwrap();
+        assert_eq!(
+            finished.get("success"),
+            Some(&serde_json::Value::Bool(false))
+        );
+        assert_eq!(finished.str("error"), Some(error.message.as_str()));
+    }
+
+    /// The premise the MCP server runs on: the same call, with nowhere to
+    /// report to, still does the work and still answers through its `Result`.
+    #[tokio::test]
+    async fn a_sink_with_no_window_changes_nothing_but_the_reporting() {
+        let args = vec!["-c".into(), "echo one; exit 0".into()];
+        run_operation(&progress::Null, operation("sh", &args))
+            .await
+            .expect("headless must not change the outcome");
+
+        let args = vec!["-c".into(), "exit 1".into()];
+        assert!(run_operation(&progress::Null, operation("sh", &args))
+            .await
+            .is_err());
     }
 
     #[tokio::test]

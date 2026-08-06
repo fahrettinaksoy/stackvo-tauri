@@ -37,7 +37,21 @@ defineProps({
            much the card is pulled up past the extension. At Vuetify's default
            48 the card ate 16px more than the extension gave back, and the
            header sat visibly low in its own band. -->
-      <v-toolbar color="primary" height="100" extended extension-height="64" flat density="default">
+      <!-- `tag="div"`, not the default `<header>`. Vuetify's toolbar renders a
+           `<header>`, which is a `banner` landmark — and `App.vue`'s app bar is
+           already the banner for the whole window. With the default, a screen
+           reader offered three of them on every page (the app bar, this, and
+           the inner bar below) and no way to tell them apart. Caught by the axe
+           pass in `tests/a11y-axe.spec.js` once the pages could be mounted. -->
+      <v-toolbar
+        tag="div"
+        color="primary"
+        height="100"
+        extended
+        extension-height="64"
+        flat
+        density="default"
+      >
         <v-toolbar-title class="page-title">
           <v-icon size="40" class="mr-3">{{ topIcon }}</v-icon>
           <div class="d-flex flex-column justify-center">
@@ -56,7 +70,9 @@ defineProps({
 
       <v-card elevation="2" class="inner-card d-flex flex-column mx-5 mt-n16 mb-4">
         <template v-if="!hideBar">
-          <v-toolbar :color="barTransparent ? 'transparent' : undefined">
+          <!-- Same reason as above: a bar inside the page's card is not the
+               window's banner. -->
+          <v-toolbar tag="div" :color="barTransparent ? 'transparent' : undefined">
             <!-- A view with tabs puts them here instead of a title. The page
                  name is already in the toolbar above, so repeating it and then
                  stacking a tab strip underneath costs a row to say nothing. -->

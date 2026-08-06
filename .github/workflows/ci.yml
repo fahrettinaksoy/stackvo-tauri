@@ -72,6 +72,105 @@ jobs:
       - name: Formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
+  # What is not tested.
+  #
+  # 478 Rust tests and 160 front-end tests is a good number and was never a
+  # measurement: nobody could say which of `engine.rs`'s 1,391 lines or which of
+  # `Settings.vue`'s 3,172 any of them reached. A count of tests answers "is
+  # there effort here"; only coverage answers "is there a hole here".
+  #
+  # **No threshold, deliberately.** A floor picked before anyone has seen the
+  # number is either low enough to bless the gap or high enough to fail on the
+  # first run, and both teach the team to write tests that move a percentage.
+  # This job reports into the run summary and never fails the build. Turning it
+  # into a gate is a separate, informed decision — one line in vitest.config.js
+  # and a `--fail-under-lines` here.
+  #
+  # Ubuntu only: coverage is a property of the code, not of the platform, and
+  # the cfg-gated Windows and macOS branches are covered by `build` compiling
+  # and running them on their own runners.
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libssl-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: coverage
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      # `src-tauri/rust-toolchain.toml` pins 1.96.1, and rustup resolves that
+      # file from the working directory — so the component added to `stable`
+      # above is on a toolchain this build never uses. Added here, from inside
+      # `src-tauri`, it lands on the toolchain that actually compiles.
+      - name: Give the pinned toolchain its instrumentation tools
+        working-directory: src-tauri
+        run: rustup component add llvm-tools-preview
+
+      - run: npm ci
+
+      # `--ignore-run-fail` so a failing test still produces a report. Without
+      # it `cargo llvm-cov` exits before printing the table, and this job would
+      # go red for a reason the `build` job already covers — reporting nothing
+      # exactly when something is wrong is the opposite of what it is for.
+      - name: Measure the Rust core
+        continue-on-error: true
+        run: |
+          cargo llvm-cov --manifest-path src-tauri/Cargo.toml \
+            --ignore-run-fail --summary-only | tee rust-coverage.txt
+
+      - name: Measure the front end
+        continue-on-error: true
+        run: npm run test:js:coverage
+
+      # Into the run summary rather than a log nobody opens. Two numbers on the
+      # workflow page is the whole point of this job.
+      - name: Report
+        if: always()
+        run: |
+          {
+            echo "## Coverage"
+            echo
+            echo '### Rust'
+            echo '```'
+            # The column header and the total. Per-module rows are in the step
+            # log; a summary that lists 49 of them is a summary nobody reads.
+            grep -E '^(Filename|TOTAL)' rust-coverage.txt || echo "no Rust report produced"
+            echo '```'
+            echo
+            echo '### Front end'
+            if [ -f coverage/coverage-summary.json ]; then
+              node -e '
+                const t = require("./coverage/coverage-summary.json").total;
+                for (const k of ["lines", "statements", "functions", "branches"]) {
+                  console.log(`- ${k}: ${t[k].pct}% (${t[k].covered}/${t[k].total})`);
+                }
+              '
+            else
+              echo "no front-end report produced"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # Supply chain. One platform is enough — the dependency graph is the same
   # everywhere, and installing cargo-deny three times to get one answer is waste.
   supply-chain:

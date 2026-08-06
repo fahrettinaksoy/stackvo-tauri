@@ -270,7 +270,7 @@ pub fn plan(root: &Path, name: &str, tag: Option<String>) -> Result<Plan> {
             Code::InvalidInput,
             format!("`{tag}` is not a valid image tag"),
         )
-        .with_hint("Lowercase letters, digits, and . _ - / : only."));
+        .with_hint(crate::hints::IMAGE_REFERENCE_CHARSET));
     }
 
     let mut warnings = Vec::new();

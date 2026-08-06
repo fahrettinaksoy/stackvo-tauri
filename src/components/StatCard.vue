@@ -32,10 +32,17 @@ const color = computed(() => loadColor(props.value));
         <span v-if="secondary" class="text-caption text-medium-emphasis">{{ secondary }}</span>
       </div>
 
+      <!-- Named after the card it belongs to. Vuetify gives the bar
+           `role="progressbar"` and `aria-valuenow`, and nothing else: a screen
+           reader announced "42" with no indication of what was at 42, on a
+           dashboard showing four of these at once. `aria-label` is what turns
+           it back into "CPU, 42". Found by the axe pass in
+           `tests/a11y-axe.spec.js` on its first run. -->
       <v-progress-linear
         v-if="hasMeter"
         :model-value="value"
         :color="color"
+        :aria-label="title"
         height="6"
         rounded
         class="mb-3"

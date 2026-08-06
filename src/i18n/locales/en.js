@@ -991,6 +991,10 @@ export default {
     openLogs: 'Open folder',
     logsUnavailable: 'No writable log location was found on this system.',
     logsRedacted: 'Password and token values are masked as the log is written.',
+    saveBundle: 'Save a diagnostic bundle',
+    saveBundleHint:
+      'One archive with the log, the startup checks, the doctor report and any crash reports — everything a bug report needs, instead of the log alone.',
+    saveBundleDone: 'Saved ({bytes}). It is plain text inside; have a look before sending it.',
     verifyNow: 'Verify the generator now',
     checkForUpdates: 'Check for updates',
     updates: 'Updates',
@@ -1025,6 +1029,9 @@ export default {
     followOutput: 'Follow output',
     stopFollowing: 'Stop following output',
     toggleConsole: 'Toggle console',
+    // Announced by a screen reader while a metric card waits for its first
+    // sample. Vuetify gives the spinner role="progressbar" and no name.
+    loading: 'Loading',
     close: 'Close',
   },
   actions: {
@@ -1337,6 +1344,87 @@ export default {
     strict: 'Strict',
     compat: 'Compat',
     silentlySkipped: 'Bash drops these without saying so',
+  },
+
+  // Suggestions, keyed by `hintKey` on the error the Rust side raised.
+  //
+  // The catalogue is `src-tauri/src/hints.rs`; these are its translations, and
+  // `src-tauri/tests/hint_translations.rs` fails the build if the two sets ever
+  // differ in either direction — a hint with no translation, or a translation
+  // for a hint nothing raises any more.
+  //
+  // The English in en.js is a copy of what the Rust carries as its fallback,
+  // and the same test pins the two equal. Deliberate: it turns an edit to the
+  // English into a change that has to pass through the translations, instead of
+  // one that silently leaves Turkish describing the old behaviour.
+  errorHints: {
+    startDocker: 'Start Docker Desktop and try again.',
+    startDockerOrSetHost: 'Start Docker Desktop, or set DOCKER_HOST if the engine is elsewhere.',
+    startDockerManually: 'Start Docker manually, then retry.',
+    projectMayNotBeBuilt: 'The project may not be built yet.',
+    chooseWorkspace: 'Choose an empty folder for StackVo to set up, or one it already manages.',
+    projectNameCharset:
+      'Names may contain letters, digits, dot, underscore and dash, and must start with a letter or digit.',
+    pathLeavesProjects: 'Refusing to operate on a path that leaves projects/.',
+    onlyProjectFolders: 'Only project folders inside the selected workspace can be opened.',
+    adoptInstead: 'Adopt it instead — that is the path that writes one.',
+    fixOrAdopt: 'Fix the file, or delete it and adopt the folder instead.',
+    runDoctorThenRetry:
+      'Settings → Doctor lists what is wrong and can repair it; then clone or register again.',
+    adoptExistingCode: 'Use adoption for existing code — scaffolding is for a brand-new project.',
+    chooseAnotherName: 'Choose another name, or adopt the folder that is already there.',
+    installGitOrAdopt: 'Install git, or clone the repository yourself and adopt the folder.',
+    editFromManifestTab: "Edit it from the project's Manifest tab instead.",
+    startProjectForCommands: 'Start the project first — these commands run inside its container.',
+    buildAndStartForWorker: 'Build and start the project first — the worker runs its image.',
+    workersAreDetected: 'Workers are detected from artisan and composer.json.',
+    startProjectForTunnel: 'Start the project first — the tunnel forwards to its container.',
+    installMkcert:
+      'Install it with `brew install mkcert` (macOS), your package manager (Linux), or `choco install mkcert` (Windows), then try again.',
+    checkTldAndDomains: 'Check DEFAULT_TLD_SUFFIX in .env and the `domain` in each stackvo.json.',
+    certificateIssuedButUntrusted:
+      'The certificate is issued either way and the stack serves — the browser warns about the issuer until the authority is trusted. Settings → Certificates has a button that does it in your terminal, where the password prompt can be answered.',
+    runMkcertInstall:
+      'Run `mkcert -install` once in a terminal — it needs a password for the system trust store, and a windowed app has no terminal to ask in.',
+    hostnameCharset: 'Hostnames may contain letters, digits, dots and hyphens.',
+    hostsNeedsAdmin: 'Administrator rights are required to edit the hosts file.',
+    hostsNotReplaced: 'The hosts file could not be replaced.',
+    installPolkit: 'Install polkit, or edit /etc/hosts manually.',
+    serviceMustBeInCatalog: 'Only services listed in contracts/env.schema.json can be managed.',
+    supportedDatabases: 'Supported: mysql, mariadb, postgres, mongo.',
+    enableAMailCatcher: 'Enable mailhog (or mailpit) in .env, then regenerate.',
+    mailUiMayBeStarting: 'The container may still be starting, or its UI port may be taken.',
+    envKeyCharset: 'Keys must match ^[A-Z_][A-Z0-9_]*$ so Compose can interpolate them.',
+    envIsOneKeyPerLine:
+      'The .env format is one key per line; multi-line values cannot be read back.',
+    revealValueFirst: 'Reveal the value first, or leave the field untouched.',
+    phpIniDirectiveCharset: 'Directive names are letters, digits, underscores and dots.',
+    phpIniIsOnePerLine: 'php.ini is one directive per line.',
+    phpIniSizeFormat:
+      'Sizes are a number with an optional K, M or G — 256M, 1G, 512. Times are whole seconds. -1 means unlimited.',
+    serverDirectivesUnsupported:
+      'Only nginx, caddy and frankenphp have a generated config to add directives to.',
+    presetIsExportedJson: 'A preset is the JSON that Settings → Presets exports.',
+    presetWrongFile: 'Pointing the importer at another JSON file is the usual cause.',
+    presetTooNew: 'Update StackVo Desktop, or ask for a preset exported by an older version.',
+    onlyShippedTemplates: 'Only the templates the app ships can be overridden.',
+    revertTemplateFirst: 'Revert it first if you want the shipped version back.',
+    profileIdsFromList: 'Profile ids are the cachegrind.out.* names from profile_list.',
+    profileIsCompressed:
+      'Xdebug compresses by default; StackVo turns that off when it enables profiling. Re-record this profile, or gunzip the file yourself.',
+    logIdsAreRelative: 'Log ids are relative, with no parent or root segments.',
+    installATerminal: 'Install one, or use the built-in terminal instead.',
+    chooseABrowser: 'Choose a browser in Settings → External applications.',
+    chooseAnEditor: 'Choose an editor in Settings, or open the folder manually.',
+    waitForOperation: 'Wait for it to finish, or watch the operation console for progress.',
+    quickCommandsAreFixed: 'Commands come from the fixed catalog; ids are not arbitrary.',
+    imageReferenceCharset: 'Lowercase letters, digits, and . _ - / : only.',
+    composeFileNotFound:
+      'Looked for compose.yaml, compose.yml, docker-compose.yaml and docker-compose.yml.',
+    composeFileMustBeValid:
+      'The file is resolved by `docker compose config`, so it has to be valid Compose — including any variables it interpolates.',
+    useGenerateRun: 'Use generate_run; `verify` mode still reports drift against what is on disk.',
+    mcpNeedsAllowWrites: 'Restart it with --allow-writes to enable the writing tools.',
   },
 
   errors: {

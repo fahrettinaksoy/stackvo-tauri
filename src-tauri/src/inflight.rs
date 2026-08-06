@@ -48,7 +48,7 @@ impl Registry {
                 Code::Conflict,
                 format!("an operation on {key} is already running"),
             )
-            .with_hint("Wait for it to finish, or watch the operation console for progress."));
+            .with_hint(crate::hints::WAIT_FOR_OPERATION));
         }
 
         Ok(Guard {

@@ -103,9 +103,9 @@ describe('propName', () => {
  */
 describe('hidden', () => {
   it('is the difference between the size and the sample', () => {
-    expect(hidden({ t: 'arr', n: 120, items: new Array(50).fill({ k: 0, v: { t: 'null' } }) })).toBe(
-      70
-    );
+    expect(
+      hidden({ t: 'arr', n: 120, items: new Array(50).fill({ k: 0, v: { t: 'null' } }) })
+    ).toBe(70);
     expect(hidden({ t: 'arr', n: 2, items: [1, 2] })).toBe(0);
   });
 });

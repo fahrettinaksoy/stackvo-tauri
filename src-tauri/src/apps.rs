@@ -361,7 +361,7 @@ pub fn resolve_terminal(
         .find(|(.., probe)| is_available(probe))
         .ok_or_else(|| {
             Error::new(Code::NotFound, "No terminal application was found.")
-                .with_hint("Install one, or use the built-in terminal instead.")
+                .with_hint(crate::hints::INSTALL_A_TERMINAL)
         })
 }
 

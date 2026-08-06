@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { api } from '@/lib/ipc';
+import { api, asList } from '@/lib/ipc';
 import { humaniseField } from '@/lib/manifest';
 import ErrorAlert from '@/components/ErrorAlert.vue';
 import SideSheet from '@/components/SideSheet.vue';
@@ -106,7 +106,7 @@ async function load() {
   secrets.value = {};
   shown.value = new Set();
   try {
-    settings.value = await api.serviceSettings(props.service.id);
+    settings.value = asList(await api.serviceSettings(props.service.id));
   } catch (e) {
     error.value = e;
     settings.value = [];
