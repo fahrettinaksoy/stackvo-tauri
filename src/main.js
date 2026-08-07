@@ -1,4 +1,6 @@
 import './styles/global.css';
+import './styles/project-panes.css';
+import './styles/settings-panes.css';
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
 import router from './router';

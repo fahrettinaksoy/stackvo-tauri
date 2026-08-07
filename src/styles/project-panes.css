@@ -1,0 +1,260 @@
+/* The vocabulary the project-detail panes speak.
+ *
+ * These rules used to live in `ProjectDetail.vue`'s `<style scoped>`, which is
+ * exactly where they stopped working the moment §14.16 moved the markup into
+ * fourteen child components: a scoped block only reaches the elements its own
+ * component renders. Every pane rendered unstyled — cards with no surface,
+ * label/value pairs run together into one string — and no test looked at CSS,
+ * so the suite stayed green while the page was visibly broken.
+ *
+ * Nested under `.detail-content` rather than made global on purpose:
+ * `.section-head` already means something else in `Projects.vue`, and two
+ * page-wide definitions of one name race on source order. The panes all render
+ * inside `.detail-content`, so this reaches exactly them and nothing else.
+ */
+
+/* The card Settings uses, for the same reason it uses it: several groups now
+   share one tab, and without a surface between them three subjects run
+   together under one heading. Filled rather than outlined — the fill does the
+   separating and the hairline only has to close the shape, which is what keeps
+   a dark surface from reading as a white box around every group. */
+.detail-content .pane {
+  background: rgba(var(--v-theme-surface-bright), 0.55);
+  border: thin solid rgba(var(--v-border-color), calc(var(--v-border-opacity) / 2));
+  padding: 16px;
+}
+
+.detail-content .pane + .pane {
+  margin-top: 16px;
+}
+
+.detail-content .section-head {
+  display: flex;
+  align-items: center;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.75;
+  font-weight: 600;
+}
+
+.detail-content .tile-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.detail-content .tile-foot {
+  font-size: 0.72rem;
+  opacity: 0.6;
+}
+
+.detail-content .metric-tile {
+  height: 100%;
+}
+
+.detail-content .field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(var(--v-border-color), 0.06);
+  font-size: 0.82rem;
+}
+
+.detail-content .field-key {
+  flex: 0 0 46%;
+  text-transform: uppercase;
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  opacity: 0.6;
+}
+
+.detail-content .field-val {
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.detail-content .field-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.76rem;
+  word-break: break-all;
+}
+
+.detail-content .field-link {
+  color: rgb(var(--v-theme-primary));
+  cursor: pointer;
+  word-break: break-all;
+}
+
+.detail-content .field-link:hover {
+  text-decoration: underline;
+}
+
+/* No `:deep()`: this file is plain CSS, not a scoped block, so the descendant
+   already reaches into Vuetify's markup on its own. */
+.detail-content .mono-input textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.detail-content .dockerfile {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+  border-radius: var(--app-radius);
+  background: rgba(var(--v-border-color), 0.06);
+  padding: 8px 0;
+  overflow-x: auto;
+}
+
+.detail-content .df-line {
+  display: flex;
+  gap: 12px;
+  padding: 0 12px;
+}
+
+.detail-content .df-line:hover {
+  background: rgba(var(--v-border-color), 0.06);
+}
+
+/* Right-aligned in a fixed gutter so the numbers form a column rather than a
+   ragged edge, and unselectable so copying the file does not copy them. */
+.detail-content .df-no {
+  flex: 0 0 32px;
+  text-align: right;
+  opacity: 0.38;
+  user-select: none;
+}
+
+.detail-content .df-code {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Heatmap ------------------------------------------------------------------ */
+.detail-content .heatmap {
+  position: relative;
+}
+
+.detail-content .heat-hours {
+  position: relative;
+  height: 16px;
+  margin-left: 64px;
+  font-size: 0.68rem;
+  opacity: 0.6;
+}
+
+.detail-content .heat-hours span {
+  position: absolute;
+}
+
+.detail-content .heat-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.detail-content .heat-day {
+  flex: 0 0 56px;
+  font-size: 0.7rem;
+  opacity: 0.65;
+  text-align: right;
+}
+
+.detail-content .heat-cells {
+  display: grid;
+  grid-template-columns: repeat(24, 1fr);
+  gap: 3px;
+  flex: 1 1 auto;
+}
+
+.detail-content .heat-cell {
+  height: 26px;
+  border-radius: min(var(--app-radius), 6px);
+  display: block;
+}
+
+/* An hour with no sample is not an hour that measured zero — the two must not
+   look alike, or the grid invents history it never had. */
+.detail-content .heat-cell.empty {
+  background: rgba(var(--v-border-color), 0.08);
+}
+
+.detail-content .heat-cell.l0 {
+  background: #0e2a16;
+}
+.detail-content .heat-cell.l1 {
+  background: #1b5e20;
+}
+.detail-content .heat-cell.l2 {
+  background: #2e7d32;
+}
+.detail-content .heat-cell.l3 {
+  background: #43a047;
+}
+.detail-content .heat-cell.l4 {
+  background: #66bb6a;
+}
+
+.detail-content .heat-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+}
+
+.detail-content .heat-legend .heat-cell {
+  width: 14px;
+  height: 14px;
+}
+
+.detail-content .worker-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 0;
+}
+
+.detail-content .worker-row + .worker-row {
+  border-top: thin solid rgba(var(--v-border-color), calc(var(--v-border-opacity) / 2));
+}
+
+/* Symfony renders the dump with its own alignment and box drawing, so this has
+   to be monospaced and must not reflow — a wrapped `array:2 [` tree is unreadable
+   in a way that a scrollbar is not. */
+
+/* One command per row, the same shape as the worker rows above it. */
+.detail-content .cmd-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+}
+
+.detail-content .cmd-row + .cmd-row {
+  border-top: thin solid rgba(var(--v-border-color), calc(var(--v-border-opacity) / 2));
+}
+
+/* A long `php artisan …` must not push the button off the row. */
+.detail-content .min-width-0 {
+  min-width: 0;
+}
+
+/* Config for the user to paste into their own repository. Selectable, and it
+   keeps its own line breaks — this is code, and a reflowed `hmr: { … }` block
+   is code somebody has to repair before it runs. */
+.detail-content .snippet {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  background: rgb(var(--v-theme-surface-bright));
+  user-select: text;
+}

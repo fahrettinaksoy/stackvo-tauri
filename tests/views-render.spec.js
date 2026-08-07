@@ -84,6 +84,7 @@ const Services = (await import('@/views/Services.vue')).default;
 const Dashboard = (await import('@/views/Dashboard.vue')).default;
 const Mail = (await import('@/views/Mail.vue')).default;
 const Projects = (await import('@/views/Projects.vue')).default;
+const ProjectDetail = (await import('@/views/ProjectDetail.vue')).default;
 
 function router() {
   return createRouter({
@@ -101,7 +102,7 @@ function router() {
  * the real app, so a test that skipped it would be exercising a tree the user
  * never sees.
  */
-async function render(component, locale = 'en') {
+async function render(component, locale = 'en', props = {}) {
   const i18n = createI18n({ legacy: false, locale, messages: { en, tr } });
   const host = document.createElement('div');
   document.body.appendChild(host);
@@ -109,9 +110,10 @@ async function render(component, locale = 'en') {
   const wrapper = mount(
     {
       components: { Page: component },
-      template: '<v-app><Page /></v-app>',
+      template: '<v-app><Page v-bind="$attrs" /></v-app>',
     },
     {
+      attrs: props,
       attachTo: host,
       global: { plugins: [createPinia(), router(), vuetify, i18n] },
     }
@@ -132,6 +134,8 @@ const PAGES = [
   ['Dashboard', Dashboard],
   ['Mail', Mail],
   ['Projects', Projects],
+  // Added once §14.16 finished: this took a `name` prop, so it is mounted with
+  // one below rather than in this list.
 ];
 
 beforeEach(() => {
@@ -257,6 +261,160 @@ describe('what the pages show once there is data', () => {
     const text = wrapper.text();
     expect(text).toContain('StackVo');
     expect(text).toContain('0.1.0');
+    wrapper.unmount();
+  });
+});
+
+/**
+ * `ProjectDetail.vue`, mounted at last.
+ *
+ * This is the finish line for §14.16. The page was 3,007 lines and could not be
+ * mounted at all: one `<script setup>` holding every section's state, so any
+ * mount executed all of it. Fourteen panes and their composables later it is
+ * 1,092, and the sections it now composes each have their own suite.
+ *
+ * The point of *these* cases is the composition itself — that the page wires up
+ * fourteen children without throwing, and survives a boundary that answers
+ * badly, which is precisely what could not be checked before.
+ */
+describe('the project page', () => {
+  const PROJECT = {
+    name: 'shop',
+    runtime: 'php',
+    domain: 'shop.loc',
+    domainConfigured: true,
+    running: true,
+    built: true,
+    containerName: 'stackvo-shop',
+    path: '/ws/projects/shop',
+    manifest: { runtime: 'php', documentRoot: 'public' },
+  };
+
+  const seed = () => {
+    replies.projectGet = PROJECT;
+    replies.projectManifestRead = { runtime: 'php', documentRoot: 'public' };
+    replies.containerInspect = {
+      name: 'stackvo-shop',
+      running: true,
+      ports: [],
+      networks: [],
+      mounts: [],
+      env: [],
+      restartCount: 0,
+    };
+    replies.releasePlan = {
+      tag: 'shop:1.0.0',
+      baseImage: 'php:8.3-fpm-alpine',
+      excluded: [['node_modules', 'rebuilt during the image build']],
+      warnings: [],
+      dockerfile: 'FROM php:8.3-fpm-alpine\n',
+    };
+    // `profiles`, `trigger`, `bytes`, `directory` — the shape of
+    // `commands::ProfilerStatus`, whose `Vec` is never absent.
+    replies.profilerStatus = {
+      mode: 'profile',
+      trigger: 'XDEBUG_TRIGGER=1',
+      profiles: [],
+      bytes: 0,
+      directory: '/ws/projects/shop/.stackvo/profiles',
+      xdebug: { running: false, active: false, activeMode: null },
+    };
+    replies.phpIniStatus = { values: {}, effective: {}, unmanaged: {} };
+    replies.xdebugStatus = { enabled: false, needsRebuild: false, active: false };
+    replies.tunnelStatus = [];
+    replies.workerOptions = [];
+    replies.workerStatus = [];
+    replies.appLogs = [];
+  };
+
+  /**
+   * Every section, by clicking the rail — not by mounting and asserting on
+   * whatever the default tab happens to be.
+   *
+   * The first version of this test did exactly that, and passed while five of
+   * the six sections were never rendered at all. Breaking a pane on purpose
+   * changed nothing, which is how it was caught.
+   */
+  /**
+   * A phrase only that section's panes can produce.
+   *
+   * Asserting "something rendered" is not enough: the page shell is itself a
+   * stack of cards, so a section whose panes all failed still leaves plenty on
+   * screen. The first version of this test did that and passed with five of the
+   * seven sections never rendered at all.
+   */
+  const OWN_TEXT = {
+    indicator: () => en.projectDetail.composition,
+    configuration: () => en.detail.manifest,
+    container: () => en.tunnel.title,
+    logs: () => en.logs.sources,
+    debug: () => en.profiler.title,
+    runtime: () => en.phpIni.title,
+    release: () => en.release.excluded,
+  };
+
+  it('renders every section in the rail', async () => {
+    seed();
+    const wrapper = await render(ProjectDetail, 'en', { name: 'shop' });
+
+    const rail = wrapper.findAll('.detail-nav .nav-item');
+    expect(rail.length, 'a PHP project offers every section').toBe(7);
+    expect(Object.keys(OWN_TEXT)).toHaveLength(rail.length);
+
+    for (const key of Object.keys(OWN_TEXT)) {
+      const item = rail.find((i) => i.text().includes(en.projectDetail[key] ?? '\u0000'));
+      await (item ?? rail[Object.keys(OWN_TEXT).indexOf(key)]).trigger('click');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await wrapper.vm.$nextTick();
+
+      expect(wrapper.text(), `the ${key} section rendered nothing of its own`).toContain(
+        OWN_TEXT[key]()
+      );
+    }
+
+    wrapper.unmount();
+  });
+
+  /**
+   * The rail is built from the runtime: a Node project has a dev server and no
+   * Xdebug, so it must not offer a Debug tab that would open onto nothing.
+   */
+  it('offers a Node project a different rail', async () => {
+    seed();
+    replies.projectGet = { ...PROJECT, runtime: 'node' };
+
+    const wrapper = await render(ProjectDetail, 'en', { name: 'shop' });
+    const labels = wrapper.findAll('.detail-nav .nav-item').map((i) => i.text());
+
+    expect(labels).not.toContain(en.projectDetail.debug);
+    expect(labels).toContain(en.projectDetail.runtime);
+    wrapper.unmount();
+  });
+
+  /** The state that used to be unreachable: a project that is not there. */
+  it('renders when the project cannot be read', async () => {
+    replies.projectGet = () => Promise.reject(new Error('no such project'));
+
+    const wrapper = await render(ProjectDetail, 'en', { name: 'gone' });
+    expect(wrapper.text().trim().length).toBeGreaterThan(0);
+    wrapper.unmount();
+  });
+
+  it('renders when every command answers null', async () => {
+    for (const command of ['projectGet', 'projectManifestRead', 'containerInspect']) {
+      replies[command] = null;
+    }
+
+    const wrapper = await render(ProjectDetail, 'en', { name: 'shop' });
+    expect(wrapper.text().trim().length).toBeGreaterThan(0);
+    wrapper.unmount();
+  });
+
+  it('renders in Turkish', async () => {
+    replies.projectGet = PROJECT;
+
+    const wrapper = await render(ProjectDetail, 'tr', { name: 'shop' });
+    expect(wrapper.text().trim().length).toBeGreaterThan(0);
     wrapper.unmount();
   });
 });

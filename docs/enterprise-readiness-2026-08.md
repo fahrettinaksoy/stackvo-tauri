@@ -23,30 +23,30 @@ testi, 13 vitest dosyası, **143** IPC komutu, 17 MCP aracı, 2 dil.
 
 ## 0. Özet — olgunluk karnesi
 
-| Alan | Puan | Tek cümlelik gerekçe |
-| --- | :-: | --- |
-| Kod kalitesi & gerekçelendirme | **9/10** | Yorumlar karar kaydı seviyesinde; sektörde nadir. |
-| Hata yönetimi (Rust) | **9/10** | Üretim kodunda **7** `unwrap/expect` — hepsi bilinçli invariant. |
-| Sözleşme bütünlüğü (kod) | **9/10** | Ölçüldü: kayıt ↔ implementasyon ↔ sözleşme **sıfır drift**. |
-| Güvenlik modeli (tasarım) | **8/10** | argv-only spawn, yol sınırlama, dar capability, allowlist'li URL. |
-| Tedarik zinciri | **7/10** | `cargo-deny` + Dependabot + `npm audit`; SBOM ve provenance yok. |
-| Test **stratejisi** | **5/10** | 478 test var ama kapsam ölçülmüyor, E2E yok, sıcak modüller zayıf. |
-| Gözlemlenebilirlik | **5/10** | Mükemmel log altyapısı, ama panic hook yok ve `panic = "abort"`. |
-| Mimari katmanlama | **4/10** | 6.195 satırlık tek `commands.rs`; 48 komut `AppHandle`'a yapışık. |
-| Sürüm mühendisliği | **3/10** | `pubkey: ""` **ve** güncelleme endpoint'i 404. Dağıtılamaz. |
-| Tip güvenliği (uçtan uca) | **3/10** | IPC sınırında tip yok; 22k satır JS Rust'ın struct'larını bilmiyor. |
-| Dokümantasyon doğruluğu | **3/10** | README'de iki ölçülebilir iddia yanlış; SECURITY.md linki 404. |
-| i18n mimarisi | **5/10** | Kod tarafı doğru tasarlanmış; 146 spesifik dize çevrilmiyor. |
-| Erişilebilirlik | **3/10** | Tek regex testi; axe yok, klavye/focus testi yok, RTL yok. |
-| Performans mühendisliği | **2/10** | Tek benchmark yok, bundle bütçesi yok, cache stratejisi yok. |
-| Yönetişim & süreklilik | **2/10** | Bus factor 1; ADR yok, ARCHITECTURE.md yok. |
-| Kurumsal dağıtım | **1/10** | Merkezî politika, private registry, air-gap — hiçbiri yok. |
+| Alan                           |   Puan   | Tek cümlelik gerekçe                                                |
+| ------------------------------ | :------: | ------------------------------------------------------------------- |
+| Kod kalitesi & gerekçelendirme | **9/10** | Yorumlar karar kaydı seviyesinde; sektörde nadir.                   |
+| Hata yönetimi (Rust)           | **9/10** | Üretim kodunda **7** `unwrap/expect` — hepsi bilinçli invariant.    |
+| Sözleşme bütünlüğü (kod)       | **9/10** | Ölçüldü: kayıt ↔ implementasyon ↔ sözleşme **sıfır drift**.         |
+| Güvenlik modeli (tasarım)      | **8/10** | argv-only spawn, yol sınırlama, dar capability, allowlist'li URL.   |
+| Tedarik zinciri                | **7/10** | `cargo-deny` + Dependabot + `npm audit`; SBOM ve provenance yok.    |
+| Test **stratejisi**            | **5/10** | 478 test var ama kapsam ölçülmüyor, E2E yok, sıcak modüller zayıf.  |
+| Gözlemlenebilirlik             | **5/10** | Mükemmel log altyapısı, ama panic hook yok ve `panic = "abort"`.    |
+| Mimari katmanlama              | **4/10** | 6.195 satırlık tek `commands.rs`; 48 komut `AppHandle`'a yapışık.   |
+| Sürüm mühendisliği             | **3/10** | `pubkey: ""` **ve** güncelleme endpoint'i 404. Dağıtılamaz.         |
+| Tip güvenliği (uçtan uca)      | **3/10** | IPC sınırında tip yok; 22k satır JS Rust'ın struct'larını bilmiyor. |
+| Dokümantasyon doğruluğu        | **3/10** | README'de iki ölçülebilir iddia yanlış; SECURITY.md linki 404.      |
+| i18n mimarisi                  | **5/10** | Kod tarafı doğru tasarlanmış; 146 spesifik dize çevrilmiyor.        |
+| Erişilebilirlik                | **3/10** | Tek regex testi; axe yok, klavye/focus testi yok, RTL yok.          |
+| Performans mühendisliği        | **2/10** | Tek benchmark yok, bundle bütçesi yok, cache stratejisi yok.        |
+| Yönetişim & süreklilik         | **2/10** | Bus factor 1; ADR yok, ARCHITECTURE.md yok.                         |
+| Kurumsal dağıtım               | **1/10** | Merkezî politika, private registry, air-gap — hiçbiri yok.          |
 
-**Teşhis.** Bu, *tek bir çok iyi mühendisin* yazabileceği en iyi kod
+**Teşhis.** Bu, _tek bir çok iyi mühendisin_ yazabileceği en iyi kod
 tabanlarından biri — ve tam olarak o yüzden kurumsal değil. Eksikler kod
 kalitesinde değil; **kalitenin kod dışına, otomatik ve devredilebilir hale
 çıkarılmasında.** Kod içinde doğrulama var (E/F suite'leri, differential
-testler); kodun *çevresinde* — README, release, dağıtım, devir — yok.
+testler); kodun _çevresinde_ — README, release, dağıtım, devir — yok.
 
 ---
 
@@ -61,14 +61,14 @@ Aşağıdaki eleştirilerin hiçbiri bunları geçersiz kılmıyor:
    bayt bayt fixture karşılaştırmasıyla değiştirmek
    (`tests/fixtures_differential.rs`).
 3. **Üretim kodunda `unwrap` yok.** 49 modülde toplam **7** tane
-   *(ölçüm: her dosyada `#[cfg(test)]` öncesi bölüm)*, üçü `contracts.rs`'te
+   _(ölçüm: her dosyada `#[cfg(test)]` öncesi bölüm)_, üçü `contracts.rs`'te
    derlenmiş JSON'un parse'ı. Çoğu Rust projesinin geçemediği bir çıta.
 4. **Sözleşme bütünlüğü — ölçüldü, sıfır drift.**
    `lib.rs` **143** komut kaydediyor, `commands.rs` **143** komut uyguluyor,
    fark **yok**. `contracts/ipc.json` 147 komut bildiriyor: 143 Rust komutu +
    3 `kind: "frontend-plugin"` (bilinçli olarak frontend'de) + 1
    `status: "deferred"` (`updates_check`). Sözleşme kendi istisnalarını
-   *makine-okunur alanlarla* işaretliyor. Bu, bu incelemede rastlanan en
+   _makine-okunur alanlarla_ işaretliyor. Bu, bu incelemede rastlanan en
    olgun tek pratik.
 5. **Kilitleme tasarımı.** `inflight::Registry` (kullanıcı hatası → anında
    reddet) ile `generate_lock` (dahili adım → sıraya al) ayrımı.
@@ -87,7 +87,7 @@ Aşağıdaki eleştirilerin hiçbiri bunları geçersiz kılmıyor:
 **Ölçüm.** 6.195 satır, **143 `#[tauri::command]`**, tek dosya. `lib.rs`'teki
 kayıt listesi elle bakımı yapılan 143 satır.
 
-**Bugün drift yok** (§1.4) — bu bir *risk* bulgusudur, bir kusur değil. Ama
+**Bugün drift yok** (§1.4) — bu bir _risk_ bulgusudur, bir kusur değil. Ama
 riski taşıyan mekanizma zayıf: bir komutu `commands.rs`'e yazıp `lib.rs`'e
 eklememek **derlenir ve sessizce geçer**. Yakalayan tek şey
 `tools/validate-contracts.mjs` suite E, ve o CI job'ı **harici bir repo
@@ -145,10 +145,10 @@ setup>` + 2.057 satır `<template>`. İçinde **80 reaktif tanım** (50 `ref` + 
 
 **Test durumu — nüanslı.** İki test (`template-overrides.spec.js`,
 `certificates-pane.spec.js`) Settings.vue'yu **mount etmiyor**; panelin bir
-*kopyasını* test içinde yeniden kuruyor, sonra gerçek dosyayı metin olarak
+_kopyasını_ test içinde yeniden kuruyor, sonra gerçek dosyayı metin olarak
 okuyup kopyanın hâlâ eşleştiğini doğruluyor ("shape mirror" tekniği).
 
-Bu, tanrı bileşeni test etmenin *yaratıcı* bir çözümü ve yorumları neden böyle
+Bu, tanrı bileşeni test etmenin _yaratıcı_ bir çözümü ve yorumları neden böyle
 yapıldığını iyi anlatıyor. Ama karşılığı şu: davranış **kopyada** doğrulanıyor,
 **üründe** değil. Kopya ile gerçek arasındaki bağ bir `toContain(...)` string
 eşleşmesi — bir boşluk değişikliği testi kırar, gerçek bir regresyon ise
@@ -172,13 +172,13 @@ bloğu yok, CI'da `cargo-llvm-cov`/`tarpaulin` yok.
 478 test etkileyici — ama neyin test edilmediği bilinmiyor. Modül başına
 yoğunluk bunu ima ediyor:
 
-| Modül | Satır | Test | Not |
-| --- | --: | --: | --- |
-| `engine.rs` | 1.391 | 4 | Docker'a dokunan her şeyin merkezi |
-| `pty.rs` | 501 | 4 | Kullanıcı makinesinde süreç açıyor |
-| `scaffold.rs` | 791 | 5 | 28 şablon, hepsi kullanıcı dosyası yazıyor |
-| `watcher.rs` | 193 | 4 | Dosya sistemi olayları |
-| `error.rs` | 134 | 0 | Serileştirme şekli sözleşmenin parçası |
+| Modül         | Satır | Test | Not                                        |
+| ------------- | ----: | ---: | ------------------------------------------ |
+| `engine.rs`   | 1.391 |    4 | Docker'a dokunan her şeyin merkezi         |
+| `pty.rs`      |   501 |    4 | Kullanıcı makinesinde süreç açıyor         |
+| `scaffold.rs` |   791 |    5 | 28 şablon, hepsi kullanıcı dosyası yazıyor |
+| `watcher.rs`  |   193 |    4 | Dosya sistemi olayları                     |
+| `error.rs`    |   134 |    0 | Serileştirme şekli sözleşmenin parçası     |
 
 **"Yerine bu olsaydı."** CI'da `cargo llvm-cov` + `vitest --coverage`. Rakam
 önemli değil, **eşiğin var olması** önemli: eşiksiz kapsam, düşünce olmadan
@@ -267,8 +267,8 @@ satırı. İkisi de kabul edilebilir; belirsizlik değil.
 **Ölçüm.** `elevate.rs:48` —
 `format!(r#"do shell script "{command}" with administrator privileges"#)`.
 
-Modülün kendi yorumu bunu kabul ediyor: *"her çağıran ne geçirdiğinden
-sorumlu."* İki çağıran da uygulama yollarından kuruyor — ama o yollar kullanıcı
+Modülün kendi yorumu bunu kabul ediyor: _"her çağıran ne geçirdiğinden
+sorumlu."_ İki çağıran da uygulama yollarından kuruyor — ama o yollar kullanıcı
 home dizinini ve `STACKVO_ROOT`'u içeriyor. Tek savunma bir yorum ve şeklin
 pinlendiği bir test.
 
@@ -291,7 +291,7 @@ Kurumsal karşılığı net: bir şirket makinesinde `~/.stackvo/.env` yedeklene
 senkronlanan ve DLP taramasına takılan bir dosyadır. **"Yerine bu olsaydı":**
 `SERVICE_*_PASSWORD` sınıfı anahtarlar keystore'da, `.env`'de
 `keychain:stackvo/mysql-root` gibi bir referans. Bash CLI uyumluluğu bunu
-zorlaştırır — bu bir *v2 sözleşme değişikliği*, ama şimdi planlanmalıydı.
+zorlaştırır — bu bir _v2 sözleşme değişikliği_, ama şimdi planlanmalıydı.
 
 ### 5.3 Tedarik zinciri: SBOM ve provenance yok
 
@@ -303,7 +303,7 @@ kurumsal satın almada **sorulan** şeyler:
 - **Artefakt checksum'ları** — `latest.json` imzalı, ama manuel indiren için
   SHA-256 listesi yok.
 
-### 5.4 macOS sistem proxy'si okunmuyor *(düzeltilmiş bulgu — §15)*
+### 5.4 macOS sistem proxy'si okunmuyor _(düzeltilmiş bulgu — §15)_
 
 **Ölçüm** (`cargo tree -e features -i reqwest`):
 
@@ -313,7 +313,7 @@ kurumsal satın almada **sorulan** şeyler:
   MITM-inspeksiyon CA'sı çalışır.** (`webpki-root-certs` graf içinde ama
   yalnızca `rustls-platform-verifier-android` altında.)
 - ⚠️ **`macos-system-configuration` özelliği açık DEĞİL.** `default-features =
-  false` bunu kapatıyor ve `tauri-plugin-updater` da açmıyor (yalnızca
+false` bunu kapatıyor ve `tauri-plugin-updater` da açmıyor (yalnızca
   `rustls-tls`, `json`, `stream`, `zip`).
 
 Pratik sonuç, ilk taslakta iddia edilenden **çok daha dar**: `HTTPS_PROXY` /
@@ -376,7 +376,7 @@ yayınlanıyor ve Gatekeeper uyarısı kullanıcıya çıkıyor. Bir gözden ka�
 
 ---
 
-## 7. i18n — tasarım doğru, kapsama eksik *(düzeltilmiş bulgu — §15)*
+## 7. i18n — tasarım doğru, kapsama eksik _(düzeltilmiş bulgu — §15)_
 
 ### 7.1 Kategori çevriliyor, spesifik metin çevrilmiyor
 
@@ -494,21 +494,21 @@ kapısı. (c) Pencere gizliyken poll aralığını uzatan tek bir
 
 ## 11. Dokümantasyon doğruluğu — projenin kendi tezine aykırı tek yüzey
 
-Bu projenin tezi şu: *"'muhtemelen aynı' shipping için bir standart değil."*
+Bu projenin tezi şu: _"'muhtemelen aynı' shipping için bir standart değil."_
 Kod bu teze uyuyor (E/F suite'leri, differential testler, `mcp.rs`'te tool ↔
 komut çapraz kontrolü). **README bu tezin dışında kalmış tek yüzey** — ve
 ölçülebilir iki iddiası bugün yanlış:
 
-| README iddiası | Ölçülen | Fark |
-| --- | --- | --- |
-| *"Thirty-four commands take an `AppHandle`"* (satır 152) | **48** | +14 |
-| *"Two tools change things (Xdebug…, reissuing the certificate)"* (satır 139) | **17 araçtan 7'si** `writes: true` | +5 |
+| README iddiası                                                               | Ölçülen                            | Fark |
+| ---------------------------------------------------------------------------- | ---------------------------------- | ---- |
+| _"Thirty-four commands take an `AppHandle`"_ (satır 152)                     | **48**                             | +14  |
+| _"Two tools change things (Xdebug…, reissuing the certificate)"_ (satır 139) | **17 araçtan 7'si** `writes: true` | +5   |
 
 Yedi yazma aracı: `xdebug_set`, `certificates_reissue`, `project_start`,
 `project_stop`, `stack_up`, `stack_down`, `generate`. README yalnızca ilk
 ikisini sayıyor — yani `--allow-writes` bayrağının bir MCP istemcisine
 verdiği yetkinin **stack'i tümüyle durdurmayı içerdiği** dokümantasyonda
-yazmıyor. Bu bir *güvenlik dokümantasyonu* boşluğu, tipografik bir hata değil.
+yazmıyor. Bu bir _güvenlik dokümantasyonu_ boşluğu, tipografik bir hata değil.
 
 **"Yerine bu olsaydı."** Bu sayılar prose'da olmamalıydı. Ya üretilmeli
 (`mcp.rs` zaten `TOOLS`'u tarayan testlere sahip — bir tanesi de README
@@ -542,18 +542,18 @@ kişi için giriş noktası yok.
 Bir geliştiricinin makinesinden bir kurumun filosuna geçişte sorulanlar. Bugün
 hiçbirinin cevabı yok.
 
-| İhtiyaç | Bugün | Olması gereken |
-| --- | --- | --- |
-| Merkezî konfigürasyon | yok | MDM / Group Policy / `/Library/Managed Preferences` okuyan, kullanıcı ayarını override eden politika katmanı |
-| Zorunlu/kilitli ayarlar | yok | "Güncelleme kanalı kilitli", "telemetri kapalı", "workspace şurada" |
-| Private Docker registry | yok | Şablonlardaki `image:` referansları için kurumsal mirror ön eki |
-| macOS sistem proxy'si | okunmuyor (§5.4) | `macos-system-configuration` özelliği + görünür hata |
-| Air-gapped kurulum | yok | Şablonlar zaten binary'de; imajlar Docker Hub'dan, offline bundle yolu yok |
-| Denetim izi | kısmi | `/etc/hosts` değişikliği, container silme, sertifika yenileme — ayrı, yapılandırılmış, döndürülmeyen audit log |
-| Üçüncü taraf lisans bildirimi | yok | About kutusunda / NOTICE dosyasında bağımlılık lisansları — MIT dağıtım yükümlülüğü |
-| Erişilebilirlik beyanı | yok | VPAT / EN 301 549 |
-| Gizlilik beyanı | yok | Hangi veri nerede, ne kadar kalıyor |
-| Destek / sürüm ömrü | "yalnızca en son" | LTS ya da en az N-1 backport politikası |
+| İhtiyaç                       | Bugün             | Olması gereken                                                                                                 |
+| ----------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------- |
+| Merkezî konfigürasyon         | yok               | MDM / Group Policy / `/Library/Managed Preferences` okuyan, kullanıcı ayarını override eden politika katmanı   |
+| Zorunlu/kilitli ayarlar       | yok               | "Güncelleme kanalı kilitli", "telemetri kapalı", "workspace şurada"                                            |
+| Private Docker registry       | yok               | Şablonlardaki `image:` referansları için kurumsal mirror ön eki                                                |
+| macOS sistem proxy'si         | okunmuyor (§5.4)  | `macos-system-configuration` özelliği + görünür hata                                                           |
+| Air-gapped kurulum            | yok               | Şablonlar zaten binary'de; imajlar Docker Hub'dan, offline bundle yolu yok                                     |
+| Denetim izi                   | kısmi             | `/etc/hosts` değişikliği, container silme, sertifika yenileme — ayrı, yapılandırılmış, döndürülmeyen audit log |
+| Üçüncü taraf lisans bildirimi | yok               | About kutusunda / NOTICE dosyasında bağımlılık lisansları — MIT dağıtım yükümlülüğü                            |
+| Erişilebilirlik beyanı        | yok               | VPAT / EN 301 549                                                                                              |
+| Gizlilik beyanı               | yok               | Hangi veri nerede, ne kadar kalıyor                                                                            |
+| Destek / sürüm ömrü           | "yalnızca en son" | LTS ya da en az N-1 backport politikası                                                                        |
 
 ---
 
@@ -578,7 +578,7 @@ Etki/maliyet oranına göre. İlk yedisi bir haftalık iş.
    (§6.4) — ikisi de birkaç satır.
 7. ✅ **`elevate` quoting'i düzelt** (§5.1) — `osascript … on run argv`.
 8. ✅ **`macos-system-configuration` özelliğini ekle** (§5.4) — tek satır.
-   *(Özelliğin adı bu sürümde farklı çıktı; §17.2'ye bakınız.)*
+   _(Özelliğin adı bu sürümde farklı çıktı; §17.2'ye bakınız.)_
 
 ### Sonraki çeyrek (hafta–ay)
 
@@ -613,13 +613,13 @@ Etki/maliyet oranına göre. İlk yedisi bir haftalık iş.
 
 Bu bölüm, dokümanın kendi hata payının kaydı. Dördü de ölçülerek yakalandı.
 
-| İlk taslak iddiası | Gerçek | Nasıl yakalandı |
-| --- | --- | --- |
-| *"rustls sistem trust store'unu kullanmıyor; kurumsal MITM CA çalışmaz."* | **Yanlış.** `rustls-platform-verifier 0.7.0` graf içinde; macOS `security-framework`, Windows `windows-sys`, Linux `rustls-native-certs`. Sistem trust store kullanılıyor. Gerçek boşluk yalnızca macOS sistem *proxy'si*. | `cargo tree -e features -i reqwest` |
-| *"Rust hata mesajları hiç çevrilmiyor; kullanıcı İngilizce hata okuyor."* | **Kısmen yanlış.** 12 hata kodunun **tamamı** + `UNKNOWN` çevrili ve `ErrorAlert.vue` bunu başlık olarak gösteriyor. Boşluk yalnızca spesifik mesaj ve `hint`. | `en.js:1342` `errors` bloğu okundu |
-| *"Üretim kodunda 364 `unwrap/expect` var."* | **Yanlış** — o sayı test modüllerini içeriyordu. `#[cfg(test)]` öncesi bölümde toplam **7**. Bu bir kusur değil, projenin güçlü yanı. | Dosya başına `#[cfg(test)]` satır numarasına kadar sayım |
-| *"MCP 34 komuta ulaşamıyor"* (README'den alınmıştı) | **README'nin kendisi yanlış.** Ölçüm: **48** komut `AppHandle` alıyor. README'nin ikinci sayısı da yanlış (§11). | `commands.rs` imza taraması |
-| *"56 hata mesajı, 46 hint çevrilmiyor."* | **İkisi de yanlıştı** — ilk sayım test modüllerini içeriyor ve `format!` ile kurulan mesajları atlıyordu. Doğrusu: **113** mesaj, **33** hint. | `#[cfg(test)]` öncesi bölümde ifade tipine göre sınıflandırma |
+| İlk taslak iddiası                                                        | Gerçek                                                                                                                                                                                                                     | Nasıl yakalandı                                               |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| _"rustls sistem trust store'unu kullanmıyor; kurumsal MITM CA çalışmaz."_ | **Yanlış.** `rustls-platform-verifier 0.7.0` graf içinde; macOS `security-framework`, Windows `windows-sys`, Linux `rustls-native-certs`. Sistem trust store kullanılıyor. Gerçek boşluk yalnızca macOS sistem _proxy'si_. | `cargo tree -e features -i reqwest`                           |
+| _"Rust hata mesajları hiç çevrilmiyor; kullanıcı İngilizce hata okuyor."_ | **Kısmen yanlış.** 12 hata kodunun **tamamı** + `UNKNOWN` çevrili ve `ErrorAlert.vue` bunu başlık olarak gösteriyor. Boşluk yalnızca spesifik mesaj ve `hint`.                                                             | `en.js:1342` `errors` bloğu okundu                            |
+| _"Üretim kodunda 364 `unwrap/expect` var."_                               | **Yanlış** — o sayı test modüllerini içeriyordu. `#[cfg(test)]` öncesi bölümde toplam **7**. Bu bir kusur değil, projenin güçlü yanı.                                                                                      | Dosya başına `#[cfg(test)]` satır numarasına kadar sayım      |
+| _"MCP 34 komuta ulaşamıyor"_ (README'den alınmıştı)                       | **README'nin kendisi yanlış.** Ölçüm: **48** komut `AppHandle` alıyor. README'nin ikinci sayısı da yanlış (§11).                                                                                                           | `commands.rs` imza taraması                                   |
+| _"56 hata mesajı, 46 hint çevrilmiyor."_                                  | **İkisi de yanlıştı** — ilk sayım test modüllerini içeriyor ve `format!` ile kurulan mesajları atlıyordu. Doğrusu: **113** mesaj, **33** hint.                                                                             | `#[cfg(test)]` öncesi bölümde ifade tipine göre sınıflandırma |
 
 Ayrıca ilk taslakta **olmayan**, doğrulama sırasında ortaya çıkan üç bulgu:
 güncelleme endpoint'inin 404 vermesi (§6.1), SECURITY.md advisory linkinin ölü
@@ -660,45 +660,45 @@ yapar.
 
 ### 17.1 Yapılanlar
 
-| # | Madde | Ne yapıldı |
-| --: | --- | --- |
-| 1 | Panic hook (§4.1) | Yeni `crash.rs`: `set_hook` + `crash-<UTC>-<pid>.txt`, senkron `fs::write` ile. Mesaj `logging::redact`'ten geçiyor. Son 10 rapor tutuluyor. Hem app hem `stackvo-mcp` kuruyor. 9 test. |
-| 3 | SECURITY.md (§6.1) | Advisory linki `stackvo/stackvo`'ya alındı — doğrulandı, HTTP 200. |
-| 4 | README sayıları (§11) | 34 → **48**, "iki araç" → **yedi araç, adlarıyla**. Yeni `tests/readme_claims.rs` ikisini de koda karşı ölçüyor: yanlış sayı da, eksik araç adı da build'i kırıyor (kırıldığı doğrulandı). |
-| 5 | Kapsam (§3.1) | `vitest --coverage` (v8) + CI'da `cargo llvm-cov`. Eşik **yok**, run summary'ye rapor. |
-| 6 | Sürüm + imza uyarısı (§6.2, §6.4) | `tests/version_agreement.rs` üç dosyayı eşitliyor. `release.yml` artık macOS için de imzasız/notarize-edilmemiş durumu uyarıyor — dört senaryonun dördü de koşturularak doğrulandı. |
-| 7 | `elevate` (§5.1) | Raporun "doğrusu" seçeneği: `shell(&str)` → `run(&[&str])`. Script sabit, yollar `argv` ile gidiyor, `quoted form of` kaçışlıyor. **İnterpolasyon kalmadı.** 6 test — üçü gerçek `osascript` çalıştırıp düşmanca girdiyi deniyor. |
-| 8 | Sistem proxy (§5.4) | `reqwest`'e `system-proxy` + `mail.rs`'e `no_proxy()` istemci. |
-| 2 | Release (§6.1) | İmza anahtarı üretildi, `pubkey` dolduruldu — `release.yml` preflight artık geçiyor. **Endpoint hâlâ 404: açık blokaj.** |
+|   # | Madde                             | Ne yapıldı                                                                                                                                                                                                                        |
+| --: | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|   1 | Panic hook (§4.1)                 | Yeni `crash.rs`: `set_hook` + `crash-<UTC>-<pid>.txt`, senkron `fs::write` ile. Mesaj `logging::redact`'ten geçiyor. Son 10 rapor tutuluyor. Hem app hem `stackvo-mcp` kuruyor. 9 test.                                           |
+|   3 | SECURITY.md (§6.1)                | Advisory linki `stackvo/stackvo`'ya alındı — doğrulandı, HTTP 200.                                                                                                                                                                |
+|   4 | README sayıları (§11)             | 34 → **48**, "iki araç" → **yedi araç, adlarıyla**. Yeni `tests/readme_claims.rs` ikisini de koda karşı ölçüyor: yanlış sayı da, eksik araç adı da build'i kırıyor (kırıldığı doğrulandı).                                        |
+|   5 | Kapsam (§3.1)                     | `vitest --coverage` (v8) + CI'da `cargo llvm-cov`. Eşik **yok**, run summary'ye rapor.                                                                                                                                            |
+|   6 | Sürüm + imza uyarısı (§6.2, §6.4) | `tests/version_agreement.rs` üç dosyayı eşitliyor. `release.yml` artık macOS için de imzasız/notarize-edilmemiş durumu uyarıyor — dört senaryonun dördü de koşturularak doğrulandı.                                               |
+|   7 | `elevate` (§5.1)                  | Raporun "doğrusu" seçeneği: `shell(&str)` → `run(&[&str])`. Script sabit, yollar `argv` ile gidiyor, `quoted form of` kaçışlıyor. **İnterpolasyon kalmadı.** 6 test — üçü gerçek `osascript` çalıştırıp düşmanca girdiyi deniyor. |
+|   8 | Sistem proxy (§5.4)               | `reqwest`'e `system-proxy` + `mail.rs`'e `no_proxy()` istemci.                                                                                                                                                                    |
+|   2 | Release (§6.1)                    | İmza anahtarı üretildi, `pubkey` dolduruldu — `release.yml` preflight artık geçiyor. **Endpoint hâlâ 404: açık blokaj.**                                                                                                          |
 
 ### 17.2 Raporun uygulama sırasında yanlış çıkan iki tavsiyesi
 
-| Rapordaki iddia | Gerçek | Nasıl yakalandı |
-| --- | --- | --- |
-| *"`macos-system-configuration` özelliğini eklemek (tek satır)"* (§5.4) | **Özellik adı yanlış.** O ad `reqwest` 0.12'nin; bu repo 0.13.4 kullanıyor ve orada adı **`system-proxy`** (ve `default`'un parçası, `default-features = false` ile kapanıyor). Ayrıca **tek satır değil**: hyper-util'in macOS okuyucusu sistemin istisna listesini ve "Exclude simple hostnames"i okumuyor, `NO_PROXY` dışında hiçbir şey daraltmıyor. Özellik süreç geneli olduğu için `mail.rs`'in `127.0.0.1` trafiği kurumsal proxy'ye düşerdi — yani özellik, tam da açıldığı makinede mail catcher'ı bozardı. `mail::client` artık `no_proxy()` ile kuruluyor. | `reqwest-0.13.4/Cargo.toml` özellik listesi + `hyper-util`'in `matcher.rs`'i okundu |
-| *"`scaffold.rs` … 791 satır, 5 test"* — sıcak ve zayıf modüller listesinde (§3.1) | **Zayıf değil: %94.09 satır kapsamı.** Test *yoğunluğu* kapsamı yanlış tahmin ediyor; §3.1'in kendi tezi bu tabloyla çürüdü. Aynı tabloda `error.rs` (%30.65), `engine.rs` (%19.65), `pty.rs` (%29.04), `watcher.rs` (%43.62) doğru çıktı. | `cargo llvm-cov --summary-only` |
+| Rapordaki iddia                                                                   | Gerçek                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Nasıl yakalandı                                                                     |
+| --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| _"`macos-system-configuration` özelliğini eklemek (tek satır)"_ (§5.4)            | **Özellik adı yanlış.** O ad `reqwest` 0.12'nin; bu repo 0.13.4 kullanıyor ve orada adı **`system-proxy`** (ve `default`'un parçası, `default-features = false` ile kapanıyor). Ayrıca **tek satır değil**: hyper-util'in macOS okuyucusu sistemin istisna listesini ve "Exclude simple hostnames"i okumuyor, `NO_PROXY` dışında hiçbir şey daraltmıyor. Özellik süreç geneli olduğu için `mail.rs`'in `127.0.0.1` trafiği kurumsal proxy'ye düşerdi — yani özellik, tam da açıldığı makinede mail catcher'ı bozardı. `mail::client` artık `no_proxy()` ile kuruluyor. | `reqwest-0.13.4/Cargo.toml` özellik listesi + `hyper-util`'in `matcher.rs`'i okundu |
+| _"`scaffold.rs` … 791 satır, 5 test"_ — sıcak ve zayıf modüller listesinde (§3.1) | **Zayıf değil: %94.09 satır kapsamı.** Test _yoğunluğu_ kapsamı yanlış tahmin ediyor; §3.1'in kendi tezi bu tabloyla çürüdü. Aynı tabloda `error.rs` (%30.65), `engine.rs` (%19.65), `pty.rs` (%29.04), `watcher.rs` (%43.62) doğru çıktı.                                                                                                                                                                                                                                                                                                                             | `cargo llvm-cov --summary-only`                                                     |
 
 ### 17.3 Ölçüm artık var: ilk sayılar
 
 Raporun §3.1'de "bilinmiyor" dediği şey artık bir sayı.
 
-| | Satır kapsamı |
-| --- | --: |
-| **Rust** (toplam) | **%61.60** |
-| `generator.rs` | %94.89 |
-| `scaffold.rs` | %94.09 |
-| `migrate.rs` | %82.46 |
-| `phpini.rs` | %67.26 |
-| `watcher.rs` | %43.62 |
-| `db.rs` | %35.14 |
-| `error.rs` | %30.65 |
-| `pty.rs` | %29.04 |
-| `engine.rs` | %19.65 |
-| **`commands.rs`** | **%18.18** |
-| **Frontend** (toplam) | **%30.70** |
-| `src/lib/**` | %91.42 |
-| `src/stores/**` | %78.87 |
-| **`src/views/**`** | **%0** |
+|                       | Satır kapsamı |
+| --------------------- | ------------: |
+| **Rust** (toplam)     |    **%61.60** |
+| `generator.rs`        |        %94.89 |
+| `scaffold.rs`         |        %94.09 |
+| `migrate.rs`          |        %82.46 |
+| `phpini.rs`           |        %67.26 |
+| `watcher.rs`          |        %43.62 |
+| `db.rs`               |        %35.14 |
+| `error.rs`            |        %30.65 |
+| `pty.rs`              |        %29.04 |
+| `engine.rs`           |        %19.65 |
+| **`commands.rs`**     |    **%18.18** |
+| **Frontend** (toplam) |    **%30.70** |
+| `src/lib/**`          |        %91.42 |
+| `src/stores/**`       |        %78.87 |
+| **`src/views/**`**    |        **%0** |
 
 İki sayı raporun iki ayrı bölümünü sayıya çeviriyor:
 
@@ -723,12 +723,12 @@ bir politika kararı vermeyi gerektiriyor. **Bu bölüm, raporun §12'de "bus fa
 1" dediği şeyin somut hâlidir** — hepsi tek bir kişinin elinde ve hiçbirinin
 başka bir yerde kaydı yok.
 
-| # | Ne | Neden devredilemiyor | Bugünkü etkisi |
-| --: | --- | --- | --- |
-| 1 | **Güncelleme endpoint'i 404** | `tauri.conf.json` `stackvo/stackvo-tauri`'yi gösteriyor; o repo **yok** (doğrulandı: HTTP 404). Nerede yayınlanacağı bir sahiplik kararı — `stackvo/stackvo` release'leri mi, yeni bir repo mu. | İmza tarafı çözüldü, dağıtım tarafı çözülmedi: **uygulama hâlâ güncelleme alamaz.** Blokajın *ikinci* yarısı bu. |
-| 2 | **`TAURI_SIGNING_PRIVATE_KEY` secret'ı** | Özel anahtar üretildi ve `~/.tauri/stackvo.key`'de duruyor (mod 600); public yarısı `tauri.conf.json`'a girdi. Özel yarı **repoya girmedi ve girmemeli** — GitHub repository secret'ı olarak eklenmesi gerekiyor. Parolasız üretildi; parolalı istenirse çift yeniden üretilmeli. | `release.yml` preflight'ının pubkey kontrolü artık geçiyor, secret kontrolü hâlâ bloke ediyor — doğru davranış. |
-| 3 | **Apple / Windows imzalama secret'ları** | `APPLE_CERTIFICATE`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`, `WINDOWS_CERTIFICATE`. Hepsi ücretli geliştirici hesaplarına bağlı. | §6.4'ten sonra artık **sessiz değil**: eksikse release log'unda uyarı çıkıyor. Ama hâlâ eksikler. |
-| 4 | **Kapsam eşiği** | Sayılar artık var (§17.3). %61.60'ı mı yoksa daha düşük bir tabanı mı kilitleyeceği mühendislik değil, politika kararı. | Ölçüm var, kapı yok. |
+|   # | Ne                                       | Neden devredilemiyor                                                                                                                                                                                                                                                              | Bugünkü etkisi                                                                                                   |
+| --: | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+|   1 | **Güncelleme endpoint'i 404**            | `tauri.conf.json` `stackvo/stackvo-tauri`'yi gösteriyor; o repo **yok** (doğrulandı: HTTP 404). Nerede yayınlanacağı bir sahiplik kararı — `stackvo/stackvo` release'leri mi, yeni bir repo mu.                                                                                   | İmza tarafı çözüldü, dağıtım tarafı çözülmedi: **uygulama hâlâ güncelleme alamaz.** Blokajın _ikinci_ yarısı bu. |
+|   2 | **`TAURI_SIGNING_PRIVATE_KEY` secret'ı** | Özel anahtar üretildi ve `~/.tauri/stackvo.key`'de duruyor (mod 600); public yarısı `tauri.conf.json`'a girdi. Özel yarı **repoya girmedi ve girmemeli** — GitHub repository secret'ı olarak eklenmesi gerekiyor. Parolasız üretildi; parolalı istenirse çift yeniden üretilmeli. | `release.yml` preflight'ının pubkey kontrolü artık geçiyor, secret kontrolü hâlâ bloke ediyor — doğru davranış.  |
+|   3 | **Apple / Windows imzalama secret'ları** | `APPLE_CERTIFICATE`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`, `WINDOWS_CERTIFICATE`. Hepsi ücretli geliştirici hesaplarına bağlı.                                                                                                                 | §6.4'ten sonra artık **sessiz değil**: eksikse release log'unda uyarı çıkıyor. Ama hâlâ eksikler.                |
+|   4 | **Kapsam eşiği**                         | Sayılar artık var (§17.3). %61.60'ı mı yoksa daha düşük bir tabanı mı kilitleyeceği mühendislik değil, politika kararı.                                                                                                                                                           | Ölçüm var, kapı yok.                                                                                             |
 
 Ayrıca, **bu çalışmadan bağımsız** ve HEAD'de de mevcut olan iki kırık
 (`git stash` ile doğrulandı):
@@ -757,24 +757,25 @@ Eksik olan yarısı şuydu: **enum'un gözlenebilir bir üçüncü varyantı yok
 atıyor. Üçüncü cevap — "topla, sonra iddia et" — testlerin ihtiyaç duyduğu tek
 cevaptı ve yoktu. Sonucu ölçülebilir: `run_operation`, uygulamadaki **her uzun
 işlemin** geçtiği huni (11 komut, her compose çalıştırması, her build, her
-clone), **hiç testi yoktu.** Yazılmamış değil; *yazılamazdı*.
+clone), **hiç testi yoktu.** Yazılmamış değil; _yazılamazdı_.
 
 **Dilim 1.** Yeni `progress.rs` — içinde tek bir `use tauri::` yok:
 
-| | |
-| --- | --- |
+|                      |                                                                                                                                                      |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `trait ProgressSink` | `fn event(&self, name: &str, payload: Value)`. `dyn`-uyumlu olması için jenerik değil; payload `Value`, çünkü zaten webview'e JSON olarak gidiyordu. |
-| `Null` | Pencere yok, olaylar düşer. `stackvo-mcp` artık `Sink::Headless` yerine bunu kullanıyor — MCP yolu artık hiçbir Tauri tipi adlandırmıyor. |
-| `Recording` | Var olmayan implementasyon. Olayları sırasıyla tutar; `names()`, `named()`, `last()`. |
+| `Null`               | Pencere yok, olaylar düşer. `stackvo-mcp` artık `Sink::Headless` yerine bunu kullanıyor — MCP yolu artık hiçbir Tauri tipi adlandırmıyor.            |
+| `Recording`          | Var olmayan implementasyon. Olayları sırasıyla tutar; `names()`, `named()`, `last()`.                                                                |
 
 `events::Sink` trait'i implement ediyor, `run_operation` artık
 `&dyn ProgressSink` alıyor — masaüstü çağrı yerleri değişmedi (`&Sink`
 otomatik `&dyn`'e dönüşüyor), webview aynı JSON'u alıyor.
 
 Sonra `run_operation`'ın dört dalı da test edildi: başarı (satır başına progress
-+ tek terminal olay), sıfır-olmayan çıkış (hem `Err` **hem** başarısız terminal
-olay — birini emitip diğerini atlamak konsolu sonsuza kadar döndürür), başlamayan
-program, ve pencere olmadan aynı sonuç. **`runner.rs`: %98.17.**
+
+- tek terminal olay), sıfır-olmayan çıkış (hem `Err` **hem** başarısız terminal
+  olay — birini emitip diğerini atlamak konsolu sonsuza kadar döndürür), başlamayan
+  program, ve pencere olmadan aynı sonuç. **`runner.rs`: %98.17.**
 
 **Dilim 2.** `generate()` `AppHandle`'ı iki ilgisiz sebeple alıyordu: yönetilen
 kilit ve sink. İkincisi ayrıldı — `generate_reported(&dyn ProgressSink, …)` —
@@ -790,7 +791,7 @@ kullanıcının **tüm ayarlarını** uyarısız varsayılana döndürüyor ve b
 yedeklemiyordu — sonraki `prefs_set` de kanıtın üzerine yazıyordu.
 
 **Görmediği ikincisi daha sinsiydi.** `serde_json::from_str` bir `3`'ü, bir
-`"dark"`'ı ya da bir diziyi *geçerli JSON* olarak kabul eder ve eski kod onu
+`"dark"`'ı ya da bir diziyi _geçerli JSON_ olarak kabul eder ve eski kod onu
 öylece döndürüyordu. Sonrasında her `prefs_set` çağrısı `as_object_mut()`'tan
 `None` alıyor, shallow merge hiçbir şey yapmıyor, ve aynı skaler geri
 yazılıyordu. Yani: **kullanıcı ayarları değiştiriyor, hiçbiri kaydedilmiyor,
@@ -800,7 +801,7 @@ Yapılan: `schemaVersion: 1` (ileride yeniden adlandırılacak bir anahtar için
 tutamak), nesne olmayan JSON de bozuk sayılıyor, ve bozuk dosya
 **kopyalanmıyor — taşınıyor** (`preferences.corrupt-<UTC>.json`). Taşımak
 kasıtlı: kopyalasaydık bozuk dosya orada durduğu sürece her açılışta yeni bir
-yedek üretilirdi. Yalnızca *bozuk* JSON'da çalıştığı için güvenli — daha yeni bir
+yedek üretilirdi. Yalnızca _bozuk_ JSON'da çalıştığı için güvenli — daha yeni bir
 sürümün bilinmeyen anahtarlar taşıyan dosyası hâlâ geçerli bir nesnedir, okunur
 ve karantinaya alınmaz (bu da ayrıca test edildi).
 
@@ -812,7 +813,7 @@ ve karantinaya alınmaz (bu da ayrıca test edildi).
   Tek dilli bir SBOM, Tauri uygulamasının yarısını atlayan bir belgedir.
 - **Build provenance** — `actions/attest-build-provenance`, artı iş için
   gereken `id-token: write` ve `attestations: write` izinleri.
-- **SHA-256 listesi** — `latest.json` imzalı olduğu için *updater* kanıtlayabiliyordu;
+- **SHA-256 listesi** — `latest.json` imzalı olduğu için _updater_ kanıtlayabiliyordu;
   releases sayfasından elle indiren kişinin hiçbir yolu yoktu.
 
 ### 18.4 §14.10 — ölçüldü, ertelendi
@@ -832,12 +833,12 @@ checkout'una bağlı olması — ondan bağımsız ve çok daha ucuz kapatılabi
 
 ### 18.5 Kapsam, iki tur sonra
 
-| | Başlangıç | Şimdi |
-| --- | --: | --: |
-| **Rust toplam** | %61.60 | **%63.12** |
-| `runner.rs` | (`run_operation` test edilemez) | **%98.17** |
-| `commands.rs` | %18.18 | **%23.97** |
-| `progress.rs` | — | %98.06 |
+|                 |                       Başlangıç |      Şimdi |
+| --------------- | ------------------------------: | ---------: |
+| **Rust toplam** |                          %61.60 | **%63.12** |
+| `runner.rs`     | (`run_operation` test edilemez) | **%98.17** |
+| `commands.rs`   |                          %18.18 | **%23.97** |
+| `progress.rs`   |                               — |     %98.06 |
 
 Rust testleri: **448 → 469.**
 
@@ -857,7 +858,7 @@ Testin yakaladığı şey README değildi; **kendi ölçümünün güvenilmez h�
 geldiğiydi**:
 
 > `the command scan found 146 commands, so its count of 48 AppHandle commands
-> cannot be trusted either`
+cannot be trusted either`
 
 O `assert_eq!(total, 143)` satırı savunma amaçlı yazılmıştı ve tam olarak
 öngörüldüğü şekilde işledi — yanlış bir sayı README'ye sessizce yerleşmek yerine
@@ -883,10 +884,10 @@ olmaları çözülmüş olmaları değil.
 
 ### 19.1 CI'ın kendi kapıları
 
-| Ne | Neydi | Ne yapıldı |
-| --- | --- | --- |
-| `npm run lint` exit 1 | Dört dump dosyası Prettier'dan geçmiyordu — yani "Lint the front end" adımı main'de kırmızıydı. | `prettier --write`. Dördü de saf biçimlendirme; diff'i satır satır kontrol edildi, anlamsal değişiklik yok. |
-| ESLint `coverage/` dizinini tarıyordu | **Bu turun kendi regresyonu.** §17.5'te açılan kapsam raporu, v8 reporter'ın kendi HTML paketini üretiyor; ESLint onun `eslint-disable` yorumlarını "kullanılmayan direktif" diye raporluyordu. | `eslint.config.js` ignore listesine `coverage/**`. |
+| Ne                                    | Neydi                                                                                                                                                                                           | Ne yapıldı                                                                                                  |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `npm run lint` exit 1                 | Dört dump dosyası Prettier'dan geçmiyordu — yani "Lint the front end" adımı main'de kırmızıydı.                                                                                                 | `prettier --write`. Dördü de saf biçimlendirme; diff'i satır satır kontrol edildi, anlamsal değişiklik yok. |
+| ESLint `coverage/` dizinini tarıyordu | **Bu turun kendi regresyonu.** §17.5'te açılan kapsam raporu, v8 reporter'ın kendi HTML paketini üretiyor; ESLint onun `eslint-disable` yorumlarını "kullanılmayan direktif" diye raporluyordu. | `eslint.config.js` ignore listesine `coverage/**`.                                                          |
 
 ### 19.2 Hermetik olmayan test
 
@@ -897,17 +898,17 @@ Sebebi kaydedilmemişti, ve sebep kodda değildi.
 Test `missing_hosts_by_owner`'ı çağırıyor; o zincir **gerçek Docker daemon'ına**
 ve **gerçek `/etc/hosts`'a** ulaşıyor. Testin kendi yorumu şöyle diyordu:
 
-> *Nothing here starts Docker, and that is the point: `stackvo_containers`
-> fails, nothing is running…*
+> _Nothing here starts Docker, and that is the point: `stackvo_containers`
+> fails, nothing is running…_
 
-Doğru, ve aynı şey değil. Docker'ı *başlatmamak* ile hiçbir şeyin *çalışmıyor
-olması* farklı iddialar. CI runner'ında ikisi çakışıyor, o yüzden test yeşildi.
+Doğru, ve aynı şey değil. Docker'ı _başlatmamak_ ile hiçbir şeyin _çalışmıyor
+olması_ farklı iddialar. CI runner'ında ikisi çakışıyor, o yüzden test yeşildi.
 Stack'i fiilen çalıştıran bir geliştirici makinesinde phpMyAdmin ve RabbitMQ
 **çalışıyor**, kod onları doğru şekilde listeliyor, ve test kodda olmayan bir
 hatayı bildiriyordu. **Yani: bakımcının kendi makinesinde koşamayan bir test.**
 
 `service_domains`'in iki ortam okuması (çalışan container'lar, `/etc/hosts`)
-argümana çevrildi. Kural artık *belirtilen* bir dünyaya karşı doğrulanıyor:
+argümana çevrildi. Kural artık _belirtilen_ bir dünyaya karşı doğrulanıyor:
 hiçbir şey çalışmıyor **ve** hiçbir şey yazılı değil — "fresh install" tam olarak
 budur. Bir de tersi eklendi: bir servis çalışıyorsa adı isteniyor. Sadece boş
 durumu doğrulamak, her zaman boş dönen bir fonksiyondan da geçerdi.
@@ -941,10 +942,10 @@ container adı ve compose servis adı oluyor, ve aşağıda hiçbir şey onu yen
 kontrol etmiyor. Altı düşmanca ad artık reddediliyor **ve** reddedilmeden önce
 UI'a hiçbir olay gitmediği doğrulanıyor.
 
-*(Bu arada bir beklentim yanlış çıktı: bilinmeyen servis `InvalidInput` değil
+_(Bu arada bir beklentim yanlış çıktı: bilinmeyen servis `InvalidInput` değil
 `NotFound` dönüyor. Kod haklı — ad iyi biçimli, sadece hiçbir şeyi
 adlandırmıyor — ve ikisi kullanıcıya farklı çevrilmiş başlık olarak ulaştığı için
-hangisi olduğu davranıştır. Test gerçeğe uyduruldu.)*
+hangisi olduğu davranıştır. Test gerçeğe uyduruldu.)_
 
 ### 19.5 §14.14'ün ilk yarısı: axe
 
@@ -961,7 +962,7 @@ gerektiriyor. Tam olarak bir makinenin insandan iyi olduğu sınıf.
 
 **Ve bir şey kapatıldı: `color-contrast`.** jsdom'da canvas yok, axe kontrastı
 canvas'a boyayarak ölçüyor — kural açık bırakılsaydı her bileşende sonsuza kadar
-*hiçbir şey kontrol etmeden* geçerdi. Hiç koşmamasından kötü olurdu: vermediği bir
+_hiçbir şey kontrol etmeden_ geçerdi. Hiç koşmamasından kötü olurdu: vermediği bir
 garantiyi veriyormuş gibi görünen yeşil bir suite. Üstelik bu uygulamanın en çok
 ihtiyaç duyduğu kural o — `appearance.js` temayı işletim sisteminin vurgu
 renginden türetiyor, yani palet sabit değil ve elle bir kez denetlenemez. Gerçek
@@ -969,13 +970,13 @@ bir tarayıcı gerekiyor: §14.12.
 
 ### 19.6 Sayılar
 
-| | Tur 1 | Tur 2 | Şimdi |
-| --- | --: | --: | --: |
-| **Rust toplam** | %61.60 | %63.12 | **%63.34** |
-| `commands.rs` | %18.18 | %23.97 | **%25.46** |
+|                     |  Tur 1 |  Tur 2 |      Şimdi |
+| ------------------- | -----: | -----: | ---------: |
+| **Rust toplam**     | %61.60 | %63.12 | **%63.34** |
+| `commands.rs`       | %18.18 | %23.97 | **%25.46** |
 | **Frontend toplam** | %30.70 | %30.70 | **%31.44** |
-| Rust testleri | 448 | 469 | **472** |
-| Frontend testleri | 160 | 160 | **182** |
+| Rust testleri       |    448 |    469 |    **472** |
+| Frontend testleri   |    160 |    160 |    **182** |
 
 Ve ilk kez: **Rust paketi tamamen yeşil**, `npm run lint` exit 0, vitest'te
 sıfır unhandled error.
@@ -998,11 +999,11 @@ sıfır unhandled error.
 §7.1 **33** `with_hint` sayıyordu. Ölçüm: **60** — 57'si düz literal, 3'ü
 çalışma anında kurulan. 56 tanesi de birbirinden farklı.
 
-*(Aradaki fark muhtemelen §15'te kaydedilen `format!` sorununun aynısı: ilk
+_(Aradaki fark muhtemelen §15'te kaydedilen `format!` sorununun aynısı: ilk
 sayım çok satırlı literal'leri ve `.to_string()` ile yazılmış olanları
 atlıyordu. Aynı hatanın hem mesaj hem hint sayımında tekrarlanması, "ifade
 tipine göre sınıflandırma"nın tek seferlik bir düzeltme değil, sürekli bir
-yöntem sorunu olduğunu gösteriyor.)*
+yöntem sorunu olduğunu gösteriyor.)_
 
 ### 20.2 Neden anahtar değil, katalog
 
@@ -1060,13 +1061,13 @@ metin değiştirildiğinde build kırılıyor.
 
 ### 20.5 Sayılar
 
-| | Önce | Sonra |
-| --- | --: | --: |
-| Çevrilmeyen hint | 60 | **3** (çalışma anında kurulanlar) |
-| Türkçe hint çevirisi | 0 | **56** |
-| Rust testleri | 472 | **475** |
-| Frontend testleri | 182 | **186** |
-| Rust kapsam | %63.34 | **%63.47** |
+|                      |   Önce |                             Sonra |
+| -------------------- | -----: | --------------------------------: |
+| Çevrilmeyen hint     |     60 | **3** (çalışma anında kurulanlar) |
+| Türkçe hint çevirisi |      0 |                            **56** |
+| Rust testleri        |    472 |                           **475** |
+| Frontend testleri    |    182 |                           **186** |
+| Rust kapsam          | %63.34 |                        **%63.47** |
 
 Kullanıcının **eyleme geçtiği** metin artık Türkçe. Rapor bunu "çevrilmemesi en
 pahalı olanı" diye işaretlemişti.
@@ -1128,7 +1129,7 @@ Yerine gerçek bir değişmez kondu: `lib.rs`'in `generate_handler!` listesi ile
 `commands.rs`'teki implementasyonlar **iki yönlü** karşılaştırılıyor.
 
 Bu, `tools/validate-contracts.mjs` suite E'nin yaptığı işin yarısı — ama **o
-job harici bir repo checkout'una bağlı**. Rapor bunu §2.1'de kusur değil *risk*
+job harici bir repo checkout'una bağlı**. Rapor bunu §2.1'de kusur değil _risk_
 diye işaretlemişti ve haklıydı: `stackvo/stackvo` private olduğu, adı
 değiştiği ya da rate-limit'e takıldığı gün sözleşme kapısı kaybolur ve kimse
 fark etmez. Bu yarısı ağ, checkout ve Node istemiyor — o job koşamadığında da
@@ -1140,12 +1141,12 @@ kimsenin geliştirme sırasında açmadığı bir ekranda ortaya çıkar.
 
 ### 21.6 Sayılar
 
-| | Önce | Sonra |
-| --- | --: | --: |
-| Rust testleri | 475 | **481** |
-| `diagnostics.rs` kapsam | — | **%94.58** |
-| Rust toplam kapsam | %63.47 | **%64.34** |
-| IPC komutu | 143 | **144** |
+|                         |   Önce |      Sonra |
+| ----------------------- | -----: | ---------: |
+| Rust testleri           |    475 |    **481** |
+| `diagnostics.rs` kapsam |      — | **%94.58** |
+| Rust toplam kapsam      | %63.47 | **%64.34** |
+| IPC komutu              |    143 |    **144** |
 
 §14'ün 9–15 grubundan geriye **§14.10 (tauri-specta)** ve **§14.12 (E2E)**
 kaldı; ikisi de §18.4 ve §19.5'te gerekçeleriyle ayrı dal olarak işaretli.
@@ -1166,7 +1167,7 @@ tauri-driver is not supported on this platform
 macOS'ta WKWebView'ın WebDriver'ı yok. Yani §14.12'nin senaryoları **bu
 makinede hiçbir şekilde koşturulamaz**; ancak bir Linux runner ilk kez
 gördüğünde doğrulanabilirler. Koşulmamış test altyapısı göndermek, raporun
-kendi tezinin ("*'muhtemelen aynı' shipping için bir standart değil*") tam
+kendi tezinin ("_'muhtemelen aynı' shipping için bir standart değil_") tam
 karşıtı olurdu. **§14.12 açık; bir Linux runner gerektiriyor.**
 
 ### 22.2 Ama boşluk E2E'nin kendisi değildi
@@ -1183,11 +1184,11 @@ yoktu — `Projects.vue` (1.022) ve `Mail.vue` (762) dahil, kimse denememişti.
 atıyordu ve `null` geldiğinde pencere boşalıyordu. Sayfalar mount edilince
 **aynı hatanın dört örneği daha** çıktı:
 
-| Yer | Komut |
-| --- | --- |
-| `LogView.vue` | `app_logs_all`, `app_logs` |
-| `DumpView.vue` | `debug_bridge_overview` |
-| `Projects.vue` | `project_adoptable` |
+| Yer            | Komut                      |
+| -------------- | -------------------------- |
+| `LogView.vue`  | `app_logs_all`, `app_logs` |
+| `DumpView.vue` | `debug_bridge_overview`    |
+| `Projects.vue` | `project_adoptable`        |
 
 Sözleşme taranınca liste dönen **yedi** atama daha korumasız çıktı
 (`service_settings`, `container_stats_history`, `quick_commands`,
@@ -1226,23 +1227,23 @@ sayfa eklendi ve dört gerçek ihlal çıktı:
 - **`empty-table-header`** — Vuetify'ın `VDataTableHeaders.js:226` satırı
   koşulsuz bir `<th colspan="{n+1}">` yükleme satırı üretiyor. Gerçek bir bulgu
   ama **burada yazılmamış** ve hiçbir prop/slot ile kontrol edilemiyor. Yalnızca
-  *sayfa* taramalarında, kaynağı adlandırılarak kapatıldı; bileşen taramalarında
+  _sayfa_ taramalarında, kaynağı adlandırılarak kapatıldı; bileşen taramalarında
   kural açık kalıyor — `aria-progressbar-name`'i her yerde kapatmak, bu dosyayı
   haklı çıkaran bulguyu çöpe atmak olurdu.
 
 ### 22.6 Sayılar
 
-| | Önce | Sonra |
-| --- | --: | --: |
+|                            |   Önce |      Sonra |
+| -------------------------- | -----: | ---------: |
 | **Frontend toplam kapsam** | %31.44 | **%50.71** |
-| **`src/views/`** | **%0** | **%26.38** |
-| `About` / `Dumps` / `Logs` | %0 | **%100** |
-| `Services` | %0 | **%94.38** |
-| `Dashboard` | %0 | **%85.42** |
-| `Projects` | %0 | **%84.25** |
-| `Mail` | %0 | **%78.78** |
-| Frontend testleri | 186 | **228** |
-| Rust testleri | 481 | 481 |
+| **`src/views/`**           | **%0** | **%26.38** |
+| `About` / `Dumps` / `Logs` |     %0 |   **%100** |
+| `Services`                 |     %0 | **%94.38** |
+| `Dashboard`                |     %0 | **%85.42** |
+| `Projects`                 |     %0 | **%84.25** |
+| `Mail`                     |     %0 | **%78.78** |
+| Frontend testleri          |    186 |    **228** |
+| Rust testleri              |    481 |        481 |
 
 Geriye `Settings.vue` ve `ProjectDetail.vue` kaldı — ikisi de **%0**, ve ikisi de
 §14.16'nın (bölme) konusu. `src/views/`'in %26'da kalmasının tek sebebi onlar.
@@ -1264,7 +1265,7 @@ Geriye `Settings.vue` ve `ProjectDetail.vue` kaldı — ikisi de **%0**, ve ikis
 `Settings.vue` 3.433 satır ve **%0** kapsamdı. Rapor §2.3'te bunun en pahalı
 sonucunu doğru tespit etmişti: iki test — `certificates-pane.spec.js` ve
 `template-overrides.spec.js` — paneli **mount etmiyor**, markup'ın bir
-*kopyasını* test dosyasında yeniden kuruyor, sonra gerçek dosyayı metin olarak
+_kopyasını_ test dosyasında yeniden kuruyor, sonra gerçek dosyayı metin olarak
 okuyup kopyanın hâlâ eşleştiğini doğruluyordu.
 
 Bu ikisiyle başlandı çünkü ikisi de **gerçekten kırık gönderilmiş** bir davranış
@@ -1285,12 +1286,12 @@ kopyada aramalarıydı.
 
 ### 23.2 Ne yapıldı
 
-| | |
-| --- | --- |
-| `composables/useCertificates.js` | Durum + `load` / `reissue` / `trustInTerminal`. Modül kapsamlı, çünkü panel **ve** ayar rayının "sertifika bayat" rozeti aynı veriyi okur ve aynı cevabı vermek zorundadır. |
-| `composables/useTemplates.js` | Çağrı başına kendi durumu — tek tüketici var. `busyWith` burada, düzeltmesiyle birlikte. |
-| `components/settings/CertificatesPane.vue` | 242 satır, **%100 kapsam** |
-| `components/settings/TemplateOverridesPane.vue` | 158 satır, **%100 kapsam** |
+|                                                 |                                                                                                                                                                             |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `composables/useCertificates.js`                | Durum + `load` / `reissue` / `trustInTerminal`. Modül kapsamlı, çünkü panel **ve** ayar rayının "sertifika bayat" rozeti aynı veriyi okur ve aynı cevabı vermek zorundadır. |
+| `composables/useTemplates.js`                   | Çağrı başına kendi durumu — tek tüketici var. `busyWith` burada, düzeltmesiyle birlikte.                                                                                    |
+| `components/settings/CertificatesPane.vue`      | 242 satır, **%100 kapsam**                                                                                                                                                  |
+| `components/settings/TemplateOverridesPane.vue` | 158 satır, **%100 kapsam**                                                                                                                                                  |
 
 Kopya-testlerin ikisi de silindi; yerlerine gerçek bileşeni mount eden
 `settings-certificates.spec.js` (8 test) ve `settings-templates.spec.js`
@@ -1304,7 +1305,7 @@ Panelin geri kalanı erişilemezdi. Gerçek bileşen mount edilince aynı dosyal
 
 - SSL kapalıyken panelin hiçbir şeyin geçerli olmadığını söylemesi
 - mkcert yokken yeniden üretme düğmesinin **disabled** olması
-- CA güvenilirken terminal düğmesinin *görünmemesi*
+- CA güvenilirken terminal düğmesinin _görünmemesi_
 - Yeniden üretme başarılı ama proxy eskisini servis ediyorken uyarı
 - Workspace yokken sessiz kalıp başka her hatayı göstermesi
 - Şablon listesinde devralınanların ayrılması, sınır bozuk cevap verdiğinde
@@ -1330,14 +1331,14 @@ birden düşüyor — hem "seçim yokken dönüyor" hem "bitince tekrar dönüyo
 
 ### 23.5 Sayılar
 
-| | Önce | Sonra |
-| --- | --: | --: |
-| `Settings.vue` | 3.433 satır | **2.938** |
-| Shape-mirror testi | 2 | **0** |
-| `CertificatesPane` / `TemplateOverridesPane` | — | **%100 / %100** |
-| `src/composables` | — | **%95.31** |
-| Frontend toplam kapsam | %50.71 | **%53.74** |
-| Frontend testleri | 228 | **241** |
+|                                              |        Önce |           Sonra |
+| -------------------------------------------- | ----------: | --------------: |
+| `Settings.vue`                               | 3.433 satır |       **2.938** |
+| Shape-mirror testi                           |           2 |           **0** |
+| `CertificatesPane` / `TemplateOverridesPane` |           — | **%100 / %100** |
+| `src/composables`                            |           — |      **%95.31** |
+| Frontend toplam kapsam                       |      %50.71 |      **%53.74** |
+| Frontend testleri                            |         228 |         **241** |
 
 Kalan dokuz panel ve `ProjectDetail.vue` aynı kalıpla devam eder. `Settings.vue`
 hâlâ %0 — onu mount etmek bütün panellerin çıkmasını bekliyor.
@@ -1380,17 +1381,17 @@ Message compilation error: Not allowed nest placeholder
 ```
 
 vue-i18n `{…}`'i placeholder okur, yani `{{ VAR }}` **iç içe** bir
-placeholder'dır ve yasaktır. Gürültülü değil, *sessiz*: derleyici hatayı
+placeholder'dır ve yasaktır. Gürültülü değil, _sessiz_: derleyici hatayı
 loglar, ham dizeye düşer, metin doğru görünür ve her render konsola hata yazar.
 
 Bunu bir teste bağladım — `tests/i18n.spec.js` artık **her mesajı** iki dilde
 derletiyor — ve kapı açılır açılmaz **üç tane daha** çıktı:
 
-| Anahtar | Sorun |
-| --- | --- |
-| `settings.servers.extraHint` | `{{ VAR }}` — iç içe placeholder |
-| `mail.searchPlaceholder` | `from:a@b.c` — çıplak `@` bağlı-mesaj başlatır |
-| `newProject.gitUrlPlaceholder` | `git@server…` — aynısı |
+| Anahtar                        | Sorun                                          |
+| ------------------------------ | ---------------------------------------------- |
+| `settings.servers.extraHint`   | `{{ VAR }}` — iç içe placeholder               |
+| `mail.searchPlaceholder`       | `from:a@b.c` — çıplak `@` bağlı-mesaj başlatır |
+| `newProject.gitUrlPlaceholder` | `git@server…` — aynısı                         |
 
 Dördü de iki dilde, yani **8 dize**. Hepsi vue-i18n'in literal kaçışıyla
 (`{'@'}`, `{'{{ VAR }}'}`) düzeltildi ve render edilen metnin **birebir aynı**
@@ -1401,10 +1402,10 @@ etmediği bir yüzey, yanlış olduğunda hiçbir şeyin şikâyet etmediği iç
 kalır. Panelin mount edilmesi tek bir tanesini görünür yaptı; **kapı geri
 kalanını buldu.**
 
-*(Testin ilk hâli de yanlıştı: `flatten` dizileri de düzleştirdiği için
+_(Testin ilk hâli de yanlıştı: `flatten` dizileri de düzleştirdiği için
 `nav.items.0` gibi sahte anahtarlar üretip vue-i18n'e "böyle bir anahtar yok"
 uyarısı bastırıyordu — kapının kendi gürültüsü, bulgu diye okunabilirdi. Yalnızca
-string yapraklara bakacak şekilde daraltıldı.)*
+string yapraklara bakacak şekilde daraltıldı.)_
 
 ### 24.4 Ve iki sahipsiz stil
 
@@ -1416,13 +1417,13 @@ değişmesine yol açmıştı — hiçbir testin ve lint'in göremeyeceği bir g
 
 ### 24.5 Sayılar
 
-| | §23 sonrası | Şimdi |
-| --- | --: | --: |
-| `Settings.vue` | 2.938 satır | **2.848** |
-| Çıkarılan panel | 2 | **3** |
-| Bozuk i18n dizesi | 8 | **0** |
-| Frontend kapsam | %53.74 | **%54.37** |
-| Frontend testleri | 241 | **248** |
+|                   | §23 sonrası |      Şimdi |
+| ----------------- | ----------: | ---------: |
+| `Settings.vue`    | 2.938 satır |  **2.848** |
+| Çıkarılan panel   |           2 |      **3** |
+| Bozuk i18n dizesi |           8 |      **0** |
+| Frontend kapsam   |      %53.74 | **%54.37** |
+| Frontend testleri |         241 |    **248** |
 
 Kalan sekiz panelin dördü paylaşılan `.env` editörüne bağlı — sıradaki adım o.
 
@@ -1444,17 +1445,17 @@ açmak, kalan işin şeklini değiştiriyor.
 ### 25.2 Test edilmemiş olması en dikkat çekici kısmıydı
 
 Bu makinenin hiç testi yoktu. Altı panel stack'in yapılandırma dosyasını
-üzerinden yazıyor, ve *ne yazılacağına* karar veren parçalar üç satırlık ok
+üzerinden yazıyor, ve _ne yazılacağına_ karar veren parçalar üç satırlık ok
 fonksiyonları — yani hata verene kadar hiç hata vermeyen, verdiğinde de aynı
 anda her yerde veren kod sınıfı.
 
 Üçü mutasyonla denendi, üçü de yakalanıyor:
 
-| Karar | Yanlış olduğunda |
-| --- | --- |
-| Üç katmanlı okuma (`edits → env → defaults`) | Form "bu varsayılan" diyemez; her değer eşit derecede seçilmiş görünür. |
+| Karar                                                  | Yanlış olduğunda                                                                                                                                                                                                    |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Üç katmanlı okuma (`edits → env → defaults`)           | Form "bu varsayılan" diyemez; her değer eşit derecede seçilmiş görünür.                                                                                                                                             |
 | `edit()`'in değer geri geldiğinde anahtarı **silmesi** | Bir karakter yazıp geri silmek diff'te iz bırakır; kaydet düğmesi yanar, kayıt diskteki değerin aynısını yazar, ve yönlendirme anahtarıysa **kimsenin yapmadığı bir değişiklik için** "yeniden üret" uyarısı çıkar. |
-| İki boolean yazımının ayrı tutulması | `.env`'de compose `true`/`false`, üretilen nginx ve php.ini parçaları `on`/`off` okur. Yanlışını yazmak, **parse edilen ve anahtarın söylediğinin tersini yapan** bir dosya üretir. |
+| İki boolean yazımının ayrı tutulması                   | `.env`'de compose `true`/`false`, üretilen nginx ve php.ini parçaları `on`/`off` okur. Yanlışını yazmak, **parse edilen ve anahtarın söylediğinin tersini yapan** bir dosya üretir.                                 |
 
 Sonuncusu bu kod tabanının en sessiz hata sınıfı: dosya geçerli, uygulama
 çalışıyor, ve ayar tam tersini yapıyor.
@@ -1469,13 +1470,13 @@ son ekte kalır.
 
 ### 25.4 Sayılar
 
-| | §24 sonrası | Şimdi |
-| --- | --: | --: |
-| `Settings.vue` | 2.848 satır | **2.816** |
-| Composable | 3 | **4** |
-| `useEnvEditor` kapsamı | — | **%100** |
-| Frontend kapsam | %54.37 | **%54.96** |
-| Frontend testleri | 248 | **265** |
+|                        | §24 sonrası |      Şimdi |
+| ---------------------- | ----------: | ---------: |
+| `Settings.vue`         | 2.848 satır |  **2.816** |
+| Composable             |           3 |      **4** |
+| `useEnvEditor` kapsamı |           — |   **%100** |
+| Frontend kapsam        |      %54.37 | **%54.96** |
+| Frontend testleri      |         248 |    **265** |
 
 Kilit açıldı: kalan sekiz panel artık teker teker çıkarılabilir, çünkü hepsi
 aynı composable'ı çağırıp kendi markup'ını taşıyabilir. `Settings.vue` hâlâ %0 —
@@ -1483,88 +1484,829 @@ son panel çıkana kadar öyle kalacak.
 
 ---
 
-## 26. Kaldığımız yer
+## 26. §14.16 devam — `useStackShape`, ve bölmenin gerçek riski
+
+### 26.1 Çıkarılan
+
+`domain` panelinin arkasındaki üç mantık kümesi `useStackShape.js`'e taşındı,
+**%100 kapsam**, 40 test:
+
+|                    |                                                                                   |
+| ------------------ | --------------------------------------------------------------------------------- |
+| `useStackShape`    | Son ekin iki yarıya bölünmesi, dört doğrulama kuralı, HSTS uyarısı, kaydet kapısı |
+| `useHostsOverview` | Eksik ve bayat girdiler, tek yükseltme isteminde iki yönlü düzeltme               |
+| `useProxy`         | Traefik'in durumu ve kendi panosunun adresi                                       |
+
+Doğrulama süs değil: `DEFAULT_TLD_SUFFIX` doğrudan `Host(\`shop.SUFFIX\`)`
+içine giriyor ve **aşağıda hiçbir yer onu bir daha kontrol etmiyor**. Boşluklu
+bir son ek, parse edilen bir compose dosyası, ayağa kalkan bir stack ve çözülmeyen
+tek bir adres üretir. Bu kurallar 2.816 satırlık bir bileşenin içinde, testsiz
+duruyordu — kimse test etmek istemediği için değil, onlara ulaşmanın görünümü
+mount etmek anlamına geldiği için.
+
+### 26.2 Ve bu turun asıl bulgusu: ben kırdım, hiçbir şey görmedi
+
+Çıkarma sırasında yazdığım silme betiği, niyetlenilen bloğun **çok ötesine**
+geçip `Settings.vue`'dan üç sabiti daha aldı: `SERVER_SUPPORT`, `sizeRules`,
+`secondsRules` — ve `RUNTIME_DEFAULTS`. Şablon dördünü de kullanmaya devam
+ediyordu.
+
+Yani: **uygulama render'da patlayacaktı**, ve
+
+- `eslint` sustu — şablon tanımlayıcılarını script binding'leriyle karşılaştırmıyordu,
+- `prettier` sustu,
+- 265 testin **hiçbiri** düşmedi, çünkü ilgili paneller henüz mount edilmiyor,
+- `vue/valid-*` kuralları sözdizimine bakar, varlığa değil.
+
+Yakalayan tek şey **§24.3'te eklenen i18n kapısı** oldu: silinen kurallar iki
+çeviri anahtarını erişilemez bıraktı ve "kullanılmayan çeviri" testi düştü. Bir
+gate'in kendi konusu dışında bir hatayı yakalaması tesadüf; **tesadüfe
+güvenilmez.**
+
+**Alınan önlem:** `vue/no-undef-properties` açıldı. Sabiti tekrar silerek
+denendi:
+
+```
+1860:34  error  'SERVER_SUPPORT' is not defined  vue/no-undef-properties
+```
+
+Bu, §14.16'nın kalan sekiz paneli için asıl risk azaltımı. Bölme, tanımı bir
+dosyadan alıp diğerine koymaktır ve bu sınıf hatanın tek görünür olduğu katman
+buydu — çünkü panellerin çoğu hâlâ mount edilmiyor.
+
+_(Dosya `git checkout` ile geri alınıp düzenlemeler kesin sınırlarla yeniden
+uygulandı. Yamalayarak ilerlemek, ne kadarının gittiğini bilmeden tahmin etmek
+olurdu.)_
+
+### 26.3 Sayılar
+
+|                         | §25 sonrası |      Şimdi |
+| ----------------------- | ----------: | ---------: |
+| `Settings.vue`          | 2.816 satır |  **2.746** |
+| Composable              |           4 |      **7** |
+| `useStackShape` kapsamı |           — |   **%100** |
+| Frontend kapsam         |      %54.96 | **%55.66** |
+| Frontend testleri       |         265 |    **305** |
+
+`domain` panelinin **markup'ı** hâlâ `Settings.vue`'da — bu tur mantığı çıkardı,
+bileşen bir sonraki adım. Kalıp (§33.2) değişmedi; yalnızca 1. adımı bitirdi.
+
+---
+
+## 27. §14.16 — `DomainPane`, ve paylaşılan durumun taşınması
+
+### 27.1 Dördüncü panel
+
+`domain`'in markup'ı da çıktı: `DomainPane.vue`, **%100 kapsam**, 12 test.
+`Settings.vue` **2.746 → 2.398**.
+
+Bu, paylaşılan `.env` editörüne ihtiyaç duyan **ilk** panel. Prop olarak
+geçirmek işe yarardı ve hiçbir panelin _seçmediği_ bir değeri her panel
+imzasından geçirmek anlamına gelirdi; `provide`/`inject` tam olarak bunun
+içindir. `useSharedEnvEditor()`, kimse sağlamamışsa kendi örneğini kuruyor —
+ve bu, paylaşılan duruma bağlı bir panelin **tek başına mount edilebilmesinin**
+tek sebebi.
+
+Panel `.env`'i kendisi **okumuyor**, bilerek: altı panel tek dosya üzerinde tek
+bir diff paylaşıyor, ve her mount'unda yükleyen bir panel kullanıcı sekme
+değiştirdiğinde diğerlerinin yazdığını sessizce atardı.
+
+### 27.2 Testin ilk hâli bunu bilmiyordu ve dört kez düştü
+
+Paneli çıplak mount ettim. Dört iddia düştü — önizleme boş, kaydet düğmesi
+kapalı, HSTS uyarısı sessiz — ve dördü de **doğru davranıştı**: yüklenmemiş bir
+editörle her alan boş, dolayısıyla kaydet düğmesinin kapalı olması gerekir.
+Yani dört kırık iddia gibi görünen şey, tek bir eksik `load()`'du.
+
+Test, uygulamanın yaptığını yapan bir host bileşenin altına alındı: editörü
+sağlayan ve **yükleyen** bir ebeveyn. Kaydetmesi gereken ders şu: bir bileşeni
+gerçekte içinde yaşamadığı bir bağlamda mount etmek, testi yeşil yapmaz —
+yanlış soruyu sormasını sağlar.
+
+### 27.3 Ve bir öncülüm yanlıştı
+
+"Boş TLD kaydedilebilir olmamalı" diye bir test yazdım. Yanlış: TLD yarısını
+temizlemek `stackvo` bırakır — tek etiketli bir suffix, ki **meşru** (`loc` tek
+başına da öyle). Kural setini okumadan davranışı tahmin etmiştim. Test gerçekten
+reddedilen bir değere (`lo c`) çevrildi.
+
+### 27.4 Yeni lint kuralı ikinci kez işe yaradı
+
+`vue/no-undef-properties` (§26.2'de eklendi) bu turda iki eksik binding yakaladı:
+`isDefault` ve `stackBusy`, markup taşındığında geride kalmışlardı. İkisi de
+render'da patlardı, hiçbir test görmezdi — çünkü panel o an henüz mount
+edilmiyordu.
+
+### 27.5 Sayılar
+
+|                      | §26 sonrası |      Şimdi |
+| -------------------- | ----------: | ---------: |
+| `Settings.vue`       | 2.746 satır |  **2.398** |
+| Çıkarılan panel      |           3 |      **4** |
+| `DomainPane` kapsamı |           — |   **%100** |
+| Frontend kapsam      |      %55.66 | **%57.66** |
+| Frontend testleri    |         305 |    **318** |
+
+Başlangıçtaki 3.433 satırdan **%30 düşüş**. Kalan yedi panel aynı kalıpla
+devam eder; `provide`/`inject` kurulduğu için `.env`'e bağlı olanlar artık
+teker teker çıkarılabilir.
+
+---
+
+## 28. §14.16 — `WorkspacePane`, ve hiç çalışmayan bir yükleme
+
+### 28.1 En büyük panel
+
+`workspace` çıktı: `WorkspacePane.vue` (%98.74) + `useStackPreset` /
+`useGeneratorCheck` (%94.67), 16 test. `Settings.vue` **2.398 → 1.959** —
+başlangıçtaki 3.433'ten **%43 düşüş**.
+
+Compose fiilleri (`up` / `restart` / `down`) ve klasör seçici **emit ediliyor**,
+çağrılmıyor: paylaşılan işlem konsoluna raporlanıyorlar ve meşguliyet durumu
+görünümün. Kendi çalıştıran bir panel, stack'e sahip olan bir panel olurdu.
+
+### 28.2 Ve bulduğu hata: dışa aktarma kartı hiç dolmuyordu
+
+`Settings.vue` preset'i etkin sekmeyi izleyen bir `watch`'tan yüklüyordu:
+
+```js
+if (value === 'sharing' && !stackPreset.value) loadStackPreset();
+```
+
+**`sharing` diye bir bölüm yok.** Klasör, compose fiilleri ve preset tek bir
+`workspace` paneline birleştirilmiş, anahtar geride kalmıştı. `loadStackPreset`'e
+giden hayatta kalan tek yol, bir içe aktarma _başarılı olduktan sonraki_
+çağrıydı — yani paneli açan kullanıcı boş bir JSON kutusu ve "0 servis açık"
+görüyordu.
+
+Hiçbir şey yanlış görünmüyordu. Var olmayan bir string ile karşılaştırma yapan
+bir `watch`, hiçbir aracın raporladığı bir hata değil; ve paneli mount eden bir
+test olmadığı için kimse fark etmedi. Panel artık mount'ta yüklüyor — her bölüm
+bir `v-if` arkasında olduğu için **mount etmek zaten açmaktır**, ve ayak
+uydurulacak bir anahtar kalmıyor.
+
+`it('loads the current stack as soon as it opens')` bu hatanın geri gelirse
+düşen hâli.
+
+### 28.3 Testimin üç kurgu hatası
+
+Bu tur test kurgusu üç kez yanlıştı ve üçü de kaydedilmeye değer, çünkü üçü de
+"test yeşil olsun diye" değil "test doğru soruyu sorsun diye" düzeltildi:
+
+1. **Yanlış i18n anahtarları.** Butonları `settings.stack.up` ile aradım;
+   gerçekte `actions.up`. Buton bulunamadı, test "buton yok" dedi — doğru
+   şikâyet, yanlış sebep.
+2. **Motor kapalıydı.** Compose butonları `!app.engineUp` ile devre dışı; taze
+   bir store motoru kapalı bildirir. Bu **doğru davranış**, ve bu butonların
+   konusu olan dünya değil. Ayrı bir test olarak da sabitlendi.
+3. **İki ayrı Pinia.** `mount`'a verilen pinia ile testin `useAppStore()`
+   çağrısının çözdüğü pinia farklıydı: `engineUp` testte `true`, panelde
+   `false` okuyordu ve butonlar devre dışı kalıyordu. `useAppStore(pinia)` ile
+   açıkça verildi.
+
+Üçüncüsü en sinsisi: iki store örneği olan bir test, yazdığı durumun test
+ettiği şeye görünmediği bir testtir — ve bunu söyleyen tek şey, iddianın
+sebepsiz düşmesiydi.
+
+### 28.4 Yeniden adlandırma i18n anahtarlarına sızdı
+
+`stackPreset` → `preset` yeniden adlandırmam `t('stackPreset.export')`
+çağrılarının içine de girdi ve 21 anahtarı `t('preset.export')` yaptı. §24.3'te
+eklenen i18n kapısı ikisini birden yakaladı: "uygulamanın istediği anahtarlar"
+ve "kullanılmayan çeviriler" testleri aynı anda düştü.
+
+### 28.5 Sayılar
+
+|                   | §27 sonrası |      Şimdi |
+| ----------------- | ----------: | ---------: |
+| `Settings.vue`    | 2.398 satır |  **1.959** |
+| Çıkarılan panel   |           4 |      **5** |
+| Composable        |           7 |      **9** |
+| Frontend kapsam   |      %57.66 | **%60.26** |
+| Frontend testleri |         318 |    **335** |
+
+`Settings.vue` başlangıçtaki 3.433 satırdan **%43** küçüldü. Kalan altı panel:
+`appearance` (~276), `php` (~163), `servers` limitleri (~155), `preferences`
+(~94), `doctor` (~94), `services` (~79), `localisation` (~55).
+
+---
+
+## 29. §14.16 — `AppearancePane`, ve axe'ın iki kaydırıcısı
+
+### 29.1 En temiz dikiş
+
+`appearance` çıktı: `AppearancePane.vue`, **%100 kapsam**, 6 test.
+`Settings.vue` **1.959 → 1.657** — başlangıçtaki 3.433'ten **%52 düşüş**.
+
+Şimdiye kadarki en temiz ayrım: ne `.env` editörüne ne işlem konsoluna
+dokunuyor. Değiştirdiği her şey `useAppearanceStore`'da yaşıyor ve store kendi
+kendine kalıcılaştırıp uyguluyor — yani panel, bir store'un üzerindeki
+markup'tan ibaret.
+
+### 29.2 Test neyi ölçüyor
+
+Store'un kendi kapsamı var, dolayısıyla burada değerli olan yalnızca markup
+çalışınca var olan üç şey:
+
+- **Sıfırlama göstergesi doğru söylüyor mu** — bayrak store'u takip etmeli;
+  bayat bir bayrak ya hiçbir şey yapmayan bir sıfırlama sunar ya da işe
+  yarayacak olanı gizler.
+- **İsimsiz hazır ayar kaydedilemiyor**, ve kaydetme alanı temizliyor — aksi
+  halde bir sonraki hazır ayara öncekinin adı öneriliyor ve ikinci tıklama onu
+  sessizce eziyor.
+- **Kütüphanenin gönderdiği her palet, font ve renk gerçekten sunuluyor mu** —
+  elle yazılmış bir alt küme, `appearance.js`'e eklenen bir paletin uygulamada
+  hiç görünmemesinin ve kimsenin bunu raporlamamasının yoludur.
+
+### 29.3 Ve iki erişilebilirlik ihlali daha
+
+Panel mount edilir edilmez axe iki kaydırıcıyı bildirdi: yarıçap ve arayüz
+ölçeği. İkisinin de **görünür bir etiketi var** — üstlerinde bir
+`<div class="field-label">` — ama programatik bir bağı yok. Ekran okuyucu
+"kaydırıcı, 12" diyor ve neyin 12'si olduğunu söylemiyor. İkisine de
+`aria-label` eklendi.
+
+Kalan bir ihlal Vuetify'ın kendisinden: `v-slider`, gerçek `role="slider"`
+kontrolünün yanında yalnızca form değeri taşısın diye gizli bir
+`<input tabindex="-1">` üretiyor. Etiketi yok ve verilemiyor — Vuetify ona
+hiçbir öznitelik geçirmiyor — ve odaklanılamadığı için hiçbir kullanıcı onunla
+karşılaşmıyor. `label` kuralı **yalnızca bu panel için** kapatıldı, her yerde
+değil: o kural gerçek etiketsiz alanları yakalayan kural ve §22.5'te
+`LogView` ile `DumpView`'da tam olarak onu yakalamıştı.
+
+### 29.4 Sayılar
+
+|                   | §28 sonrası |      Şimdi |
+| ----------------- | ----------: | ---------: |
+| `Settings.vue`    | 1.959 satır |  **1.657** |
+| Çıkarılan panel   |           5 |      **6** |
+| Frontend kapsam   |      %60.26 | **%61.93** |
+| Frontend testleri |         335 |    **342** |
+
+Çıkarılan altı panelin altısı da **%98–100** kapsamda. Kalan beş panel:
+`php` (~163), `servers` limitleri (~155), `preferences` (~94), `doctor` (~94),
+`services` (~79), `localisation` (~55).
+
+---
+
+## 30. §14.16 — `PhpPane` ve `LocalisationPane`
+
+### 30.1 İki panel daha
+
+`php` ve `localisation` çıktı, ikisi de **%100 kapsam**, 10 test.
+`Settings.vue` **1.657 → 1.415** — başlangıçtaki 3.433'ten **%59 düşüş**.
+
+`php`, katalog seçimlerini de beraberinde getirdi: `useCatalog` modül kapsamlı,
+çünkü iki panel (`php` ve `servers`) aynı katalogu okuyor ve tek bir istekten
+aynı cevabı almaları gerekiyor.
+
+### 30.2 Pinlenmeye değer tek kural
+
+`itemsFor`: **`.env`'de yazılı olan değer her zaman listede.** Katalog onu
+bilmese bile.
+
+Buraya iki sıradan yoldan gelinir — başarısız bir katalog çağrısı, ve daha eski
+bir sürümün yazdığı bir değer. İkisinde de tek öğesi eksik olan bir select boş
+render eder, ki bu "artık bu sürüm gönderilmiyor" değil **veri kaybı** gibi
+okunur. Dört test bunu sabitliyor: katalogtan gelen liste, listede olmayan
+yazılı değer, okunamayan katalog, ve ikisinin de bilmediği durum.
+
+### 30.3 `localisation`: üç kontrol, üç ayrı sahip
+
+En küçük panel ve tam da bu yüzden mount edilmeye değer. Uygulama dili
+`setLocale`'den geçiyor — çünkü tercihi de kalıcılaştırıyor ve tepsiyi yeniden
+etiketliyor. Konsol dili ve RTL bayrağı appearance durumu ve doğrudan store'a
+gidiyor.
+
+Üçünden birini yanlış sahibe bağlamak, **çalışıyor görünen ve bir sonraki
+açılışta kendini unutan** bir kontrol üretir. Test üçünü de sahibine karşı
+doğruluyor, ve appearance ayarlarının `setLocale`'i _çağırmadığını_ da.
+
+### 30.4 Sayılar
+
+|                   | §29 sonrası |      Şimdi |
+| ----------------- | ----------: | ---------: |
+| `Settings.vue`    | 1.657 satır |  **1.415** |
+| Çıkarılan panel   |           6 |      **8** |
+| Composable        |           9 |     **10** |
+| Frontend kapsam   |      %61.93 | **%63.55** |
+| Frontend testleri |         342 |    **354** |
+
+Çıkarılan sekiz panelin sekizi de **%98–100** kapsamda. Kalan dört panel:
+`servers` limitleri (~155), `preferences` (~94), `doctor` (~94),
+`services` (~79).
+
+---
+
+## 31. §14.16 — `Settings.vue` bitti
+
+### 31.1 Bitiş çizgisi
+
+Son dört panel çıktı (`servers` limitleri, `services`, `preferences`,
+`doctor`) ve **`Settings.vue` artık mount edilebiliyor.**
+
+|                        |   Başlangıç |      Şimdi |
+| ---------------------- | ----------: | ---------: |
+| `Settings.vue`         | 3.433 satır |    **831** |
+| `Settings.vue` kapsamı |      **%0** | **%90.97** |
+| Çıkarılan panel        |           0 |     **12** |
+| Composable             |           0 |     **11** |
+| `src/views/` kapsamı   |          %0 |  **%47.2** |
+| Frontend toplam kapsam |      %30.70 | **%73.85** |
+| Frontend testleri      |         160 |    **372** |
+
+Görünüm artık hiç panel markup'ı tutmuyor — yalnızca ray, paylaşılan `.env`
+editörü ve Hakkında kartı. Çıkarılan on iki panelin onu **%97–100** kapsamda.
+
+### 31.2 Asıl kazanç: sekme değiştirmek artık test ediliyor
+
+`tests/settings-view.spec.js` görünümü mount edip **on bir bölümün hepsini**
+tek tek açıyor, iki dilde.
+
+Bu, bölmeden önce yapılamayan kontrol. Her panel bir `v-if` arkasında,
+dolayısıyla görünümün sağlamayı bıraktığı bir şeye atıf yapan bir panel
+**yalnızca kendi sekmesi seçildiğinde** patlar — yani onu bozan değişiklik
+sırasında kimsenin açmadığı bir ekranda. Bölme boyunca `vue/no-undef-properties`
+bunun üç gerçek örneğini yakaladı (§26.2, §27.4); artık kalanını bu test
+yakalıyor.
+
+Bir test de paylaşılan diff'i doğruluyor: `domain` panelinde yapılan bir
+düzenleme, `php` paneline geçildiğinde görünüyor. İki panel tek dosya üzerinde
+iki ayrı diff tutsaydı, en son kaydeden diğerinin işini sessizce atardı.
+
+### 31.3 Bu turun bulguları
+
+- **`ServerDirectivesPane`'in metin kutusunun adı yoktu** — yalnızca placeholder
+  taşıyordu, ki placeholder yazılır yazılmaz kaybolur ve erişilebilir ad
+  değildir. §22.5'teki iki select ile aynı sınıf; axe onu ancak panel bir
+  ebeveynin içinde tarandığında gördü.
+- **`renderPane` çıplak mount ediyordu.** `ServicesPane` bir navigation drawer
+  taşıyor ve Vuetify'ın layout injection'ı `v-app` istiyor. Aynı dersi
+  `views-render.spec.js` §22'de öğrenmişti; axe yardımcısına da uygulandı.
+- **Bayat dilim dosyaları.** `servers` çıkarıldıktan sonra satır numaraları
+  kaydı ve önceden alınmış dilimler yanlış içerik taşıdı — bir panel bileşeni
+  başka bir panelin markup'ıyla üretildi. Yeniden dilimlenerek düzeltildi;
+  §30.2'nin "kesme sınırını doğrula" kuralının ikinci hâli: **kestiğin dosyayı
+  değiştirdikten sonra dilimlerini yeniden al.**
+
+### 31.4 Kalan
+
+`ProjectDetail.vue` (3.007 satır, **%0**) — aynı kalıp, aynı bitiş çizgisi.
+`src/views/`'i %47'de tutan tek şey artık o.
+
+---
+
+## 32. §14.16 — `ProjectDetail.vue` başladı
+
+### 32.1 İlk panel
+
+`ProjectDetail.vue` (3.007 satır, **%0**) bölünmeye başladı. İlk çıkan
+`indicator`: `useContainerStats` (**%100**, 24 test) ve `IndicatorPane.vue`
+(**%100**, 4 test). Görünüm **3.007 → 2.741**.
+
+`Settings.vue`'dan farklı bir yapı: yedi bölümün blokları **iç içe geçmiş** —
+`debug` üç ayrı yerde, `container` üç, `configuration` üç. Bir bölümün tüm
+blokları aynı `v-if` altında sırayla render edildiği için tek bileşende
+toplanmaları görsel sırayı koruyor; harita §32.4'te.
+
+### 32.2 Timer görünümde kalıyor, panel prop alıyor
+
+Panel her sayıyı prop olarak alıyor. Yoklama zamanlayıcısı görünümün, çünkü
+**container ile birlikte başlayıp durması** gerekiyor — kendi mount'unda yoklayan
+bir panel, durmuş bir container'ın grafiğini hareket ettirmeye devam ederdi.
+
+Composable'ın testi tam da bunu sabitliyor: durmuş container'da okuma
+**temizleniyor, donmuyor** (donmuş bir okuma container'ın hâlâ bir şey yaptığını
+iddia eder), iki kez `start` çağırmak iki zamanlayıcı bırakmıyor, ve bir örnek
+alınamadığında son okuma korunmuyor.
+
+### 32.3 Ve iki bulgu
+
+- **Disk çubuğu sabitti.** `model-value="12"` — gerçek "R … / W …" sayılarının
+  yanına çizilen, her zaman %12 gösteren bir çubuk. Ölçüm gibi duruyordu ve
+  dekorasyondu. Blok G/Ç bir oran değil, iki sayaç; çizilecek bir yüzde yok.
+  **Çubuk kaldırıldı** — eksiklik değil, düzeltme.
+- **Bellek çubuğunun adı yoktu** — `StatCard`, `Dashboard`, `Mail` ve
+  `AppearancePane`'den sonra aynı sınıfın beşinci örneği. Vuetify'ın ne
+  ürettiğini bilmeden görülmüyor; axe her seferinde ilk mount'ta buluyor.
+
+### 32.4 Kalan bölümlerin haritası
+
+| Bölüm           | Satır | Blok |
+| --------------- | ----: | ---: |
+| `configuration` |   311 |    3 |
+| `debug`         |   304 |    3 |
+| `container`     |   271 |    3 |
+| `runtime`       |   227 |    2 |
+| `release`       |   112 |    1 |
+| `logs`          |    13 |    1 |
+
+Toplam 1.238 satır markup; geri kalanı başlık, araç çubuğu ve script.
+
+### 32.5 Sayılar
+
+|                        | §31 sonrası |      Şimdi |
+| ---------------------- | ----------: | ---------: |
+| `ProjectDetail.vue`    | 3.007 satır |  **2.741** |
+| Frontend toplam kapsam |      %73.85 | **%75.39** |
+| Frontend testleri      |         372 |    **401** |
+
+---
+
+## 33. §14.16 — `ProjectDetail.vue` bitti
+
+### 33.1 Bitiş çizgisi
+
+`ProjectDetail.vue`: **3.007 → 1.092 satır**. Sayfa artık mount edilebiliyor, ve
+`tests/views-render.spec.js` onu mount ediyor — §2.3'ün "iki tanrı bileşen"
+teşhisinin ikinci yarısı kapandı.
+
+Çıkan **on dört panel** ve **dokuz composable**:
+
+| Bölüm         | Panel                                            | Composable                  |
+| ------------- | ------------------------------------------------ | --------------------------- |
+| indicator     | `IndicatorPane`                                  | `useContainerStats`         |
+| configuration | `OverviewPane`, `ManifestPane`, `DockerfilePane` | `useDockerfilePreview`      |
+| container     | `ContainerPane`, `TunnelPane`, `WorkersPane`     | `useTunnel`, `useWorkers`   |
+| logs          | `LogsPane`                                       | —                           |
+| debug         | `XdebugPane`, `ProfilerPane`, `DumpsPane`        | `useXdebug`, `useProfiler`  |
+| runtime       | `DevServerPane`, `PhpIniPane`                    | `useDevServer`, `usePhpIni` |
+| release       | `ReleasePane`                                    | `useRelease`                |
+| (ortak)       | —                                                | `useCopyTick`               |
+
+### 33.2 İki çapraz bağ, iki olay
+
+Panellerin çoğu bağımsız. İkisi değildi, ve ikisi de **olay** olarak çözüldü —
+panelin sahibi olmadığı şeye uzanması yerine:
+
+- `XdebugPane` toggle'ı manifest dosyasını diske yeniden yazıyor, ve aynı dosyayı
+  `ManifestPane` gösteriyor. Panel `changed` yayıyor, görünüm dosyayı yeniden
+  okuyor. Panelin editöre uzanması, sahiplenmediği durumu düzeltmesi olurdu.
+- `ProfilerPane` ve `DumpsPane`'in "konteyneri yeniden oluştur" düğmesi projenin
+  yaşam döngüsü — görünümün işi. `apply` yayıyorlar.
+
+`useCopyTick` ise tersi bir karar: **modül kapsamlı**. Sayfa bir kopyalama için
+_iki_ onay gösteriyor — düğmenin ikonu tike dönüyor, ve görünüm snackbar
+kaldırıyor. Bunlar ayrı bileşenlerde; örnek-başına durum, snackbar'ı hiç
+yazılmayan bir değeri izler hâlde bırakırdı.
+
+### 33.3 Bu turun bulguları
+
+Panelleri gerçekten mount etmek **beş** kusur çıkardı — hiçbiri lint'in
+göreceği türden değil:
+
+1. **`@/stores/ops` diye bir dosya yok.** İki panel onu import ediyordu
+   (`@/stores/operations` doğrusu). ESLint import yollarını çözmüyor; hata
+   yalnızca `DumpsPane` mount edildiğinde çıktı. Yani sayfa çalışma anında
+   patlardı.
+2. **Xdebug rozeti hiç görünmüyordu.** Ray `s.key === 'xdebug'` diye bakıyor
+   ama Xdebug, profiler ve dump yakalayıcı tek `debug` sekmesinde birleştirildi
+   — o günden beri "açık ama çalışmıyor" uyarısı sessiz. Rayı gezen test
+   yazarken çıktı.
+3. **`project_get` `null` dönerse sayfa patlıyordu.** Tipsiz sınır reject
+   etmeden `null` verebiliyor; altındaki her satır alan okuyor. Kimsenin
+   `await` etmediği bir async fonksiyondan fırlayan unhandled rejection ve boş
+   pencere. Artık "böyle bir proje yok" durumu olarak ele alınıyor.
+4. **Manifest editörünün adı yoktu.** Başlık üstünde bir `div` olduğu için
+   Vuetify var olmayan bir label'a `aria-labelledby` yayıyordu: ekran okuyucu
+   24 satırlık editöre ulaşıp hiçbir şey duymuyordu. axe yakaladı.
+5. **Üç fikstür sözleşmeye uymuyordu** — `profiles` yerine `files`,
+   `generatorVerify`'da olmayan bir `drifted` alanı, ve `preset::Plan`'in
+   `rejected`/`unchanged` alanlarının eksikliği. Üçü de dokuz "unhandled
+   rejection" üretiyordu; suite yeşil görünüyordu. Rust tarafındaki `Vec`
+   alanları serde'de hiç yok olmaz — **fikstür savunmacı değil, sözleşme
+   şeklinde olmalı**.
+
+Ayrıca üç kopyalama düğmesi hiçbir geri bildirim vermiyordu, kardeş paneldeki
+aynı düğme tik atarken. Aynı yardımcıya bağlandılar.
+
+### 33.4 Testin kendisi de bir kez yanlıştı
+
+İlk hâli sayfayı mount edip "bir şey render oldu mu" diye soruyordu. Yedi
+bölümden beşi hiç render edilmemişken geçiyordu — varsayılan sekme dışına
+çıkmıyordu. Bir paneli kasten bozmak hiçbir şeyi değiştirmedi; yakalanması bu
+oldu.
+
+Şimdiki hâli rayı geziyor ve her bölüm için **yalnızca o bölümün üretebileceği**
+bir metni arıyor. Sayfa kabuğunun kendisi bir kart yığını olduğu için "bir şey
+var" yetmiyor. Aynı mutasyon artık yakalanıyor.
+
+### 33.5 Bölmenin kaçırdığı şey: stiller
+
+Kullanıcı ekran görüntüsü gönderene kadar kimse görmedi: **çıkarılan yirmi
+panelin hiçbiri stilini taşımıyordu.**
+
+`ProjectDetail.vue`'nun ve `Settings.vue`'nun `<style scoped>` blokları
+`.pane`, `.field-key`, `.section-head`, `.swatch`, `.preset-json` gibi
+sınıfları tanımlıyordu. Scoped blok yalnızca _kendi bileşeninin_ render ettiği
+elemanlara ulaşır — markup çocuk bileşenlere taşınınca kurallar hiçbir şeye
+denk gelmez oldu. Kartların yüzeyi gitti, `.field-key`/`.field-val` çifti tek
+dizeye yapıştı (`Adstackvo-parser.ajans`), Görünüm panelindeki renk kareleri
+kayboldu.
+
+**497 test bunun içinden yeşil geçti.** Mount testleri metne ve rollere bakıyor;
+hiçbiri stylesheet'e bakmıyor, ve jsdom bir SFC'nin `<style>` bloğunu zaten hiç
+uygulamıyor. Yani koruma bir render iddiası olamazdı — kaynağı okumak zorundaydı.
+
+Çözüm iki paylaşılan sayfa: `src/styles/project-panes.css` (40 kural) ve
+`src/styles/settings-panes.css` (14 kural), `main.js`'ten import ediliyor.
+**Global değil, atadan türetilmiş** (`.detail-content …`, `.settings-scroll …`):
+`.section-head` `Projects.vue`'da başka bir şey demek, `.break` ve `.mono` ise
+her sayfanın kullanabileceği adlar — iki sayfa-geneli tanım kaynak sırasına
+göre yarışırdı.
+
+`tests/pane-styles.spec.js` tekrarını engelliyor: her panelin markup'ında geçen
+her sınıfın ona _ulaşabilen_ bir yerde tanımlı olduğunu doğruluyor, kuralların
+sahibi sayfanın altında kaldığını, ve `:deep()`'in düz CSS'e taşınmadığını —
+taşınırsa selector geçersiz olur ve kural sessizce hiçbir şey yapmaz, ki bu tam
+olarak bu dosyanın yakalamak için var olduğu hatanın görüntüsüdür.
+
+Test yazılır yazılmaz iki şey daha buldu:
+
+- **`min-w-0`** — `WorkersPane`'de kullanılıyor, ama tanım `.min-width-0`.
+  Benim değil, önceden vardı: uzun bir `php artisan …` komutu düğmeyi satırdan
+  itiyordu, ve yorumu bunu birebir uyarıyordu.
+- **Ölü bir media query** — `Settings.vue`'da kalan `@media (min-width: 960px)`
+  bloğu, artık görünümün render etmediği `.service-tabs`'i ayarlıyordu.
+
+Alınan ders, §34.3'ün dokuzuncu uyarısı: **panel çıkarma kalıbının 2. adımı
+"scoped stiller dahil" diyordu ve yirmi kez atlandı.** Bir kalıbın adımı, onu
+doğrulayan bir test yoksa kalıbın parçası değildir.
+
+### 33.6 Sayılar
+
+|                     |  Önce |     Sonra |
+| ------------------- | ----: | --------: |
+| `ProjectDetail.vue` | 3.007 | **1.092** |
+| Frontend testleri   |   401 |   **497** |
+| Frontend kapsamı    | %75,4 | **%89,7** |
+| Unhandled rejection |     9 |     **0** |
+| Rust testleri       |   481 |       481 |
+
+## 34. §14.17 — `ARCHITECTURE.md` + ADR
+
+§12'nin ölçümü: 21 commit, 1 yazar, `CODEOWNERS`'ın her satırı aynı kişi.
+"Bugün bu projeyi devralacak ikinci kişi için giriş noktası yok."
+
+### 34.1 Ne yazıldı
+
+- **`ARCHITECTURE.md`** — Rust tarafının dört bandı, bilinmeye değer tek istek
+  akışı (`project_create`'in uçtan uca yolu), 54 modülün konuya göre tablosu,
+  workspace'in disk düzeni, ve frontend'in "görünüm panel besteler, panel
+  markup'a sahip olur, composable duruma sahip olur" kalıbı.
+- **`docs/adr/`** — yedi karar, `README.md` indeksiyle.
+
+Maddenin özeti şuydu: _"mevcut yorumları taşıyarak başla; yeni yazı gerekmiyor,
+yalnızca yer değiştirme."_ Doğru çıktı. `elevate.rs`'in açılış paragrafı zaten
+eksiksiz bir ADR — bağlam, karar, ve istenmeyen sonuç dahil. Eksik olan tek şey
+**adreslenebilir** olmasıydı: numarası yok, başka yerden referans verilemiyor,
+ve üzerine yazan bir ardıl tanımlanamıyor.
+
+### 34.2 Belge de test edilir
+
+`src-tauri/tests/architecture_claims.rs` (5 test):
+
+- her bağlantı var olan bir dosyaya gidiyor mu;
+- ADR dizini ile `ARCHITECTURE.md`'nin karar tablosu aynı kümeyi mi anlatıyor;
+- her ADR'de Status, Decision **ve Consequences** var mı — sadece faydaları
+  sayan bir ADR, incelenmemiş bir karardır;
+- belgedeki sayılar (54 modül, 148 komut, 59 olay) ağaçla uyuşuyor mu;
+- **ve ADR 0001'in kuralı**: `commands.rs` dışındaki hiçbir modül Tauri'nin
+  yönetilen durumunu almıyor.
+
+Sonuncusu maddenin kendisinden daha değerli çıktı. ADR 0001 bir yorumdu; artık
+derlemeyi düşüren bir test. Ve ilk hâli **yanlıştı**: `State<'_, AppState>`
+literalini arıyordu, ama ağaçta üç yazım var — kasten bozulmuş bir modül testin
+tam önünde dururken geçti. `State<'_,` ile eşleşiyor artık.
+
+### 34.3 Sınırın üçüncü tanımı
+
+Yeni: `src-tauri/tests/contract_agreement.rs` (5 test). Sınır üç yerde
+tanımlanıyor — sözleşme dosyası, `#[tauri::command]` fonksiyonları, ve
+`generate_handler!` listesi — ve üçü de bugün aynı şeyi anlatıyor: 144 Rust
+komutu + 3 `frontend-plugin` + 1 `deferred` = 148.
+
+Bunu kontrol eden bir şey yoktu. `npm run contracts:check` E süiti dört kenardan
+ikisini kapsıyordu, biri de derleyicinin işi. Kapsanmayan ikisi:
+
+| Nereden             | Nereye              | Kim bakıyor                                   |
+| ------------------- | ------------------- | --------------------------------------------- |
+| sözleşme            | `generate_handler!` | E süiti (mevcut)                              |
+| `generate_handler!` | implementasyon      | rustc                                         |
+| implementasyon      | sözleşme            | **yeni** — kimsenin anlaşmadığı bir sınır     |
+| implementasyon      | `generate_handler!` | **yeni** — çalışma anında `command not found` |
+
+Ayrıca `cargo test`'e taşıyor. E süitinin belgelenmiş taban çizgisi dört hataydı;
+taban çizgisi sıfır olmayan bir süit yeni bir hatada derlemeyi düşüremez.
+
+### 34.4 Tarayıcı iki kez yanlıştı
+
+Bu turun tek teknik zorluğu, kaynağı okuyan bir testin kendi kaynağını da
+okumasıydı:
+
+1. İlk sürüm `#[tauri::command]` özniteliğini `fn`'in hemen üstünde arıyordu.
+   `workspace_pick` ve `hosts_apply` `#[tauri::command(async)]` yazılmış ve
+   aralarında birer paragraf belge var — ikisi de görünmez oldu.
+2. İkinci sürüm öneki eşleştiriyordu. `commands.rs` kendi kaynağını
+   `#[tauri::command` için tarayan bir birim testi taşıyor, yani öznitelik orada
+   bir **string literal** olarak geçiyor — tarayıcı ona kurulup bir sonraki test
+   yardımcısını komut ilan etti (`generated_workspace`).
+
+Çözüm: satırın **tamamı** öznitelik olmalı, ve eşleşme 200 satırlık bir pencere
+ile sınırlı. `the_scanner_finds_a_realistic_number_of_commands` testi de bu
+yüzden var — dördü de küme farkı, ve hiçbir şey bulamayan bir tarayıcı hepsini
+boşuna geçirir.
+
+### 34.5 Eskimiş bir README iddiası
+
+`README.md` "Current baseline: **4 errors**" diyordu. Dördü de düzeltilmiş,
+cümle kalmış — ve benim değişikliklerimden _önce_ de öyleydi (`git stash` ile
+doğrulandı). Sayı kaldırıldı: bir metindeki rakamı hiçbir şey kontrol etmiyor,
+ki bu tam olarak `readme_claims.rs`'in var olma sebebi.
+
+### 34.6 Sayılar
+
+|                         | Önce |             Sonra |
+| ----------------------- | ---: | ----------------: |
+| Rust testleri           |  533 |           **538** |
+| Mimari belgesi          |  yok | `ARCHITECTURE.md` |
+| ADR                     |    0 |             **7** |
+| Sınırı doğrulayan kenar |  2/4 |           **4/4** |
+
+---
+
+## 35. Kaldığımız yer
 
 Bu bölüm, işi devralmak için okunması gereken tek yer. §12'nin "bus factor 1"
 teşhisine verilen cevabın kendisi: bir sonraki oturum — kim olursa olsun —
 buradan başlar.
 
-### 26.1 §14 durum tablosu
+Artık tek yer değil, ve bu iyi haber: §34 ile `ARCHITECTURE.md` ve `docs/adr/`
+var. Bu bölüm **işin nerede kaldığını** anlatır; oraya _nasıl_ yapıldığını
+anlatan belge ayrıdır.
 
-| # | Madde | Durum | Nerede |
-| --: | --- | --- | --- |
-| 1 | Panic hook + crash dosyası | ✅ | §17.1 |
-| 2 | Release blokajları | ⚠️ **yarım** | §17.5 — anahtar üretildi, **endpoint hâlâ 404** |
-| 3 | SECURITY.md 404 linki | ✅ | §17.1 |
-| 4 | README'deki iki yanlış sayı | ✅ | §17.1, §21.5 |
-| 5 | Kapsam ölçümü | ✅ (eşiksiz) | §17.1 |
-| 6 | Sürüm eşitliği + macOS imza uyarısı | ✅ | §17.1 |
-| 7 | `elevate` quoting | ✅ | §17.1 |
-| 8 | macOS sistem proxy'si | ✅ | §17.2 |
-| 9 | `ProgressSink` | ✅ (iki dilim) | §18.1 |
-| 10 | `tauri-specta` | ⛔ **ertelendi** | §18.4 — ölçüldü, ayrı dal |
-| 11 | `hint` i18n | ✅ | §20 |
-| 12 | E2E | ⛔ **engelli** | §22.1 — `tauri-driver` macOS'ta çalışmıyor, Linux runner gerekiyor |
-| 13 | SBOM + provenance | ✅ | §21.3 |
-| 14 | Tanılama paketi + vitest-axe | ✅ | §19.5, §21 |
-| 15 | Bozuk prefs + `schemaVersion` | ✅ | §18.2 |
-| 16 | **Settings/ProjectDetail bölme** | 🔄 **devam ediyor** | §23–25 |
-| 17 | `ARCHITECTURE.md` + ADR | ⬜ başlanmadı | — |
-| 18 | Merkezî politika + private registry | ⬜ başlanmadı | — |
-| 19 | Docker trait + proptest + criterion | ⬜ başlanmadı | — |
-| 20 | Keystore ile sır yönetimi | ⬜ başlanmadı | — |
+### 35.0 Bu oturum tam olarak nerede durdu
 
-### 26.2 Sıradaki adım: §14.16'nın kalanı
+- **Ağaç yeşil.** 538 Rust testi, 533 frontend testi, `npm run lint` 0 hata,
+  `npm run build` temiz, `npm run contracts:check` 0 hata / 6 uyarı, 0 unhandled
+  rejection.
+- **Commit edilmemiş ~55 dosya** — §33 (ProjectDetail bölme + stil düzeltmesi)
+  ve §34 (mimari belgesi) birlikte. Tek commit olarak planlandı.
+- **§14.18 başlandı ve geri alındı.** `src-tauri/src/policy.rs` yazıldı,
+  `lib.rs`'e hiç bağlanmadı, ve `Code::Forbidden` olmadığı için derlenmiyordu.
+  **Silindi**; tasarımın tamamı §35.2'de. Yarım inmiş bir modül hiç olmayandan
+  kötüdür — bir sonraki oturum sıfırdan değil, yazılı bir tasarımdan başlar.
+- **Bilinen ve dokunulmamış:** `stats.rs:351`'de bir clippy uyarısı
+  (`iter()` yerine `values()`), bu oturumdan önce de vardı. `contracts:check`'in
+  altı uyarısı da öyle — beşi henüz hiçbir görünümün çağırmadığı sarmalayıcı.
 
-`useEnvEditor` çıkarıldığı için (§25) **kilit açık** — kalan panellerin her biri
-artık tek başına çıkarılabilir. Kalıp üç kez uygulandı ve sabit:
+### 35.1 §14 durum tablosu
 
-1. Panelin durumunu ve eylemlerini `src/composables/useX.js`'e taşı.
-   Durum modül kapsamlı **yalnızca** iki tüketici varsa (`useCertificates`, ray
-   rozeti yüzünden); aksi halde çağrı başına.
-2. Markup'ı `src/components/settings/XPane.vue`'ya taşı.
-   **Scoped stilleri de taşı** — bir scoped stil elemanı başka bir bileşene
-   takip etmez, ve bunu unutmak sessizce görünümü bozar (§24.4).
-3. `Settings.vue`'da `<XPane />` ile değiştir, ölü script'i sil,
-   `onMounted`'daki yükleyici çağrısını kaldır.
-4. `tests/settings-x.spec.js` yaz — gerçek bileşeni mount et, sınırı mock'la.
-   **İç duruma dokunma**, gerçek akışı sür (§23.4).
-5. Paneli `tests/a11y-axe.spec.js`'in "extracted Settings panes" bloğuna ekle,
-   **veriyle** — boş panel taramak boş durumu taramaktır (§22.5).
+|   # | Madde                               | Durum                 | Nerede                                                             |
+| --: | ----------------------------------- | --------------------- | ------------------------------------------------------------------ |
+|   1 | Panic hook + crash dosyası          | ✅                    | §17.1                                                              |
+|   2 | Release blokajları                  | ⚠️ **yarım**          | §17.5 — anahtar üretildi, **endpoint hâlâ 404**                    |
+|   3 | SECURITY.md 404 linki               | ✅                    | §17.1                                                              |
+|   4 | README'deki iki yanlış sayı         | ✅                    | §17.1, §21.5                                                       |
+|   5 | Kapsam ölçümü                       | ✅ (eşiksiz)          | §17.1                                                              |
+|   6 | Sürüm eşitliği + macOS imza uyarısı | ✅                    | §17.1                                                              |
+|   7 | `elevate` quoting                   | ✅                    | §17.1                                                              |
+|   8 | macOS sistem proxy'si               | ✅                    | §17.2                                                              |
+|   9 | `ProgressSink`                      | ✅ (iki dilim)        | §18.1                                                              |
+|  10 | `tauri-specta`                      | ⛔ **ertelendi**      | §18.4 — ölçüldü, ayrı dal                                          |
+|  11 | `hint` i18n                         | ✅                    | §20                                                                |
+|  12 | E2E                                 | ⛔ **engelli**        | §22.1 — `tauri-driver` macOS'ta çalışmıyor, Linux runner gerekiyor |
+|  13 | SBOM + provenance                   | ✅                    | §21.3                                                              |
+|  14 | Tanılama paketi + vitest-axe        | ✅                    | §19.5, §21                                                         |
+|  15 | Bozuk prefs + `schemaVersion`       | ✅                    | §18.2                                                              |
+|  16 | **Settings/ProjectDetail bölme**    | ✅ **ikisi de bitti** | §23–33                                                             |
+|  17 | `ARCHITECTURE.md` + ADR             | ✅                    | §34                                                                |
+|  18 | Merkezî politika + private registry | ⬜ tasarlandı         | §35.2 — `policy.rs` yazıldı ve geri alındı                         |
+|  19 | Docker trait + proptest + criterion | ⬜ başlanmadı         | §35.2                                                              |
+|  20 | Keystore ile sır yönetimi           | ⬜ başlanmadı         | §35.2                                                              |
 
-Kalan paneller, büyükten küçüğe:
+### 35.2 Sıradaki adım: §14.18–20
 
-| Panel | Satır | Not |
-| --- | --: | --- |
-| `workspace` | ~321 | Preset dışa/içe aktarma, compose fiilleri, tanılama paketi düğmesi |
-| `domain` | ~312 | TLD/SSL/hosts — `routingChanged` uyarısını kullanan panel |
-| `appearance` | ~276 | Tema/yoğunluk/vurgu rengi; `useAppearanceStore`'a bağlı |
-| `php` | ~163 | `useEnvEditor` ile |
-| `servers` (limitler yarısı) | ~155 | `useEnvEditor` ile — direktif yarısı çıktı (§24) |
-| `preferences` | ~94 | `prefs` get/set |
-| `doctor` | ~94 | Çoğu zaten `<DoctorPanel />` |
-| `services` | ~79 | `useEnvEditor` ile |
-| `localisation` | ~55 | En küçüğü; ısınmak için iyi |
+§14.16 (§33) ve §14.17 (§34) kapandı. Kalan üçü de hiç başlanmadı ve hiçbiri
+diğerine bağlı değil.
 
-Sonra `ProjectDetail.vue` (3.007 satır) aynı kalıpla.
+#### §14.18 — Merkezî politika + private registry
 
-**Bitiş çizgisi:** son panel çıktığında `Settings.vue` mount edilebilir hale
-gelir ve `%0`'dan çıkar — bugün `src/views/`'i `%26`'da tutan tek şey o ve
-`ProjectDetail.vue`.
+Başlandı ve **kasten geri alındı**: `policy.rs` yazıldı, `lib.rs`'e hiç
+bağlanmadı, ve derlenmiyordu (`Code::Forbidden` yok). Yarım inmiş bir modül
+hiç olmayandan kötüdür — dosya silindi, tasarım buraya yazıldı.
 
-### 26.3 Devralan için üç uyarı
+**Politika dosyası.** Yalnızca yöneticinin yazabileceği tek bir JSON:
+
+| Platform | Yol                                                     |
+| -------- | ------------------------------------------------------- |
+| macOS    | `/Library/Managed Preferences/com.stackvo.desktop.json` |
+| Windows  | `%ProgramData%\StackVo\policy.json`                     |
+| Linux    | `/etc/stackvo/policy.json`                              |
+
+`STACKVO_POLICY_FILE` üçünü de geçersiz kılar. Bu bir arka kapı değil, testin
+oraya ulaşmasının tek yolu — ve **açıkça söylenmeli**: bu değişkeni
+ayarlayabilen kullanıcı kendi yazdığı dosyayı da gösterebilir. Katman, iş
+birliği yapan bir uygulamaya kurumun _niyetini_ bildirir; **güvenlik sınırı
+değildir** ve öyle anlatılmamalıdır.
+
+**Neden JSON, platformun kendi deposu değil.** macOS MDM `.plist`, Windows Group
+Policy registry anahtarı yazar. İkisini okumak bu crate'te olmayan iki ayrı
+ayrıştırıcı demek — ve iki mekanizma da bir dosyayı bir anahtar kadar kolay
+dağıtabiliyor. Tek biçim, üç yol, tek ayrıştırıcı. plist/registry okuyucuları
+bariz bir sonraki adım ve tahmin edilmemeli.
+
+```json
+{
+  "schemaVersion": 1,
+  "settings": { "DEFAULT_TLD_SUFFIX": "corp.test", "SERVER_TYPE": "nginx" },
+  "locked": ["DEFAULT_TLD_SUFFIX"],
+  "registryPrefix": "registry.corp.example/proxy"
+}
+```
+
+Kurallar, yazılırken çıkanlar dahil:
+
+- **Öncelik**: gömülü varsayılan < `.env` < politika. `config::Env::load`'un
+  sonuna bir `policy::apply`.
+- **Ayarlamadığı bir anahtarı kilitleyemez.** "Neye" demeden "değişmesin"
+  demek, makineyi elindekinde bırakmaktır. Böyle bir giriş yok sayılır ve
+  `error` alanında bildirilir.
+- **Bozuk politika uygulamayı açılmaz yapmaz.** Dağıtılmış bir dosyadaki yazım
+  hatası, açılmayan bir filo demek olmamalı — boş politika + `error` döner, ve
+  hata _bildirilir_, yutulmaz: sessizce hiçbir şey yapmayan bir politika,
+  onu dağıtan yöneticinin yürürlükte sandığı bir politikadır.
+- **Kilitli anahtara yazma** `env_set`'te reddedilir; hata politikanın hangi
+  dosyadan geldiğini söyler, ve Settings paneli alanı düzenlenebilir değil
+  _yönetiliyor_ diye çizer.
+
+**Mirror kuralı** (`policy::mirror`), üç istisnayla:
+
+- zaten bir registry adı taşıyan referans (`ghcr.io/x/y`, `localhost:5000/z`) —
+  Docker'ın tanıdığı kuralla: ilk parça `.` ya da `:` içeriyorsa veya tam olarak
+  `localhost` ise. Kasıtlı bir seçimi başka yere yönlendirmek yanlış olur.
+- zaten önekle başlayan referans — ikinci render ikinci yeniden yazma olmamalı.
+- **`stackvo-` ile başlayan imaj** — bunlar bu makinede `docker compose build`
+  ile üretiliyor ve hiçbir registry'de yok. Önek eklemek onları aynı anda hem
+  çekilemez hem inşa edilemez yapar.
+
+Yeniden yazma **render edilmiş metin** üzerinde yapılmalı, yirmi `.tpl`
+dosyasında değil: şablonlar Bash üreticisiyle olan sözleşme, Bash mirror'dan
+haberdar değil, ve dosyaları düzenlemek her differential karşılaştırmayı porta
+ilgisiz bir sebeple düşürür.
+
+Ayrıca gerekenler: `Code::Forbidden` (bugün yok), `policy_status` komutu +
+sözleşme girişi, Settings'te "yönetiliyor" rozeti, ve ADR 0008.
+
+#### §14.19 — Docker trait + proptest + criterion
+
+`ProgressSink` (§18.1) bunun küçük provası: Tauri'siz bir soyutlama, test
+edilebilir ikizlerle. `engine.rs` bugün bollard'ı doğrudan çağırıyor, yani
+"daemon şunu döndürürse ne olur" hiçbir yerde test edilemiyor.
+
+#### §14.20 — Keystore ile sır yönetimi
+
+v2 sözleşme değişikliği olarak planlanmalı (§5.2).
+
+#### Hâlâ engelli olan ikisi
+
+§14.10 `tauri-specta` (ayrı dal, ADR 0006'nın ardılı) ve §14.12 E2E (Linux
+runner gerekiyor).
+
+### 35.3 Devralan için dokuz uyarı
 
 1. **`Settings.vue` %0 kapsamda ve öyle kalacak** — bölme bitene kadar. Bu bir
    gerileme değil, ölçünün dürüst hâli.
 2. **Mount testleri gerçek hata buluyor.** Bu oturumda dört ayrı sınıf çıktı:
    tipsiz IPC sınırı (§22.3), `hintKey`'in düşmesi (§22.4), erişilebilirlik
    (§22.5), ve bozuk i18n dizeleri (§24.3). Bir paneli çıkarırken çıkan hatayı
-   *susturmayın* — o, çıkarmanın getirisidir.
-3. **`git stash` ile "bu benim mi?" kontrolü yapın.** Bu oturumda üç kez
+   _susturmayın_ — o, çıkarmanın getirisidir.
+3. **Paneli, uygulamada yaşadığı bağlamda mount edin.** §27.2: `DomainPane`
+   çıplak mount edildiğinde dört iddia düştü ve dördü de doğru davranıştı —
+   paylaşılan editör yüklenmemişti. Testin kurgusu yanlışsa test yanlış soruyu
+   sorar.
+4. **Dosyayı değiştirdikten sonra dilimlerini yeniden alın.** §31.3: bir
+   panel çıkarıldıktan sonra satır numaraları kaydı, önceden alınmış dilimler
+   yanlış içerik taşıdı, ve bir bileşen başka bir panelin markup'ıyla üretildi.
+5. **Bir bloğu silmeden önce ne sildiğini doğrulayın.** §26.2: bir betik
+   niyetlenilenin ötesine geçip dört sabit sildi, şablon onları kullanmaya
+   devam etti, ve 265 testin hiçbiri görmedi. `vue/no-undef-properties` artık
+   açık — ama kesme sınırını yine de `assert` edin.
+6. **Testte tek bir Pinia kullanın**, ve store'u `useStore(pinia)` ile açıkça
+   çözün. §28.3: `mount`'a verilen pinia ile testin okuduğu ayrı çıktı, durum
+   görünmez oldu ve iddia sebepsiz düştü.
+7. **Fikstürü sözleşme şeklinde yazın, savunmacı değil.** §33.3: Rust'ta
+   `Vec<T>` olan bir alan serde'de hiç yok olmaz, ama üç fikstür onları atladı
+   ve dokuz sessiz unhandled rejection üretti. Eksik fikstür, arka ucun
+   gönderemeyeceği bir yükü test etmektir.
+8. **Stilleri taşımayı unutmayın — ve bunu bir testle doğrulayın.** §33.5:
+   kalıbın 2. adımı "scoped stiller dahil" diyordu, yirmi kez atlandı, ve 497
+   test görmedi. `tests/pane-styles.spec.js` artık bekçi.
+9. **`git stash` ile "bu benim mi?" kontrolü yapın.** Bu oturumda üç kez
    kullanıldı ve üçünde de cevap "hayır, önceden vardı" idi (§19.1, §19.2).
    Kaydedilmemiş bir hatayı kendi değişikliğine yazmak, iki turu boşa harcar.
 
-### 26.4 Sahibine kalanlar — hâlâ açık
+### 35.4 Sahibine kalanlar — hâlâ açık
 
 §17.5 değişmedi:
 
@@ -1575,4 +2317,3 @@ gelir ve `%0`'dan çıkar — bugün `src/views/`'i `%26`'da tutan tek şey o ve
 3. **Apple / Windows imzalama secret'ları** girilmedi — artık eksikse release
    log'unda uyarı çıkıyor (§17.1), ama hâlâ eksikler.
 4. **Kapsam eşiği** yok. Sayılar var (§25.4); eşik bir politika kararı.
-
