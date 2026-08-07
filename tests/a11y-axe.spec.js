@@ -99,11 +99,25 @@ const RULES = {
   'color-contrast': { enabled: false },
 };
 
-async function scan(wrapper) {
-  const results = await axe(wrapper.element, { rules: RULES });
+async function scan(wrapper, rules = RULES) {
+  const results = await axe(wrapper.element, { rules });
   wrapper.unmount();
   return results;
 }
+
+/**
+ * `v-slider` renders a hidden `<input tabindex="-1">` beside the real
+ * `role="slider"` control, purely so the slider carries a value in a form. It
+ * has no label and cannot be given one — Vuetify forwards nothing to it — and
+ * it is not focusable, so no keyboard or screen-reader user ever meets it.
+ *
+ * Scoped to the one pane that has sliders rather than turned off everywhere:
+ * `label` is the rule that catches a genuinely unlabelled field, and it caught
+ * two in `LogView` and `DumpView`. The sliders' *real* control is named — see
+ * the `aria-label` on each in `AppearancePane.vue`, added because axe reported
+ * "slider, 12" with nothing saying what was at 12.
+ */
+const SLIDER_HOST = { ...RULES, label: { enabled: false } };
 
 describe('axe over the components that can be mounted', () => {
   /**
@@ -260,9 +274,7 @@ describe('axe over the pages that can be mounted', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     await wrapper.vm.$nextTick();
 
-    const results = await axe(wrapper.element, { rules: FRAMEWORK });
-    wrapper.unmount();
-    expect(results).toHaveNoViolations();
+    expect(await scan(wrapper, FRAMEWORK)).toHaveNoViolations();
     document.body.innerHTML = '';
   });
 });
@@ -276,6 +288,354 @@ describe('axe over the pages that can be mounted', () => {
  * select has no items to open — which reads as an app defect and is not one.
  * The list, the chips and the buttons are the part worth checking.
  */
+/**
+ * The panes coming out of `ProjectDetail.vue`.
+ *
+ * Same reasoning as the Settings block below: scanned with data, because most
+ * of the markup is behind a `v-if` on there being a sample at all.
+ */
+describe('axe over the extracted project panes', () => {
+  it('IndicatorPane has no violations', async () => {
+    const IndicatorPane = (await import('@/components/project/IndicatorPane.vue')).default;
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+
+    const pie = [
+      { key: 'a', title: 'A', value: 1, color: '#1976D2' },
+      { key: 'b', title: 'B', value: 2, color: '#2A313C' },
+    ];
+    const wrapper = mount(
+      {
+        components: { IndicatorPane },
+        template: '<v-app><IndicatorPane v-bind="$attrs" /></v-app>',
+      },
+      {
+        attrs: {
+          running: true,
+          stats: { cpuPercent: 12, memoryUsed: 1, memoryLimit: 2, netRx: 1, netTx: 1 },
+          cpuSeries: [1, 2, 3],
+          memoryPie: pie,
+          networkPie: pie,
+          diskPie: pie,
+          heatmap: [{ label: new Date('2026-08-06T00:00:00'), hours: Array(24).fill(5) }],
+        },
+        attachTo: host,
+        global: { plugins: [vuetify, i18n] },
+      }
+    );
+
+    expect(await scan(wrapper)).toHaveNoViolations();
+    document.body.innerHTML = '';
+  });
+
+  it('ReleasePane has no violations', async () => {
+    vi.resetModules();
+    vi.doMock('@/lib/ipc', () => ({
+      StackvoError: class extends Error {},
+      call: vi.fn(),
+      asList: (value) => (Array.isArray(value) ? value : []),
+      api: new Proxy(
+        {},
+        {
+          get: () => () =>
+            Promise.resolve({
+              tag: 'shop:1.4.0',
+              baseImage: 'php:8.3-fpm-alpine',
+              excluded: [['node_modules', 'rebuilt during the image build']],
+              warnings: ['no .dockerignore found'],
+              dockerfile: 'FROM php:8.3-fpm-alpine\n',
+            }),
+        }
+      ),
+    }));
+    const ReleasePane = (await import('@/components/project/ReleasePane.vue')).default;
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    // Scanned with a plan, not empty: the table, the accordion and the tag
+    // field only exist once one has been read, and they are the whole pane.
+    const wrapper = mount(
+      {
+        components: { ReleasePane },
+        template: '<v-app><ReleasePane name="shop" /></v-app>',
+      },
+      { attachTo: host, global: { plugins: [vuetify, i18n] } }
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+
+    expect(await scan(wrapper)).toHaveNoViolations();
+    document.body.innerHTML = '';
+  });
+
+  it.each([
+    [
+      'DevServerPane',
+      'node',
+      {
+        devserverStatus: {
+          enabled: true,
+          mounted: true,
+          command: 'npm run dev -- --host',
+          productionCommand: 'npm start',
+          hostAllowed: false,
+          needsRecreate: true,
+          snippet: "server: { allowedHosts: ['shop.loc'] }",
+        },
+      },
+    ],
+    [
+      'PhpIniPane',
+      'php',
+      {
+        phpIniStatus: {
+          values: { memory_limit: '256M' },
+          effective: { memory_limit: '128M' },
+          unmanaged: { opcache_enable: '1' },
+          warning: 'post_max_size is below upload_max_filesize',
+          path: '/ws/projects/shop/php.ini',
+        },
+      },
+    ],
+  ])('%s has no violations', async (name, runtime, seed) => {
+    vi.resetModules();
+    vi.doMock('@/lib/ipc', () => ({
+      StackvoError: class extends Error {},
+      call: vi.fn(),
+      asList: (value) => (Array.isArray(value) ? value : []),
+      api: new Proxy({}, { get: (_t, key) => () => Promise.resolve(seed[key]) }),
+    }));
+    const Pane = (await import(`@/components/project/${name}.vue`)).default;
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    // Every alert and the snippet block are behind a `v-if` on state, so the
+    // seed above deliberately turns all of them on at once.
+    const wrapper = mount(
+      {
+        components: { Pane },
+        template: `<v-app><Pane name="shop" runtime="${runtime}" /></v-app>`,
+      },
+      { attachTo: host, global: { plugins: [vuetify, i18n] } }
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+
+    expect(await scan(wrapper)).toHaveNoViolations();
+    document.body.innerHTML = '';
+  });
+
+  it.each([
+    [
+      'TunnelPane',
+      {
+        tunnelStatus: [
+          { project: 'shop', running: true, url: 'https://loud-fox.trycloudflare.com' },
+        ],
+      },
+    ],
+    [
+      'WorkersPane',
+      {
+        workerOptions: ['queue', 'schedule'],
+        workerStatus: [{ project: 'shop', kind: 'queue', restarts: 3 }],
+      },
+    ],
+  ])('%s has no violations', async (name, seed) => {
+    vi.resetModules();
+    vi.doMock('@/lib/ipc', () => ({
+      StackvoError: class extends Error {},
+      call: vi.fn(),
+      asList: (value) => (Array.isArray(value) ? value : []),
+      api: new Proxy({}, { get: (_t, key) => () => Promise.resolve(seed[key]) }),
+    }));
+    const Pane = (await import(`@/components/project/${name}.vue`)).default;
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const wrapper = mount(
+      {
+        components: { Pane },
+        template: '<v-app><Pane name="shop" :running="true" /></v-app>',
+      },
+      { attachTo: host, global: { plugins: [vuetify, i18n] } }
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+
+    expect(await scan(wrapper)).toHaveNoViolations();
+    document.body.innerHTML = '';
+  });
+
+  it('ContainerPane has no violations', async () => {
+    const ContainerPane = (await import('@/components/project/ContainerPane.vue')).default;
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+
+    const wrapper = mount(
+      {
+        components: { ContainerPane },
+        template: '<v-app><ContainerPane v-bind="$attrs" /></v-app>',
+      },
+      {
+        attrs: {
+          project: { built: true, containerName: 'stackvo-shop' },
+          details: {
+            name: 'stackvo-shop',
+            id: 'sha256:deadbeef',
+            image: 'stackvo/php:8.3',
+            imageSize: 1024,
+            state: 'running',
+            running: true,
+            ports: [{ container: 80, host: 8080 }],
+            networks: ['stackvo-net'],
+            gateway: '172.20.0.1',
+            restartCount: 0,
+            restartPolicy: 'unless-stopped',
+            startedAt: '2026-08-06T09:00:00Z',
+            created: '2026-08-01T12:00:00Z',
+          },
+          running: true,
+        },
+        attachTo: host,
+        global: { plugins: [vuetify, i18n] },
+      }
+    );
+
+    expect(await scan(wrapper)).toHaveNoViolations();
+    document.body.innerHTML = '';
+  });
+
+  it.each([
+    [
+      'XdebugPane',
+      'php',
+      { xdebugStatus: { enabled: true, needsRebuild: true, active: false, running: true } },
+    ],
+    [
+      'ProfilerPane',
+      'php',
+      {
+        profilerStatus: {
+          mode: 'profile',
+          trigger: 'XDEBUG_TRIGGER=1',
+          bytes: 4096,
+          directory: '/ws/projects/shop/.stackvo/profiles',
+          profiles: [
+            {
+              id: 'cachegrind.out.1',
+              name: 'cachegrind.out.1',
+              bytes: 4096,
+              recordedAt: 1_786_007_730,
+            },
+          ],
+          xdebug: { running: true, active: true, activeMode: 'debug' },
+        },
+      },
+    ],
+  ])('%s has no violations', async (name, runtime, seed) => {
+    vi.resetModules();
+    vi.doMock('@/lib/ipc', () => ({
+      StackvoError: class extends Error {},
+      call: vi.fn(),
+      asList: (value) => (Array.isArray(value) ? value : []),
+      api: new Proxy({}, { get: (_t, key) => () => Promise.resolve(seed[key]) }),
+    }));
+    const { createPinia } = await import('pinia');
+    const Pane = (await import(`@/components/project/${name}.vue`)).default;
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const wrapper = mount(
+      {
+        components: { Pane },
+        template: `<v-app><Pane name="shop" runtime="${runtime}" :running="true" /></v-app>`,
+      },
+      { attachTo: host, global: { plugins: [createPinia(), vuetify, i18n] } }
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+
+    expect(await scan(wrapper)).toHaveNoViolations();
+    document.body.innerHTML = '';
+  });
+
+  it('DockerfilePane has no violations', async () => {
+    vi.resetModules();
+    vi.doMock('@/lib/ipc', () => ({
+      StackvoError: class extends Error {},
+      call: vi.fn(),
+      asList: (value) => (Array.isArray(value) ? value : []),
+      api: new Proxy(
+        {},
+        {
+          get: () => () =>
+            Promise.resolve({
+              dockerfile: 'FROM php:8.3-fpm-alpine\nCOPY . /app\n',
+              matches: false,
+              differences: ['pdo_mysql is dropped by the Bash generator'],
+            }),
+        }
+      ),
+    }));
+    const DockerfilePane = (await import('@/components/project/DockerfilePane.vue')).default;
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const wrapper = mount(
+      {
+        components: { DockerfilePane },
+        template: '<v-app><DockerfilePane name="shop" /></v-app>',
+      },
+      { attachTo: host, global: { plugins: [vuetify, i18n] } }
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+
+    expect(await scan(wrapper)).toHaveNoViolations();
+    document.body.innerHTML = '';
+  });
+
+  it('ManifestPane has no violations', async () => {
+    const { createPinia } = await import('pinia');
+    const ManifestPane = (await import('@/components/project/ManifestPane.vue')).default;
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    // A bare textarea with a heading beside it rather than a label is exactly
+    // the shape axe exists to catch, so it is scanned with content in it.
+    const wrapper = mount(
+      {
+        components: { ManifestPane },
+        template:
+          '<v-app><ManifestPane name="shop" :dirty="true" model-value=\'{ "runtime": "php" }\' /></v-app>',
+      },
+      { attachTo: host, global: { plugins: [createPinia(), vuetify, i18n] } }
+    );
+
+    expect(await scan(wrapper)).toHaveNoViolations();
+    document.body.innerHTML = '';
+  });
+
+  it('LogsPane says so when the project has not been built', async () => {
+    const LogsPane = (await import('@/components/project/LogsPane.vue')).default;
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+
+    const wrapper = mount(
+      {
+        components: { LogsPane },
+        template: '<v-app><LogsPane :project="{ built: false }" name="shop" /></v-app>',
+      },
+      { attachTo: host, global: { plugins: [vuetify, i18n] } }
+    );
+
+    expect(wrapper.text()).toContain(en.detail.notBuilt);
+    expect(await scan(wrapper)).toHaveNoViolations();
+    document.body.innerHTML = '';
+  });
+});
+
 describe('axe over the extracted Settings panes', () => {
   const replies = {};
 
@@ -297,10 +657,12 @@ describe('axe over the extracted Settings panes', () => {
     const host = document.createElement('div');
     document.body.appendChild(host);
 
-    const wrapper = mount(pane, {
-      attachTo: host,
-      global: { plugins: [createPinia(), vuetify, i18n] },
-    });
+    // Inside `v-app`, like the view. Vuetify's drawers and sheets resolve an
+    // injected layout from it, and a pane that holds one throws without it.
+    const wrapper = mount(
+      { components: { Pane: pane }, template: '<v-app><Pane /></v-app>' },
+      { attachTo: host, global: { plugins: [createPinia(), vuetify, i18n] } }
+    );
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     await wrapper.vm.$nextTick();
@@ -323,6 +685,80 @@ describe('axe over the extracted Settings panes', () => {
         caPath: '/ws/ca/rootCA.pem',
       },
       certPlan: { remove: ['gone.loc'] },
+    });
+
+    expect(await scan(wrapper)).toHaveNoViolations();
+    document.body.innerHTML = '';
+  });
+
+  it('DomainPane has no violations', async () => {
+    const wrapper = await renderPane('DomainPane', {
+      envGet: { DEFAULT_TLD_SUFFIX: 'stackvo.loc', DOCKER_DEFAULT_NETWORK: 'stackvo-net' },
+      envDefaults: {},
+      hostsOverview: {
+        entries: [
+          { domain: 'shop.loc', configured: true },
+          { domain: 'blog.loc', configured: false },
+        ],
+        stale: ['deleted.loc'],
+      },
+      containerInspect: { running: true, image: 'traefik:v3', ports: [{ host: 80 }] },
+    });
+
+    expect(await scan(wrapper)).toHaveNoViolations();
+    document.body.innerHTML = '';
+  });
+
+  it.each([
+    ['ServicesPane', {}],
+    [
+      'PreferencesPane',
+      { prefsGet: {}, appsAvailable: { terminals: [], editors: [], browsers: [] } },
+    ],
+    ['DiagnosticsPane', { logsInfo: { directory: '/logs', newestFile: null, totalBytes: 0 } }],
+  ])('%s has no violations', async (name, seed) => {
+    const wrapper = await renderPane(name, seed);
+    expect(await scan(wrapper)).toHaveNoViolations();
+    document.body.innerHTML = '';
+  });
+
+  it('ServerLimitsPane has no violations', async () => {
+    const wrapper = await renderPane('ServerLimitsPane', {
+      envGet: { SERVER_MAX_BODY_SIZE: '64m', SERVER_GZIP: 'on' },
+      envDefaults: {},
+      catalogGet: { runtimes: [], servers: ['nginx', 'caddy'] },
+      serverConfigGet: '# nginx\n',
+    });
+    expect(await scan(wrapper)).toHaveNoViolations();
+    document.body.innerHTML = '';
+  });
+
+  it('LocalisationPane has no violations', async () => {
+    const wrapper = await renderPane('LocalisationPane', {});
+    expect(await scan(wrapper)).toHaveNoViolations();
+    document.body.innerHTML = '';
+  });
+
+  it('PhpPane has no violations', async () => {
+    const wrapper = await renderPane('PhpPane', {
+      envGet: { SUPPORTED_LANGUAGES_PHP_DEFAULT: '8.4' },
+      envDefaults: {},
+      catalogGet: { runtimes: [{ id: 'php', versions: ['8.3', '8.4'] }], servers: ['nginx'] },
+    });
+    expect(await scan(wrapper)).toHaveNoViolations();
+    document.body.innerHTML = '';
+  });
+
+  it('AppearancePane has no violations', async () => {
+    const wrapper = await renderPane('AppearancePane', {});
+    expect(await scan(wrapper, SLIDER_HOST)).toHaveNoViolations();
+    document.body.innerHTML = '';
+  });
+
+  it('WorkspacePane has no violations', async () => {
+    const wrapper = await renderPane('WorkspacePane', {
+      presetExport: { name: 'team', services: { mysql: { enabled: true } } },
+      templatesList: [{ path: 'core/servers/nginx.conf', overridden: true }],
     });
 
     expect(await scan(wrapper)).toHaveNoViolations();

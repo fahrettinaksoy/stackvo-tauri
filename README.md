@@ -219,6 +219,18 @@ Phase 0 turned up four live bugs in shipped StackVo, found purely by writing the
 | 3 ✅  | Tray, notifications, fs-watcher, hosts helper, PTY, autostart, single-instance     |
 | 4 🚧  | Generator port to Rust, native Windows, signed auto-updates                        |
 
+## How it is built
+
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — the map: the four bands of the Rust
+  side, the one request flow worth knowing, and what the front end's panes and
+  composables are for.
+- **[docs/adr/](docs/adr/)** — seven decisions with their consequences, numbered
+  so a later one can supersede an earlier one.
+
+Both are checked by `src-tauri/tests/architecture_claims.rs`: a broken link, a
+count that has drifted, or an ADR missing its consequences section fails the
+build.
+
 ## Checking the contract
 
 ```bash
@@ -239,8 +251,14 @@ of Phase 3, **22 declared commands had no implementation** — including
 `project_create`, so the app could not create a project at all. Suite F then
 found **21 wrappers no view called** and **4 events nothing emitted**.
 
-Current baseline: **4 errors**, all of them pre-existing StackVo bugs. Suites E
-and F are clean.
+Current state: **no errors**, six warnings — five wrappers no view calls yet,
+and one for a checkout with no projects in it.
+
+That number is deliberately not a promise. It was written here as "4 errors, all
+of them pre-existing StackVo bugs" and stayed after the four were fixed, because
+nothing checks a number in prose. `src-tauri/tests/contract_agreement.rs` is the
+part that _is_ checked, and it covers the two edges this suite does not — see
+[ADR 0006](docs/adr/0006-a-hand-written-contract.md).
 
 `tools/measure-env-usage.mjs` is a separate check with the same intent: it
 measures which `.env` keys the checkout actually reads and reconciles that

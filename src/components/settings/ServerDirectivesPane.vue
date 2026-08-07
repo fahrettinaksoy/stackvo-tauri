@@ -58,8 +58,12 @@ onMounted(load);
       <v-tab v-for="srv in CONFIGURABLE_SERVERS" :key="srv" :value="srv">{{ srv }}</v-tab>
     </v-tabs>
 
+    <!-- Named as well as placeheld: a placeholder disappears the moment
+         anything is typed and is not an accessible name, so a screen reader
+         announced this editor as an unlabelled text box. -->
     <v-textarea
       v-model="text"
+      :aria-label="t('settings.servers.extra')"
       :placeholder="t('settings.servers.extraPlaceholder')"
       :hint="t('settings.servers.extraHint')"
       persistent-hint

@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue';
+import { computed, inject, provide, ref } from 'vue';
 import { api } from '@/lib/ipc';
 
 /**
@@ -182,4 +182,30 @@ export function useEnvEditor() {
     save,
     clearPending,
   };
+}
+
+/**
+ * The key `Settings.vue` shares one editor under.
+ *
+ * Six panes edit the same file, so they must see the same instance — two calls
+ * to `useEnvEditor()` would be two diffs over one `.env`, and whichever saved
+ * last would silently drop the other's changes. Passing it down as a prop would
+ * work and would mean threading it through every pane signature for a value
+ * none of them chooses; injection is the idiom for exactly this.
+ */
+const ENV_EDITOR = Symbol('stackvo:env-editor');
+
+/** Called once, by the view that owns the editor. */
+export function provideEnvEditor(editor) {
+  provide(ENV_EDITOR, editor);
+  return editor;
+}
+
+/**
+ * Called by a pane. Falls back to its own editor when nothing provided one,
+ * so a pane can be mounted on its own in a test without a host component —
+ * which is the whole reason these panes are being extracted.
+ */
+export function useSharedEnvEditor() {
+  return inject(ENV_EDITOR, null) ?? useEnvEditor();
 }

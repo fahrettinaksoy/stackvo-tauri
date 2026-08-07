@@ -52,6 +52,15 @@ export default [
       // this rule reads as a modifier. The alternative is 40 eslint-disable
       // comments describing a framework convention.
       'vue/valid-v-slot': ['error', { allowModifiers: true }],
+      // A template referencing a binding the script does not define.
+      //
+      // Not hypothetical: extracting the Domain pane deleted three consts the
+      // Servers pane still used, and nothing complained. `vue/valid-*` checks
+      // syntax, the unit tests only mount what has a test, and the app throws
+      // at render — on a tab nobody opened during the change. This rule is the
+      // only layer that sees it.
+      'vue/no-undef-properties': 'error',
+
       // Multi-word names are a Vue convention this codebase does not follow for
       // views (Dashboard, Projects, Settings) and does not need to.
       'vue/multi-word-component-names': 'off',
@@ -70,6 +79,9 @@ export default [
         // patches a prototype on.
         globalThis: 'readonly',
         SVGElement: 'readonly',
+        // Node 17+, and the honest way to build a fixture a test then mutates
+        // without the mutation leaking into the next test.
+        structuredClone: 'readonly',
       },
     },
   },

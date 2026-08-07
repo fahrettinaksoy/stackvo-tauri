@@ -1,0 +1,123 @@
+/* The vocabulary the Settings panes speak.
+ *
+ * No `:deep()` anywhere below: that is scoped-block syntax. This is plain CSS,
+ * where a descendant selector already reaches into Vuetify's own markup.
+ *
+ * Same break as `project-panes.css`, found the same way and on the same day:
+ * §14.16 moved twelve sections of `Settings.vue` into child components and left
+ * these rules in the view's `<style scoped>` block, which reaches only the
+ * elements that component itself renders. Six panes rendered unstyled — the
+ * appearance swatches, the services list, the preset JSON — and the suite
+ * stayed green, because nothing looked at CSS.
+ *
+ * Nested under `.settings-scroll`, the panes' common ancestor, rather than made
+ * global: `.break` and `.mono` are names any page might reuse.
+ */
+
+/* One layer, not two.
+   `v-list` paints `surface` by default, and these rows sit on a group card
+   already filled with a translucent `surface-bright`. In the light theme the
+   two are close enough to read as one; in the dark theme the list's opaque
+   fill sat visibly on top of the card's, so every row looked like a second
+   panel. The list is transparent now and the row earns a background only
+   under the pointer — which is also the only time it means anything. */
+.settings-scroll .service-list .v-list-item {
+  background: transparent;
+}
+.settings-scroll .service-list .v-list-item:hover {
+  background: rgba(var(--v-theme-on-surface), 0.06);
+}
+
+/* The list takes the room; the rail takes what its labels need. */
+.settings-scroll .services-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The rail is a filter, not navigation: left-aligned labels, sized to the
+   text. Categories come from the catalog, so they are content — uppercasing
+   them turns `adminUis` into `ADMINUIS`, which is not what the row beneath
+   calls it. */
+.settings-scroll .service-tabs .v-tab {
+  justify-content: flex-start;
+  min-width: 0;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* The preset, as it will be committed. Scrolls in its own box rather than
+   widening the page — a twenty-service preset is longer than the pane. */
+.settings-scroll .preset-json {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+}
+
+/* A key or a version, where the difference between 8.0 and 8.O matters. */
+.settings-scroll .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Small caption above a control group. Vuetify's own labels sit inside the
+   field; these name a cluster of controls that has no single field to sit in. */
+.settings-scroll .field-label {
+  font-size: 12px;
+  opacity: 0.72;
+  margin-bottom: 6px;
+}
+
+.settings-scroll .swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-scroll .swatch {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  /* Capped: a 28px swatch at the top of the range would be a circle. */
+  border-radius: min(var(--app-radius), 14px);
+  border: 2px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+/* Neutrals are near-background by definition, so without an outline the row
+   reads as empty space rather than as five choices. */
+.settings-scroll .swatch--neutral {
+  border-color: rgba(var(--v-theme-on-surface), 0.22);
+}
+
+.settings-scroll .swatches.is-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.settings-scroll .swatch.is-active {
+  border-color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+.settings-scroll .break {
+  word-break: break-all;
+}
+
+.settings-scroll .log-path {
+  word-break: break-all;
+  opacity: 0.75;
+}
+
+/* The tab strip becomes a fixed column once there is room for one. Moved with
+   `.service-tabs` itself: a media query left behind in the view adjusts a class
+   the view no longer renders. */
+@media (min-width: 960px) {
+  .settings-scroll .service-tabs {
+    flex: 0 0 auto;
+    width: 160px;
+  }
+}
