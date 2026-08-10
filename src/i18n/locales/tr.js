@@ -413,6 +413,19 @@ export default {
         'SSL açık, yani her alan adı HTTPS üzerinden sunuluyor. mkcert olmadan sertifika üretilmez ve tarayıcılar siteyi açmayı reddeder. `choco install mkcert` ile kurun.',
     },
   },
+  imports: {
+    found: '{tool} içinde bulundu: {n} site',
+    explain:
+      '{path} okundu. Oraya asla bir şey yazılmaz. İçe aktarma, siteyi bu çalışma alanına kopyalar ve ardından diğer klasörler gibi sahiplenir.',
+    take: 'İçe aktar',
+    taken: 'Zaten burada',
+    move: 'Kopyalamak yerine taşı',
+    moveOff: 'Aslı yerinde kalır, yani karşılaştırırken diğer araç çalışmaya devam eder.',
+    moveOn: 'Kopya tamamlandığında aslı silinir. Diğer araç bu siteyi artık sunmayacak.',
+    pick: '{tool} klasörünü göster',
+    notThere: 'O klasör bir {source} kurulumuna benzemiyor.',
+    sizeAtLeast: 'en az {size}',
+  },
   adopt: {
     found: 'projects/ altındaki {n} klasörün stackvo.json dosyası yok.',
     from: '{files} dosyasından algılandı',
@@ -495,6 +508,18 @@ export default {
     restored: '{path} dosyasından geri yüklendi',
     confirmRestore:
       '{db} içeriği seçilen dosyanın içeriğiyle değiştirilecek. Şu anda içinde ne varsa kaybolur.',
+  },
+  snapshots: {
+    title: 'Snapshot’lar',
+    subtitle:
+      'Bu uygulamanın sakladığı ve geri koyabildiği adlandırılmış bir kopya. Çalışma alanında durur, yani İndirilenler’de değil stack’le birlikte kalır.',
+    name: 'Bu snapshot’a bir ad verin',
+    take: 'Al',
+    restore: 'Geri yükle',
+    delete: 'Sil',
+    none: 'Bu veritabanının henüz snapshot’ı yok.',
+    automatic: 'zamanlanmış olarak alındı',
+    restored: '{name} geri yüklendi',
   },
   xdebug: {
     title: 'Xdebug',
@@ -750,12 +775,18 @@ export default {
       INITDB_ROOT_PASSWORD: 'İlk kurulum root parolası',
       UPLOAD_LIMIT: 'Yükleme sınırı',
       CLUSTER_NAME: 'Küme adı',
+      ROOT_USER: 'Root kullanıcı adı',
+      REGION: 'Bölge',
+      MASTER_KEY: 'Ana anahtar',
+      API_KEY: 'API anahtarı',
+      CONSOLE_HOST_PORT: 'Konsol host portu',
     },
     categories: {
       databases: 'Veritabanları',
       cache: 'Önbellek',
       queue: 'Kuyruklar',
       search: 'Arama',
+      storage: 'Nesne depolama',
       monitoring: 'İzleme',
       devtools: 'Geliştirici araçları',
       adminUis: 'Yönetim arayüzleri',
@@ -945,6 +976,18 @@ export default {
     engineGroupDesc: 'Konteynerleri çalıştıran motorun durumu',
     externalApps: 'Dış uygulamalar',
     externalAppsDesc: 'Terminal ve editör hangi uygulamada açılsın',
+    backups: 'Otomatik yedekler',
+    backupsDesc: 'Zamanlanmış olarak alınan, çalışma alanında tutulan snapshot’lar.',
+    backupSchedule: 'Snapshot alma sıklığı',
+    backupScheduleHint:
+      'Saatten değil, son snapshot’tan ölçülür — üç gün kapalı kalmış bir dizüstü üç değil bir snapshot borçludur. Yalnızca çalışan veritabanları yedeklenir.',
+    backupOff: 'Hiçbir zaman',
+    backupHourly: 'Saatte bir',
+    backupDaily: 'Günde bir',
+    backupWeekly: 'Haftada bir',
+    backupKeep: 'Saklanacak zamanlanmış snapshot sayısı',
+    backupKeepHint:
+      'Bu sayının ötesindeki en eski zamanlanmışlar silinir. Kendi adlandırdığınız snapshot’lar asla silinmez ve bu sayıya dahil edilmez.',
     startup: 'Başlangıç ve kapatma',
     startupDesc: 'Uygulama açılırken ve kapanırken ne olsun',
     compose: 'Konteynerler',
@@ -992,6 +1035,36 @@ export default {
       inEnvFile: '.env içinde, düz metin',
       move: 'Taşı',
       restore: 'Geri al',
+    },
+    agents: {
+      title: 'Yapay zekâ asistanları',
+      sectionDesc: 'StackVo MCP sunucusunu bu makinedeki asistanlara tanıtın.',
+      description:
+        'Bu sunucuya sahip bir asistan, “shop.loc neden açılmıyor?” sorusunu ön kontrol raporundan, hosts dosyasından, sertifikadan ve bir container’ın loglarından cevaplayabilir.',
+      whatItDoes:
+        'Ekleme, o uygulamanın kendi yapılandırma dosyasına stackvo adında tek bir girdi yazar. Dosya her satırda yazılı, kendiniz açabilesiniz diye.',
+      neverClobbers:
+        'Dosyadaki başka hiçbir şeye dokunulmaz ve yazmadan önce yanına .stackvo-backup adıyla bir kopya bırakılır.',
+      noBinary:
+        'stackvo-mcp ayrı bir binary ve uygulamayla birlikte gelmiyor. Tanıtılabilmesi için önce derlenmesi gerekiyor — aksi hâlde asistan var olmayan bir yolu işaret ederdi.',
+      buildCommand: 'cargo build --release --bin stackvo-mcp',
+      serverBinary: 'Tanıtılacak sunucu',
+      allowWrites: 'Asistan değişiklik yapabilsin',
+      allowWritesDetail:
+        'Kapalıyken asistan yalnızca okuyabilir. Açıkken stack_up, stack_down, project_start, project_stop, generate, xdebug_set ve certificates_reissue de eklenir — yani stack’in tamamını durdurmak dahil. Bu ayar, eklediğiniz bir sonraki asistan için geçerlidir.',
+      state: {
+        registered: 'Tanıtıldı',
+        stale: 'Tanıtıldı, ama başka bir kopyayı işaret ediyor',
+        available: 'Kurulu, tanıtılmadı',
+        absent: 'Bu makinede bulunamadı',
+        unparseable: 'Bu dosya yorum satırı içeriyor, güvenle düzenlenemez',
+      },
+      add: 'Tanıt',
+      update: 'Güncelle',
+      remove: 'Kaldır',
+      copyBlock: 'Bloğu kopyala',
+      notListed:
+        'Codex ve Zed listede yok: Codex yapılandırmasını TOML’da tutuyor, Zed’in biçimi ise doğrulanamadı. İkisi de yukarıdaki blokla elle yapılandırılabilir.',
     },
     policy: {
       title: 'Bu makine yönetiliyor',
@@ -1125,6 +1198,28 @@ export default {
     composeRestart: 'Yığını yeniden başlat',
   },
 
+  requirements: {
+    title: 'Bu projenin ihtiyaç duyduğu servisler',
+    description:
+      'Ortam tanımının repoyla birlikte gelen yarısı: bir iş arkadaşı klonluyor, burayı açıyor ve eksik olanı açıyor.',
+    none: 'Bu proje hiçbir servis beyan etmiyor ve .env dosyasından da bir şey çıkmadı.',
+    declaredBy: 'stackvo.json içinde beyan edilmiş',
+    suggestedBy: 'Projenin kendi .env dosyasından çıkarıldı',
+    suggestedCaveat:
+      'Bu bir tahmin — her birinin yanında hangi anahtardan çıktığı yazıyor. Yazmak, onu iş arkadaşlarınızın karar olarak okuyacağı bir dosyaya koyar; önce kontrol edin.',
+    becauseOf: '{key} anahtarından',
+    state: {
+      enabled: 'Bu makinede açık',
+      missing: 'Burada açık değil',
+      unknown: 'Bu sürümde bu servis için şablon yok',
+    },
+    unknownExplained:
+      'Şablonu olmayan isimler dosyadan silinmiyor, duruyor — sessizce kaybolan bir beyan kimsenin hata ayıklayamayacağı bir beyandır. Yalnızca işleme alınmıyorlar.',
+    enable: '{count} servisi aç',
+    enableDetail: '.env yazılır, compose dosyaları yeniden üretilir ve servisler başlatılır.',
+    declare: '{count} tanesini stackvo.json’a yaz',
+    written: 'Yazıldı. stackvo.json’ı commit edin; klonlayan bir sonraki kişi aynı listeyi alır.',
+  },
   logs: {
     title: 'Loglar',
     live: 'canlı',
@@ -1371,6 +1466,11 @@ export default {
       'Klonlama bilgisayarınızdaki git ile yapılır. Anahtar, ssh yapılandırması ve sunucu izinleri sizin kurulumunuzdan okunur — StackVo bunların hiçbirini yönetmez. Terminalde çalışan bir adres burada da çalışır.',
     gitManifestHint:
       'Depoda stackvo.json varsa ayarları olduğu gibi kullanılır — takımın cevabı sizindir, yukarıdaki alanlar yok sayılır. Yoksa proje, gelen dosyalardan tespit edilerek yapılandırılır.',
+    aliases: 'Ek alan adları',
+    aliasesHint:
+      "Bu projenin cevap verdiği diğer adlar. stackvo.json'a yazılır, yani klonlayan bir iş arkadaşı da alır.",
+    aliasesWildcard:
+      'Joker, sertifikaya ve yönlendiriciye ulaşır ama hiçbir hosts dosyası joker ifade edemez — o adlar siz elle eklemedikçe çözülmez.',
     domain: 'Alan adı',
     runtime: 'Çalışma ortamı',
     phpVersion: 'PHP sürümü',
@@ -1482,6 +1582,10 @@ export default {
     installPolkit: 'polkit kurun ya da /etc/hosts dosyasını elle düzenleyin.',
     serviceMustBeInCatalog:
       'Yalnızca contracts/env.schema.json içinde listelenen servisler yönetilebilir.',
+    snapshotNameCharset:
+      'Harf, rakam, nokta, tire ve alt çizgi kullanın — ad bir dosya adına dönüşüyor. `auto-` zamanlanmış snapshot’lara ayrılmıştır.',
+    snapshotNameInUse:
+      'Başka bir ad seçin ya da önce mevcut snapshot’ı silin — bir snapshot asla yerinde ezilmez.',
     supportedDatabases: 'Desteklenenler: mysql, mariadb, postgres, mongo.',
     enableAMailCatcher:
       '.env içinde mailhog (ya da mailpit) servisini etkinleştirip yeniden üretin.',
@@ -1502,6 +1606,10 @@ export default {
       'Anahtar zincirinizi açıp yeniden deneyin — bu ayarın şifresi orada saklanıyor.',
     onlyCredentialsMove:
       'Anahtar deposunda yalnızca şifreler, token’lar ve sunucu kimlikleri tutulabilir.',
+    agentConfigUnparseable:
+      'Bu dosya düz JSON değil — birkaç editör içinde yorum satırına izin veriyor ve bunlar silinmeden dosya güvenle düzenlenemez. Dosyayı açıp burada gösterilen bloğu yapıştırın.',
+    buildTheMcpServer:
+      'Önce derleyin: StackVo checkout’unda `cargo build --release --bin stackvo-mcp`.',
     keystoreEntryIsGone:
       'Giriş anahtar deposundan silinmiş. Servisi geri getirmek için değeri yeniden girin.',
     settingIsManaged:

@@ -137,6 +137,12 @@ hints! {
         "Only services listed in contracts/env.schema.json can be managed.";
     SUPPORTED_DATABASES = "supportedDatabases",
         "Supported: mysql, mariadb, postgres, mongo.";
+    SNAPSHOT_NAME_CHARSET = "snapshotNameCharset",
+        "Use letters, digits, dot, dash and underscore — the name becomes a filename. \
+         `auto-` is reserved for scheduled snapshots.";
+    SNAPSHOT_NAME_IN_USE = "snapshotNameInUse",
+        "Choose another name, or delete the existing snapshot first — a snapshot is never \
+         overwritten in place.";
     ENABLE_A_MAIL_CATCHER = "enableAMailCatcher",
         "Enable mailhog (or mailpit) in .env, then regenerate.";
     MAIL_UI_MAY_BE_STARTING = "mailUiMayBeStarting",
@@ -164,6 +170,13 @@ hints! {
         "Unlock your keychain and try again — the password for this setting is stored there.";
     ONLY_CREDENTIALS_MOVE = "onlyCredentialsMove",
         "Only passwords, tokens and server ids can be kept in the keystore.";
+
+    // ---------------------------------------------------------------- assistants
+    AGENT_CONFIG_UNPARSEABLE = "agentConfigUnparseable",
+        "This file is not plain JSON — several editors allow comments in it, which cannot be \
+         edited safely without deleting them. Open it and paste the block shown here.";
+    BUILD_THE_MCP_SERVER = "buildTheMcpServer",
+        "Build it first: `cargo build --release --bin stackvo-mcp` in the StackVo checkout.";
     KEYSTORE_ENTRY_IS_GONE = "keystoreEntryIsGone",
         "The entry was removed from the keystore. Set the value again to restore the service.";
 

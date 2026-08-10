@@ -20,8 +20,8 @@ Three parts, in the order a request travels:
 | Part                                | Where                | Size                    |
 | ----------------------------------- | -------------------- | ----------------------- |
 | Front end — Vue 3, Vuetify 3, Pinia | `src/`               | 24k lines               |
-| Back end — Rust, 61 modules         | `src-tauri/src/`     | 38k lines               |
-| The boundary between them           | `contracts/ipc.json` | 155 commands, 57 events |
+| Back end — Rust, 64 modules         | `src-tauri/src/`     | 38k lines               |
+| The boundary between them           | `contracts/ipc.json` | 168 commands, 57 events |
 
 The two halves never share a type. They share a **contract**, and §5 is about
 why that is a deliberate cost rather than an omission.
@@ -55,15 +55,15 @@ document behind it:
 - **`state.inflight.acquire`** — one operation per subject, held for the life of
   the command. The front end has a busy flag per view; this is the boundary the
   tray, a second window and a keyboard shortcut all share.
-  → [ADR 0003](docs/adr/0003-one-operation-per-subject.md)
+  → [decision 0003](docs/durum.md)
 - **`generator::render`** — the compose file and the Dockerfile are _rendered_
   from the manifest every time, never edited in place.
-  → [ADR 0002](docs/adr/0002-generated-files-are-rendered.md)
+  → [decision 0002](docs/durum.md)
 - **`runner::run_operation(sink, …)`** — the long half of the work reports
   through a sink rather than returning, so a build does not block a promise for
-  four minutes. → [ADR 0005](docs/adr/0005-progress-through-a-sink.md)
+  four minutes. → [decision 0005](docs/durum.md)
 - **the error that comes back** — a `StackvoError` with a `code`, not a string.
-  → [ADR 0004](docs/adr/0004-errors-are-codes-not-strings.md)
+  → [decision 0004](docs/durum.md)
 
 ---
 
@@ -71,7 +71,7 @@ document behind it:
 
 ### 3.1 Layers
 
-`src-tauri/src/` is flat — 61 modules, no subdirectories — but it is not
+`src-tauri/src/` is flat — 64 modules, no subdirectories — but it is not
 unstructured. There are four bands, and the dependency arrows only ever point
 downward:
 
@@ -79,7 +79,7 @@ downward:
   entry              1.3k   lib.rs, main.rs, menu, tray — plugins, state, the
       │                     handler list, the window
       ▼
-  commands.rs        6.7k   the IPC surface: 151 #[tauri::command] functions
+  commands.rs        6.7k   the IPC surface: 164 #[tauri::command] functions
       │                     argument validation, orchestration, nothing else
       ▼
   domain            22.7k   32 modules: generator, manifest, certs, hosts,
@@ -96,7 +96,7 @@ downward:
 `commands.rs` is the only file that mentions `AppHandle` or `State<'_, …>`, and
 that is the rule the band structure exists to enforce: everything below it can
 be called from a test, from the `diagnose` example, or from the MCP surface,
-with no running application. → [ADR 0001](docs/adr/0001-tauri-free-domain.md)
+with no running application. → [decision 0001](docs/durum.md)
 
 The 6.7k-line `commands.rs` is the known cost of that rule. It is a directory of
 thin functions rather than a module with a subject, and splitting it by subject
@@ -168,7 +168,7 @@ That is not how it started. `Settings.vue` and `ProjectDetail.vue` were 3.4k and
 3.0k lines, held every section's state in one `<script setup>`, and could not be
 mounted in a test at all — so neither was covered by anything. Splitting them
 into 26 panes (14 for the project page, 12 for settings) is the largest single change in this repository's history and is
-written up in §23–33 of `docs/enterprise-readiness-2026-08.md`.
+written up in [`docs/durum.md`](docs/durum.md) §3.
 
 Two things that split taught, both now enforced by tests:
 
@@ -196,14 +196,14 @@ rejections".
 
 ## 5. The contract
 
-`contracts/ipc.json` is the specification of the boundary: 155 commands, 57
+`contracts/ipc.json` is the specification of the boundary: 168 commands, 57
 events, 58 named types, 3 error shapes, and — for most entries — a `why`.
 
 It is a **hand-maintained document, not generated code**, and that is the
 trade-off worth stating plainly. Generating TypeScript types from the Rust
 (`tauri-specta`) would make drift impossible; it was measured and deferred
 because it changes how every command is declared and belongs on its own branch.
-→ [ADR 0006](docs/adr/0006-a-hand-written-contract.md)
+→ [decision 0006](docs/durum.md)
 
 What keeps it honest in the meantime is `src-tauri/tests/contract_agreement.rs`,
 which fails the build when the contract, the `#[tauri::command]` functions and
@@ -271,25 +271,23 @@ readiness review rather than papered over with tests that cannot execute.
 
 ---
 
-## 8. Decisions
+## 7a. Where the open work is, and where the decisions are
 
-`docs/adr/` holds the architectural decisions in the usual form: context, the
-decision, and its consequences including the ones nobody wanted. They are
-numbered so a later one can supersede an earlier one, which is the property a
-code comment cannot have.
+One document, [`docs/durum.md`](docs/durum.md). It replaced five — two
+competitive reviews, a readiness review, a platform matrix and ten ADR files —
+when keeping "what is left" in five places stopped being readable.
 
-| #                                                                 | Decision                                            |
-| ----------------------------------------------------------------- | --------------------------------------------------- |
-| [0001](docs/adr/0001-tauri-free-domain.md)                        | The domain band knows nothing about Tauri           |
-| [0002](docs/adr/0002-generated-files-are-rendered.md)             | Generated files are rendered, never edited          |
-| [0003](docs/adr/0003-one-operation-per-subject.md)                | One operation per subject, enforced in the back end |
-| [0004](docs/adr/0004-errors-are-codes-not-strings.md)             | Errors are codes with catalogued hints              |
-| [0005](docs/adr/0005-progress-through-a-sink.md)                  | Long operations report through a sink               |
-| [0006](docs/adr/0006-a-hand-written-contract.md)                  | The IPC contract is written, not generated          |
-| [0007](docs/adr/0007-one-privileged-call.md)                      | Exactly one privileged call                         |
-| [0008](docs/adr/0008-what-a-breaking-contract-change-is.md)       | What a breaking contract change is                  |
-| [0009](docs/adr/0009-a-policy-file-is-not-a-lock.md)              | A policy file is not a lock                         |
-| [0010](docs/adr/0010-secrets-move-out-of-env-not-off-the-disk.md) | Secrets move out of `.env`, not off the disk        |
+| Section | Answers |
+| --- | --- |
+| §1 | What was delivered, with the decision and the mistake found on the way. |
+| §2–§3 | What the product cannot do against ten rivals, and what the engineering will not carry at ten developers and three hundred machines. |
+| §4–§5 | What to do next, and what is waiting on a decision only the owner can make. |
+| §6 | **The decisions**, numbered. Comments in this codebase say "ADR 0005"; that is §6. |
+| §7 | The measurements, held to the tree by `platform_matrix_claims.rs`. |
+
+Two of those sections have gates and three do not, and the document says which:
+§6 and §7 fail the build when they drift, while "not done" is not a measurable
+property of code and no test can pretend otherwise.
 
 ---
 
@@ -301,7 +299,7 @@ first draft named a module as weakly tested that was 94% covered, and counted 33
 of something there were 60 of.
 
 So the checkable claims here are checked. `src-tauri/tests/readme_claims.rs`
-covers `README.md`; the counts above (61 modules, 151 commands, 155 contract
+covers `README.md`; the counts above (64 modules, 164 commands, 168 contract
 entries, 533 front-end and 538 Rust tests) come from `contract_agreement.rs` and from the module list itself, and
 a claim that drifts fails a test rather than aging quietly.
 

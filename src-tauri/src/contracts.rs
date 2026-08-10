@@ -211,12 +211,44 @@ mod tests {
     }
 
     #[test]
-    fn service_catalog_has_twenty_one_entries() {
-        // 21 templates on disk: both mail catchers ship — Mailpit as the
+    fn service_catalog_has_twenty_five_entries() {
+        // 25 templates on disk: both mail catchers ship — Mailpit as the
         // default, MailHog kept by explicit decision for stacks that already
         // run it. (The original count's README claims of "40+" and "14" were
-        // both wrong, C-17.)
-        assert_eq!(env_schema().service_catalog().len(), 21);
+        // both wrong, C-17.) The last four are MinIO, Meilisearch, Typesense
+        // and Valkey, added together because they are the rows six competitors
+        // each ship and this one did not.
+        assert_eq!(env_schema().service_catalog().len(), 25);
+    }
+
+    /// The schema's catalog and the templates that ship are the same set.
+    ///
+    /// Both halves matter and they fail differently. A directory with no
+    /// catalog entry is a service nothing can switch on — `knows_service`
+    /// rejects the id, so it is dead weight in the binary with no way in. A
+    /// catalog entry with no directory is worse: the Services page offers a
+    /// row, `service_enable` writes `SERVICE_<NAME>_ENABLE=true` into the
+    /// user's `.env`, and `render_dynamic_compose` then logs a warning and
+    /// renders nothing — a service that reads as enabled and does not exist.
+    ///
+    /// This is a claim `env.schema.json` now makes in prose, which in this
+    /// repository means it needs somewhere to be measured.
+    #[test]
+    fn every_catalog_entry_has_a_template_and_the_reverse() {
+        let catalog: std::collections::BTreeSet<String> = env_schema()
+            .service_catalog()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+
+        // Read from the compiled-in skeleton rather than the checkout: that is
+        // what a packaged app has, and a template present only in the working
+        // tree would pass a filesystem walk and fail on a user's machine.
+        let shipped: std::collections::BTreeSet<String> =
+            crate::skeleton::shipped_services().into_iter().collect();
+        assert!(!shipped.is_empty(), "no service templates are compiled in");
+
+        assert_eq!(catalog, shipped);
     }
 
     #[test]

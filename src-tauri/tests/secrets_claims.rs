@@ -167,10 +167,7 @@ fn the_generator_refuses_rather_than_rendering_a_hole() {
 fn the_documentation_says_the_value_is_still_in_the_generated_file() {
     let places = [
         ("secrets.rs", read("src/secrets.rs")),
-        (
-            "ADR 0010",
-            read_up("docs/adr/0010-secrets-move-out-of-env-not-off-the-disk.md"),
-        ),
+        ("durum.md §6 · 0010", read_up("docs/durum.md")),
         ("contracts/ipc.json", read_up("contracts/ipc.json")),
         (
             "SecretsPane.vue",

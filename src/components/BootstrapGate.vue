@@ -100,7 +100,7 @@ async function run() {
 
     // `minimal` is the profile Traefik is in — the proxy every domain resolves
     // through, including the two the gate insisted on. Not `all`: nobody asked
-    // for twenty-one containers on first launch, and nothing is switched on by
+    // for twenty-five containers on first launch, and nothing is switched on by
     // default any more.
     await api.composeUp('minimal');
     current.value = 2;

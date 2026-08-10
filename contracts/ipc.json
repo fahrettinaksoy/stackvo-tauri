@@ -246,6 +246,37 @@
       "returns": "Project",
       "why": "ProjectDetail.vue currently re-fetches the whole list and filters client-side."
     },
+    "project_requirements": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "name": "string"
+      },
+      "returns": "{ declared: Array<{ id: string, known: boolean, enabled: boolean }>, suggested: Array<{ service: string, key: string }>, plan: Plan }",
+      "why": "Competitive review B-1: herd.yml, .lerd.yaml and .ddev/config.yaml all describe the whole environment and are committed, so a teammate clones and runs one command. stackvo.json carried the project and a preset carried the stack, and the two never met. `services` in the manifest is the missing half; this reports what the repository declares, what this machine gives it, and the diff.",
+      "notes": "Reads only. `declared` comes from the manifest — the statement a colleague agreed to — and `suggested` from the project's own .env, which is a guess and is kept separate for that reason; suggestions already declared are dropped. A suggestion carries the KEY that implied it and never the value, because that file holds credentials. `plan` is produced by the same planner preset_plan uses, so an unknown service id is rejected there by name rather than becoming a SERVICE_<JUNK>_ENABLE key. See src-tauri/src/detect.rs `services_from_env` for what counts as evidence."
+    },
+    "project_requirements_apply": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string"
+      },
+      "returns": "Plan",
+      "why": "Turns the declaration into an enabled stack, through the plan-then-apply path a preset import already uses rather than a second one with its own rules.",
+      "notes": "Writes .env and stops, exactly as preset_apply does: the returned plan says needsRegenerate and regenerating is a visible step with its own progress. Never disables anything — a project declares what it needs, and one project not needing Redis is not a statement that another project's Redis should stop. Never writes a version: there is one SERVICE_<NAME>_VERSION per workspace, so a project pinning one would change every other project's database. Re-plans inside the call, so a .env changed between the review and the click is not overwritten with a stale diff."
+    },
+    "project_requirements_declare": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string",
+        "services": "string[]"
+      },
+      "returns": "Manifest",
+      "why": "Writes the `services` list into stackvo.json, which is the file that gets committed — the point of the feature is that the next person to clone does not have to be told.",
+      "notes": "Reads the manifest, replaces one list and writes it back, so a field this version of the UI does not know about cannot be lost on the round trip. Ids are trimmed, lower-cased and de-duplicated the same way manifest::read normalises them. An unknown id is a WARNING and not an error: an invalid manifest is a project the app refuses to build, and a typo in an optional field must not take a project offline."
+    },
     "project_validate": {
       "new": true,
       "kind": "query",
@@ -866,7 +897,7 @@
       "args": {},
       "returns": "{ active: boolean, source: string|null, managed: string[], locked: string[], registryPrefix: string|null, error: string|null }",
       "why": "A fleet of machines has settings somebody other than the person at the keyboard cares about — the domain suffix, the web server, and on a network without Docker Hub the registry every image is pulled from. Without this the Settings panes can only grey a field out, and a greyed-out field with no reason reads as a broken app rather than a managed one.",
-      "notes": "Reads one JSON file: /Library/Managed Preferences/com.stackvo.desktop.json on macOS, %ProgramData%\\StackVo\\policy.json on Windows, /etc/stackvo/policy.json on Linux; STACKVO_POLICY_FILE overrides all three. Read once per process, like every managed-preferences reader — a restart is how a change is picked up. This is NOT a security boundary and must not be presented as one: the override variable and, usually, the file itself are within the user's reach. `managed` and `locked` carry keys only, never values — env_get redacts secrets and this must not be a way around that. `error` is a parse or rule failure and is returned rather than swallowed, because a policy that quietly does nothing is one the administrator believes is in force; a broken file yields an empty policy and never a refusal to start. See src-tauri/src/policy.rs and docs/adr/0009-a-policy-file-is-not-a-lock.md."
+      "notes": "Reads one JSON file: /Library/Managed Preferences/com.stackvo.desktop.json on macOS, %ProgramData%\\StackVo\\policy.json on Windows, /etc/stackvo/policy.json on Linux; STACKVO_POLICY_FILE overrides all three. Read once per process, like every managed-preferences reader — a restart is how a change is picked up. This is NOT a security boundary and must not be presented as one: the override variable and, usually, the file itself are within the user's reach. `managed` and `locked` carry keys only, never values — env_get redacts secrets and this must not be a way around that. `error` is a parse or rule failure and is returned rather than swallowed, because a policy that quietly does nothing is one the administrator believes is in force; a broken file yields an empty policy and never a refusal to start. See src-tauri/src/policy.rs and docs/durum.md §6, decision 0009."
     },
     "secrets_status": {
       "new": true,
@@ -882,7 +913,7 @@
       "args": { "key": "string" },
       "returns": "void",
       "why": "On a company machine ~/.stackvo/.env is backed up, synced and DLP-scanned, and it holds database passwords in plain text (readiness review §5.2). This moves one into Keychain / Credential Manager / Secret Service and leaves `keychain:<entry>` in its place.",
-      "notes": "One key at a time and never automatic, because it has a consequence: the Bash CLI reads .env directly and would use the string `keychain:…` as the password. Writes the keystore first and the .env line second, and removes the entry again if the file write fails — the other order loses the password. Moving an already-moved key succeeds silently rather than failing, so a double click is not an error. Errors: INVALID_INPUT for a key that is not a credential, NOT_FOUND when there is no value to move, PERMISSION_DENIED when the keystore will not open. Audited as `secret_move`. This does NOT remove the value from generated/docker-compose.dynamic.yml, which is rendered with the real password — see docs/adr/0010-secrets-move-out-of-env-not-off-the-disk.md."
+      "notes": "One key at a time and never automatic, because it has a consequence: the Bash CLI reads .env directly and would use the string `keychain:…` as the password. Writes the keystore first and the .env line second, and removes the entry again if the file write fails — the other order loses the password. Moving an already-moved key succeeds silently rather than failing, so a double click is not an error. Errors: INVALID_INPUT for a key that is not a credential, NOT_FOUND when there is no value to move, PERMISSION_DENIED when the keystore will not open. Audited as `secret_move`. This does NOT remove the value from generated/docker-compose.dynamic.yml, which is rendered with the real password — see docs/durum.md §6, decision 0010."
     },
     "secret_restore": {
       "new": true,
@@ -891,6 +922,35 @@
       "returns": "void",
       "why": "The way back. A user may only discover the CLI incompatibility after moving a key, and without this the only way out is hand-editing .env with a value the app will not show them.",
       "notes": "Writes the .env line first and deletes the keystore entry second — deleting first and failing to write would destroy the password. The only caller of env_writer::apply_verbatim, which is what stops the ordinary write path from undoing a move nobody asked to undo. Audited as `secret_restore`."
+    },
+    "agents_status": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "{ binary: string | null, source: 'sibling' | 'build' | 'path' | null, root: string | null, clients: Array<{ id: string, label: string, path: string, present: boolean, exists: boolean, parseable: boolean, command: string | null, current: boolean }> }",
+      "why": "The README asked the reader to find their assistant's configuration file, work out its shape and paste a JSON block into it with a path they had to supply themselves. Competitive review K-1 — every rival with an MCP server installs itself. This is the read half: which clients are on this machine, which already point at the server, and whether the binary exists to point at.",
+      "notes": "Reads only, and works with no workspace selected — the answer is about the machine, not the stack, and hiding the pane until a folder is chosen would hide it exactly during setup. `binary` is null when stackvo-mcp cannot be found, and then agents_install refuses rather than registering a path that does not exist; `source` says which copy was found. `parseable` false means the file is JSON with comments (VS Code's format), which is reported rather than rewritten — stripping comments would delete the user's own notes. See src-tauri/src/agents.rs."
+    },
+    "agents_install": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "client": "string",
+        "allowWrites": "boolean"
+      },
+      "returns": "string",
+      "why": "Writes the `stackvo` MCP entry into one client's configuration file, so registering the server is a click rather than hand-edited JSON. Returns the path written.",
+      "notes": "Reads the file, inserts one key and writes it back — never renders from a template, so every other server and every unknown key survives. Takes a `.stackvo-backup` beside the file first, and writes atomically. `allowWrites` adds `--allow-writes`, which grants that assistant stack_down and project_stop as well as the read tools; it is passed from the UI and defaults to off there. Writes `STACKVO_ROOT` into the entry's env when a workspace is selected. Errors: NOT_FOUND when stackvo-mcp is not on this machine, INVALID_INPUT for an unknown client or a file that is not plain JSON, CONFLICT when the servers key holds something that is not an object. Audited as `agent_install`."
+    },
+    "agents_remove": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "client": "string"
+      },
+      "returns": "string",
+      "why": "The way back out. A registration that can only be added is one people avoid adding.",
+      "notes": "Removes only the `stackvo` entry; an empty `mcpServers` left behind is not tidied away, because that would be this app deciding something about a file it does not own. Removing what is not there succeeds, so a second click is not an error. Audited as `agent_remove`."
     },
     "system_accent": {
       "new": true,
@@ -988,6 +1048,37 @@
       "args": {},
       "returns": "void",
       "notes": "Opens the user's terminal running `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain <ca>` — the write mkcert itself performs, without mkcert's pre-check, which reports the CA already installed whenever it is merely present in a keychain. macOS grants the authorization only interactively, so sudo needs a terminal to ask in."
+    },
+    "imports_scan": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "Array<{ source: 'xampp' | 'laragon', path: string, sites: Array<{ name: string, path: string, domain: string | null, bytes: number, partial: boolean, detected: Detected, taken: boolean }> }>",
+      "why": "Competitive review §L. XAMPP has been frozen on PHP 8.2 since 2023 and lost its add-on ecosystem in September 2025; Laragon went commercial in 2025 and was forked. Those are the two largest installed bases in the category and every rival is courting them — EnvKit imports Laragon in bulk, ForgeKit lists six sources. StackVo could read neither.",
+      "notes": "Reads only, and works with no workspace selected. `taken` says a directory of that name is already under projects/, so the list can say so before anything is clicked. `bytes` is measured because importing copies, and a size caps out at 20,000 entries with `partial: true` rather than walking a node_modules to the last byte on a page that lists eleven sites. XAMPP's own dashboard directories are excluded. Laragon's per-site vhost supplies `domain`; XAMPP serves by path and has no name to read, so it is null and adoption asks. See src-tauri/src/imports.rs."
+    },
+    "imports_scan_at": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "source": "string",
+        "path": "string"
+      },
+      "returns": "Install | null",
+      "why": "The same, for an installation somewhere this app did not think to look — the well-known paths are installer defaults and people move things.",
+      "notes": "null when the directory holds no htdocs (XAMPP) or www (Laragon), which is the honest answer for 'that is not one of those'. INVALID_INPUT for a source name that is not xampp or laragon."
+    },
+    "imports_take": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "path": "string",
+        "name": "string",
+        "move": "boolean"
+      },
+      "returns": "string",
+      "why": "Brings one site into the workspace. The generator bind-mounts ${PROJECTS}/<name>, so a project lives under the projects directory or it does not exist — an import is a file operation, and this is that half only.",
+      "notes": "The manifest is NOT written here: the caller follows with project_adopt, so an imported project goes through the same validation, the same domain question and the same name rules as any other adoption. Copies by default. `move` copies first and removes the original only once the copy is complete — the reverse order turns a full disk into a site that exists in neither place — and a failure to remove is logged rather than rolled back, because deleting a correct copy to honour the word 'move' destroys the half that worked. Nothing is ever written into the other installation. A half-finished copy is removed: adoption would otherwise find it and produce a project missing files nobody can name. Errors: ALREADY_EXISTS when the name is taken, NOT_FOUND for a path that is not a directory, INVALID_INPUT when the projects directory is inside the site being imported. Audited as `project_import`."
     },
     "project_adoptable": {
       "new": true,
@@ -1101,6 +1192,47 @@
       "returns": "DbTarget[]",
       "why": "Which database services can be dumped, what they are called, and whether they are running. The credentials were already read out of .env and rendered in the services list; what was missing was anything to do with them.",
       "notes": "Reads .env and the engine. A service that is enabled but not running is still listed, with `running: false` — the reason a dump cannot start right now is worth showing next to the button that is disabled because of it."
+    },
+    "db_snapshots": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "Array<{ service: string, name: string, path: string, bytes: number, takenAt: string, automatic: boolean }>",
+      "why": "Competitive review G-2: `ddev snapshot` and `lerd db:snapshot` name a point in time and restore it by that name. db_dump could already write a file to a path chosen in a save dialog, which is raw material — a dump in Downloads is not something anybody comes back to.",
+      "notes": "The registry IS the directory: <root>/backups/<service>/, the name is the file stem, and takenAt is the file's modification time. No index file, because a second answer to 'what snapshots exist' drifts the first time somebody deletes one in Finder, and the recovery is a restore naming a file that is not there. Only files with the engine's own extension are listed. `automatic` marks the ones the schedule took — the only ones retention may remove. See src-tauri/src/snapshot.rs."
+    },
+    "db_snapshot_take": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "service": "string",
+        "name": "string"
+      },
+      "returns": "string",
+      "why": "Takes a named copy, into a path the app owns. Returns the operation id; progress and completion arrive on the same db:* events db_dump uses.",
+      "notes": "The name is refused rather than sanitised when it is not usable as a filename — silently turning `../escape` into something else gives back a snapshot under a name the user did not choose and will not find. `auto-` is reserved so nobody can create a snapshot the scheduler would later prune. An existing name is ALREADY_EXISTS, never an overwrite: a snapshot silently replaced is the copy somebody thought they still had. Serialised per service against db_dump and db_restore."
+    },
+    "db_snapshot_restore": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "service": "string",
+        "name": "string"
+      },
+      "returns": "string",
+      "why": "Puts a named snapshot back, replacing what is in the database.",
+      "notes": "The same restore db_restore performs, so it is audited as `db_restore` with the snapshot's path. NOT_FOUND when the file is gone — the listing is the filesystem, so a snapshot deleted outside the app is simply absent rather than a broken index entry."
+    },
+    "db_snapshot_delete": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "service": "string",
+        "name": "string"
+      },
+      "returns": "void",
+      "why": "Removes one copy. The way out of a directory that would otherwise only grow.",
+      "notes": "Missing is success, so a second click is not an error. Deliberately not audited: this deletes a copy, and the act that has to be accounted for is the restore, which is."
     },
     "service_connection": {
       "new": true,

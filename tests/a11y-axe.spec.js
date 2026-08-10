@@ -435,6 +435,20 @@ describe('axe over the extracted project panes', () => {
       },
     ],
     [
+      'RequirementsPane',
+      {
+        projectRequirements: {
+          declared: [
+            { id: 'mysql', known: true, enabled: true },
+            { id: 'redis', known: true, enabled: false },
+            { id: 'postgress', known: false, enabled: false },
+          ],
+          suggested: [{ service: 'meilisearch', key: 'SCOUT_DRIVER' }],
+          plan: { changes: [], needsRegenerate: false },
+        },
+      },
+    ],
+    [
       'WorkersPane',
       {
         workerOptions: ['queue', 'scheduler'],
@@ -735,6 +749,30 @@ describe('axe over the extracted Settings panes', () => {
 
   it('LocalisationPane has no violations', async () => {
     const wrapper = await renderPane('LocalisationPane', {});
+    expect(await scan(wrapper)).toHaveNoViolations();
+    document.body.innerHTML = '';
+  });
+
+  it('AgentsPane has no violations', async () => {
+    const wrapper = await renderPane('AgentsPane', {
+      agentsStatus: {
+        binary: '/opt/stackvo/stackvo-mcp',
+        source: 'build',
+        root: '/Users/x/.stackvo',
+        clients: [
+          {
+            id: 'cursor',
+            label: 'Cursor',
+            path: '/Users/x/.cursor/mcp.json',
+            present: true,
+            exists: true,
+            parseable: true,
+            command: null,
+            current: false,
+          },
+        ],
+      },
+    });
     expect(await scan(wrapper)).toHaveNoViolations();
     document.body.innerHTML = '';
   });

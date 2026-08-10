@@ -126,6 +126,21 @@ pub struct Manifest {
     pub runtime: String,
     pub server: Option<String>,
     pub document_root: Option<String>,
+    /// Extra hostnames the same project answers on, beside [`Self::domain`].
+    ///
+    /// Lower-cased, de-duplicated, and never containing `domain` itself. A
+    /// leading `*.` is allowed and is the one entry that behaves differently
+    /// everywhere downstream: it reaches the certificate and the router and
+    /// cannot reach `/etc/hosts`.
+    pub aliases: Vec<String>,
+    /// Catalog ids of the backing services this project needs.
+    ///
+    /// The half of an environment definition that travels with the repository:
+    /// `stackvo.json` already said what to build the project *with*, and this
+    /// says what it needs *around* it. Empty is the overwhelmingly common case
+    /// and means "nothing declared", not "nothing needed" — an existing project
+    /// gains the field only when somebody writes it.
+    pub services: Vec<String>,
     pub php: Option<PhpConfig>,
     pub node: Option<NodeConfig>,
     /// The block for a `LANG_RUNTIMES` runtime, keyed in the file by the
@@ -343,6 +358,12 @@ pub fn normalize(json: &serde_json::Value, raw: &str, dir_name: &str) -> Manifes
         }
     }
 
+    // ---- extra hostnames --------------------------------------------------
+    let aliases = read_aliases(json, domain.as_deref(), &mut warnings);
+
+    // ---- declared services ------------------------------------------------
+    let services = read_services(json, &mut warnings);
+
     // ---- write rules the Bash parser depends on ---------------------------
     check_extension_layout(raw, &mut errors);
 
@@ -352,6 +373,8 @@ pub fn normalize(json: &serde_json::Value, raw: &str, dir_name: &str) -> Manifes
         runtime,
         server,
         document_root: str_field(json, "document_root"),
+        aliases,
+        services,
         php,
         node,
         lang,
@@ -359,6 +382,161 @@ pub fn normalize(json: &serde_json::Value, raw: &str, dir_name: &str) -> Manifes
         errors,
         warnings,
     }
+}
+
+/// Whether a hostname is one `/etc/hosts` can carry.
+pub fn resolves_through_hosts(value: &str) -> bool {
+    !value.starts_with("*.")
+}
+
+/// `aliases`, normalised the way `domain` is and checked the way it is not.
+///
+/// Warnings rather than errors throughout, for the reason `services` gives: an
+/// invalid manifest is a project the app will not build, and a mistyped extra
+/// hostname must not cost somebody the project that works at its main one.
+fn read_aliases(
+    json: &serde_json::Value,
+    domain: Option<&str>,
+    warnings: &mut Vec<Finding>,
+) -> Vec<String> {
+    let Some(value) = json.get("aliases") else {
+        return Vec::new();
+    };
+
+    let Some(items) = value.as_array() else {
+        warnings.push(Finding {
+            code: "ALIASES_NOT_A_LIST".into(),
+            path: "aliases".into(),
+            message: "`aliases` is not an array; nothing was read from it".into(),
+        });
+        return Vec::new();
+    };
+
+    let mut out: Vec<String> = Vec::new();
+
+    for (index, item) in items.iter().enumerate() {
+        let Some(raw) = item.as_str() else {
+            warnings.push(Finding {
+                code: "ALIASES_NOT_A_STRING".into(),
+                path: format!("aliases[{index}]"),
+                message: "entries must be hostnames, as strings".into(),
+            });
+            continue;
+        };
+
+        // The same normalisation `domain` gets, and for the same reason: the
+        // hosts line, the Traefik rule and the certificate SAN are three
+        // strings compared byte for byte in three places.
+        let alias = raw.trim().to_ascii_lowercase();
+        if alias.is_empty() {
+            continue;
+        }
+
+        if !crate::hosts::is_valid_wildcard_or_domain(&alias) {
+            warnings.push(Finding {
+                code: "INVALID_ALIAS".into(),
+                path: format!("aliases[{index}]"),
+                message: format!(
+                    "\"{alias}\" is not a hostname; a wildcard is written `*.example.loc` and \
+                     may only replace the leftmost label"
+                ),
+            });
+            continue;
+        }
+
+        // Dropped rather than reported: repeating the main domain in the list
+        // is a reasonable thing to write and means exactly what leaving it out
+        // means. Keeping it would put the name in the Traefik rule twice.
+        if Some(alias.as_str()) == domain {
+            continue;
+        }
+
+        if out.contains(&alias) {
+            warnings.push(Finding {
+                code: "ALIASES_DUPLICATE".into(),
+                path: format!("aliases[{index}]"),
+                message: format!("\"{alias}\" is listed more than once"),
+            });
+            continue;
+        }
+
+        out.push(alias);
+    }
+
+    out
+}
+
+/// `services`, checked against the catalog and normalised.
+///
+/// Every fault here is a **warning**, never an error, and the distinction is
+/// the whole design of the field. An error makes the manifest invalid, and an
+/// invalid manifest is a project the app refuses to build — so a typo in an
+/// optional convenience would take somebody's whole project offline. A warning
+/// leaves the project working and the declaration visible as unmet, which is
+/// also what `project_requirements` will report a moment later.
+///
+/// Unknown ids are kept rather than dropped, for the same reason: a
+/// declaration that silently disappears is one nobody can debug. `preset::plan`
+/// rejects it by name further down the path, once, where the reason can be
+/// shown.
+fn read_services(json: &serde_json::Value, warnings: &mut Vec<Finding>) -> Vec<String> {
+    let Some(value) = json.get("services") else {
+        return Vec::new();
+    };
+
+    let Some(items) = value.as_array() else {
+        warnings.push(Finding {
+            code: "SERVICES_NOT_A_LIST".into(),
+            path: "services".into(),
+            message: "`services` is not an array; nothing was read from it".into(),
+        });
+        return Vec::new();
+    };
+
+    let catalog = crate::contracts::env_schema();
+    let mut out: Vec<String> = Vec::new();
+
+    for (index, item) in items.iter().enumerate() {
+        let Some(id) = item.as_str() else {
+            warnings.push(Finding {
+                code: "SERVICES_NOT_A_STRING".into(),
+                path: format!("services[{index}]"),
+                message: "entries must be service ids, as strings".into(),
+            });
+            continue;
+        };
+
+        // Trimmed and lower-cased on the way in, like `domain`: the id becomes
+        // `SERVICE_<NAME>_ENABLE` by uppercasing, and " Redis" would produce a
+        // key with a space in it that `.env` cannot express.
+        let id = id.trim().to_ascii_lowercase();
+        if id.is_empty() {
+            continue;
+        }
+
+        if out.contains(&id) {
+            warnings.push(Finding {
+                code: "SERVICES_DUPLICATE".into(),
+                path: format!("services[{index}]"),
+                message: format!("\"{id}\" is listed more than once"),
+            });
+            continue;
+        }
+
+        if !catalog.knows_service(&id) {
+            warnings.push(Finding {
+                code: "UNKNOWN_SERVICE".into(),
+                path: format!("services[{index}]"),
+                message: format!(
+                    "\"{id}\" is not a service this version of StackVo has a template for"
+                ),
+            });
+        }
+
+        out.push(id);
+    }
+
+    out
 }
 
 fn read_php(
@@ -736,6 +914,98 @@ mod tests {
         assert!(m.valid, "{:?}", m.errors);
     }
 
+    // ------------------------------------------------- extra hostnames (E-2)
+
+    #[test]
+    fn aliases_are_normalised_the_way_the_domain_is() {
+        let m = parse(
+            r#"{"name":"shop","domain":"shop.loc","php":{"version":"8.4"},
+                "aliases":[" API.Shop.LOC ","*.shop.loc","shop.loc","api.shop.loc"]}"#,
+            "shop",
+        );
+
+        // Lower-cased and trimmed, because the hosts line, the Traefik rule and
+        // the certificate SAN are three strings compared byte for byte.
+        // `shop.loc` itself is dropped: repeating the main domain means what
+        // leaving it out means, and keeping it would name it twice in the rule.
+        assert_eq!(m.aliases, ["api.shop.loc", "*.shop.loc"]);
+        assert!(m.warnings.iter().any(|w| w.code == "ALIASES_DUPLICATE"));
+        assert!(m.valid, "{:?}", m.errors);
+    }
+
+    /// A wildcard is one label deep and leftmost — anything else is a hostname
+    /// with an asterisk in it, which mkcert refuses and Traefik matches never.
+    #[test]
+    fn only_a_leftmost_single_label_wildcard_is_a_wildcard() {
+        let m = parse(
+            r#"{"name":"shop","domain":"shop.loc","php":{"version":"8.4"},
+                "aliases":["*.shop.loc","*.*.shop.loc","api.*.shop.loc","*shop.loc"]}"#,
+            "shop",
+        );
+
+        assert_eq!(m.aliases, ["*.shop.loc"]);
+        assert_eq!(
+            m.warnings
+                .iter()
+                .filter(|w| w.code == "INVALID_ALIAS")
+                .count(),
+            3
+        );
+        // Still valid: a mistyped extra hostname must not cost somebody the
+        // project that works at its main one.
+        assert!(m.valid, "{:?}", m.errors);
+    }
+
+    #[test]
+    fn a_wildcard_is_the_one_name_a_hosts_file_cannot_carry() {
+        assert!(resolves_through_hosts("api.shop.loc"));
+        assert!(!resolves_through_hosts("*.shop.loc"));
+    }
+
+    // ------------------------------------------------ declared services (B-1)
+
+    #[test]
+    fn declared_services_are_normalised_and_kept_in_order() {
+        let m = parse(
+            r#"{"name":"shop","domain":"shop.loc","php":{"version":"8.4"},"services":["  MySQL ","redis","mysql",""]}"#,
+            "shop",
+        );
+
+        // Order is the author's, not alphabetical: a manifest is read by people
+        // and reordering their list on every write produces diff noise nobody
+        // asked for. The duplicate is dropped and reported.
+        assert_eq!(m.services, ["mysql", "redis"]);
+        assert!(m.warnings.iter().any(|w| w.code == "SERVICES_DUPLICATE"));
+        assert!(m.valid, "{:?}", m.errors);
+    }
+
+    /// The rule the whole field hangs on: a typo must not take a project
+    /// offline. An invalid manifest is one the app refuses to build.
+    #[test]
+    fn an_unknown_service_is_a_warning_and_the_project_still_builds() {
+        let m = parse(
+            r#"{"name":"shop","domain":"shop.loc","php":{"version":"8.4"},"services":["mysql","postgress"]}"#,
+            "shop",
+        );
+
+        assert!(m.valid, "{:?}", m.errors);
+        assert!(m.warnings.iter().any(|w| w.code == "UNKNOWN_SERVICE"));
+        // Kept, not dropped — a declaration that silently disappears is one
+        // nobody can debug, and the planner rejects it by name further on.
+        assert_eq!(m.services, ["mysql", "postgress"]);
+    }
+
+    #[test]
+    fn a_services_key_of_the_wrong_shape_is_reported_rather_than_obeyed() {
+        let m = parse(
+            r#"{"name":"shop","domain":"shop.loc","php":{"version":"8.4"},"services":"mysql"}"#,
+            "shop",
+        );
+        assert!(m.services.is_empty());
+        assert!(m.warnings.iter().any(|w| w.code == "SERVICES_NOT_A_LIST"));
+        assert!(m.valid);
+    }
+
     #[test]
     fn normalize_spec_still_reports_real_faults() {
         // Layout is forgiven, semantics are not: imap does not build on 8.4.
@@ -845,6 +1115,27 @@ pub fn to_json(manifest: &Manifest) -> String {
         ));
     }
 
+    // Beside `domain`, which is what it extends — and, like `services`, before
+    // the runtime blocks: W-01 reserves the end of the document for
+    // `php.extensions`.
+    if !manifest.aliases.is_empty() {
+        let items: Vec<String> = manifest
+            .aliases
+            .iter()
+            .map(|host| format!("    {}", quote(host)))
+            .collect();
+        lines.push(format!("  \"aliases\": [\n{}\n  ]", items.join(",\n")));
+    }
+
+    if !manifest.services.is_empty() {
+        let items: Vec<String> = manifest
+            .services
+            .iter()
+            .map(|id| format!("    {}", quote(id)))
+            .collect();
+        lines.push(format!("  \"services\": [\n{}\n  ]", items.join(",\n")));
+    }
+
     if let Some(lang) = &manifest.lang {
         let mut block = format!("  {}: {{\n", quote(&manifest.runtime));
         let mut fields = vec![format!("    \"version\": {}", quote(&lang.version))];
@@ -952,6 +1243,8 @@ mod write_tests {
             runtime: "php".into(),
             server: Some("nginx".into()),
             document_root: Some("public".into()),
+            aliases: vec![],
+            services: vec![],
             php: Some(PhpConfig {
                 version: "8.4".into(),
                 extensions: vec!["mbstring".into(), "pdo".into(), "pdo_mysql".into()],
@@ -986,6 +1279,53 @@ mod write_tests {
         // And no legacy-spelling warning, because we emit the canonical field.
         assert!(!back.warnings.iter().any(|w| w.code == "C-10"));
         assert_eq!(back.php.unwrap().extensions.len(), 3);
+    }
+
+    /// W-01 reserves the end of the document for `php.extensions`, so a new
+    /// key added anywhere after it silently breaks the layout rule.
+    #[test]
+    fn services_are_written_before_the_php_block_and_survive_the_round_trip() {
+        let mut m = php_manifest();
+        m.services = vec!["mysql".into(), "redis".into()];
+        let text = to_json(&m);
+
+        // The block, not the word: `"runtime": "php"` carries `"php"` too, and
+        // matching that made the first version of this test pass on a file
+        // where the order was right for the wrong reason.
+        assert!(
+            text.find("  \"services\": [").unwrap() < text.find("  \"php\": {").unwrap(),
+            "{text}"
+        );
+
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let back = normalize(&json, &text, "shop");
+        assert!(back.valid, "{:?}", back.errors);
+        assert_eq!(back.services, ["mysql", "redis"]);
+    }
+
+    #[test]
+    fn aliases_are_written_before_the_php_block_and_survive_the_round_trip() {
+        let mut m = php_manifest();
+        m.aliases = vec!["api.shop.loc".into(), "*.shop.loc".into()];
+        let text = to_json(&m);
+
+        assert!(
+            text.find("  \"aliases\": [").unwrap() < text.find("  \"php\": {").unwrap(),
+            "{text}"
+        );
+
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let back = normalize(&json, &text, "shop");
+        assert!(back.valid, "{:?}", back.errors);
+        assert_eq!(back.aliases, ["api.shop.loc", "*.shop.loc"]);
+    }
+
+    /// The field is optional and almost every manifest on disk predates it.
+    #[test]
+    fn a_manifest_without_the_key_declares_nothing_and_writes_nothing() {
+        let mut m = php_manifest();
+        m.services.clear();
+        assert!(!to_json(&m).contains("services"));
     }
 
     #[test]
@@ -1070,6 +1410,8 @@ mod write_tests {
             runtime: "node".into(),
             server: None,
             document_root: None,
+            aliases: vec![],
+            services: vec![],
             php: None,
             node: Some(NodeConfig {
                 version: "22".into(),

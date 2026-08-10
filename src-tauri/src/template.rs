@@ -376,7 +376,7 @@ fn is_top_level_key(line: &str) -> bool {
 /// The order is data, not a detail: the generated file is compared byte for
 /// byte against Bash's, and a different order is a different file even when it
 /// describes the same stack. Grouped as the shell groups them.
-pub const DYNAMIC_SERVICES: [(&str, &str); 21] = [
+pub const DYNAMIC_SERVICES: [(&str, &str); 25] = [
     // Databases
     (
         "SERVICE_MYSQL_ENABLE",
@@ -407,6 +407,10 @@ pub const DYNAMIC_SERVICES: [(&str, &str); 21] = [
         "SERVICE_MEMCACHED_ENABLE",
         "services/memcached/docker-compose.memcached.tpl",
     ),
+    (
+        "SERVICE_VALKEY_ENABLE",
+        "services/valkey/docker-compose.valkey.tpl",
+    ),
     // Message queues
     (
         "SERVICE_RABBITMQ_ENABLE",
@@ -420,6 +424,19 @@ pub const DYNAMIC_SERVICES: [(&str, &str); 21] = [
     (
         "SERVICE_ELASTICSEARCH_ENABLE",
         "services/elasticsearch/docker-compose.elasticsearch.tpl",
+    ),
+    (
+        "SERVICE_MEILISEARCH_ENABLE",
+        "services/meilisearch/docker-compose.meilisearch.tpl",
+    ),
+    (
+        "SERVICE_TYPESENSE_ENABLE",
+        "services/typesense/docker-compose.typesense.tpl",
+    ),
+    // Object storage
+    (
+        "SERVICE_MINIO_ENABLE",
+        "services/minio/docker-compose.minio.tpl",
     ),
     // Monitoring
     (

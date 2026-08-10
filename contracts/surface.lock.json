@@ -1,5 +1,5 @@
 {
-  "_note": "The last RELEASED call surface, and the version it went out as. Generated: UPDATE_CONTRACT_LOCK=1 cargo test --test contract_version. Refresh it at a release and at no other time — see docs/adr/0008.",
+  "_note": "The last RELEASED call surface, and the version it went out as. Generated: UPDATE_CONTRACT_LOCK=1 cargo test --test contract_version. Refresh it at a release and at no other time — see docs/durum.md §6, decision 0008.",
   "commands": {
     "app_log_open": {
       "args": {

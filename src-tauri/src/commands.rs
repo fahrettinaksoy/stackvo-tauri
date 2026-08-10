@@ -261,6 +261,8 @@ pub async fn list_projects(root: &std::path::Path) -> Result<Vec<Project>> {
                         runtime: "php".into(),
                         server: None,
                         document_root: None,
+                        aliases: Vec::new(),
+                        services: Vec::new(),
                         php: None,
                         node: None,
                         lang: None,
@@ -279,7 +281,18 @@ pub async fn list_projects(root: &std::path::Path) -> Result<Vec<Project>> {
 
     let domains: Vec<String> = manifests
         .iter()
-        .filter_map(|(_, _, m)| m.domain.clone())
+        .flat_map(|(_, _, m)| {
+            m.domain
+                .iter()
+                .cloned()
+                .chain(
+                    m.aliases
+                        .iter()
+                        .filter(|a| crate::manifest::resolves_through_hosts(a))
+                        .cloned(),
+                )
+                .collect::<Vec<_>>()
+        })
         .collect();
     let hosts_status = hosts::status_for(&domains);
 
@@ -2139,7 +2152,23 @@ async fn wanted_domains(root: &std::path::Path) -> Vec<String> {
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|p| p.domain)
+        .flat_map(|p| {
+            // The main domain and every alias a hosts file can express. A
+            // wildcard is deliberately not here and is not an omission: no
+            // hosts file resolves one, so listing it would put a line in the
+            // "missing" report that no button could ever fix. It is reported
+            // as unresolvable in its own right — see `project_hostnames`.
+            p.domain
+                .into_iter()
+                .chain(
+                    p.manifest
+                        .aliases
+                        .iter()
+                        .filter(|a| crate::manifest::resolves_through_hosts(a))
+                        .cloned(),
+                )
+                .collect::<Vec<_>>()
+        })
         .collect();
 
     // Everything the stack itself answers on, from the two functions that know.
@@ -2302,6 +2331,194 @@ pub async fn db_restore(
     path: String,
 ) -> Result<String> {
     db_operation(app, state, service, path, "restore").await
+}
+
+// ----------------------------------------------------- snapshots (G-1, G-2)
+
+/// Every snapshot in the workspace, newest first.
+#[tauri::command]
+pub fn db_snapshots(state: State<'_, AppState>) -> Result<Vec<crate::snapshot::Snapshot>> {
+    Ok(crate::snapshot::list(&state.root()?))
+}
+
+/// Take one, under a name somebody chose.
+///
+/// The same dump `db_dump` performs, into a path this app owns rather than one
+/// picked in a save dialog — which is the whole difference between raw material
+/// and a feature you come back to.
+#[tauri::command]
+pub async fn db_snapshot_take(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    service: String,
+    name: String,
+) -> Result<String> {
+    let root = state.root()?;
+    let name = crate::snapshot::safe_name(&name)?;
+    let path = crate::snapshot::path_for(&root, &service, &name)?;
+
+    if path.exists() {
+        return Err(Error::new(
+            Code::AlreadyExists,
+            format!("a {service} snapshot called `{name}` already exists"),
+        )
+        .with_hint(crate::hints::SNAPSHOT_NAME_IN_USE));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| Error::io(format!("creating {}", parent.display()), e))?;
+    }
+
+    db_operation(app, state, service, path.display().to_string(), "dump").await
+}
+
+/// Put one back, replacing what is in the database.
+#[tauri::command]
+pub async fn db_snapshot_restore(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    service: String,
+    name: String,
+) -> Result<String> {
+    let root = state.root()?;
+    let path = checked_snapshot(&root, &service, &name)?;
+
+    if !path.is_file() {
+        return Err(Error::not_found(format!("snapshot {name}")));
+    }
+    db_operation(app, state, service, path.display().to_string(), "restore").await
+}
+
+/// Delete one. Deliberately not audited: this removes a copy, and the thing
+/// that would have to be accounted for is the restore, which already is.
+#[tauri::command]
+pub fn db_snapshot_delete(state: State<'_, AppState>, service: String, name: String) -> Result<()> {
+    crate::snapshot::remove(&state.root()?, &service, &name)
+}
+
+/// The one place a snapshot name becomes a path outside `snapshot.rs`.
+fn checked_snapshot(
+    root: &std::path::Path,
+    service: &str,
+    name: &str,
+) -> Result<std::path::PathBuf> {
+    // A scheduled snapshot carries the reserved prefix, so it cannot go through
+    // `safe_name` — which refuses that prefix precisely so nobody can create
+    // one. Both spellings are checked for the characters that matter.
+    let checked = if name.starts_with(crate::snapshot::AUTO_PREFIX) {
+        name.strip_prefix(crate::snapshot::AUTO_PREFIX)
+            .filter(|rest| {
+                !rest.is_empty()
+                    && !rest.starts_with('.')
+                    && rest
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+            })
+            .map(|_| name.to_string())
+            .ok_or_else(|| {
+                Error::new(
+                    Code::InvalidInput,
+                    "not a scheduled snapshot name".to_string(),
+                )
+                .with_hint(crate::hints::SNAPSHOT_NAME_CHARSET)
+            })?
+    } else {
+        crate::snapshot::safe_name(name)?
+    };
+
+    crate::snapshot::path_for(root, service, &checked)
+}
+
+/// The scheduler's one tick: take what is due, then prune what has expired.
+///
+/// Runs from a background loop and never from a command. Everything it can fail
+/// at is a reason to do nothing rather than to report: the engine is down, the
+/// database is not running, the workspace has moved. A backup feature that
+/// raises a dialog because Docker was closed is one people switch off.
+pub async fn run_due_snapshots(app: &AppHandle) {
+    let (schedule, keep) = snapshot_settings();
+    if schedule == crate::snapshot::Schedule::Off {
+        return;
+    }
+
+    // `Manager` names `state`, and this module imports `State` rather than the
+    // trait — spelled out here so the one background caller does not put a
+    // trait import at the top of a file where nothing else needs it.
+    let state = <AppHandle as tauri::Manager<_>>::state::<AppState>(app);
+    let Ok(root) = state.root() else { return };
+
+    // Only what is actually running. Dumping a stopped database produces a
+    // failed `docker exec` and, before `db::dump` removes it, a zero-byte file
+    // that looks exactly like a backup.
+    let Ok(targets) = crate::db::targets(&root).await else {
+        return;
+    };
+
+    for target in targets.into_iter().filter(|t| t.running) {
+        let service = target.service.clone();
+        let last = crate::snapshot::last_automatic(&root, &service);
+        if !crate::snapshot::is_due(schedule, last, std::time::SystemTime::now()) {
+            continue;
+        }
+
+        let name =
+            crate::snapshot::auto_name(&crate::snapshot::stamp(std::time::SystemTime::now()));
+        let Ok(path) = crate::snapshot::path_for(&root, &service, &name) else {
+            continue;
+        };
+        if let Some(parent) = path.parent() {
+            if std::fs::create_dir_all(parent).is_err() {
+                continue;
+            }
+        }
+
+        // Serialised against the manual buttons through the same key, so a
+        // scheduled dump cannot start while somebody is restoring.
+        let Ok(_busy) = state.inflight.acquire(format!("db:{service}")) else {
+            continue;
+        };
+
+        match crate::db::dump(&root, &service, &path, |_| {}).await {
+            Ok(bytes) => {
+                tracing::info!(service = %service, bytes, "scheduled snapshot taken");
+                events::emit(
+                    app,
+                    "db:snapshot",
+                    serde_json::json!({ "service": service, "name": name, "bytes": bytes }),
+                );
+            }
+            Err(e) => {
+                tracing::warn!(service = %service, error = %e.message, "scheduled snapshot failed");
+                continue;
+            }
+        }
+
+        for stale in crate::snapshot::expired(&crate::snapshot::list(&root), keep) {
+            if crate::snapshot::remove(&root, &service, &stale).is_ok() {
+                tracing::info!(service = %service, snapshot = %stale, "expired snapshot removed");
+            }
+        }
+    }
+}
+
+/// The schedule and the retention window, from preferences.
+///
+/// Defaults are `off` and 7 — off because a feature that starts writing
+/// hundreds of megabytes without being asked is one people find out about when
+/// a disk fills, and 7 because that is a week of daily copies.
+fn snapshot_settings() -> (crate::snapshot::Schedule, usize) {
+    let prefs = prefs_path().map(|p| read_prefs(&p)).unwrap_or_default();
+    let schedule = prefs
+        .get("backupSchedule")
+        .and_then(|v| v.as_str())
+        .map(crate::snapshot::Schedule::parse)
+        .unwrap_or_default();
+    let keep = prefs
+        .get("backupKeep")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(7)
+        .clamp(1, 100) as usize;
+    (schedule, keep)
 }
 
 /// Both directions differ only in which way the bytes travel.
@@ -3367,6 +3584,136 @@ pub fn project_manifest_write(
     Ok(spec)
 }
 
+// ------------------------------------------------- declared services (B-1)
+
+/// One service a project's manifest asks for, and what this stack does about it.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeclaredService {
+    pub id: String,
+    /// There is a template for it. False means the manifest names something
+    /// this version has never heard of — reported, not silently dropped.
+    pub known: bool,
+    /// `SERVICE_<NAME>_ENABLE` is true in the workspace `.env`.
+    pub enabled: bool,
+}
+
+/// What a project declares, what the stack currently gives it, and the diff.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Requirements {
+    pub declared: Vec<DeclaredService>,
+    /// Services the project's own `.env` implies but its manifest does not
+    /// declare, each with the key that implied it. The input to writing the
+    /// declaration in the first place.
+    pub suggested: Vec<crate::detect::ServiceHint>,
+    /// The reviewed diff, from the same planner a preset import uses. Empty
+    /// changes means the stack already satisfies the declaration.
+    pub plan: crate::preset::Plan,
+}
+
+/// Read the declaration and compare it with the stack. Changes nothing.
+///
+/// Two sources on purpose. `declared` is what the repository says, which is the
+/// statement a teammate cloned; `suggested` is what the project's own `.env`
+/// implies, which is how the declaration gets written the first time without
+/// anybody typing a list. Keeping them apart matters — merging them would make
+/// a guess indistinguishable from a commitment, and only one of the two is
+/// something a colleague agreed to.
+#[tauri::command]
+pub fn project_requirements(state: State<'_, AppState>, name: String) -> Result<Requirements> {
+    let root = state.root()?;
+    let dir = workspace::project_dir(&root, &name)?;
+    let manifest = manifest::read(&dir.join("stackvo.json"), &name)?;
+
+    let env = Env::load(&root)?;
+    let catalog = crate::contracts::env_schema();
+
+    let declared = manifest
+        .services
+        .iter()
+        .map(|id| DeclaredService {
+            known: catalog.knows_service(id),
+            enabled: env.service_enabled(id),
+            id: id.clone(),
+        })
+        .collect();
+
+    // Only what is not already written down: repeating a declared service as a
+    // suggestion would invite somebody to "add" what is already there.
+    let suggested = crate::detect::services_of(&dir)
+        .into_iter()
+        .filter(|hint| !manifest.services.contains(&hint.service))
+        .collect();
+
+    Ok(Requirements {
+        declared,
+        suggested,
+        plan: crate::preset::plan_declared(&root, &manifest.services)?,
+    })
+}
+
+/// Enable everything the project declares that is not on yet.
+///
+/// Writes `.env` and stops there, exactly as `preset_apply` does, and for the
+/// same reason: the plan says `needsRegenerate` and regenerating is a visible
+/// step with its own progress. Doing it silently here would make one click
+/// rewrite every compose file in the workspace.
+#[tauri::command]
+pub fn project_requirements_apply(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<crate::preset::Plan> {
+    let root = state.root()?;
+    let dir = workspace::project_dir(&root, &name)?;
+    let manifest = manifest::read(&dir.join("stackvo.json"), &name)?;
+
+    // `.env` has several writers; the preset import takes the same lock for the
+    // same reason — the diff that is applied must be the diff that was planned.
+    let _busy = state.inflight.acquire("preset")?;
+    crate::preset::apply_declared(&root, &manifest.services)
+}
+
+/// Write the declaration into `stackvo.json`.
+///
+/// A focused command rather than asking the front end to rebuild a manifest and
+/// post it through `project_manifest_write`: that path round-trips every other
+/// field through the webview, and a field the UI has not learned about yet
+/// would come back missing. Here the manifest is read, one list is replaced,
+/// and the rest is the bytes that were already there.
+#[tauri::command]
+pub fn project_requirements_declare(
+    state: State<'_, AppState>,
+    name: String,
+    services: Vec<String>,
+) -> Result<Manifest> {
+    let root = state.root()?;
+    let dir = workspace::project_dir(&root, &name)?;
+    if !dir.is_dir() {
+        return Err(Error::not_found(format!("project {name}")));
+    }
+    let _busy = state.inflight.acquire(format!("project:{name}"))?;
+
+    let path = dir.join("stackvo.json");
+    let mut manifest = manifest::read(&path, &name)?;
+
+    // Normalised here as well as in `read`, because this list comes from the
+    // webview rather than from the file: same trim, same lower-case, same
+    // de-duplication, so what is written back reads identically to what a
+    // person would have typed.
+    let mut wanted: Vec<String> = Vec::new();
+    for id in services {
+        let id = id.trim().to_ascii_lowercase();
+        if !id.is_empty() && !wanted.contains(&id) {
+            wanted.push(id);
+        }
+    }
+    manifest.services = wanted;
+
+    manifest::write(&path, &manifest)?;
+    Ok(manifest)
+}
+
 /// Turn an incoming JSON spec into a validated Manifest.
 ///
 /// The old POST body was flat (`runtime`, `version`, `extensions` at the top
@@ -3492,7 +3839,7 @@ pub async fn project_create(
     // in-process; these two were the steps left to the README and to a trip
     // through Settings.
     if outcome.is_ok() {
-        sync_project_host(&app, m.domain.as_deref()).await;
+        sync_project_host(&app, &m).await;
         sync_certificate(&app, &state, &root).await;
     }
 
@@ -3516,26 +3863,43 @@ pub async fn project_create(
 /// project is on disk and generated either way, a rollback here would delete
 /// work over a file the user can also fix from the Domains pane, and refusing
 /// the password prompt is a choice, not a failure.
-async fn sync_project_host(app: &AppHandle, domain: Option<&str>) {
-    let Some(domain) = domain.filter(|d| hosts::is_valid_domain(d)) else {
-        return;
-    };
+async fn sync_project_host(app: &AppHandle, manifest: &Manifest) {
+    // Every name this project answers on that a hosts file can carry. One
+    // elevation prompt for all of them rather than one per name: a project with
+    // three tenant subdomains asking three times for the same password is a
+    // project people stop adding subdomains to.
+    let wanted: Vec<String> = manifest
+        .domain
+        .iter()
+        .cloned()
+        .chain(
+            manifest
+                .aliases
+                .iter()
+                .filter(|a| crate::manifest::resolves_through_hosts(a))
+                .cloned(),
+        )
+        .filter(|d| hosts::is_valid_domain(d))
+        .collect();
 
-    let configured = hosts::status_for(std::slice::from_ref(&domain.to_string()))
-        .first()
-        .is_some_and(|e| e.configured);
-    if configured {
+    let configured = hosts::status_for(&wanted);
+    let missing: Vec<String> = wanted
+        .into_iter()
+        .filter(|d| !configured.iter().any(|e| &e.domain == d && e.configured))
+        .collect();
+
+    if missing.is_empty() {
         return;
     }
 
-    match hosts::apply(&[domain.to_string()], &[]) {
+    match hosts::apply(&missing, &[]) {
         Ok(plan) => events::emit(
             app,
             "hosts:changed",
             serde_json::json!({ "added": plan.add, "removed": plan.remove }),
         ),
         Err(e) => {
-            tracing::warn!(domain = %domain, error = %e.message, "hosts entry not written")
+            tracing::warn!(error = %e.message, "hosts entries not written")
         }
     }
 }
@@ -3588,6 +3952,137 @@ async fn sync_certificate(app: &AppHandle, state: &AppState, root: &std::path::P
         ),
         Err(e) => tracing::warn!(error = %e.message, "certificate not reissued"),
     }
+}
+
+// ------------------------------------------------ importing from a rival
+
+/// What XAMPP and Laragon have on this machine.
+///
+/// Reads only, and never the tool's own configuration for anything but the
+/// hostname it serves a site at. Works with no workspace selected, because the
+/// answer is about the machine — but reports which names are taken when there
+/// is one, so the list can say so before somebody clicks.
+#[tauri::command]
+pub fn imports_scan(state: State<'_, AppState>) -> Result<Vec<crate::imports::Install>> {
+    let projects = state
+        .root()
+        .ok()
+        .and_then(|root| workspace::projects_root(&root));
+    Ok(crate::imports::scan(projects.as_deref()))
+}
+
+/// The same, for an installation somewhere this app did not think to look.
+#[tauri::command]
+pub fn imports_scan_at(
+    state: State<'_, AppState>,
+    source: String,
+    path: String,
+) -> Result<Option<crate::imports::Install>> {
+    let source = match source.as_str() {
+        "xampp" => crate::imports::Source::Xampp,
+        "laragon" => crate::imports::Source::Laragon,
+        other => {
+            return Err(Error::new(
+                Code::InvalidInput,
+                format!("{other} is not a tool this app can read"),
+            ))
+        }
+    };
+
+    let projects = state
+        .root()
+        .ok()
+        .and_then(|root| workspace::projects_root(&root));
+    Ok(crate::imports::scan_at(
+        source,
+        std::path::Path::new(&path),
+        projects.as_deref(),
+    ))
+}
+
+/// Bring one site into the workspace. Copies by default; moves when asked.
+///
+/// This is the file half only. The manifest is written by `project_adopt`
+/// afterwards, from the front end, with the detected domain filled in — the
+/// same path an ordinary adoption takes, so an imported project is validated by
+/// the same rules and is not a second class of project.
+///
+/// Nothing is written into the other installation in either mode. `move` copies
+/// first and removes the original only once the copy is complete: the reverse
+/// order turns a full disk into a site that exists in neither place.
+#[tauri::command]
+pub async fn imports_take(
+    state: State<'_, AppState>,
+    path: String,
+    name: String,
+    r#move: bool,
+) -> Result<String> {
+    let root = state.root()?;
+    let name = workspace::canonical_name(&name);
+    let target = workspace::project_dir(&root, &name)?;
+
+    let source = std::path::PathBuf::from(&path);
+    if !source.is_dir() {
+        return Err(Error::not_found(path));
+    }
+    if target.exists() {
+        return Err(Error::new(
+            Code::AlreadyExists,
+            format!("a project directory called `{name}` already exists"),
+        )
+        .with_hint(crate::hints::CHOOSE_ANOTHER_NAME));
+    }
+    // The one thing a copy must not do: write a tree into itself. It happens
+    // when somebody points the projects directory at their own htdocs, which is
+    // a perfectly reasonable thing to have tried.
+    if target.starts_with(&source) {
+        return Err(Error::new(
+            Code::InvalidInput,
+            "the projects directory is inside the site being imported".to_string(),
+        ));
+    }
+
+    let _busy = state.inflight.acquire(format!("project:{name}"))?;
+
+    let from = source.clone();
+    let to = target.clone();
+    let copied =
+        tauri::async_runtime::spawn_blocking(move || crate::imports::copy_tree(&from, &to))
+            .await
+            .map_err(|e| Error::new(Code::IoError, format!("the copy did not finish: {e}")))?;
+
+    if let Err(e) = copied {
+        // A half-copied tree is worse than none: adoption would find it, write
+        // a manifest, and produce a project missing files nobody can name.
+        let _ = std::fs::remove_dir_all(&target);
+        return Err(Error::io(format!("copying {} ", source.display()), e));
+    }
+
+    if r#move {
+        // Only now. And a failure here is reported rather than rolled back —
+        // the copy is complete and correct, and deleting it to honour "move"
+        // would destroy the successful half of the operation.
+        if let Err(e) = std::fs::remove_dir_all(&source) {
+            tracing::warn!(
+                path = %source.display(),
+                error = %e,
+                "the site was copied but the original could not be removed"
+            );
+        }
+    }
+
+    crate::audit::record_with(
+        "project_import",
+        &name,
+        crate::audit::Outcome::Ok,
+        Some(format!(
+            "{} from {}",
+            if r#move { "moved" } else { "copied" },
+            source.display()
+        )),
+    );
+
+    Ok(target.display().to_string())
 }
 
 // ------------------------------------------------------- adopting a folder
@@ -3708,7 +4203,7 @@ pub async fn project_adopt(
 
     // An adopted project is reached by name exactly like a created one.
     if outcome.is_ok() {
-        sync_project_host(&app, m.domain.as_deref()).await;
+        sync_project_host(&app, &m).await;
         sync_certificate(&app, &state, &root).await;
     }
 
@@ -3788,7 +4283,7 @@ pub async fn project_register(
     // and is untouched either way.
 
     if outcome.is_ok() {
-        sync_project_host(&app, m.domain.as_deref()).await;
+        sync_project_host(&app, &m).await;
         sync_certificate(&app, &state, &root).await;
     }
 
@@ -3873,13 +4368,11 @@ pub async fn project_delete(
     }
     let _busy = state.inflight.acquire(format!("project:{name}"))?;
 
-    // Read before anything is removed: the domain is in the manifest, and the
-    // hosts line and the certificate are both keyed by it. Absent or
-    // unreadable, those two steps are simply skipped — a project whose
-    // manifest is already gone has no domain to clean up after.
-    let domain = manifest::read(&dir.join("stackvo.json"), &name)
-        .ok()
-        .and_then(|m| m.domain);
+    // Read before anything is removed: every name this project answers on is in
+    // the manifest, and the hosts lines and the certificate are keyed by them.
+    // Absent or unreadable, those two steps are simply skipped — a project
+    // whose manifest is already gone has no names to clean up after.
+    let manifest = manifest::read(&dir.join("stackvo.json"), &name).ok();
 
     let operation_id = events::next_operation_id("delete");
     events::emit(&app, "project:deleting", SubjectEvent::project(&name));
@@ -3982,7 +4475,9 @@ pub async fn project_delete(
     // failed delete leaves the project in place, and taking its name out of
     // the hosts file would make the project it did not delete unreachable.
     if outcome.is_ok() {
-        drop_project_host(&app, domain.as_deref()).await;
+        if let Some(manifest) = &manifest {
+            drop_project_host(&app, manifest).await;
+        }
         sync_certificate(&app, &state, &root).await;
     }
 
@@ -4017,26 +4512,33 @@ async fn remove_project_containers(name: &str) {
 /// line somebody added by hand stays, even for a project being deleted — a
 /// tool that removes entries it did not write is a tool nobody trusts with
 /// that file again.
-async fn drop_project_host(app: &AppHandle, domain: Option<&str>) {
-    let Some(domain) = domain.filter(|d| hosts::is_valid_domain(d)) else {
-        return;
-    };
+async fn drop_project_host(app: &AppHandle, manifest: &Manifest) {
+    let managed = hosts::mapped_domains().1;
 
-    let managed = hosts::mapped_domains()
-        .1
-        .contains(&domain.to_ascii_lowercase());
-    if !managed {
+    // Every name that was written for this project, not just the main one:
+    // deleting a project and leaving its three tenant subdomains behind is how
+    // a hosts file fills up with names for directories that are gone.
+    let remove: Vec<String> = manifest
+        .domain
+        .iter()
+        .cloned()
+        .chain(manifest.aliases.iter().cloned())
+        .filter(|d| hosts::is_valid_domain(d))
+        .filter(|d| managed.contains(&d.to_ascii_lowercase()))
+        .collect();
+
+    if remove.is_empty() {
         return;
     }
 
-    match hosts::apply(&[], &[domain.to_string()]) {
+    match hosts::apply(&[], &remove) {
         Ok(plan) => events::emit(
             app,
             "hosts:changed",
             serde_json::json!({ "added": plan.add, "removed": plan.remove }),
         ),
         Err(e) => {
-            tracing::warn!(domain = %domain, error = %e.message, "hosts entry not removed")
+            tracing::warn!(error = %e.message, "hosts entries not removed")
         }
     }
 }
@@ -5335,6 +5837,80 @@ pub fn secret_restore(state: State<'_, AppState>, key: String) -> Result<()> {
     outcome
 }
 
+// ---------------------------------------------------------------- assistants
+
+/// Which assistants are on this machine, and which already know about the
+/// server.
+///
+/// Deliberately tolerant of having no workspace. Every other command here
+/// starts with `state.root()?`, which is right when the answer is about a
+/// stack — but this one is about the machine, and refusing to list the editors
+/// installed on it because no folder has been chosen yet would hide the pane
+/// exactly when somebody is setting the app up for the first time. The root is
+/// reported when there is one, because it goes into the registration.
+#[tauri::command]
+pub fn agents_status(state: State<'_, AppState>) -> Result<crate::agents::Status> {
+    let root = state.root().ok().map(|r| r.display().to_string());
+    Ok(crate::agents::status(root.as_deref()))
+}
+
+/// Write the server into one client's configuration file.
+///
+/// `allow_writes` is the whole security decision and it is passed from the UI
+/// rather than defaulted here: it puts `--allow-writes` in the argument list,
+/// which grants that assistant `stack_down` and `project_stop` along with the
+/// tools people actually want. The default in the pane is off, matching the
+/// server's own default.
+///
+/// Audited, because this writes to a file outside the workspace and outside
+/// this app's own directories — the same reason `/etc/hosts` is audited.
+#[tauri::command]
+pub fn agents_install(
+    state: State<'_, AppState>,
+    client: String,
+    allow_writes: bool,
+) -> Result<String> {
+    let root = state.root().ok().map(|r| r.display().to_string());
+    let outcome = crate::agents::install(&client, allow_writes, root.as_deref());
+
+    crate::audit::record_with(
+        "agent_install",
+        &client,
+        if outcome.is_ok() {
+            crate::audit::Outcome::Ok
+        } else {
+            crate::audit::Outcome::Failed
+        },
+        // The flag is the detail worth having later: "an assistant could stop
+        // the stack from this date" is answerable only if it was written down.
+        Some(
+            if allow_writes {
+                "reads and writes"
+            } else {
+                "read-only"
+            }
+            .to_string(),
+        ),
+    );
+    outcome
+}
+
+/// Take the server back out of one client's configuration file.
+#[tauri::command]
+pub fn agents_remove(client: String) -> Result<String> {
+    let outcome = crate::agents::uninstall(&client);
+    crate::audit::record(
+        "agent_remove",
+        &client,
+        if outcome.is_ok() {
+            crate::audit::Outcome::Ok
+        } else {
+            crate::audit::Outcome::Failed
+        },
+    );
+    outcome
+}
+
 // ---------------------------------------------------------------- system accent
 
 /// The accent colour the user picked in System Settings.
@@ -5691,7 +6267,11 @@ fn default_prefs() -> serde_json::Value {
         "startMinimized": false,
         "closeBehaviour": "ask",
         "autostart": false,
-        "notifyOnBuild": true
+        "notifyOnBuild": true,
+        // Off, because a feature that starts writing hundreds of megabytes
+        // without being asked is one people find out about when a disk fills.
+        "backupSchedule": "off",
+        "backupKeep": 7
     })
 }
 
@@ -6156,12 +6736,17 @@ pub fn render_generated(root: &std::path::Path) -> Result<Rendered> {
     {
         // (template, output) — the exact mapping in config.sh. The first five
         // are rendered; the last two are copied verbatim by Bash.
-        const RENDERED: [(&str, &str); 5] = [
+        const RENDERED: [(&str, &str); 6] = [
             ("redis/redis.conf.tpl", "redis.conf"),
             ("mysql/my.cnf.tpl", "mysql.cnf"),
             ("mongo/mongo.conf.tpl", "mongo.conf"),
             ("postgres/postgres.conf.tpl", "postgres.conf"),
             ("elasticsearch/elasticsearch.yml.tpl", "elasticsearch.yml"),
+            // Valkey's compose template bind-mounts this file. A service whose
+            // config is not rendered starts against whatever the image ships
+            // and quietly ignores every setting the workspace holds — which is
+            // the failure this list exists to prevent, one entry per template.
+            ("valkey/valkey.conf.tpl", "valkey.conf"),
         ];
         const COPIED: [(&str, &str); 2] = [
             ("mariadb/my.cnf", "mariadb.cnf"),

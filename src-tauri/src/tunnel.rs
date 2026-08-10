@@ -206,6 +206,8 @@ mod tests {
             runtime: "php".into(),
             server: Some("nginx".into()),
             document_root: None,
+            aliases: vec![],
+            services: vec![],
             php: None,
             node: None,
             lang: None,

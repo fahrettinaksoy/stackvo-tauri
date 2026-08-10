@@ -66,6 +66,30 @@
       "pattern": "^[a-zA-Z0-9._-]+(/[a-zA-Z0-9._-]+)*$",
       "description": "Document root relative to the project directory, for runtime=php. No leading slash, no '..' segments. Ignored when runtime=node."
     },
+    "aliases": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 32,
+      "items": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 253,
+        "pattern": "^(\\*\\.)?[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$"
+      },
+      "default": [],
+      "description": "OPTIONAL. Additional hostnames the same project answers on, beside `domain`. Multi-tenant applications that resolve the tenant from a subdomain cannot be developed with one name; DDEV calls these additional_hostnames and additional_fqdns, Herd allows several per site. A leading `*.` is accepted and becomes a certificate SAN and a Traefik HostRegexp router \u2014 but NOT an /etc/hosts entry, because a hosts file cannot express a wildcard. That is a property of the resolver, not a limitation of this field: until StackVo runs a local DNS server (gap E-1), a wildcard alias resolves only for names the user has added by other means, and the app reports it as unresolved rather than pretending otherwise. An entry equal to `domain` is dropped as a duplicate."
+    },
+    "services": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 32,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]*$"
+      },
+      "default": [],
+      "description": "OPTIONAL. The backing services this project needs, by catalog id \u2014 the half of an environment definition that a teammate gets by cloning the repository. The authoritative list of ids is contracts/env.schema.json \u2192 services and is deliberately NOT repeated here: two lists of what a service is called is how one of them goes stale. An id this version of StackVo does not know is a WARNING and not an error \u2014 the project still builds, and the declaration is reported as unmet rather than silently dropped. NO VERSIONS: a service has exactly one SERVICE_<NAME>_VERSION for the whole workspace, so a project pinning one would silently change every other project's database. project_requirements plans this and project_requirements_apply enables it, through the same plan-then-apply path a preset import uses."
+    },
     "php": {
       "type": "object",
       "additionalProperties": false,

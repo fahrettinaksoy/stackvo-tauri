@@ -160,6 +160,22 @@ const SPECS: &[Spec] = &[
         default_database: None,
     },
     Spec {
+        service: "valkey",
+        kind: Kind::Redis,
+        // 6379 inside, whatever the host publishes outside — and the host
+        // default is 6381 precisely so both can run. The container port is the
+        // half no `.env` key moves, which is why this number is not 6381.
+        container_port: 6379,
+        port_keys: &["SERVICE_VALKEY_HOST_PORT", "HOST_PORT_VALKEY"],
+        user_key: None,
+        default_user: None,
+        // As Redis, and for the same reason: the shipped `valkey.conf` leaves
+        // `requirepass` out entirely.
+        password_key: None,
+        database_key: None,
+        default_database: None,
+    },
+    Spec {
         service: "memcached",
         kind: Kind::Memcached,
         container_port: 11211,
@@ -189,6 +205,51 @@ const SPECS: &[Spec] = &[
         // The template sets `xpack.security.enabled` from `ELASTIC_SECURITY`,
         // which defaults to false — so the shipped cluster takes no credentials
         // and a URI carrying them would be rejected rather than ignored.
+        user_key: None,
+        default_user: None,
+        password_key: None,
+        database_key: None,
+        default_database: None,
+    },
+    // The three services whose credential is a header, not a userinfo field.
+    //
+    // Meilisearch wants `Authorization: Bearer <master key>`, Typesense wants
+    // `X-TYPESENSE-API-KEY`, and an S3 client wants an access key and a secret
+    // key alongside an endpoint — none of the three is a `user:password@` and
+    // encoding one as if it were produces a string that parses, is copied, and
+    // is refused. So the URI is the address alone and the key stays where it
+    // already is: in the credentials block below it, masked, with `env_reveal`
+    // as the way to see it.
+    Spec {
+        service: "meilisearch",
+        kind: Kind::Http,
+        container_port: 7700,
+        port_keys: &["SERVICE_MEILISEARCH_HOST_PORT", "HOST_PORT_MEILISEARCH"],
+        user_key: None,
+        default_user: None,
+        password_key: None,
+        database_key: None,
+        default_database: None,
+    },
+    Spec {
+        service: "typesense",
+        kind: Kind::Http,
+        container_port: 8108,
+        port_keys: &["SERVICE_TYPESENSE_HOST_PORT", "HOST_PORT_TYPESENSE"],
+        user_key: None,
+        default_user: None,
+        password_key: None,
+        database_key: None,
+        default_database: None,
+    },
+    Spec {
+        service: "minio",
+        // The S3 API and not the console. The console is a browser destination
+        // and its address is the domain the sheet shows a row above; an SDK
+        // pointed at 9001 gets HTML back.
+        kind: Kind::Http,
+        container_port: 9000,
+        port_keys: &["SERVICE_MINIO_HOST_PORT", "HOST_PORT_MINIO"],
         user_key: None,
         default_user: None,
         password_key: None,
@@ -597,9 +658,16 @@ mod tests {
             ("postgres", 5432),
             ("mongo", 27017),
             ("redis", 6379),
+            // Valkey's, and deliberately the same number: it is Redis's port
+            // inside a container of its own, and only the published one differs.
+            ("valkey", 6379),
             ("memcached", 11211),
             ("rabbitmq", 5672),
             ("elasticsearch", 9200),
+            ("meilisearch", 7700),
+            ("typesense", 8108),
+            // The S3 API. 9001 is the console, which is not a connection string.
+            ("minio", 9000),
             ("cassandra", 9042),
             ("mailpit", 1025),
             ("mailhog", 1025),

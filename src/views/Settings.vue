@@ -21,6 +21,7 @@ import { usePreferences } from '@/composables/usePreferences';
 import DiagnosticsPane from '@/components/settings/DiagnosticsPane.vue';
 import PolicyNotice from '@/components/settings/PolicyNotice.vue';
 import SecretsPane from '@/components/settings/SecretsPane.vue';
+import AgentsPane from '@/components/settings/AgentsPane.vue';
 import PageLayout from '@/components/PageLayout.vue';
 import SettingsSection from '@/components/SettingsSection.vue';
 import SettingsGroup from '@/components/SettingsGroup.vue';
@@ -185,6 +186,16 @@ const SECTIONS = [
     icon: 'mdi-key-chain-variant',
     label: 'settings.secrets.title',
     desc: 'settings.secrets.description',
+  },
+  // With the app's own settings rather than under 'help': this is a way *in*
+  // to the app, like the tray and the window, not a thing to consult when
+  // something is wrong.
+  {
+    key: 'agents',
+    group: 'app',
+    icon: 'mdi-robot-outline',
+    label: 'settings.agents.title',
+    desc: 'settings.agents.sectionDesc',
   },
   {
     key: 'doctor',
@@ -476,6 +487,10 @@ onMounted(async () => {
 
           <template v-if="tab === 'secrets'">
             <SecretsPane />
+          </template>
+
+          <template v-if="tab === 'agents'">
+            <AgentsPane />
           </template>
 
           <template v-if="tab === 'certificates'">

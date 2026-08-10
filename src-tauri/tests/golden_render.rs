@@ -18,8 +18,8 @@
 //! fixtures it did leave behind (`tests/fixtures/probe-*`, `traefik/`,
 //! `docker-compose.projects.yml`) still anchor the Dockerfiles, the routers and
 //! the projects compose file in `fixtures_differential.rs`. What is frozen here
-//! is the *rest*: twenty-one assembled service blocks, the awk filter that
-//! trims them, the harvested volumes section and five config renders. Their
+//! is the *rest*: twenty-five assembled service blocks, the awk filter that
+//! trims them, the harvested volumes section and six config renders. Their
 //! value is that a change to any of it shows up as a reviewable diff instead of
 //! reaching a running container.
 //!
@@ -45,7 +45,7 @@ const NO_WORKSPACE: &str = "/stackvo-golden-render-no-such-workspace";
 
 /// The five configs `render_generated` writes into `generated/configs/`, as
 /// (template, output) pairs.
-const CONFIGS: [(&str, &str); 5] = [
+const CONFIGS: [(&str, &str); 6] = [
     ("services/redis/redis.conf.tpl", "redis.conf"),
     ("services/mysql/my.cnf.tpl", "mysql.cnf"),
     ("services/mongo/mongo.conf.tpl", "mongo.conf"),
@@ -54,6 +54,7 @@ const CONFIGS: [(&str, &str); 5] = [
         "services/elasticsearch/elasticsearch.yml.tpl",
         "elasticsearch.yml",
     ),
+    ("services/valkey/valkey.conf.tpl", "valkey.conf"),
 ];
 
 fn golden_dir() -> PathBuf {

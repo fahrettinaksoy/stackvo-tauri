@@ -72,10 +72,7 @@ fn policy_code() -> String {
 fn the_module_the_adr_and_the_contract_name_the_same_paths() {
     let sources = [
         ("policy.rs", read("src/policy.rs")),
-        (
-            "ADR 0009",
-            read_up("docs/adr/0009-a-policy-file-is-not-a-lock.md"),
-        ),
+        ("durum.md §6 · 0009", read_up("docs/durum.md")),
         ("contracts/ipc.json", read_up("contracts/ipc.json")),
     ];
 
@@ -140,10 +137,7 @@ fn the_code_reads_the_paths_the_documentation_advertises() {
 fn the_documentation_keeps_saying_it_is_not_a_security_boundary() {
     let places = [
         ("policy.rs", read("src/policy.rs")),
-        (
-            "ADR 0009",
-            read_up("docs/adr/0009-a-policy-file-is-not-a-lock.md"),
-        ),
+        ("durum.md §6 · 0009", read_up("docs/durum.md")),
         ("contracts/ipc.json", read_up("contracts/ipc.json")),
         (
             "PolicyNotice.vue",

@@ -374,6 +374,64 @@ pub fn load(path: &Path) -> Result<Preset> {
     parse(&text)
 }
 
+// ------------------------------------------- a project's own declaration
+
+/// A project's `services` list, as a preset.
+///
+/// The whole of B-1 is this function, and the reason it is four lines is that
+/// the hard part already existed. A repository-committed environment definition
+/// and an exported preset are the same statement made by different people —
+/// "this stack should hold these services" — so the declaration is turned into
+/// the type the reviewed plan-then-apply path already takes, rather than
+/// growing a second path with its own rules about unknown ids and its own
+/// answer to "what will this change".
+///
+/// **Never `enabled: false`.** A preset can say "and turn Elasticsearch off",
+/// because it describes a whole machine. A project describes only itself, and
+/// one project not needing Redis is not a statement that another project's
+/// Redis should stop. So the list is read as requirements, not as a mirror.
+///
+/// **No versions**, and the contract says why: there is one
+/// `SERVICE_<NAME>_VERSION` for the workspace, so a project pinning one would
+/// silently change every other project's database.
+pub fn from_declaration(services: &[String]) -> Preset {
+    Preset {
+        kind: "stackvo-preset".to_string(),
+        version: 1,
+        name: None,
+        description: None,
+        services: services
+            .iter()
+            .map(|id| {
+                (
+                    id.clone(),
+                    ServicePreset {
+                        enabled: true,
+                        version: None,
+                    },
+                )
+            })
+            .collect(),
+        settings: BTreeMap::new(),
+    }
+}
+
+/// What enabling a project's declared services would change.
+pub fn plan_declared(root: &Path, services: &[String]) -> Result<Plan> {
+    let env = Env::load(root)?;
+    Ok(plan(&env, &catalog(), &from_declaration(services)))
+}
+
+/// Apply it, re-planning first for the reason [`apply_file`] re-plans.
+pub fn apply_declared(root: &Path, services: &[String]) -> Result<Plan> {
+    let plan = plan_declared(root, services)?;
+    let patch = patch(&plan);
+    if !patch.is_empty() {
+        crate::env_writer::apply(root, &patch)?;
+    }
+    Ok(plan)
+}
+
 pub fn plan_file(root: &Path, path: &Path) -> Result<Plan> {
     let env = Env::load(root)?;
     let preset = load(path)?;
@@ -637,5 +695,79 @@ GRAFANA_ADMIN_TOKEN=tok_live_abcdef
             None,
         );
         assert_eq!(preset.services["mysql"].version, None);
+    }
+    // ------------------------------------------- a project's own declaration
+
+    /// A declaration turns into a plan that only ever switches things **on**.
+    ///
+    /// The asymmetry with a preset is the point and it is easy to lose: a
+    /// preset describes a whole machine and may legitimately say "and turn
+    /// Elasticsearch off", but one project not needing Redis says nothing
+    /// about another project's Redis. A mirror here would make opening one
+    /// project stop another one's database.
+    #[test]
+    fn a_declaration_only_ever_enables() {
+        let preset = from_declaration(&["mysql".to_string(), "redis".to_string()]);
+        assert!(preset.services.values().all(|s| s.enabled));
+        assert!(preset.services.values().all(|s| s.version.is_none()));
+        // And it carries no settings: a project may not reach the domain
+        // suffix or the web server the whole workspace runs on.
+        assert!(preset.settings.is_empty());
+    }
+
+    #[test]
+    fn only_what_is_off_appears_in_the_plan() {
+        let env = Env::parse("SERVICE_MYSQL_ENABLE=true\nSERVICE_REDIS_ENABLE=false\n");
+        let catalog = vec![
+            ("mysql".to_string(), "databases".to_string()),
+            ("redis".to_string(), "cache".to_string()),
+        ];
+
+        let plan = plan(
+            &env,
+            &catalog,
+            &from_declaration(&["mysql".to_string(), "redis".to_string()]),
+        );
+
+        assert_eq!(plan.changes.len(), 1);
+        assert_eq!(plan.changes[0].key, "SERVICE_REDIS_ENABLE");
+        assert_eq!(plan.changes[0].to, "true");
+        assert_eq!(plan.unchanged, 1);
+        assert!(plan.needs_regenerate);
+    }
+
+    /// A typo in a manifest must not become `SERVICE_POSTGRESS_ENABLE=true` in
+    /// somebody's `.env` — a key nothing reads, bringing up a compose profile
+    /// that matches nothing (CONFLICTS.md C-09). The planner already refused
+    /// that for presets; this is the same refusal reached from the manifest.
+    #[test]
+    fn a_service_with_no_template_is_rejected_by_name_rather_than_written() {
+        let env = Env::parse("");
+        let catalog = vec![("mysql".to_string(), "databases".to_string())];
+
+        let plan = plan(
+            &env,
+            &catalog,
+            &from_declaration(&["mysql".to_string(), "postgress".to_string()]),
+        );
+
+        assert_eq!(plan.changes.len(), 1);
+        assert_eq!(plan.changes[0].subject, "mysql");
+        assert_eq!(plan.rejected.len(), 1);
+        assert!(
+            plan.rejected[0].starts_with("postgress:"),
+            "{:?}",
+            plan.rejected
+        );
+    }
+
+    /// Nothing declared is nothing to do — and specifically not an empty patch
+    /// written to `.env`, which would rewrite the file for no reason.
+    #[test]
+    fn an_empty_declaration_changes_nothing() {
+        let plan = plan(&Env::parse(""), &[], &from_declaration(&[]));
+        assert!(plan.changes.is_empty());
+        assert!(patch(&plan).is_empty());
+        assert!(!plan.needs_regenerate);
     }
 }

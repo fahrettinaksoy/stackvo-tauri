@@ -108,6 +108,11 @@ export function blankForm() {
   return {
     name: '',
     domain: '',
+    // Extra hostnames and declared services. Both are carried through the form
+    // even where nothing edits them: this form is what `formToSpec` turns into
+    // the whole manifest, so a field it forgets is a field that Save deletes.
+    aliases: [],
+    services: [],
     runtime: 'php',
     server: 'nginx',
     documentRoot: 'public',
@@ -141,6 +146,8 @@ export function formFromManifest(manifest) {
 
   form.name = manifest.name ?? '';
   form.domain = manifest.domain ?? '';
+  form.aliases = [...(manifest.aliases ?? [])];
+  form.services = [...(manifest.services ?? [])];
   form.runtime = ['node', ...LANG_RUNTIMES].includes(manifest.runtime) ? manifest.runtime : 'php';
 
   if (manifest.server) form.server = manifest.server;
@@ -194,6 +201,12 @@ export function formToSpec(form, tld) {
     domain: form.domain || (suffix ? `${form.name}.${suffix}` : ''),
     runtime: form.runtime,
   };
+
+  // Omitted when empty rather than written as `[]`: almost every manifest on
+  // disk predates both keys, and rewriting one to add two empty arrays is a
+  // diff in somebody's repository that says nothing.
+  if (form.aliases?.length) spec.aliases = [...form.aliases];
+  if (form.services?.length) spec.services = [...form.services];
 
   if (form.runtime === 'node') {
     spec.node = {

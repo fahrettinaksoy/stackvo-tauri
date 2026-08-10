@@ -1,31 +1,30 @@
-//! `docs/platform-matrix.md`, held to the same standard as `README.md`.
+//! The measurement table in `docs/durum.md`, held to the same standard as
+//! `README.md`.
 //!
-//! The document answers one question — what a web build of this app could and
-//! could not do — and it answers it with counts: how many commands there are,
-//! how many front-end files reach for Tauri, how many places the data path goes
-//! through. Those counts were taken once, in August 2026, and then the tree
-//! grew. By the time anyone looked again the document said 142 commands against
-//! 149, 47 front-end files against 95, and 32,515 lines of Rust against 37,969.
+//! That table answers with counts — how many commands there are, how many
+//! front-end files reach for Tauri, how many places the data path goes through.
+//! Counts taken once and then left behind are how a document came to say 142
+//! commands against 149, 47 front-end files against 95, and 32,515 lines of
+//! Rust against 37,969.
 //!
 //! Nothing was wrong when it was written. That is the point: a number in prose
 //! has no way of aging, so it stops being a measurement and becomes a memory of
 //! one, and the reader cannot tell which they are looking at.
 //!
-//! `readme_claims.rs` made this argument for `README.md` and
+//! `readme_claims.rs` makes this argument for `README.md` and
 //! `architecture_claims.rs` for `ARCHITECTURE.md`. This is the same gate for
-//! the third document that carries countable claims.
+//! the status document, which absorbed the platform matrix's numbers when the
+//! five documents under `docs/` became one.
 //!
 //! ## What is checked, and what deliberately is not
 //!
 //! Checked: the counts a parser can settle — commands, files, wrappers, lines,
 //! and the four commands the document names as having no web meaning.
 //!
-//! Not checked: the platform columns, the streaming argument, and the four
-//! classification counts the document itself marks as manual. Those are
-//! judgements about what code *means*, and §7 of that document already says
-//! which of them have been run and which have only been read. A test that
-//! pretended to settle them would be a worse lie than the stale number this
-//! file exists to prevent.
+//! Not checked: the four classification counts the document itself marks as
+//! manual and prints the method for. Those are judgements about what code
+//! *means*, and a test that pretended to settle them would be a worse lie than
+//! the stale number this file exists to prevent.
 
 use std::path::{Path, PathBuf};
 
@@ -41,7 +40,7 @@ fn read(path: &Path) -> String {
 }
 
 fn document() -> String {
-    read(&repo_root().join("docs/platform-matrix.md"))
+    read(&repo_root().join("docs/durum.md"))
 }
 
 /// Every `.js` and `.vue` under `src/`, tests excluded.
@@ -88,7 +87,7 @@ fn front_end_files() -> Vec<PathBuf> {
 fn measurement_table(doc: &str) -> &str {
     let start = doc
         .find("| | Sayı | Nasıl sayıldı |")
-        .expect("docs/platform-matrix.md still has its §1 measurement table");
+        .expect("docs/durum.md still has its §7 measurement table");
     let table = &doc[start..];
     &table[..table.find("\n\n").unwrap_or(table.len())]
 }
@@ -120,7 +119,7 @@ fn assert_states(doc: &str, number: usize, what: &str) {
     let table = measurement_table(doc);
     assert!(
         states_number(table, &number.to_string()),
-        "the measurement table in docs/platform-matrix.md does not state \
+        "the measurement table in docs/durum.md does not state \
          {number}, which is the current count of {what}. Re-measure the \
          document — every number in it is a claim about this tree."
     );
@@ -232,7 +231,7 @@ fn invoke_appears_in_exactly_one_file() {
     assert!(
         offenders.is_empty(),
         "`invoke(` is supposed to appear only in src/lib/ipc.js — the whole \
-         transport argument in docs/platform-matrix.md depends on it. It also \
+         transport argument in docs/durum.md depends on it. It also \
          appears in: {offenders:?}"
     );
 }
@@ -259,12 +258,12 @@ fn the_desktop_only_commands_are_still_called_that() {
     ] {
         assert!(
             commands.contains_key(name),
-            "docs/platform-matrix.md names `{name}` as one of the four commands a \
+            "docs/durum.md names `{name}` as one of the four commands a \
              web build cannot have, and the contract no longer declares it"
         );
         assert!(
             doc.contains(name),
-            "`{name}` is no longer named in docs/platform-matrix.md"
+            "`{name}` is no longer named in docs/durum.md"
         );
     }
 }
@@ -292,7 +291,7 @@ fn the_rust_source_size_is_current() {
     let grouped = format!("{}.{:03}", lines / 1000, lines % 1000);
     assert!(
         states_number(measurement_table(&doc), &grouped),
-        "the measurement table in docs/platform-matrix.md does not state \
+        "the measurement table in docs/durum.md does not state \
          {grouped} lines of Rust, which is what `src-tauri/src/*.rs` holds"
     );
 }
