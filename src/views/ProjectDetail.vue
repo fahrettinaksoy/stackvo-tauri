@@ -13,6 +13,7 @@ import DevServerPane from '@/components/project/DevServerPane.vue';
 import LogsPane from '@/components/project/LogsPane.vue';
 import PhpIniPane from '@/components/project/PhpIniPane.vue';
 import ManifestPane from '@/components/project/ManifestPane.vue';
+import RequirementsPane from '@/components/project/RequirementsPane.vue';
 import OverviewPane from '@/components/project/OverviewPane.vue';
 import ProfilerPane from '@/components/project/ProfilerPane.vue';
 import TunnelPane from '@/components/project/TunnelPane.vue';
@@ -198,6 +199,26 @@ async function openExternalTerminal() {
 /** Rebuild and start through compose — the right action after a manifest edit. */
 async function bringUp() {
   await act(() => api.composeUpProject(props.name));
+}
+
+/**
+ * Bring up the services this project declares, after they were switched on.
+ *
+ * `custom` with the declared ids rather than the `services` profile, which
+ * would start everything the workspace has enabled. A project asked for its
+ * own list and starting somebody else's Kafka alongside it is not what the
+ * button said.
+ *
+ * Regenerate first for the reason `applyManifest` gives: the compose files were
+ * rendered from a `.env` that did not have these services in it, so bringing
+ * them up without regenerating starts nothing and reports success.
+ */
+async function startRequired(services) {
+  if (!services.length) return;
+  await act(async () => {
+    await api.generateRun('all');
+    await api.composeUp('custom', services);
+  });
 }
 
 /**
@@ -739,6 +760,13 @@ onUnmounted(() => {
         </template>
 
         <!-- MANIFEST ------------------------------------------------------ -->
+        <!-- What the project needs *around* it. Beside the manifest because
+             that is the file it is written into, and above it because the
+             answer to "why is this list here" is one scroll away. -->
+        <template v-if="shows('configuration')">
+          <RequirementsPane :name="name" @apply="startRequired" />
+        </template>
+
         <template v-if="shows('configuration')">
           <ManifestPane
             v-model="manifestText"

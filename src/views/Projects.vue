@@ -6,6 +6,7 @@ import { useInventoryStore } from '@/stores/inventory';
 import { useOperationsStore } from '@/stores/operations';
 import { useAppStore } from '@/stores/app';
 import { parentDomain } from '@/lib/manifest';
+import { bytes } from '@/lib/format';
 import { listenAll, REFRESH_TRIGGERS } from '@/lib/events';
 import { api, asList } from '@/lib/ipc';
 import PageLayout from '@/components/PageLayout.vue';
@@ -250,6 +251,79 @@ async function loadAdoptable() {
   }
 }
 
+/**
+ * Sites belonging to XAMPP or Laragon.
+ *
+ * Beside the adoptable folders rather than in a wizard of its own: both
+ * questions are "there is code on this machine StackVo is not running", and a
+ * migration behind a menu is one people do not find in the window where they
+ * are still deciding.
+ */
+const installs = ref([]);
+const importing = ref(null);
+const importMove = ref(false);
+
+/**
+ * An installation somewhere the well-known paths do not look.
+ *
+ * The defaults are installer defaults and people move things — and without
+ * this the answer for somebody with XAMPP on a second drive is "StackVo says I
+ * do not have XAMPP", which is worse than no scan at all.
+ */
+async function pickInstall(source) {
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const path = await open({ directory: true, multiple: false });
+  if (!path) return;
+
+  actionError.value = null;
+  try {
+    const found = await api.importsScanAt(source, path);
+    if (!found) {
+      actionError.value = { code: 'NOT_FOUND', message: t('imports.notThere', { source }) };
+      return;
+    }
+    // Replaces a previous answer for the same path rather than stacking, so
+    // pointing at the same folder twice does not list its sites twice.
+    installs.value = [...installs.value.filter((i) => i.path !== found.path), found];
+  } catch (e) {
+    actionError.value = e;
+  }
+}
+
+async function loadImports() {
+  try {
+    installs.value = asList(await api.importsScan());
+  } catch {
+    // Nothing installed is the ordinary case, not a failure to report.
+    installs.value = [];
+  }
+}
+
+/**
+ * Copy the site in, then adopt it exactly as any other folder is adopted.
+ *
+ * Two calls rather than one command that does both, and deliberately: adoption
+ * already validates the manifest, applies the name rules and asks the schema
+ * whether the result is legal. An importer with its own manifest writer would
+ * be a second set of those rules to keep in step.
+ */
+async function importSite(install, site) {
+  importing.value = site.path;
+  actionError.value = null;
+  try {
+    await api.importsTake(site.path, site.name, importMove.value);
+    // The domain only when the other tool actually said one. Laragon writes a
+    // vhost per site; XAMPP serves by path, so there is nothing to carry and
+    // adoption falls back to the suffix like every other project.
+    await api.projectAdopt(site.name, null, site.domain ? { domain: site.domain } : undefined);
+    await Promise.all([inventory.loadProjects(), loadAdoptable(), loadImports()]);
+  } catch (e) {
+    actionError.value = e;
+  } finally {
+    importing.value = null;
+  }
+}
+
 async function adopt(folder) {
   adopting.value = folder.name;
   actionError.value = null;
@@ -340,6 +414,7 @@ let teardown = null;
 onMounted(async () => {
   inventory.loadProjects();
   loadAdoptable();
+  loadImports();
 
   const offRefresh = await listenAll(REFRESH_TRIGGERS, () => inventory.loadProjects());
 
@@ -415,6 +490,96 @@ onUnmounted(() => teardown?.());
     <!-- Unmanaged folders ------------------------------------------------ -->
     <!-- Real code sitting in projects/ with no stackvo.json. It is invisible
          everywhere else in the app, which is why it accumulates. -->
+    <!-- Sites belonging to another tool. Same shape as the adoptable panel
+         below it, because it answers the same question from further away. -->
+    <div class="d-flex ga-2 px-4 py-2">
+      <v-btn
+        v-for="source in ['xampp', 'laragon']"
+        :key="source"
+        size="x-small"
+        variant="text"
+        prepend-icon="mdi-folder-search-outline"
+        @click="pickInstall(source)"
+      >
+        {{ t('imports.pick', { tool: source }) }}
+      </v-btn>
+    </div>
+
+    <v-expansion-panels
+      v-if="installs.some((i) => i.sites.length)"
+      variant="accordion"
+      rounded="0"
+      flat
+      class="adopt-panels"
+    >
+      <v-expansion-panel v-for="install in installs" :key="install.path" elevation="0">
+        <v-expansion-panel-title>
+          <v-icon size="small" class="mr-2">mdi-import</v-icon>
+          <span class="text-body-2">
+            {{ t('imports.found', { tool: install.source, n: install.sites.length }) }}
+          </span>
+        </v-expansion-panel-title>
+
+        <v-expansion-panel-text class="adopt-body">
+          <div class="text-caption text-medium-emphasis mb-2">
+            {{ t('imports.explain', { path: install.path }) }}
+          </div>
+
+          <!-- The destructive choice is a switch above the list, off, and says
+               what it does. A per-row "move" button would be a delete somebody
+               reaches for while aiming at the row below. -->
+          <v-switch
+            v-model="importMove"
+            color="warning"
+            density="compact"
+            hide-details
+            class="mb-2"
+            :label="t('imports.move')"
+          />
+          <div class="text-caption text-medium-emphasis mb-3">
+            {{ importMove ? t('imports.moveOn') : t('imports.moveOff') }}
+          </div>
+
+          <div v-for="site in install.sites" :key="site.path" class="adopt-row">
+            <span class="adopt-name">{{ site.name }}</span>
+
+            <v-chip v-if="site.detected.framework" size="x-small" color="success" variant="tonal">
+              {{ site.detected.framework }}
+            </v-chip>
+            <v-chip v-else size="x-small" variant="tonal">{{ site.detected.runtime }}</v-chip>
+
+            <v-chip v-if="site.domain" size="x-small" variant="tonal">{{ site.domain }}</v-chip>
+
+            <span class="adopt-evidence">
+              {{
+                site.partial
+                  ? t('imports.sizeAtLeast', { size: bytes(site.bytes) })
+                  : bytes(site.bytes)
+              }}
+            </span>
+
+            <v-spacer />
+
+            <span v-if="site.taken" class="text-caption text-medium-emphasis mr-2">
+              {{ t('imports.taken') }}
+            </span>
+            <v-btn
+              v-else
+              size="x-small"
+              variant="tonal"
+              color="primary"
+              prepend-icon="mdi-import"
+              :loading="importing === site.path"
+              :disabled="!!importing || !!adopting"
+              @click="importSite(install, site)"
+            >
+              {{ t('imports.take') }}
+            </v-btn>
+          </div>
+        </v-expansion-panel-text>
+      </v-expansion-panel>
+    </v-expansion-panels>
+
     <!-- Flush and square, like the search field directly under it. Both span
          the card, and a radius on a surface that runs to an edge cuts a notch
          out of the corner rather than rounding it — which is what the inset

@@ -50,6 +50,8 @@ function categoryLabel(category) {
       return t('serviceSettings.categories.queue');
     case 'search':
       return t('serviceSettings.categories.search');
+    case 'storage':
+      return t('serviceSettings.categories.storage');
     case 'monitoring':
       return t('serviceSettings.categories.monitoring');
     case 'devtools':

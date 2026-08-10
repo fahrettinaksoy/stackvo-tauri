@@ -83,6 +83,32 @@ const domain = computed({
   },
 });
 
+/**
+ * The same lower-casing the domain gets, for the same reason: these become a
+ * Traefik rule, a hosts line and a certificate SAN, compared byte for byte.
+ *
+ * A `*.` prefix survives — it is the one hostname form that is deliberately not
+ * a hostname, and `canonical()` would not know that.
+ */
+const aliases = computed({
+  get: () => form.value.aliases ?? [],
+  set: (value) =>
+    (form.value.aliases = (value ?? [])
+      .map((host) => String(host).trim().toLowerCase())
+      .filter(Boolean)),
+});
+
+/**
+ * Said where the wildcard is typed, not after saving.
+ *
+ * A wildcard reaches the certificate and the router and cannot reach
+ * `/etc/hosts` — no hosts file can express one. Somebody who types it and is
+ * not told will conclude the feature is broken when the name does not resolve.
+ */
+const wildcardWarning = computed(() =>
+  aliases.value.some((host) => host.startsWith('*.')) ? t('newProject.aliasesWildcard') : ''
+);
+
 const domainItems = computed(() => domainSuggestions(form.value.name, app.tld));
 const domainHint = computed(() => t('newProject.domainHint'));
 const domainWarning = computed(() => {
@@ -214,6 +240,22 @@ defineExpose({ focusName: () => nameField.value?.focus() });
       persistent-hint
       :messages="domainWarning ? [domainWarning] : []"
     />
+    <!-- Extra hostnames. A combobox rather than a text field because the value
+         is a list and splitting on commas is how `a.loc , b.loc` becomes a
+         hostname with a space in it. -->
+    <v-combobox
+      v-model="aliases"
+      :label="t('newProject.aliases')"
+      multiple
+      chips
+      closable-chips
+      clearable
+      prepend-inner-icon="mdi-dns-outline"
+      :hint="t('newProject.aliasesHint')"
+      persistent-hint
+      :messages="wildcardWarning ? [wildcardWarning] : []"
+    />
+
     <!-- Scaffolding picked the runtime the moment the template was chosen. -->
     <v-select
       v-if="!scaffold"

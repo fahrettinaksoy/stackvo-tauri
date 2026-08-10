@@ -374,6 +374,21 @@ pub fn all_service_templates(root: &Path) -> Vec<String> {
         .collect()
 }
 
+/// The service directories compiled into the binary, by name.
+///
+/// From the embedded copy and not from a filesystem walk, because those two
+/// answers differ exactly where it matters: a template added to the working
+/// tree but not to a build is present for every check that reads the checkout
+/// and absent on the machine that installs the app.
+pub fn shipped_services() -> Vec<String> {
+    SKELETON
+        .get_dir("core/templates/services")
+        .into_iter()
+        .flat_map(|dir| dir.dirs())
+        .filter_map(|d| d.path().file_name()?.to_str().map(str::to_string))
+        .collect()
+}
+
 /// Every `.tpl` under `dir`, as a path relative to `root`.
 fn collect_tpl_paths(root: &Path, dir: &Path, out: &mut std::collections::BTreeSet<String>) {
     let Ok(entries) = std::fs::read_dir(dir) else {

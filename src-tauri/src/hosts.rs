@@ -157,6 +157,24 @@ pub fn is_valid_domain(domain: &str) -> bool {
     })
 }
 
+/// A hostname, or a wildcard covering exactly one label beneath it.
+///
+/// One definition, because there were nearly two: the manifest decides whether
+/// an alias may be written, the certificate module decides whether it may be a
+/// SAN, and the two agreeing by coincidence is how `*.shop.loc` comes to be
+/// accepted in a file and dropped on the way to mkcert.
+///
+/// RFC 6125 puts the star in the leftmost label and nowhere else, which is also
+/// exactly what [`crate::certs::san_covers`] matches on and what mkcert issues.
+/// `*.*.shop.loc` and `api.*.shop.loc` are not wildcards, they are hostnames
+/// with an asterisk in them.
+pub fn is_valid_wildcard_or_domain(value: &str) -> bool {
+    match value.strip_prefix("*.") {
+        Some(rest) => is_valid_domain(rest),
+        None => is_valid_domain(value),
+    }
+}
+
 /// Reject the whole request if any domain is malformed.
 ///
 /// Not "filter out the bad ones": a caller that asked for four domains and got

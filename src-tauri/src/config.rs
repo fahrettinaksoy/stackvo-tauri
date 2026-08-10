@@ -47,7 +47,7 @@ pub struct Env {
 /// only the default: a fresh workspace no longer ships seven lines restating
 /// what the app would have done anyway, and a `.env` line now means somebody
 /// decided something rather than that a file was copied.
-pub const EMBEDDED: [(&str, &str); 139] = [
+pub const EMBEDDED: [(&str, &str); 160] = [
     // HOST_UID and HOST_GID are deliberately absent. `template::variables`
     // fills them from getuid()/getgid() when nothing else has, and it does that
     // only for keys that are missing — embedding them pinned one machine's ids
@@ -95,6 +95,13 @@ pub const EMBEDDED: [(&str, &str); 139] = [
     ("SERVICE_PHPCACHEADMIN_URL", "phpcacheadmin"),
     ("SERVICE_PHPCACHEADMIN_REDIS_HOST", "stackvo-redis"),
     ("SERVICE_PHPCACHEADMIN_MEMCACHED_HOST", "stackvo-memcached"),
+    // MinIO's domain reaches the console rather than the S3 API — the API is
+    // addressed by an endpoint URL an SDK already holds, and giving it a second
+    // name would be a name that works for a browser and not for a client.
+    ("SERVICE_MINIO_URL", "minio"),
+    ("SERVICE_MINIO_REGION", "us-east-1"),
+    ("SERVICE_MEILISEARCH_URL", "meilisearch"),
+    ("SERVICE_TYPESENSE_URL", "typesense"),
     // Stack-shaping choices. Editable in Settings; absent from a fresh `.env`
     // because the default is the answer almost everyone keeps.
     ("DEFAULT_TLD_SUFFIX", "stackvo.loc"),
@@ -168,8 +175,18 @@ pub const EMBEDDED: [(&str, &str); 139] = [
     ("SERVICE_REDIS_ENABLE", "false"),
     ("SERVICE_MARIADB_ENABLE", "false"),
     ("SERVICE_MARIADB_VERSION", "10.6"),
+    ("SERVICE_MEILISEARCH_ENABLE", "false"),
+    ("SERVICE_MEILISEARCH_HOST_PORT", "7700"),
+    ("SERVICE_MEILISEARCH_VERSION", "v1.11"),
     ("SERVICE_MEMCACHED_ENABLE", "false"),
     ("SERVICE_MEMCACHED_VERSION", "1.6"),
+    // Two published ports, and both are named: the S3 API is what an SDK
+    // connects to and the console is what a browser opens. One key for "the
+    // MinIO port" would silently be the wrong one half the time.
+    ("SERVICE_MINIO_CONSOLE_HOST_PORT", "9001"),
+    ("SERVICE_MINIO_ENABLE", "false"),
+    ("SERVICE_MINIO_HOST_PORT", "9000"),
+    ("SERVICE_MINIO_VERSION", "latest"),
     ("SERVICE_MONGO_ENABLE", "false"),
     ("SERVICE_MONGO_EXPRESS_ADMIN_USERNAME", "root"),
     ("SERVICE_MONGO_EXPRESS_BASICAUTH_USERNAME", "admin"),
@@ -203,6 +220,15 @@ pub const EMBEDDED: [(&str, &str); 139] = [
     ("SERVICE_RABBITMQ_ENABLE", "false"),
     ("SERVICE_RABBITMQ_VERSION", "3"),
     ("SERVICE_REDIS_VERSION", "7.0"),
+    ("SERVICE_TYPESENSE_ENABLE", "false"),
+    ("SERVICE_TYPESENSE_HOST_PORT", "8108"),
+    ("SERVICE_TYPESENSE_VERSION", "27.1"),
+    ("SERVICE_VALKEY_ENABLE", "false"),
+    // Not 6379. Valkey speaks Redis's protocol, so the case for having it is
+    // usually "move this project off Redis" — which means both running at once,
+    // and a shared port makes whichever starts second fail to bind.
+    ("SERVICE_VALKEY_HOST_PORT", "6381"),
+    ("SERVICE_VALKEY_VERSION", "8"),
     // Ports and starting credentials, so a workspace ships no `.env` content at
     // all. These are placeholders every install shares, not secrets: they are
     // in this file, which is public, and were in the committed `.env.example`
@@ -225,6 +251,14 @@ pub const EMBEDDED: [(&str, &str); 139] = [
     ("SERVICE_PHPCACHEADMIN_ADMIN_PASS", "admin"),
     ("SERVICE_BLACKFIRE_SERVER_ID", ""),
     ("SERVICE_BLACKFIRE_SERVER_TOKEN", ""),
+    // MinIO refuses to start on a root password shorter than eight characters,
+    // so this one cannot be `root` like the databases above it. The value is
+    // MinIO's own documented placeholder, which is the point: it is the string
+    // somebody recognises as "still the default".
+    ("SERVICE_MINIO_ROOT_USER", "minioadmin"),
+    ("SERVICE_MINIO_ROOT_PASSWORD", "minioadmin"),
+    ("SERVICE_MEILISEARCH_MASTER_KEY", "stackvo-master-key"),
+    ("SERVICE_TYPESENSE_API_KEY", "stackvo-api-key"),
 ];
 
 /// Older spellings, and what they mean now: `(legacy, current)`.
@@ -438,8 +472,17 @@ impl Env {
 
     /// Keys whose values must never reach a log, an event or an error message.
     /// Mirrors `contracts/env.schema.json` → `secrets.policy`.
+    ///
+    /// `KEY` joined the list with Meilisearch and Typesense, and it is the
+    /// suffix that shows why the list is a list rather than the word
+    /// "password": `SERVICE_MEILISEARCH_MASTER_KEY` and
+    /// `SERVICE_TYPESENSE_API_KEY` are credentials in every sense that matters
+    /// — they open the whole index — and under the old five suffixes they
+    /// would have been printed in full on the Services page, written into
+    /// events, and refused by [`crate::secrets::is_movable`], which is the same
+    /// list read from the other end.
     pub fn is_secret(key: &str) -> bool {
-        ["PASSWORD", "PASS", "TOKEN", "SECRET", "SERVER_ID"]
+        ["PASSWORD", "PASS", "TOKEN", "SECRET", "SERVER_ID", "KEY"]
             .iter()
             .any(|suffix| key.ends_with(suffix))
     }
@@ -638,5 +681,63 @@ SERVICE_REDIS_ENABLE=TRUE
         let out = env.redacted();
         assert_eq!(out["SERVICE_MYSQL_ROOT_PASSWORD"], "••••••••");
         assert_eq!(out["DEFAULT_PHP_VERSION"], "8.2");
+    }
+
+    /// An API key is a credential, and the suffix list is how this codebase
+    /// says so.
+    ///
+    /// Search engines authenticate with a key rather than a password, so
+    /// Meilisearch and Typesense arrived holding a secret that four separate
+    /// mechanisms — the Services page's mask, `redacted()`, the log scrubber
+    /// and [`crate::secrets::is_movable`] — would all have waved through. They
+    /// share one list, which is the point: this asserts on the list, not on
+    /// four behaviours that happen to agree today.
+    #[test]
+    fn a_key_is_as_much_a_credential_as_a_password() {
+        for key in [
+            "SERVICE_MEILISEARCH_MASTER_KEY",
+            "SERVICE_TYPESENSE_API_KEY",
+            "SERVICE_MYSQL_ROOT_PASSWORD",
+            "SERVICE_BLACKFIRE_SERVER_TOKEN",
+        ] {
+            assert!(Env::is_secret(key), "{key} must be treated as a secret");
+            assert!(crate::secrets::is_movable(key), "{key} must be movable");
+        }
+
+        // And the suffix is a suffix, not a substring: the words appear inside
+        // ordinary key names, and matching those would mask a version number.
+        for key in [
+            "SERVICE_MINIO_ROOT_USER",
+            "SERVICE_KAFBAT_CLUSTER_NAME",
+            "SERVICE_MEILISEARCH_VERSION",
+            "SERVICE_PGADMIN_MASTER_PASSWORD_REQUIRED",
+        ] {
+            assert!(!Env::is_secret(key), "{key} is not a secret");
+        }
+    }
+
+    /// Every service in the catalog can be switched on from a fresh install.
+    ///
+    /// `service_enable` writes `SERVICE_<NAME>_ENABLE=true`, and the Services
+    /// page decides what to render from the catalog — so a service the
+    /// contract declares and `EMBEDDED` says nothing about is a row that reads
+    /// as "off" because the key is missing rather than because anybody chose.
+    /// The version key is the same story one step later: an image tag of the
+    /// empty string is `image: "minio/minio:"`, which compose rejects.
+    #[test]
+    fn every_catalog_service_ships_an_enable_and_a_version() {
+        let embedded: std::collections::BTreeSet<&str> =
+            EMBEDDED.iter().map(|(key, _)| *key).collect();
+
+        for (service, _) in crate::contracts::env_schema().service_catalog() {
+            let prefix = Env::service_prefix(&service);
+            for suffix in ["ENABLE", "VERSION"] {
+                let key = format!("{prefix}{suffix}");
+                assert!(
+                    embedded.contains(key.as_str()),
+                    "{service} has no {key} default"
+                );
+            }
+        }
     }
 }

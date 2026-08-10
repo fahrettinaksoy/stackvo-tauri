@@ -175,6 +175,25 @@ services:
     networks:
       - "stackvo-net"
 
+  valkey:
+    profiles: ["services", "valkey"]  # --services for all, --profile valkey for this service only
+    image: "valkey/valkey:8"
+    container_name: "stackvo-valkey"
+    restart: unless-stopped
+
+    command: ["valkey-server", "/etc/valkey/valkey.conf"]
+
+    volumes:
+      - stackvo-valkey-data:/data
+      - /stackvo/generated/configs/valkey.conf:/etc/valkey/valkey.conf:ro
+
+    ports:
+      - "6381:6379"
+
+    networks:
+      - "stackvo-net"
+
+
   rabbitmq:
     profiles: ["services", "rabbitmq"]  # --services for all, --profile rabbitmq for this service only
     image: "rabbitmq:3-management"
@@ -265,6 +284,99 @@ services:
 
     networks:
       - "stackvo-net"
+
+
+  meilisearch:
+    profiles: ["services", "meilisearch"]  # --services for all, --profile meilisearch for this service only
+    image: "getmeili/meilisearch:v1.11"
+    container_name: "stackvo-meilisearch"
+    restart: unless-stopped
+
+    environment:
+      MEILI_MASTER_KEY: "stackvo-master-key"
+      MEILI_ENV: "development"
+      MEILI_DB_PATH: /meili_data
+      # Meilisearch reports usage to its vendor unless told otherwise.
+      MEILI_NO_ANALYTICS: "true"
+
+    volumes:
+      - stackvo-meilisearch-data:/meili_data
+
+    ports:
+      - "7700:7700"
+
+    networks:
+      - "stackvo-net"
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.meilisearch.rule=Host(`meilisearch.stackvo.loc`)"
+      - "traefik.http.routers.meilisearch.entrypoints=websecure"
+      - "traefik.http.routers.meilisearch.tls=true"
+      - "traefik.http.services.meilisearch.loadbalancer.server.port=7700"
+
+
+  typesense:
+    profiles: ["services", "typesense"]  # --services for all, --profile typesense for this service only
+    image: "typesense/typesense:27.1"
+    container_name: "stackvo-typesense"
+    restart: unless-stopped
+
+    environment:
+      TYPESENSE_API_KEY: "stackvo-api-key"
+      TYPESENSE_DATA_DIR: /data
+      # A browser front end queries Typesense directly, from a different
+      # origin than the one it was served from.
+      TYPESENSE_ENABLE_CORS: "true"
+
+    volumes:
+      - stackvo-typesense-data:/data
+
+    ports:
+      - "8108:8108"
+
+    networks:
+      - "stackvo-net"
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.typesense.rule=Host(`typesense.stackvo.loc`)"
+      - "traefik.http.routers.typesense.entrypoints=websecure"
+      - "traefik.http.routers.typesense.tls=true"
+      - "traefik.http.services.typesense.loadbalancer.server.port=8108"
+
+
+  minio:
+    profiles: ["services", "minio"]  # --services for all, --profile minio for this service only
+    image: "minio/minio:latest"
+    container_name: "stackvo-minio"
+    restart: unless-stopped
+
+    command: server /data --console-address ":9001"
+
+    environment:
+      MINIO_ROOT_USER: "minioadmin"
+      MINIO_ROOT_PASSWORD: "minioadmin"
+      MINIO_REGION: "us-east-1"
+      # Off by default for the reason PRIVACY.md gives for the app itself.
+      MINIO_UPDATE: "off"
+
+    volumes:
+      - stackvo-minio-data:/data
+
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+    networks:
+      - "stackvo-net"
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.minio.rule=Host(`minio.stackvo.loc`)"
+      - "traefik.http.routers.minio.entrypoints=websecure"
+      - "traefik.http.routers.minio.tls=true"
+      - "traefik.http.services.minio.loadbalancer.server.port=9001"
 
 
   kibana:
@@ -570,6 +682,8 @@ volumes:
   stackvo-kibana-data: {}
   stackvo-mailpit-data: {}
   stackvo-mariadb-data: {}
+  stackvo-meilisearch-data: {}
+  stackvo-minio-data: {}
   stackvo-mongo-data: {}
   stackvo-mysql-data: {}
   stackvo-pgadmin-data: {}
@@ -578,3 +692,5 @@ volumes:
   stackvo-rabbitmq-data: {}
   stackvo-rabbitmq-logs: {}
   stackvo-redis-data: {}
+  stackvo-typesense-data: {}
+  stackvo-valkey-data: {}

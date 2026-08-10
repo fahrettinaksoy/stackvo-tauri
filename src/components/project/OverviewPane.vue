@@ -62,6 +62,25 @@ const httpsUrl = computed(() => (props.project?.domain ? `https://${props.projec
           </a>
           <span v-else class="field-val">—</span>
         </div>
+        <!-- Beside the domain, because that is what they extend. A wildcard is
+             marked: it reaches the certificate and the router and cannot reach
+             /etc/hosts, so it is the one name here that does not resolve on its
+             own. -->
+        <div v-if="manifest?.aliases?.length" class="field">
+          <span class="field-key">{{ t('newProject.aliases') }}</span>
+          <span class="field-val">
+            <v-chip
+              v-for="host in manifest.aliases"
+              :key="host"
+              size="x-small"
+              class="mr-1"
+              :color="host.startsWith('*.') ? 'warning' : undefined"
+              :title="host.startsWith('*.') ? t('newProject.aliasesWildcard') : host"
+            >
+              {{ host }}
+            </v-chip>
+          </span>
+        </div>
         <div v-if="manifest?.php" class="field">
           <span class="field-key">{{ t('newProject.phpVersion') }}</span>
           <span class="field-val">PHP {{ manifest.php.version }}</span>

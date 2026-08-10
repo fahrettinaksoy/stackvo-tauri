@@ -190,6 +190,49 @@ describe('formFromManifest', () => {
   });
 });
 
+/**
+ * The round trip that a Save button depends on.
+ *
+ * `formToSpec` produces the whole manifest, so a field the form does not carry
+ * is a field that saving the settings sheet deletes — silently, from a file in
+ * the user's repository, with no error anywhere. Two keys arrived after the
+ * form was written and both would have gone that way.
+ */
+describe('fields the form does not edit but must not lose', () => {
+  it('carries aliases and services from a manifest back into a spec', () => {
+    const manifest = {
+      name: 'shop',
+      domain: 'shop.loc',
+      runtime: 'php',
+      aliases: ['api.shop.loc', '*.shop.loc'],
+      services: ['mysql', 'redis'],
+      php: { version: '8.4', extensions: ['mbstring'] },
+    };
+
+    const spec = formToSpec(formFromManifest(manifest), 'stackvo.loc');
+    expect(spec.aliases).toEqual(['api.shop.loc', '*.shop.loc']);
+    expect(spec.services).toEqual(['mysql', 'redis']);
+  });
+
+  it('writes neither key when there is nothing in it', () => {
+    const spec = formToSpec(
+      formFromManifest({ name: 'shop', domain: 'shop.loc', runtime: 'php' }),
+      'stackvo.loc'
+    );
+    // Not `[]`: almost every manifest on disk predates both keys, and adding
+    // two empty arrays is a diff in somebody's repository that says nothing.
+    expect(spec).not.toHaveProperty('aliases');
+    expect(spec).not.toHaveProperty('services');
+  });
+
+  it('does not share the arrays with the manifest it was loaded from', () => {
+    const manifest = { name: 'shop', domain: 'shop.loc', runtime: 'php', aliases: ['a.loc'] };
+    const form = formFromManifest(manifest);
+    form.aliases.push('b.loc');
+    expect(manifest.aliases).toEqual(['a.loc']);
+  });
+});
+
 describe('specsDiffer', () => {
   it('sees no change when the form was edited back to where it started', () => {
     const form = { ...blankForm(), name: 'shop', phpVersion: '8.2' };

@@ -214,6 +214,13 @@ export const api = {
   dbDump: (service, path) => call('db_dump', { service, path }),
   /** DESTRUCTIVE — replaces the target database. Confirm before calling. */
   dbRestore: (service, path) => call('db_restore', { service, path }),
+  /** Every named snapshot in the workspace, newest first. */
+  dbSnapshots: () => call('db_snapshots'),
+  /** Take one under a name. Returns an operation id; progress is on `db:*`. */
+  dbSnapshotTake: (service, name) => call('db_snapshot_take', { service, name }),
+  /** Put one back, replacing what is in the database. */
+  dbSnapshotRestore: (service, name) => call('db_snapshot_restore', { service, name }),
+  dbSnapshotDelete: (service, name) => call('db_snapshot_delete', { service, name }),
   /**
    * The string a client is pasted into, or null for a service without one.
    *
@@ -347,6 +354,15 @@ export const api = {
   /** removeFiles defaults to false — deleting source code needs an opt-in. */
   projectDelete: (name, removeFiles = false) => call('project_delete', { name, removeFiles }),
   /** Folders under projects/ with no stackvo.json — real code, unmanaged. */
+  /** What XAMPP and Laragon have on this machine. Reads only. */
+  importsScan: () => call('imports_scan'),
+  /** The same for an installation somewhere else; null when it is not one. */
+  importsScanAt: (source, path) => call('imports_scan_at', { source, path }),
+  /**
+   * Copy (or move) one site into the workspace. The file half only — follow
+   * with `projectAdopt`, so an imported project is validated like any other.
+   */
+  importsTake: (path, name, move = false) => call('imports_take', { path, name, move }),
   projectAdoptable: () => call('project_adoptable'),
   /** Writes the manifest for a directory that is already there. */
   /** `overrides` — `{domain, phpVersion, server, extensions}`, each optional —
@@ -356,6 +372,13 @@ export const api = {
     call('project_adopt', { name, spec, overrides }),
   projectManifestRead: (name) => call('project_manifest_read', { name }),
   projectManifestWrite: (name, manifest) => call('project_manifest_write', { name, manifest }),
+  /** What the repository declares, what this machine gives it, and the diff. */
+  projectRequirements: (name) => call('project_requirements', { name }),
+  /** Enable the declared services that are not on yet. Writes `.env` only. */
+  projectRequirementsApply: (name) => call('project_requirements_apply', { name }),
+  /** Write the `services` list into the project's committed `stackvo.json`. */
+  projectRequirementsDeclare: (name, services) =>
+    call('project_requirements_declare', { name, services }),
 
   updaterStatus: () => call('updater_status'),
   /** The third-party licence notice compiled into this build, as markdown. */
@@ -373,6 +396,18 @@ export const api = {
   secretMove: (key) => call('secret_move', { key }),
   /** Put it back in `.env` and forget the keystore entry. */
   secretRestore: (key) => call('secret_restore', { key }),
+  /** Which assistants are installed, and which already point at the server. */
+  agentsStatus: () => call('agents_status'),
+  /**
+   * Register the MCP server with one assistant.
+   *
+   * `allowWrites` is not optional on purpose. It is the argument that decides
+   * whether that assistant can stop the stack, and a default here would be a
+   * security decision made in a wrapper.
+   */
+  agentsInstall: (client, allowWrites) => call('agents_install', { client, allowWrites }),
+  /** Take the entry back out of that assistant's configuration. */
+  agentsRemove: (client) => call('agents_remove', { client }),
   /** The desktop's own accent colour, so the app can match it. */
   systemAccent: () => call('system_accent'),
   logsInfo: () => call('logs_info'),

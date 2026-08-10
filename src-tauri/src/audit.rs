@@ -30,6 +30,11 @@
 //!   * loading an image bundle, which installs something from elsewhere.
 //!   * moving a credential into the OS keystore, and taking it back out, which
 //!     changes where a password lives and what can still read it.
+//!   * importing a site from another tool, which copies somebody's source tree
+//!     into the workspace and, when asked to move, removes the original;
+//!   * registering the MCP server with an assistant, and unregistering it,
+//!     which edits a file belonging to another application and — with
+//!     `--allow-writes` — hands that assistant the ability to stop the stack.
 //!
 //! Starting a container is not here, and neither is reading anything. An audit
 //! trail that records routine traffic is one nobody reads, and a trail nobody

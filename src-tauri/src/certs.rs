@@ -139,7 +139,12 @@ pub fn required_domains(suffix: &str, project_domains: &[String]) -> (Vec<String
         if domain.is_empty() {
             continue;
         }
-        if is_valid_domain(&domain) {
+        // `is_valid_wildcard_or_domain`, not `is_valid_domain`: a project may
+        // declare `*.shop.loc` as an alias, and mkcert issues that as a SAN —
+        // the same form this function already adds for the suffix two blocks
+        // above. Validating it with the stricter check would have dropped the
+        // one hostname a multi-tenant project exists to serve.
+        if crate::hosts::is_valid_wildcard_or_domain(&domain) {
             required.push(domain);
         } else if !rejected.contains(&domain) {
             // A domain beginning with `-` would reach mkcert's argument parser
@@ -545,6 +550,13 @@ pub fn project_domains(root: &Path) -> Vec<String> {
             if let Some(domain) = manifest.domain {
                 out.push(domain);
             }
+            // Extra hostnames are certificate subjects on exactly the same
+            // terms as the main one — a name the browser reaches and the
+            // certificate does not carry is a warning interstitial, and a
+            // multi-tenant project would meet one on every tenant. Wildcards
+            // come through as they are written: `required_domains` keeps them
+            // and mkcert issues `*.shop.loc` as a SAN.
+            out.extend(manifest.aliases);
         }
     }
 
@@ -948,6 +960,46 @@ fn unreadable_ca_hint(reason: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A project may name a wildcard, and the certificate has to carry it.
+    ///
+    /// `required_domains` used to validate every project domain with
+    /// `is_valid_domain`, which rejects an asterisk — so the one hostname a
+    /// multi-tenant project exists to serve would have been dropped into
+    /// `rejected` while the suffix's own `*.stackvo.loc`, added two blocks
+    /// above, went through unchecked.
+    #[test]
+    fn a_projects_wildcard_alias_is_a_subject_like_any_other() {
+        let (required, rejected) = required_domains(
+            "stackvo.loc",
+            &[
+                "shop.loc".to_string(),
+                "*.shop.loc".to_string(),
+                "api.shop.loc".to_string(),
+            ],
+        );
+
+        assert!(required.contains(&"*.shop.loc".to_string()), "{required:?}");
+        assert!(required.contains(&"api.shop.loc".to_string()));
+        assert!(rejected.is_empty(), "{rejected:?}");
+
+        // And it covers what it claims to, on RFC 6125's terms — one label,
+        // and not the name above it.
+        assert!(covered_by(&required, "tenant1.shop.loc"));
+        assert!(!covered_by(&required, "a.b.shop.loc"));
+        assert!(
+            covered_by(&required, "shop.loc"),
+            "the bare name is listed too"
+        );
+    }
+
+    /// An asterisk anywhere else is still refused, and named.
+    #[test]
+    fn an_asterisk_that_is_not_a_wildcard_is_still_rejected() {
+        let (required, rejected) = required_domains("stackvo.loc", &["*.*.shop.loc".to_string()]);
+        assert!(!required.iter().any(|d| d.contains("*.*")));
+        assert_eq!(rejected, ["*.*.shop.loc"]);
+    }
 
     /// Everything mkcert is handed, and the one thing it is not.
     ///

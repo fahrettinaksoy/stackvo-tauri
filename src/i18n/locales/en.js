@@ -411,6 +411,20 @@ export default {
         'SSL is on, so every domain is served over HTTPS. Without mkcert the certificate is not issued and browsers refuse the site. Install it with `choco install mkcert`.',
     },
   },
+  imports: {
+    found: 'Found in {tool}: {n} site(s)',
+    explain:
+      'Read from {path}. Nothing is ever written back to it. Importing copies the site into this workspace and then adopts it like any other folder.',
+    take: 'Import',
+    taken: 'Already here',
+    move: 'Move instead of copying',
+    moveOff: 'The original stays where it is, so the other tool keeps working while you compare.',
+    moveOn:
+      'The original is removed once the copy is complete. The other tool will no longer serve this site.',
+    pick: 'Point at a {tool} folder',
+    notThere: 'That folder does not look like a {source} installation.',
+    sizeAtLeast: 'at least {size}',
+  },
   adopt: {
     found: '{n} folder(s) under projects/ have no stackvo.json.',
     from: 'detected from {files}',
@@ -497,6 +511,18 @@ export default {
     restored: 'Restored from {path}',
     confirmRestore:
       'This replaces the contents of {db} with the contents of the chosen file. Anything currently in it is lost.',
+  },
+  snapshots: {
+    title: 'Snapshots',
+    subtitle:
+      'A named copy this app keeps and can put back. Kept in the workspace, so it stays with the stack rather than in Downloads.',
+    name: 'Name this snapshot',
+    take: 'Take',
+    restore: 'Restore',
+    delete: 'Delete',
+    none: 'No snapshots of this database yet.',
+    automatic: 'taken on a schedule',
+    restored: 'Restored from {name}',
   },
   xdebug: {
     title: 'Xdebug',
@@ -755,12 +781,18 @@ export default {
       INITDB_ROOT_PASSWORD: 'Initial root password',
       UPLOAD_LIMIT: 'Upload limit',
       CLUSTER_NAME: 'Cluster name',
+      ROOT_USER: 'Root username',
+      REGION: 'Region',
+      MASTER_KEY: 'Master key',
+      API_KEY: 'API key',
+      CONSOLE_HOST_PORT: 'Console host port',
     },
     categories: {
       databases: 'Databases',
       cache: 'Cache',
       queue: 'Queues',
       search: 'Search',
+      storage: 'Object storage',
       monitoring: 'Monitoring',
       devtools: 'Developer tools',
       adminUis: 'Admin UIs',
@@ -953,6 +985,18 @@ export default {
     engineGroupDesc: 'State of the engine running the containers',
     externalApps: 'External apps',
     externalAppsDesc: 'Which app terminals and editors open in',
+    backups: 'Automatic backups',
+    backupsDesc: 'Snapshots taken on a schedule, kept in the workspace.',
+    backupSchedule: 'Take a snapshot',
+    backupScheduleHint:
+      'Measured from the last one, not from a clock — a laptop that was closed for three days owes one snapshot, not three. Only databases that are running are backed up.',
+    backupOff: 'Never',
+    backupHourly: 'Every hour',
+    backupDaily: 'Every day',
+    backupWeekly: 'Every week',
+    backupKeep: 'Scheduled snapshots to keep',
+    backupKeepHint:
+      'The oldest scheduled ones are removed past this count. Snapshots you named yourself are never removed and never counted.',
     startup: 'Startup and shutdown',
     startupDesc: 'What happens when the app opens and closes',
     compose: 'Containers',
@@ -998,6 +1042,36 @@ export default {
       inEnvFile: 'In .env, in plain text',
       move: 'Move',
       restore: 'Restore',
+    },
+    agents: {
+      title: 'AI assistants',
+      sectionDesc: 'Register the StackVo MCP server with the assistants on this machine.',
+      description:
+        'An assistant with this server can answer “why is shop.loc not loading?” from the preflight report, the hosts file, the certificate and a container’s logs.',
+      whatItDoes:
+        'Adding writes one entry, named stackvo, into that application’s own configuration file. The file is named on every row so you can open it yourself.',
+      neverClobbers:
+        'Nothing else in the file is touched, and a copy is kept beside it as .stackvo-backup before anything is written.',
+      noBinary:
+        'stackvo-mcp is a second binary and is not shipped with the app. It has to be built before it can be registered — otherwise the assistant would point at a path that does not exist.',
+      buildCommand: 'cargo build --release --bin stackvo-mcp',
+      serverBinary: 'Server that will be registered',
+      allowWrites: 'Let the assistant change things',
+      allowWritesDetail:
+        'Off, the assistant can only read. On, it also gets stack_up, stack_down, project_start, project_stop, generate, xdebug_set and certificates_reissue — which includes stopping the whole stack. This applies to the next assistant you add.',
+      state: {
+        registered: 'Registered',
+        stale: 'Registered, but pointing at another copy',
+        available: 'Installed, not registered',
+        absent: 'Not found on this machine',
+        unparseable: 'This file has comments in it and cannot be edited safely',
+      },
+      add: 'Register',
+      update: 'Update',
+      remove: 'Remove',
+      copyBlock: 'Copy block',
+      notListed:
+        'Codex and Zed are not listed: Codex keeps its configuration in TOML, and Zed’s format could not be verified. Both can be configured by hand with the block above.',
     },
     policy: {
       title: 'This machine is managed',
@@ -1132,6 +1206,28 @@ export default {
     composeRestart: 'Restart the stack',
   },
 
+  requirements: {
+    title: 'Services this project needs',
+    description:
+      'The half of an environment definition that travels with the repository: a colleague clones, opens this, and turns on what is missing.',
+    none: 'This project declares no services, and nothing in its .env suggested any.',
+    declaredBy: 'Declared in stackvo.json',
+    suggestedBy: 'Suggested by this project’s own .env',
+    suggestedCaveat:
+      'A guess, from the keys named beside each one. Writing it puts it in a file your colleagues will read as a decision — check it first.',
+    becauseOf: 'from {key}',
+    state: {
+      enabled: 'Enabled on this machine',
+      missing: 'Not enabled here',
+      unknown: 'No template for this service in this version',
+    },
+    unknownExplained:
+      'Names with no template are left in the file rather than removed — a declaration that silently disappears is one nobody can debug. They are simply not acted on.',
+    enable: 'Enable {count} service(s)',
+    enableDetail: 'Writes .env, regenerates the compose files, and starts them.',
+    declare: 'Write {count} to stackvo.json',
+    written: 'Written. Commit stackvo.json and the next person to clone gets the same list.',
+  },
   logs: {
     title: 'Logs',
     live: 'live',
@@ -1379,6 +1475,11 @@ export default {
       'Cloning uses the git on this machine. Your keys, ssh config and server permissions come from your own setup — StackVo manages none of them. A URL that works in your terminal works here.',
     gitManifestHint:
       'If the repository has a stackvo.json, its settings are used as they are — the team’s answer wins and the fields above are ignored. If it has none, the project is configured from what the clone contains.',
+    aliases: 'Extra hostnames',
+    aliasesHint:
+      'Other names this project answers on. Written into stackvo.json, so a colleague who clones gets them too.',
+    aliasesWildcard:
+      'A wildcard reaches the certificate and the router, but no hosts file can express one — those names will not resolve until you add them yourself.',
     domain: 'Domain',
     runtime: 'Runtime',
     phpVersion: 'PHP version',
@@ -1487,6 +1588,10 @@ export default {
     hostsNotReplaced: 'The hosts file could not be replaced.',
     installPolkit: 'Install polkit, or edit /etc/hosts manually.',
     serviceMustBeInCatalog: 'Only services listed in contracts/env.schema.json can be managed.',
+    snapshotNameCharset:
+      'Use letters, digits, dot, dash and underscore — the name becomes a filename. `auto-` is reserved for scheduled snapshots.',
+    snapshotNameInUse:
+      'Choose another name, or delete the existing snapshot first — a snapshot is never overwritten in place.',
     supportedDatabases: 'Supported: mysql, mariadb, postgres, mongo.',
     enableAMailCatcher: 'Enable mailhog (or mailpit) in .env, then regenerate.',
     mailUiMayBeStarting: 'The container may still be starting, or its UI port may be taken.',
@@ -1503,6 +1608,10 @@ export default {
     unlockTheKeystore:
       'Unlock your keychain and try again — the password for this setting is stored there.',
     onlyCredentialsMove: 'Only passwords, tokens and server ids can be kept in the keystore.',
+    agentConfigUnparseable:
+      'This file is not plain JSON — several editors allow comments in it, which cannot be edited safely without deleting them. Open it and paste the block shown here.',
+    buildTheMcpServer:
+      'Build it first: `cargo build --release --bin stackvo-mcp` in the StackVo checkout.',
     keystoreEntryIsGone:
       'The entry was removed from the keystore. Set the value again to restore the service.',
     settingIsManaged:

@@ -18,7 +18,6 @@
 //! dependency arrows only ever point downward" is a claim about intent that a
 //! parser cannot settle. Review settles it.
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 fn repo_root() -> PathBuf {
@@ -84,65 +83,58 @@ fn every_link_points_at_a_file_that_exists() {
     );
 }
 
-/// The decision table and the directory have to be the same set.
+/// The decisions carry the three parts that make one worth reading.
 ///
-/// Both failures are quiet. An ADR nobody links to is a decision nobody will
-/// find; a row pointing at a file that was never written reads as a decision
-/// that was made.
+/// `docs/durum.md` §6 replaced `docs/adr/`, one file per decision, when the
+/// five documents under `docs/` became one. The numbering survived the move on
+/// purpose — comments through the codebase say "ADR 0005" and "ADR 0009", and a
+/// reference that resolves to nothing is worse than no reference.
+///
+/// A decision without a status is a draft somebody forgot; without a decision
+/// it is a description of a problem; without consequences it is the half that
+/// reads well and the half nobody needs is missing.
 #[test]
-fn the_decision_table_lists_every_adr_and_no_others() {
-    let dir = repo_root().join("docs/adr");
-    let on_disk: BTreeSet<String> = std::fs::read_dir(&dir)
-        .expect("docs/adr exists")
-        .filter_map(Result::ok)
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .filter(|name| name.ends_with(".md") && name != "README.md")
+fn every_decision_carries_a_status_a_decision_and_its_consequences() {
+    let text = read(&repo_root().join("docs/durum.md"));
+
+    let numbers: Vec<&str> = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("### "))
+        .filter(|rest| rest.starts_with("00"))
+        .filter_map(|rest| rest.split_whitespace().next())
         .collect();
 
-    let linked: BTreeSet<String> = local_links(&architecture())
-        .into_iter()
-        .filter(|t| t.starts_with("docs/adr/"))
-        .map(|t| t.trim_start_matches("docs/adr/").to_string())
-        .collect();
-
-    assert_eq!(
-        on_disk, linked,
-        "the ADR directory and ARCHITECTURE.md's decision table disagree"
+    assert!(
+        numbers.len() >= 10,
+        "only {} decisions found in §6 — the heading format has changed and this \
+         gate has stopped reading them",
+        numbers.len()
     );
-}
 
-/// An ADR without a status is a draft somebody forgot; without a decision it is
-/// a description of a problem.
-#[test]
-fn every_adr_carries_a_status_and_a_decision() {
-    let dir = repo_root().join("docs/adr");
-    let mut checked = 0;
+    // Each block runs from its own heading to the next `###` or `---`.
+    for number in &numbers {
+        let start = text
+            .find(&format!("### {number} "))
+            .expect("the heading was just read out of this text");
+        let rest = &text[start..];
+        let end = rest[4..]
+            .find("\n### ")
+            .map(|i| i + 4)
+            .or_else(|| rest.find("\n---"))
+            .unwrap_or(rest.len());
+        let block = &rest[..end];
 
-    for entry in std::fs::read_dir(&dir).expect("docs/adr exists").flatten() {
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().to_string();
-        if !name.ends_with(".md") || name == "README.md" {
-            continue;
+        for part in ["**Status:**", "**Decision:**", "**Consequences:**"] {
+            assert!(block.contains(part), "decision {number} has no {part} line");
         }
-        let text = read(&path);
-
-        assert!(
-            text.contains("**Status:**"),
-            "{name} has no Status line — a decision with no status is a draft"
-        );
-        assert!(
-            text.contains("## Decision"),
-            "{name} has no Decision section"
-        );
-        assert!(
-            text.contains("## Consequences"),
-            "{name} has no Consequences section — the consequence nobody wanted \
-             is the part a later reader needs"
-        );
-        checked += 1;
     }
 
-    assert!(checked >= 7, "only {checked} ADRs found");
+    // And ARCHITECTURE.md points at them rather than carrying a second table
+    // that can disagree.
+    assert!(
+        architecture().contains("docs/durum.md"),
+        "ARCHITECTURE.md no longer points at the decisions"
+    );
 }
 
 /// The counts in the document, against the tree.

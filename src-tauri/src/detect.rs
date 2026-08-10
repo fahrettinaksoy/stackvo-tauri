@@ -398,6 +398,192 @@ struct PackageJson {
     engines: std::collections::BTreeMap<String, String>,
 }
 
+// -------------------------------------------------- services from the .env
+
+/// One reason a service was inferred: the `.env` key that said so.
+///
+/// The **key**, never the value. This function reads somebody's project `.env`,
+/// which is where their production-shaped credentials sit, and the answer is
+/// shown on screen and travels into a manifest. A value in here would be a
+/// password in a UI nobody expected to hold one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceHint {
+    pub service: String,
+    pub key: String,
+}
+
+/// A project's own `.env`, as `KEY=VALUE` pairs.
+///
+/// Not [`crate::config::Env::parse`], deliberately: that one merges StackVo's
+/// own embedded defaults over the file, which is right for the workspace `.env`
+/// and completely wrong here — it would report `SERVICE_MYSQL_ENABLE` as
+/// something a Laravel project had asked for.
+fn env_pairs(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| line.split_once('='))
+        .map(|(k, v)| {
+            (
+                k.trim().to_ascii_uppercase(),
+                v.trim().trim_matches(['"', '\'']).to_ascii_lowercase(),
+            )
+        })
+        .collect()
+}
+
+/// Does this host name point somewhere other than the machine itself?
+///
+/// The distinction that makes `REDIS_HOST` evidence or noise. Laravel's own
+/// `.env.example` ships `REDIS_HOST=127.0.0.1` in **every** project, whether or
+/// not Redis is used, so treating the key's presence as a declaration would put
+/// Redis in the manifest of every Laravel application ever cloned. A host that
+/// names something else was typed by somebody.
+fn names_another_host(value: &str) -> bool {
+    !value.is_empty() && !matches!(value, "127.0.0.1" | "localhost" | "::1" | "0.0.0.0")
+}
+
+/// The services a project's `.env` implies, with the key that implied each.
+///
+/// Modelled on Herd's `herd init`, which reads the project's `.env` and guesses
+/// — and the guesses are only useful if they are conservative. Two kinds of
+/// evidence count:
+///
+/// * a **driver** key whose value names a service (`DB_CONNECTION=pgsql`,
+///   `SCOUT_DRIVER=meilisearch`). Somebody chose that value;
+/// * a **host** key pointing at something that is not this machine
+///   (`REDIS_HOST=redis`), because the boilerplate default is localhost.
+///
+/// Everything produced is checked against the catalog before it is returned, so
+/// a rule cannot invent an id that has no template — the failure CONFLICTS.md
+/// C-09 records, arrived at from a new direction.
+pub fn services_from_env(text: &str) -> Vec<ServiceHint> {
+    // (key, value → service). A value of "" matches any non-empty value.
+    const DRIVERS: &[(&str, &[(&str, &str)])] = &[
+        (
+            "DB_CONNECTION",
+            &[
+                ("mysql", "mysql"),
+                ("mariadb", "mariadb"),
+                ("pgsql", "postgres"),
+                ("postgres", "postgres"),
+                ("postgresql", "postgres"),
+                ("mongodb", "mongo"),
+            ],
+        ),
+        (
+            "CACHE_STORE",
+            &[("redis", "redis"), ("memcached", "memcached")],
+        ),
+        (
+            "CACHE_DRIVER",
+            &[("redis", "redis"), ("memcached", "memcached")],
+        ),
+        (
+            "SESSION_DRIVER",
+            &[("redis", "redis"), ("memcached", "memcached")],
+        ),
+        (
+            "QUEUE_CONNECTION",
+            &[("redis", "redis"), ("rabbitmq", "rabbitmq")],
+        ),
+        (
+            "SCOUT_DRIVER",
+            &[
+                ("meilisearch", "meilisearch"),
+                ("typesense", "typesense"),
+                ("elasticsearch", "elasticsearch"),
+                ("elastic", "elasticsearch"),
+            ],
+        ),
+        // s3 is the API, not the implementation: MinIO is what serves it here.
+        ("FILESYSTEM_DISK", &[("s3", "minio"), ("minio", "minio")]),
+        ("FILESYSTEM_DRIVER", &[("s3", "minio"), ("minio", "minio")]),
+    ];
+
+    // (key, service) — counted only when the value names another host.
+    const HOSTS: &[(&str, &str)] = &[
+        ("REDIS_HOST", "redis"),
+        ("MEMCACHED_HOST", "memcached"),
+        ("RABBITMQ_HOST", "rabbitmq"),
+        ("ELASTICSEARCH_HOST", "elasticsearch"),
+        ("MEILISEARCH_HOST", "meilisearch"),
+        ("TYPESENSE_HOST", "typesense"),
+        ("AWS_ENDPOINT", "minio"),
+        ("MONGODB_URI", "mongo"),
+    ];
+
+    let catalog = crate::contracts::env_schema();
+    let pairs = env_pairs(text);
+    let mut out: Vec<ServiceHint> = Vec::new();
+
+    let add = |service: &str, key: &str, out: &mut Vec<ServiceHint>| {
+        if !catalog.knows_service(service) {
+            return;
+        }
+        if out.iter().any(|h| h.service == service) {
+            return;
+        }
+        out.push(ServiceHint {
+            service: service.to_string(),
+            key: key.to_string(),
+        });
+    };
+
+    for (key, value) in &pairs {
+        for (driver, mapping) in DRIVERS {
+            if key != driver {
+                continue;
+            }
+            for (needle, service) in *mapping {
+                if value == needle {
+                    add(service, key, &mut out);
+                }
+            }
+        }
+
+        for (host, service) in HOSTS {
+            if key == host && names_another_host(value) {
+                add(service, key, &mut out);
+            }
+        }
+    }
+
+    // The mail catcher is its own rule: `MAIL_MAILER=smtp` is true of every
+    // project that sends mail and says nothing about *what* receives it, so the
+    // host is what decides — and it decides between two services that both
+    // exist in the catalog.
+    for (key, value) in &pairs {
+        if key != "MAIL_HOST" {
+            continue;
+        }
+        if value.contains("mailpit") {
+            add("mailpit", key, &mut out);
+        } else if value.contains("mailhog") {
+            add("mailhog", key, &mut out);
+        }
+    }
+
+    out.sort_by(|a, b| a.service.cmp(&b.service));
+    out
+}
+
+/// The same, read off disk. `.env` first, then `.env.example` — a fresh clone
+/// has only the second, and it is exactly the file that describes what the
+/// project expects rather than what one developer happens to have configured.
+pub fn services_of(dir: &Path) -> Vec<ServiceHint> {
+    for name in [".env", ".env.example"] {
+        if let Ok(text) = std::fs::read_to_string(dir.join(name)) {
+            let found = services_from_env(&text);
+            if !found.is_empty() {
+                return found;
+            }
+        }
+    }
+    Vec::new()
+}
+
 /// Read the markers off disk. Anything unreadable is simply absent — a
 /// malformed `composer.json` should narrow the answer, not fail the scan.
 pub fn fingerprint(dir: &Path) -> Fingerprint {
@@ -796,5 +982,116 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(infer(&with_v).node_version.as_deref(), Some("20.11.1"));
+    }
+
+    // ------------------------------------------------ services from the .env
+
+    fn ids(text: &str) -> Vec<String> {
+        services_from_env(text)
+            .into_iter()
+            .map(|h| h.service)
+            .collect()
+    }
+
+    /// The false positive the whole design is arranged around.
+    ///
+    /// Laravel ships `REDIS_HOST=127.0.0.1` in every `.env.example`, used or
+    /// not. A rule keyed on the presence of the variable would put Redis in
+    /// the manifest of every Laravel project ever cloned — and a declaration
+    /// that is wrong everywhere is one nobody reads anywhere.
+    #[test]
+    fn the_boilerplate_a_framework_ships_is_not_a_declaration() {
+        let laravel = "\
+APP_NAME=Laravel
+DB_CONNECTION=sqlite
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+MEMCACHED_HOST=127.0.0.1
+MAIL_MAILER=log
+";
+        assert!(ids(laravel).is_empty(), "{:?}", ids(laravel));
+    }
+
+    #[test]
+    fn a_host_that_names_something_else_is_evidence() {
+        let text = "REDIS_HOST=stackvo-redis\nMEMCACHED_HOST=cache.internal\n";
+        assert_eq!(ids(text), ["memcached", "redis"]);
+
+        // …and the key is what is reported, never the value: this function
+        // reads a file full of passwords.
+        let hints = services_from_env("REDIS_HOST=stackvo-redis\n");
+        assert_eq!(hints[0].key, "REDIS_HOST");
+        assert!(!format!("{hints:?}").contains("stackvo-redis"));
+    }
+
+    #[test]
+    fn a_driver_value_names_the_service() {
+        assert_eq!(ids("DB_CONNECTION=pgsql\n"), ["postgres"]);
+        assert_eq!(ids("DB_CONNECTION=mysql\n"), ["mysql"]);
+        assert_eq!(ids("SCOUT_DRIVER=meilisearch\n"), ["meilisearch"]);
+        assert_eq!(ids("SCOUT_DRIVER=typesense\n"), ["typesense"]);
+        // s3 is the API, MinIO is what serves it here.
+        assert_eq!(ids("FILESYSTEM_DISK=s3\n"), ["minio"]);
+        assert_eq!(ids("QUEUE_CONNECTION=rabbitmq\n"), ["rabbitmq"]);
+    }
+
+    /// Quoting, spacing, case and comments are all things a real `.env` has.
+    #[test]
+    fn the_reader_handles_a_file_a_person_wrote() {
+        let text = "\
+# the database
+db_connection = \"pgsql\"
+
+CACHE_STORE='redis'
+REDIS_HOST=\"stackvo-redis\"
+";
+        assert_eq!(ids(text), ["postgres", "redis"]);
+    }
+
+    /// Two rules can name the same service; it must appear once, and the first
+    /// key that proved it is the one worth showing.
+    #[test]
+    fn one_service_is_reported_once() {
+        let hints = services_from_env("CACHE_STORE=redis\nREDIS_HOST=stackvo-redis\n");
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].key, "CACHE_STORE");
+    }
+
+    /// `MAIL_MAILER=smtp` is true of everything that sends mail and says
+    /// nothing about what receives it; the host is what picks between two
+    /// catchers that both exist.
+    #[test]
+    fn the_mail_catcher_is_decided_by_the_host_and_not_the_mailer() {
+        assert!(ids("MAIL_MAILER=smtp\nMAIL_HOST=smtp.sendgrid.net\n").is_empty());
+        assert_eq!(ids("MAIL_HOST=stackvo-mailpit\n"), ["mailpit"]);
+        assert_eq!(ids("MAIL_HOST=mailhog\n"), ["mailhog"]);
+    }
+
+    /// A rule may only produce an id the catalog has a template for. Without
+    /// this, a mapping added here would write `SERVICE_<JUNK>_ENABLE` into
+    /// somebody's `.env` and bring up a compose profile matching nothing.
+    #[test]
+    fn every_service_a_rule_can_produce_is_in_the_catalog() {
+        let schema = crate::contracts::env_schema();
+        let text = "\
+DB_CONNECTION=mongodb
+CACHE_STORE=memcached
+SESSION_DRIVER=redis
+QUEUE_CONNECTION=rabbitmq
+SCOUT_DRIVER=elasticsearch
+FILESYSTEM_DISK=s3
+MAIL_HOST=stackvo-mailpit
+MONGODB_URI=mongodb://db:27017
+TYPESENSE_HOST=search
+";
+        let found = services_from_env(text);
+        assert!(found.len() >= 7, "{found:?}");
+        for hint in found {
+            assert!(
+                schema.knows_service(&hint.service),
+                "{} is not in the catalog",
+                hint.service
+            );
+        }
     }
 }

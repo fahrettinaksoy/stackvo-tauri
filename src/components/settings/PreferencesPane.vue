@@ -88,6 +88,42 @@ onMounted(async () => {
     </div>
   </SettingsGroup>
 
+  <!-- Scheduled database snapshots. A preference rather than a stack setting:
+       it is about what this installation does unattended, and it applies to
+       whichever workspace is open. -->
+  <SettingsGroup
+    icon="mdi-database-clock-outline"
+    :title="t('settings.backups')"
+    :description="t('settings.backupsDesc')"
+  >
+    <v-select
+      :model-value="prefs?.backupSchedule ?? 'off'"
+      :items="[
+        { value: 'off', title: t('settings.backupOff') },
+        { value: 'hourly', title: t('settings.backupHourly') },
+        { value: 'daily', title: t('settings.backupDaily') },
+        { value: 'weekly', title: t('settings.backupWeekly') },
+      ]"
+      :label="t('settings.backupSchedule')"
+      :hint="t('settings.backupScheduleHint')"
+      persistent-hint
+      @update:model-value="(v) => setPref({ backupSchedule: v })"
+    />
+    <v-text-field
+      class="mt-3"
+      type="number"
+      min="1"
+      max="100"
+      :model-value="prefs?.backupKeep ?? 7"
+      :label="t('settings.backupKeep')"
+      :hint="t('settings.backupKeepHint')"
+      persistent-hint
+      @update:model-value="
+        (v) => setPref({ backupKeep: Math.min(100, Math.max(1, Number(v) || 1)) })
+      "
+    />
+  </SettingsGroup>
+
   <SettingsGroup
     icon="mdi-power"
     :title="t('settings.startup')"

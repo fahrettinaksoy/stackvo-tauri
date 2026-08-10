@@ -1216,6 +1216,10 @@ pub fn render_project_config_files_with(
 pub struct ComposeProject<'a> {
     pub name: &'a str,
     pub domain: &'a str,
+    /// Extra hostnames from the manifest, in the order it lists them. Empty for
+    /// every project that has not asked for any, which is why the rule this
+    /// produces is unchanged for them.
+    pub aliases: &'a [String],
     pub runtime_server: Option<Server>,
     /// Only Node projects have one; PHP projects proxy to port 80 (or 8000 for
     /// Swoole, which is its own HTTP server).
@@ -1229,12 +1233,57 @@ pub fn traefik_name(project: &str) -> String {
     project.replace('.', "-")
 }
 
-fn traefik_labels(project: &str, domain: &str, port: u16) -> String {
+/// The router rule for one project's hostnames.
+///
+/// With no aliases this is `Host(`shop.loc`)` and nothing else — byte for byte
+/// what it has always been, which `fixtures_differential.rs` freezes and which
+/// is why this is a separate function rather than a loop that happens to
+/// produce the same string for one element.
+///
+/// A wildcard cannot go in `Host()`: Traefik matches that literally, so
+/// ``Host(`*.shop.loc`)`` is a rule for a host whose first label is an
+/// asterisk. `HostRegexp` is the matcher for it, and in Traefik v3 it takes a
+/// plain Go regular expression — anchored here, because an unanchored
+/// `.+[.]shop[.]loc` also matches `x.shop.loc.attacker.test`.
+///
+/// ## Why `[.]` and not `\.`
+///
+/// Because this string ends up inside a **double-quoted YAML scalar** — the
+/// compose label — and `\.` is not a YAML escape sequence. The first version
+/// emitted `\.` and `docker compose config` answered "found unknown escape
+/// character": not a rule that failed to match, a compose file that would not
+/// parse at all, taking every other project down with it. It was found by
+/// running the output rather than reading it, which is what
+/// `examples/router_rule.rs` is for.
+///
+/// Doubling the backslash would also work and is what a second escaping layer
+/// always looks like right up until somebody reformats one of the layers.
+/// `[.]` is the same character class to every regexp engine and passes through
+/// YAML, Docker labels and Go untouched. `no_backslash_reaches_the_label` is
+/// the gate that keeps a well-meaning tidy-up from putting one back.
+pub fn traefik_rule(domain: &str, aliases: &[String]) -> String {
+    let mut clauses = vec![format!("Host(`{domain}`)")];
+
+    for alias in aliases {
+        match alias.strip_prefix("*.") {
+            Some(base) => clauses.push(format!(
+                "HostRegexp(`^[a-zA-Z0-9-]+[.]{}$`)",
+                base.replace('.', "[.]")
+            )),
+            None => clauses.push(format!("Host(`{alias}`)")),
+        }
+    }
+
+    clauses.join(" || ")
+}
+
+fn traefik_labels(project: &str, domain: &str, aliases: &[String], port: u16) -> String {
     let name = traefik_name(project);
+    let rule = traefik_rule(domain, aliases);
     format!(
         "    labels:\n\
          \x20     - \"traefik.enable=true\"\n\
-         \x20     - \"traefik.http.routers.{name}.rule=Host(`{domain}`)\"\n\
+         \x20     - \"traefik.http.routers.{name}.rule={rule}\"\n\
          \x20     - \"traefik.http.routers.{name}.entrypoints=websecure\"\n\
          \x20     - \"traefik.http.routers.{name}.tls=true\"\n\
          \x20     - \"traefik.http.services.{name}.loadbalancer.server.port={port}\"\n"
@@ -1297,7 +1346,7 @@ pub fn render_compose_service(
                 "    environment:\n      HOST: 0.0.0.0\n      PORT: {port}\n\n"
             ));
             out.push_str("    networks:\n      - stackvo-net\n\n");
-            out.push_str(&traefik_labels(name, project.domain, port));
+            out.push_str(&traefik_labels(name, project.domain, project.aliases, port));
         }
         Some(server) => {
             // Apache logs to /var/log/apache2; the rest take the whole /var/log.
@@ -1315,7 +1364,7 @@ pub fn render_compose_service(
             // Swoole is its own HTTP server on 8000; the rest sit behind a web
             // server on 80.
             let port = if server == Server::Swoole { 8000 } else { 80 };
-            out.push_str(&traefik_labels(name, project.domain, port));
+            out.push_str(&traefik_labels(name, project.domain, project.aliases, port));
         }
     }
 
@@ -1372,10 +1421,12 @@ pub fn compose_projects_from<'a>(manifests: &'a [(String, Manifest)]) -> Vec<Com
         .iter()
         .filter_map(|(name, m)| {
             let domain = m.domain.as_deref()?;
+            let aliases = m.aliases.as_slice();
             Some(if m.runtime == "node" {
                 ComposeProject {
                     name,
                     domain,
+                    aliases,
                     runtime_server: None,
                     node_port: m.node.as_ref().map(|n| n.port),
                     php_version: None,
@@ -1386,6 +1437,7 @@ pub fn compose_projects_from<'a>(manifests: &'a [(String, Manifest)]) -> Vec<Com
                 ComposeProject {
                     name,
                     domain,
+                    aliases,
                     runtime_server: None,
                     node_port: m.lang.as_ref().map(|l| l.port),
                     php_version: None,
@@ -1394,6 +1446,7 @@ pub fn compose_projects_from<'a>(manifests: &'a [(String, Manifest)]) -> Vec<Com
                 ComposeProject {
                     name,
                     domain,
+                    aliases,
                     runtime_server: Server::parse(m.server.as_deref().unwrap_or("nginx")),
                     node_port: None,
                     php_version: m.php.as_ref().map(|p| p.version.as_str()),
@@ -1538,6 +1591,83 @@ pub fn traefik_routing_warning(opts: &TraefikOptions) -> Option<String> {
 mod tests {
     use super::*;
 
+    // ------------------------------------------------ extra hostnames (E-2)
+
+    /// A project with no aliases renders the rule it has always rendered.
+    ///
+    /// Not a nicety: `fixtures_differential.rs` compares the whole projects
+    /// compose file against output frozen from the Bash generator, so a rule
+    /// that merely *means* the same thing fails the build — correctly.
+    #[test]
+    fn a_project_without_aliases_produces_exactly_the_old_rule() {
+        assert_eq!(traefik_rule("shop.loc", &[]), "Host(`shop.loc`)");
+    }
+
+    #[test]
+    fn extra_hostnames_are_alternatives_in_one_rule() {
+        assert_eq!(
+            traefik_rule("shop.loc", &["api.shop.loc".into(), "cdn.shop.loc".into()]),
+            "Host(`shop.loc`) || Host(`api.shop.loc`) || Host(`cdn.shop.loc`)"
+        );
+    }
+
+    /// `Host()` matches literally, so `Host(`*.shop.loc`)` is a rule for a
+    /// hostname whose first label is an asterisk — it would load without
+    /// complaint and match nothing anybody could type.
+    #[test]
+    fn a_wildcard_becomes_a_regexp_rather_than_a_literal_host() {
+        let rule = traefik_rule("shop.loc", &["*.shop.loc".into()]);
+        assert_eq!(
+            rule,
+            "Host(`shop.loc`) || HostRegexp(`^[a-zA-Z0-9-]+[.]shop[.]loc$`)"
+        );
+        assert!(!rule.contains("Host(`*"));
+    }
+
+    /// The rule is written into a double-quoted YAML scalar, where `\.` is not
+    /// a valid escape. The first version emitted one and `docker compose
+    /// config` refused the whole file — every project down, because one of them
+    /// declared a wildcard.
+    #[test]
+    fn no_backslash_reaches_the_label() {
+        let rule = traefik_rule("shop.loc", &["*.a.shop.loc".into(), "api.shop.loc".into()]);
+        assert!(!rule.contains('\\'), "{rule}");
+        assert!(
+            traefik_labels("shop", "shop.loc", &["*.shop.loc".into()], 80)
+                .find('\\')
+                .is_none()
+        );
+    }
+
+    /// Two properties of that pattern, both of which are security rather than
+    /// tidiness: unanchored, `.+\.shop\.loc` also matches
+    /// `x.shop.loc.attacker.test`; with unescaped dots, `shop.loc` also matches
+    /// `shopXloc`.
+    ///
+    /// Asserted on the pattern text and not by matching it here. Traefik
+    /// compiles this with Go's regexp engine, and a second engine agreeing
+    /// would be evidence about that engine — the rule is exercised against a
+    /// real Traefik in the verification recorded with this change.
+    #[test]
+    fn the_wildcard_pattern_is_anchored_and_its_dots_are_escaped() {
+        let rule = traefik_rule("shop.loc", &["*.shop.loc".into()]);
+        let pattern = rule
+            .split("HostRegexp(`")
+            .nth(1)
+            .unwrap()
+            .trim_end_matches("`)");
+
+        assert!(pattern.starts_with('^'), "{pattern}");
+        assert!(pattern.ends_with('$'), "{pattern}");
+        // Every dot in the host part is a character class: a bare one is a
+        // wildcard of its own, and `shop.loc` would also match `shopXloc`.
+        assert!(!pattern.contains("shop.loc"), "{pattern}");
+        assert!(pattern.contains("shop[.]loc"), "{pattern}");
+        // One label deep, and never zero: `[a-zA-Z0-9-]+` cannot span a dot,
+        // which is what keeps `a.b.shop.loc` and the bare domain out.
+        assert!(pattern.contains("[a-zA-Z0-9-]+"), "{pattern}");
+    }
+
     fn exts(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
     }
@@ -1549,6 +1679,8 @@ mod tests {
             runtime: "php".into(),
             server: Some(server.into()),
             document_root: Some("public".into()),
+            aliases: vec![],
+            services: vec![],
             php: Some(crate::manifest::PhpConfig {
                 version: "8.4".into(),
                 extensions: vec![],

@@ -1,3 +1,4 @@
+pub mod agents;
 pub mod appdir;
 pub mod applog;
 pub mod apps;
@@ -25,6 +26,7 @@ pub mod generator;
 pub mod git;
 pub mod hints;
 pub mod hosts;
+pub mod imports;
 pub mod inflight;
 pub mod licences;
 pub mod locale;
@@ -48,6 +50,7 @@ pub mod runner;
 pub mod scaffold;
 pub mod secrets;
 pub mod skeleton;
+pub mod snapshot;
 pub mod stats;
 pub mod stats_store;
 pub mod template;
@@ -176,6 +179,27 @@ pub fn run() {
                 watcher.retarget(&handle, root);
             }
             app.manage(watcher);
+
+            // Scheduled database snapshots.
+            //
+            // A five-minute tick rather than a timer set to the interval: the
+            // machine sleeps, and a `sleep(24h)` started before the lid closed
+            // fires a day late. Each tick asks when the last automatic snapshot
+            // was taken and compares it with the clock, so a laptop that was
+            // shut for three days owes one snapshot rather than three.
+            //
+            // Does nothing at all unless a schedule has been chosen, which is
+            // the default — see `snapshot_settings`.
+            let backup_handle = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    // Before the first check, not after: the app has just
+                    // started, the engine may not be up yet, and a dump racing
+                    // the stack's own boot is a failed one.
+                    tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                    commands::run_due_snapshots(&backup_handle).await;
+                }
+            });
 
             // Slow tray refresh. Deliberately lazy: this is a glanceable
             // summary, not a dashboard, and hammering the daemon from a
@@ -391,6 +415,10 @@ pub fn run() {
             commands::mail_clear,
             commands::db_targets,
             commands::db_dump,
+            commands::db_snapshots,
+            commands::db_snapshot_take,
+            commands::db_snapshot_restore,
+            commands::db_snapshot_delete,
             commands::db_restore,
             commands::service_connection,
             commands::xdebug_status,
@@ -436,10 +464,16 @@ pub fn run() {
             commands::project_validate,
             commands::project_create,
             commands::project_delete,
+            commands::imports_scan,
+            commands::imports_scan_at,
+            commands::imports_take,
             commands::project_adoptable,
             commands::project_adopt,
             commands::project_manifest_read,
             commands::project_manifest_write,
+            commands::project_requirements,
+            commands::project_requirements_apply,
+            commands::project_requirements_declare,
             commands::service_dependencies,
             commands::container_stats_history,
             commands::containers_start_all,
@@ -457,6 +491,9 @@ pub fn run() {
             commands::secrets_status,
             commands::secret_move,
             commands::secret_restore,
+            commands::agents_status,
+            commands::agents_install,
+            commands::agents_remove,
             commands::system_accent,
             commands::logs_info,
             commands::diagnostics_bundle,

@@ -64,7 +64,7 @@ use std::path::Path;
 /// Deliberately not a fuzzy match. A project running `ghcr.io/acme/redis-shim`
 /// is not running Redis, and guessing that it is would enable a service the
 /// developer never asked for.
-const IMAGE_TO_SERVICE: [(&str, &str); 20] = [
+const IMAGE_TO_SERVICE: [(&str, &str); 24] = [
     ("mysql", "mysql"),
     ("mysql-server", "mysql"),
     ("mariadb", "mariadb"),
@@ -74,10 +74,18 @@ const IMAGE_TO_SERVICE: [(&str, &str); 20] = [
     ("mongodb", "mongo"),
     ("cassandra", "cassandra"),
     ("redis", "redis"),
+    ("valkey", "valkey"),
     ("memcached", "memcached"),
     ("rabbitmq", "rabbitmq"),
     ("kafka", "kafka"),
     ("elasticsearch", "elasticsearch"),
+    ("meilisearch", "meilisearch"),
+    ("typesense", "typesense"),
+    // MinIO publishes the server as `minio/minio` and the client as
+    // `minio/mc`. Only the first is a service; `mc` is a one-shot CLI a
+    // compose file runs to create buckets, and adopting it as a service would
+    // leave a container that exits immediately marked as failing to start.
+    ("minio", "minio"),
     ("kibana", "kibana"),
     ("grafana", "grafana"),
     ("mailhog", "mailhog"),

@@ -2,8 +2,9 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useDisplay } from 'vuetify';
-import { api } from '@/lib/ipc';
+import { api, asList } from '@/lib/ipc';
 import { listenAll } from '@/lib/events';
+import { bytes } from '@/lib/format';
 import { useCopyTick } from '@/composables/useCopyTick';
 import SideSheet from '@/components/SideSheet.vue';
 import ErrorAlert from '@/components/ErrorAlert.vue';
@@ -323,6 +324,86 @@ async function restoreDatabase() {
   await runDb('restore', () => api.dbRestore(props.service.id, path), path);
 }
 
+// -------------------------------------------------------------- snapshots
+
+/**
+ * Named snapshots, beside the dump-to-a-path buttons above.
+ *
+ * The difference between the two is worth keeping visible rather than
+ * collapsing into one control: a dump goes somewhere the user chose and is
+ * theirs to look after, and a snapshot is a name this app remembers and can put
+ * back. People want both, and for different reasons.
+ */
+const snapshots = ref([]);
+const snapshotName = ref('');
+const snapshotBusy = ref(null);
+
+const serviceSnapshots = computed(() =>
+  snapshots.value.filter((s) => s.service === props.service?.id)
+);
+
+async function loadSnapshots() {
+  try {
+    snapshots.value = asList(await api.dbSnapshots());
+  } catch {
+    // A workspace that has never taken one has no directory, which is not a
+    // failure worth a red panel in a sheet about something else.
+    snapshots.value = [];
+  }
+}
+
+async function takeSnapshot() {
+  const name = snapshotName.value.trim();
+  if (!name) return;
+  snapshotBusy.value = 'take';
+  error.value = null;
+  try {
+    await api.dbSnapshotTake(props.service.id, name);
+    snapshotName.value = '';
+    await loadSnapshots();
+  } catch (e) {
+    error.value = e;
+  } finally {
+    snapshotBusy.value = null;
+  }
+}
+
+async function restoreSnapshot(snapshot) {
+  const { confirm } = await import('@tauri-apps/plugin-dialog');
+  const target = dbTarget.value?.database ?? props.service.id;
+  // Named, like the file restore above: "are you sure" without saying what is
+  // replaced is a dialog people learn to click through.
+  const ok = await confirm(t('db.confirmRestore', { db: target }), {
+    title: t('snapshots.restore'),
+    kind: 'warning',
+  });
+  if (!ok) return;
+
+  snapshotBusy.value = snapshot.name;
+  error.value = null;
+  try {
+    await api.dbSnapshotRestore(props.service.id, snapshot.name);
+    dbResult.value = t('snapshots.restored', { name: snapshot.name });
+  } catch (e) {
+    error.value = e;
+  } finally {
+    snapshotBusy.value = null;
+  }
+}
+
+async function deleteSnapshot(snapshot) {
+  snapshotBusy.value = snapshot.name;
+  error.value = null;
+  try {
+    await api.dbSnapshotDelete(props.service.id, snapshot.name);
+    await loadSnapshots();
+  } catch (e) {
+    error.value = e;
+  } finally {
+    snapshotBusy.value = null;
+  }
+}
+
 async function runDb(action, call, path) {
   dbBusy.value = action;
   dbLine.value = '';
@@ -361,6 +442,7 @@ watch(
       (targets) => (dbTargets.value = targets),
       () => (dbTargets.value = [])
     );
+    loadSnapshots();
   },
   { immediate: true }
 );
@@ -719,6 +801,77 @@ onUnmounted(() => stopDbEvents?.());
         <!-- The tools report to stderr; the last line is the useful one. -->
         <div v-if="dbLine" class="text-caption text-medium-emphasis mt-2 mono">{{ dbLine }}</div>
         <div v-if="dbResult" class="text-caption text-success mt-2">{{ dbResult }}</div>
+
+        <!-- Snapshots ---------------------------------------------------- -->
+        <div class="sheet-group">{{ t('snapshots.title') }}</div>
+        <div class="text-caption text-medium-emphasis mb-2">{{ t('snapshots.subtitle') }}</div>
+
+        <div class="d-flex ga-2 align-start">
+          <v-text-field
+            v-model="snapshotName"
+            :label="t('snapshots.name')"
+            density="compact"
+            variant="outlined"
+            hide-details
+            :disabled="!service.running || !!snapshotBusy"
+            @keyup.enter="takeSnapshot"
+          />
+          <v-btn
+            size="small"
+            variant="tonal"
+            prepend-icon="mdi-camera-outline"
+            :loading="snapshotBusy === 'take'"
+            :disabled="!service.running || !snapshotName.trim() || !!snapshotBusy"
+            @click="takeSnapshot"
+          >
+            {{ t('snapshots.take') }}
+          </v-btn>
+        </div>
+
+        <div v-if="!serviceSnapshots.length" class="text-caption text-medium-emphasis mt-3">
+          {{ t('snapshots.none') }}
+        </div>
+
+        <v-list v-else density="compact" class="bg-transparent mt-2">
+          <v-list-item v-for="snap in serviceSnapshots" :key="snap.name" class="px-0">
+            <template #prepend>
+              <!-- A scheduled copy is marked, because it is the only kind
+                   retention deletes on its own. -->
+              <v-icon
+                :icon="snap.automatic ? 'mdi-clock-outline' : 'mdi-camera-outline'"
+                class="mr-3"
+              />
+            </template>
+            <v-list-item-title class="text-body-2 mono">{{ snap.name }}</v-list-item-title>
+            <v-list-item-subtitle class="text-caption">
+              {{ snap.takenAt }} · {{ bytes(snap.bytes) }}
+              <span v-if="snap.automatic"> · {{ t('snapshots.automatic') }}</span>
+            </v-list-item-subtitle>
+            <template #append>
+              <v-btn
+                size="small"
+                variant="text"
+                color="warning"
+                :loading="snapshotBusy === snap.name"
+                :disabled="!service.running || !!snapshotBusy"
+                @click="restoreSnapshot(snap)"
+              >
+                {{ t('snapshots.restore') }}
+              </v-btn>
+              <v-btn
+                icon
+                size="x-small"
+                variant="text"
+                :aria-label="t('snapshots.delete')"
+                :disabled="!!snapshotBusy"
+                @click="deleteSnapshot(snap)"
+              >
+                <v-icon>mdi-delete-outline</v-icon>
+                <v-tooltip activator="parent">{{ t('snapshots.delete') }}</v-tooltip>
+              </v-btn>
+            </template>
+          </v-list-item>
+        </v-list>
       </template>
 
       <!-- Logs and mounts ----------------------------------------------- -->

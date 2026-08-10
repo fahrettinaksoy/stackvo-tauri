@@ -43,8 +43,14 @@ const PROMISED: &[(&str, &str)] = &[
     ("writing `.env`", "env_set"),
     ("restoring a database", "db_restore"),
     ("loading an image bundle", "release_load"),
+    ("importing a site from another tool", "project_import"),
     ("moving a credential into the OS keystore", "secret_move"),
     ("taking it back out", "secret_restore"),
+    (
+        "registering the MCP server with an assistant",
+        "agent_install",
+    ),
+    ("unregistering it", "agent_remove"),
 ];
 
 #[test]

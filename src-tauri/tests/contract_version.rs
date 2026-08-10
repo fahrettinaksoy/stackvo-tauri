@@ -6,7 +6,7 @@
 //! change is undefined*. A version number nobody can derive is decoration — it
 //! moves when someone remembers, which is the same as not moving.
 //!
-//! ADR [0008](../../docs/adr/0008-what-a-breaking-contract-change-is.md) gives
+//! Decision 0008 in [`docs/durum.md`](../../docs/durum.md) §6 gives
 //! the rule. This file is the rule as a build failure.
 //!
 //! ## How it works
@@ -430,7 +430,7 @@ fn lock_document(version: &str, surface: &Surface) -> Value {
     json!({
         "_note": "The last RELEASED call surface, and the version it went out as. \
                   Generated: UPDATE_CONTRACT_LOCK=1 cargo test --test contract_version. \
-                  Refresh it at a release and at no other time — see docs/adr/0008.",
+                  Refresh it at a release and at no other time — see docs/durum.md §6, decision 0008.",
         "contractVersion": version,
         "commands": surface.commands.clone().into_iter().collect::<Map<_, _>>(),
         "events": surface.events.clone().into_iter().collect::<Map<_, _>>(),
@@ -484,7 +484,7 @@ fn the_contract_version_describes_the_change_since_the_last_release() {
          says.\n\nThe last released contract was {released}. Since then, {} \
          change{} of severity {:?}:\n  {}\n\nSo contractVersion must be at least \
          {required}. Raise it in contracts/ipc.json — the rule is in \
-         docs/adr/0008-what-a-breaking-contract-change-is.md.",
+         docs/durum.md §6, decision 0008.",
         reasons.len(),
         if reasons.len() == 1 { "" } else { "s" },
         severity,
