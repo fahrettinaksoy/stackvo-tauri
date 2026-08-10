@@ -21,6 +21,33 @@ onMounted(async () => {
   version.value = await getVersion().catch(() => '');
 });
 
+/**
+ * The third-party notice, read from the binary rather than from a file.
+ *
+ * MIT, BSD, ISC and Apache-2.0 all ask that the notice travel with the
+ * software. A `NOTICE.md` in the repository does not travel with a `.dmg`, so
+ * the text is compiled in and this window is where somebody who has only the
+ * app can read it. Fetched on open rather than on mount: it is ~85 KB that most
+ * visits to this window do not need.
+ */
+const showLicences = ref(false);
+const licences = ref('');
+const licencesError = ref(false);
+
+async function openLicences() {
+  showLicences.value = true;
+  if (licences.value) return;
+  try {
+    licences.value = (await api.licencesNotice()) ?? '';
+    licencesError.value = !licences.value;
+  } catch {
+    // A build with no notice compiled in cannot happen — the file is
+    // `include_str!`'d — but a failure here must say so rather than showing an
+    // empty panel that reads as "no dependencies".
+    licencesError.value = true;
+  }
+}
+
 const LINKS = [
   { key: 'docs', icon: 'mdi-book-open-variant', url: 'https://stackvo.github.io/stackvo' },
   { key: 'source', icon: 'mdi-github', url: 'https://github.com/stackvo/stackvo' },
@@ -61,9 +88,42 @@ const LINKS = [
       </v-btn>
     </div>
 
+    <v-btn
+      variant="text"
+      size="small"
+      class="mt-2"
+      prepend-icon="mdi-license"
+      @click="openLicences"
+    >
+      {{ t('about.licences') }}
+    </v-btn>
+
     <v-spacer />
 
     <p class="text-caption text-medium-emphasis mt-6">{{ t('about.copyright') }}</p>
+
+    <v-dialog v-model="showLicences" scrollable max-width="880">
+      <v-card>
+        <v-card-title>{{ t('about.licences') }}</v-card-title>
+        <v-card-subtitle>{{ t('about.licencesDesc') }}</v-card-subtitle>
+        <v-card-text>
+          <v-alert v-if="licencesError" type="error" variant="tonal" class="mb-2">
+            {{ t('about.licencesFailed') }}
+          </v-alert>
+          <!-- Rendered as the plain text it is. Turning 85 KB of markdown into
+               HTML would need a parser in the bundle to make a legal notice
+               prettier, and the shape that matters — one package per line — is
+               already readable. -->
+          <pre v-else class="notice-text" :aria-label="t('about.licences')" tabindex="0">{{
+            licences
+          }}</pre>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="showLicences = false">{{ t('about.close') }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
@@ -72,5 +132,16 @@ const LINKS = [
    rather than under the last button. */
 .about-window {
   min-height: 100vh;
+}
+
+/* The notice is a table of packages: it has to wrap rather than scroll
+   sideways, and it has to stay monospace so the columns line up. */
+.notice-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  text-align: left;
 }
 </style>

@@ -153,3 +153,9 @@ src-tauri/gen/schemas/
 # CycloneDX SBOMs. Produced by the release workflow and uploaded as an
 # artifact; a local `cargo cyclonedx` run leaves one beside the manifest.
 *.cdx.json
+
+# The machine-readable half of the coverage report, written by
+# `npm run test:rs:coverage` for `tools/check-coverage.mjs` to read. The human
+# half goes to the terminal; neither is source.
+rust-coverage.json
+rust-coverage.txt

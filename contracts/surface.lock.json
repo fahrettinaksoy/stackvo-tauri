@@ -1,0 +1,2119 @@
+{
+  "_note": "The last RELEASED call surface, and the version it went out as. Generated: UPDATE_CONTRACT_LOCK=1 cargo test --test contract_version. Refresh it at a release and at no other time — see docs/adr/0008.",
+  "commands": {
+    "app_log_open": {
+      "args": {
+        "id": "string (LogFile.id)",
+        "name": "string (project)",
+        "tail_bytes": "u64? (default 65536)"
+      },
+      "emits": [
+        "logs:line",
+        "logs:closed"
+      ],
+      "kind": "mutation",
+      "returns": "StreamId"
+    },
+    "app_logs": {
+      "args": {
+        "name": "string (project)"
+      },
+      "kind": "query",
+      "returns": "LogFile[]"
+    },
+    "app_logs_all": {
+      "args": {},
+      "kind": "query",
+      "returns": "ProjectLogFile[]"
+    },
+    "app_logs_all_open": {
+      "args": {
+        "projects": "string[]? (all when omitted)"
+      },
+      "emits": [
+        "logs:line",
+        "logs:sources"
+      ],
+      "kind": "mutation",
+      "returns": "FanoutStream",
+      "returnsNote": "Returns the first scan's coverage rather than emitting it. An event would race the caller — the spawned task can emit before the frontend holds the stream id it filters events by, and the coverage line would then stay blank until the next rediscovery thirty seconds later. logs:sources carries updates only, because only an update has somewhere to arrive."
+    },
+    "apps_available": {
+      "args": {},
+      "kind": "query",
+      "returns": "{ terminals: App[], editors: App[], browsers: App[] }"
+    },
+    "bootstrap_complete": {
+      "args": {},
+      "kind": "mutation",
+      "replaces": "none — new in the desktop app",
+      "returns": "void"
+    },
+    "catalog_get": {
+      "args": {},
+      "kind": "query",
+      "replaces": "GET /api/supported-languages",
+      "returns": "Catalog",
+      "v1Change": "Served from the bundled contracts (php-extensions.json + env.schema.json), no longer re-parsed out of .env on every request. Runtimes without generators are marked available:false rather than silently offered."
+    },
+    "cert_apply": {
+      "args": {
+        "install_ca": "bool (default true)"
+      },
+      "elevation": "conditional",
+      "emits": [
+        "certs:changed"
+      ],
+      "kind": "mutation",
+      "returns": "CertPlan"
+    },
+    "cert_plan": {
+      "args": {},
+      "kind": "query",
+      "returns": "CertPlan"
+    },
+    "cert_status": {
+      "args": {},
+      "kind": "query",
+      "returns": "CertStatus"
+    },
+    "cert_trust_in_terminal": {
+      "args": {},
+      "kind": "mutation",
+      "replaces": "none — new in the desktop app",
+      "returns": "void"
+    },
+    "compose_down": {
+      "args": {},
+      "kind": "operation",
+      "returns": "OperationId"
+    },
+    "compose_restart": {
+      "args": {},
+      "kind": "operation",
+      "returns": "OperationId"
+    },
+    "compose_up": {
+      "args": {
+        "mode": "'minimal'|'services'|'projects'|'all'|'custom'",
+        "profiles": "string[] (custom only)"
+      },
+      "kind": "operation",
+      "replaces": "POST /api/start-with-profile",
+      "returns": "OperationId"
+    },
+    "compose_up_project": {
+      "args": {
+        "name": "string"
+      },
+      "kind": "operation",
+      "replaces": "POST /api/start-with-profile/project",
+      "returns": "OperationId"
+    },
+    "compose_up_service": {
+      "args": {
+        "name": "string"
+      },
+      "kind": "operation",
+      "replaces": "POST /api/start-with-profile/service",
+      "returns": "OperationId"
+    },
+    "container_inspect": {
+      "args": {
+        "name": "string"
+      },
+      "kind": "query",
+      "replaces": "GET /api/docker/inspect/:c",
+      "returns": "ContainerDetails"
+    },
+    "container_logs_close": {
+      "args": {
+        "stream_id": "string"
+      },
+      "kind": "mutation",
+      "returns": "void"
+    },
+    "container_logs_open": {
+      "args": {
+        "follow": "bool (default true)",
+        "name": "string",
+        "tail": "u32 (default 200)"
+      },
+      "emits": [
+        "logs:line",
+        "logs:closed"
+      ],
+      "kind": "stream",
+      "returns": "StreamId"
+    },
+    "container_stats": {
+      "args": {
+        "name": "string"
+      },
+      "kind": "query",
+      "replaces": "GET /api/docker/stats/:c",
+      "returns": "ContainerStats"
+    },
+    "container_stats_history": {
+      "args": {
+        "name": "string"
+      },
+      "kind": "query",
+      "replaces": "GET /api/docker/stats/:c/history",
+      "returns": "StatSample[]"
+    },
+    "containers_restart_all": {
+      "args": {},
+      "kind": "operation",
+      "replaces": "POST /api/docker/restart-all",
+      "returns": "OperationId"
+    },
+    "containers_start_all": {
+      "args": {},
+      "kind": "operation",
+      "replaces": "POST /api/docker/start-all",
+      "returns": "OperationId"
+    },
+    "containers_stop_all": {
+      "args": {},
+      "kind": "operation",
+      "replaces": "POST /api/docker/stop-all",
+      "returns": "OperationId"
+    },
+    "db_dump": {
+      "args": {
+        "path": "string",
+        "service": "string"
+      },
+      "emits": [
+        "db:start",
+        "db:progress",
+        "db:done",
+        "db:error"
+      ],
+      "kind": "operation",
+      "returns": "OperationId"
+    },
+    "db_restore": {
+      "args": {
+        "path": "string",
+        "service": "string"
+      },
+      "emits": [
+        "db:start",
+        "db:progress",
+        "db:done",
+        "db:error"
+      ],
+      "kind": "operation",
+      "returns": "OperationId"
+    },
+    "db_targets": {
+      "args": {},
+      "kind": "query",
+      "returns": "DbTarget[]"
+    },
+    "debug_bridge_clear": {
+      "args": {
+        "name": "string"
+      },
+      "kind": "command",
+      "returns": "void"
+    },
+    "debug_bridge_events": {
+      "args": {
+        "name": "string",
+        "since": "number?"
+      },
+      "kind": "query",
+      "returns": "{ total: number, events: Event[] }"
+    },
+    "debug_bridge_overview": {
+      "args": {},
+      "kind": "query",
+      "returns": "{ project: string, enabled: boolean, mounted: boolean, running: boolean, events: number }[]"
+    },
+    "debug_bridge_set": {
+      "args": {
+        "enabled": "boolean",
+        "name": "string"
+      },
+      "kind": "command",
+      "returns": "void"
+    },
+    "devserver_set": {
+      "args": {
+        "command": "string? (defaults to the detected npm script)",
+        "enabled": "bool",
+        "name": "string"
+      },
+      "emits": [
+        "devserver:changed"
+      ],
+      "kind": "mutation",
+      "returns": "DevServerStatus"
+    },
+    "devserver_status": {
+      "args": {
+        "name": "string"
+      },
+      "kind": "query",
+      "returns": "DevServerStatus"
+    },
+    "diagnostics_bundle": {
+      "args": {
+        "path": "string"
+      },
+      "kind": "mutation",
+      "returns": "{ path: string, bytes: number, entries: Array<{ name: string, bytes: number, truncated: boolean }> }"
+    },
+    "docker_disk_usage": {
+      "args": {},
+      "kind": "query",
+      "returns": "DiskOwner[]"
+    },
+    "docker_prune": {
+      "args": {
+        "buildCache": "'keep' | 'dangling' | 'all' (default 'keep')",
+        "images": "bool",
+        "volumes": "bool"
+      },
+      "kind": "mutation",
+      "returns": "PruneReport"
+    },
+    "docker_system_resources": {
+      "args": {},
+      "kind": "query",
+      "replaces": "GET /api/docker/system",
+      "returns": "SystemResources"
+    },
+    "doctor": {
+      "args": {},
+      "kind": "query",
+      "returns": "Doctor"
+    },
+    "doctor_drop_extension": {
+      "args": {
+        "extension": "string",
+        "subject": "string (project name, or `.env`)"
+      },
+      "emits": [
+        "manifest:changed"
+      ],
+      "kind": "mutation",
+      "returns": "Doctor (re-run)"
+    },
+    "engine_start": {
+      "args": {},
+      "kind": "mutation",
+      "returns": "void"
+    },
+    "engine_status": {
+      "args": {},
+      "kind": "query",
+      "polling": "Called on startup and on a 5s timer while disconnected; emits engine:status_changed on transition.",
+      "returns": "EngineStatus"
+    },
+    "env_defaults": {
+      "args": {},
+      "kind": "query",
+      "replaces": "none — new in the desktop app",
+      "returns": "map<string,string>"
+    },
+    "env_get": {
+      "args": {},
+      "kind": "query",
+      "replaces": "GET /api/env",
+      "returns": "map<string,string>"
+    },
+    "env_reveal": {
+      "args": {
+        "key": "string"
+      },
+      "kind": "query",
+      "returns": "string"
+    },
+    "env_set": {
+      "args": {
+        "patch": "map<string,string>"
+      },
+      "kind": "mutation",
+      "returns": "void"
+    },
+    "generate_run": {
+      "args": {
+        "scope": "'all' | 'projects' | 'services'"
+      },
+      "emits": [
+        "generate:start",
+        "generate:progress",
+        "generate:done",
+        "generate:error"
+      ],
+      "kind": "operation",
+      "returns": "OperationId"
+    },
+    "generate_with": {
+      "args": {
+        "engineMode": "'verify'|'rust' (default rust; 'bash' answers Unsupported)",
+        "scope": "'all'|'projects'|'services'"
+      },
+      "kind": "operation",
+      "returns": "{ operationId, engine, report?, note? }",
+      "rustInternal": true
+    },
+    "generator_verify": {
+      "args": {},
+      "kind": "query",
+      "returns": "GeneratorReport"
+    },
+    "git_available": {
+      "args": {},
+      "kind": "query",
+      "returns": "boolean"
+    },
+    "host_stats": {
+      "args": {},
+      "kind": "query",
+      "replaces": "GET /api/docker/stats",
+      "returns": "HostStats",
+      "v1Change": "Backed by the `sysinfo` crate on the host instead of reading /proc from inside a container. The 293-line HostStatsService with its macOS fallbacks collapses to a direct, correct read — this is the clearest early win of the port."
+    },
+    "hosts_apply": {
+      "args": {
+        "add": "string[]",
+        "remove": "string[]"
+      },
+      "elevation": "required",
+      "kind": "mutation",
+      "returns": "HostsPlan"
+    },
+    "hosts_missing": {
+      "args": {},
+      "kind": "query",
+      "returns": "string[]"
+    },
+    "hosts_missing_core": {
+      "args": {},
+      "kind": "query",
+      "replaces": "none — new in the desktop app",
+      "returns": "Array<string>"
+    },
+    "hosts_overview": {
+      "args": {},
+      "kind": "query",
+      "replaces": "none — new in the desktop app",
+      "returns": "HostsOverview"
+    },
+    "hosts_plan": {
+      "args": {
+        "add": "string[]",
+        "remove": "string[]"
+      },
+      "kind": "query",
+      "returns": "HostsPlan"
+    },
+    "hosts_status": {
+      "args": {
+        "domains": "string[]"
+      },
+      "kind": "query",
+      "returns": "HostsEntry[]",
+      "rustInternal": true
+    },
+    "locale_get": {
+      "args": {},
+      "kind": "query",
+      "returns": "\"en\" | \"tr\""
+    },
+    "logs_info": {
+      "args": {},
+      "kind": "query",
+      "returns": "{ directory: string|null, newestFile: string|null, totalBytes: number }"
+    },
+    "mail_attachment_save": {
+      "args": {
+        "id": "string",
+        "partId": "string",
+        "path": "string"
+      },
+      "kind": "mutation",
+      "returns": "u64"
+    },
+    "mail_clear": {
+      "args": {},
+      "kind": "mutation",
+      "returns": "void"
+    },
+    "mail_delete": {
+      "args": {
+        "id": "string"
+      },
+      "kind": "mutation",
+      "returns": "void"
+    },
+    "mail_html_check": {
+      "args": {
+        "id": "string"
+      },
+      "kind": "query",
+      "returns": "HtmlCheck?"
+    },
+    "mail_link_check": {
+      "args": {
+        "id": "string"
+      },
+      "kind": "query",
+      "returns": "LinkCheck?"
+    },
+    "mail_message": {
+      "args": {
+        "id": "string"
+      },
+      "kind": "query",
+      "returns": "MailBody"
+    },
+    "mail_messages": {
+      "args": {
+        "limit": "u32 (default 50)"
+      },
+      "kind": "query",
+      "returns": "MailMessage[]"
+    },
+    "mail_search": {
+      "args": {
+        "limit": "u32?",
+        "query": "string"
+      },
+      "kind": "query",
+      "returns": "MailMessage[]"
+    },
+    "mail_status": {
+      "args": {},
+      "kind": "query",
+      "returns": "MailStatus"
+    },
+    "migrate_apply": {
+      "args": {
+        "name": "string",
+        "services": "bool? (default true)",
+        "spec": "ProjectSpec? (defaults to the reviewed one)"
+      },
+      "emits": [
+        "preset:applied"
+      ],
+      "kind": "mutation",
+      "returns": "MigrationPlan"
+    },
+    "migrate_scan": {
+      "args": {
+        "name": "string (project directory)"
+      },
+      "kind": "query",
+      "returns": "MigrationPlan"
+    },
+    "open_folder": {
+      "args": {
+        "path": "string"
+      },
+      "kind": "mutation",
+      "replaces": "none — new in the desktop app",
+      "returns": "void"
+    },
+    "open_in_browser": {
+      "args": {
+        "url": "string"
+      },
+      "kind": "mutation",
+      "returns": "void"
+    },
+    "open_in_editor": {
+      "args": {
+        "path": "string"
+      },
+      "kind": "mutation",
+      "returns": "void"
+    },
+    "open_path": {
+      "args": {
+        "path": "string"
+      },
+      "implementedAs": "@tauri-apps/plugin-opener → openPath",
+      "kind": "frontend-plugin",
+      "returns": "void"
+    },
+    "open_url": {
+      "args": {
+        "url": "string"
+      },
+      "implementedAs": "@tauri-apps/plugin-opener → openUrl",
+      "kind": "frontend-plugin",
+      "returns": "void"
+    },
+    "php_ini_set": {
+      "args": {
+        "name": "string",
+        "patch": "Record<string, string|null>"
+      },
+      "emits": [
+        "php_ini:changed"
+      ],
+      "kind": "mutation",
+      "returns": "PhpIniStatus"
+    },
+    "php_ini_status": {
+      "args": {
+        "name": "string"
+      },
+      "kind": "query",
+      "returns": "PhpIniStatus"
+    },
+    "pick_directory": {
+      "args": {
+        "title": "string?"
+      },
+      "implementedAs": "@tauri-apps/plugin-dialog → open({directory:true})",
+      "kind": "frontend-plugin",
+      "returns": "string?"
+    },
+    "preflight": {
+      "args": {},
+      "kind": "query",
+      "returns": "Preflight"
+    },
+    "preflight_fix": {
+      "args": {
+        "id": "string"
+      },
+      "kind": "mutation",
+      "returns": "void"
+    },
+    "prefs_get": {
+      "args": {},
+      "kind": "query",
+      "returns": "Preferences"
+    },
+    "prefs_set": {
+      "args": {
+        "patch": "Preferences"
+      },
+      "kind": "mutation",
+      "returns": "void"
+    },
+    "preset_apply": {
+      "args": {
+        "path": "string"
+      },
+      "emits": [
+        "preset:applied"
+      ],
+      "kind": "mutation",
+      "returns": "PresetPlan"
+    },
+    "preset_export": {
+      "args": {
+        "name": "string?"
+      },
+      "kind": "query",
+      "returns": "Preset"
+    },
+    "preset_plan": {
+      "args": {
+        "path": "string"
+      },
+      "kind": "query",
+      "returns": "PresetPlan"
+    },
+    "preset_save": {
+      "args": {
+        "name": "string?",
+        "path": "string"
+      },
+      "kind": "mutation",
+      "returns": "string (path)"
+    },
+    "profiler_clear": {
+      "args": {
+        "name": "string"
+      },
+      "kind": "mutation",
+      "returns": "{ removed: number, freed: number }"
+    },
+    "profiler_delete": {
+      "args": {
+        "id": "string",
+        "name": "string"
+      },
+      "kind": "mutation",
+      "returns": "void"
+    },
+    "profiler_read": {
+      "args": {
+        "id": "string (cachegrind.out.* file name)",
+        "name": "string"
+      },
+      "kind": "query",
+      "returns": "ProfileReport"
+    },
+    "profiler_set_mode": {
+      "args": {
+        "mode": "'debug'|'profile'",
+        "name": "string"
+      },
+      "emits": [
+        "xdebug:changed"
+      ],
+      "kind": "mutation",
+      "returns": "ProfilerStatus"
+    },
+    "profiler_status": {
+      "args": {
+        "name": "string"
+      },
+      "kind": "query",
+      "returns": "ProfilerStatus"
+    },
+    "project_adopt": {
+      "args": {
+        "name": "string",
+        "overrides": "{ domain?, phpVersion?, server?, extensions? } — each replaces one detected value",
+        "spec": "ProjectSpec (optional — defaults to what was detected)"
+      },
+      "emits": [
+        "project:creating",
+        "project:created",
+        "project:error"
+      ],
+      "kind": "operation",
+      "returns": "OperationId"
+    },
+    "project_adoptable": {
+      "args": {},
+      "kind": "query",
+      "returns": "Adoptable[]"
+    },
+    "project_build": {
+      "args": {
+        "name": "string",
+        "no_cache": "bool (default false)"
+      },
+      "emits": [
+        "build:start",
+        "build:progress",
+        "build:success",
+        "build:error"
+      ],
+      "kind": "operation",
+      "replaces": "POST /api/projects/:p/build",
+      "returns": "OperationId"
+    },
+    "project_clone": {
+      "args": {
+        "name": "string?",
+        "url": "string"
+      },
+      "kind": "operation",
+      "returns": "{ operationId: OperationId, name: string, hasManifest: boolean }"
+    },
+    "project_create": {
+      "args": {
+        "spec": "ProjectSpec"
+      },
+      "emits": [
+        "project:creating",
+        "project:created",
+        "build:*",
+        "project:error"
+      ],
+      "kind": "operation",
+      "replaces": "POST /api/projects/create",
+      "returns": "OperationId"
+    },
+    "project_delete": {
+      "args": {
+        "name": "string",
+        "remove_files": "bool (default false)"
+      },
+      "kind": "mutation",
+      "replaces": "DELETE /api/projects/:name",
+      "returns": "void"
+    },
+    "project_dockerfile_preview": {
+      "args": {
+        "name": "string",
+        "strict": "bool (default true)"
+      },
+      "kind": "query",
+      "returns": "DockerfilePreview"
+    },
+    "project_get": {
+      "args": {
+        "name": "string"
+      },
+      "kind": "query",
+      "returns": "Project"
+    },
+    "project_manifest_read": {
+      "args": {
+        "name": "string"
+      },
+      "kind": "query",
+      "returns": "ProjectManifest"
+    },
+    "project_manifest_write": {
+      "args": {
+        "manifest": "ProjectManifest",
+        "name": "string"
+      },
+      "kind": "mutation",
+      "returns": "void"
+    },
+    "project_register": {
+      "args": {
+        "name": "string"
+      },
+      "kind": "operation",
+      "returns": "OperationId"
+    },
+    "project_restart": {
+      "args": {
+        "name": "string"
+      },
+      "emits": [
+        "project:restarting",
+        "project:restarted"
+      ],
+      "kind": "mutation",
+      "replaces": "POST /api/projects/:c/restart",
+      "returns": "void"
+    },
+    "project_scaffold": {
+      "args": {
+        "name": "string",
+        "template": "'laravel'|'symfony'|'cakephp'|'yii'|'codeigniter'|'laminas'|'slim'|'wordpress'|'drupal'|'prestashop'|'typo3'|'tina'|'nextjs'|'nuxt'|'vue'|'react'|'svelte'|'astro'|'nest'|'angular'|'django'|'rails'|'gin'|'echo'|'flask'|'fastapi'|'sinatra'|'rocket'"
+      },
+      "emits": [
+        "scaffold:progress",
+        "scaffold:done"
+      ],
+      "kind": "operation",
+      "returns": "OperationId"
+    },
+    "project_start": {
+      "args": {
+        "name": "string"
+      },
+      "emits": [
+        "project:starting",
+        "project:started"
+      ],
+      "kind": "mutation",
+      "replaces": "POST /api/projects/:c/start",
+      "returns": "void"
+    },
+    "project_stop": {
+      "args": {
+        "name": "string"
+      },
+      "emits": [
+        "project:stopping",
+        "project:stopped"
+      ],
+      "kind": "mutation",
+      "replaces": "POST /api/projects/:c/stop",
+      "returns": "void"
+    },
+    "project_validate": {
+      "args": {
+        "spec": "ProjectSpec"
+      },
+      "kind": "query",
+      "returns": "ValidationReport"
+    },
+    "projects_list": {
+      "args": {},
+      "kind": "query",
+      "replaces": "GET /api/projects",
+      "returns": "Project[]"
+    },
+    "pty_close": {
+      "args": {
+        "session_id": "string"
+      },
+      "kind": "mutation",
+      "replaces": "socket 'disconnect'",
+      "returns": "void"
+    },
+    "pty_open": {
+      "args": {
+        "cols": "u16",
+        "rows": "u16",
+        "target": "PtyTarget"
+      },
+      "emits": [
+        "terminal:ready",
+        "terminal:output",
+        "terminal:closed",
+        "terminal:error"
+      ],
+      "kind": "stream",
+      "replaces": "socket 'create-terminal'",
+      "returns": "SessionId",
+      "v1Change": "PtyTarget is NEW: { kind: 'container', name } or { kind: 'host', cwd }. node-pty could only reach containers because it ran inside one; portable-pty on the host can open a real host shell in the project directory."
+    },
+    "pty_resize": {
+      "args": {
+        "cols": "u16",
+        "rows": "u16",
+        "session_id": "string"
+      },
+      "kind": "mutation",
+      "replaces": "socket 'terminal-resize'",
+      "returns": "void"
+    },
+    "pty_write": {
+      "args": {
+        "data": "string",
+        "session_id": "string"
+      },
+      "kind": "mutation",
+      "replaces": "socket 'terminal-input'",
+      "returns": "void"
+    },
+    "quick_command_run": {
+      "args": {
+        "id": "string (catalog id)",
+        "name": "string"
+      },
+      "emits": [
+        "build:start",
+        "build:progress",
+        "build:success"
+      ],
+      "kind": "operation",
+      "returns": "OperationId? (null for interactive)"
+    },
+    "quick_commands": {
+      "args": {
+        "name": "string"
+      },
+      "kind": "query",
+      "returns": "QuickCommand[]"
+    },
+    "release_build": {
+      "args": {
+        "name": "string",
+        "tag": "string?"
+      },
+      "emits": [
+        "build:start",
+        "build:progress",
+        "build:success"
+      ],
+      "kind": "operation",
+      "returns": "ReleaseResult"
+    },
+    "release_plan": {
+      "args": {
+        "name": "string",
+        "tag": "string? (defaults to <name>:production)"
+      },
+      "kind": "query",
+      "returns": "ReleasePlan"
+    },
+    "release_save": {
+      "args": {
+        "name": "string",
+        "path": "string",
+        "tag": "string?"
+      },
+      "kind": "mutation",
+      "returns": "number (bytes written)"
+    },
+    "server_config_get": {
+      "args": {
+        "server": "string"
+      },
+      "kind": "query",
+      "replaces": "none — new in the desktop app",
+      "returns": "string"
+    },
+    "server_config_set": {
+      "args": {
+        "content": "string",
+        "server": "string"
+      },
+      "kind": "mutation",
+      "replaces": "none — new in the desktop app",
+      "returns": "void"
+    },
+    "service_apply_settings": {
+      "args": {
+        "name": "string",
+        "patch": "map<string,string>"
+      },
+      "kind": "operation",
+      "replaces": "none — new in the desktop app",
+      "returns": "OperationId"
+    },
+    "service_dependencies": {
+      "args": {
+        "name": "string"
+      },
+      "kind": "query",
+      "replaces": "GET /api/services/:s/dependencies",
+      "returns": "DependencyReport",
+      "rustInternal": true
+    },
+    "service_disable": {
+      "args": {
+        "name": "string"
+      },
+      "emits": [
+        "service:disabling",
+        "service:disabled",
+        "service:error"
+      ],
+      "kind": "operation",
+      "replaces": "POST /api/services/:s/disable",
+      "returns": "OperationId"
+    },
+    "service_enable": {
+      "args": {
+        "name": "string"
+      },
+      "emits": [
+        "service:enabling",
+        "service:progress",
+        "service:enabled",
+        "service:error"
+      ],
+      "kind": "operation",
+      "replaces": "POST /api/services/:s/enable",
+      "returns": "OperationId"
+    },
+    "service_restart": {
+      "args": {
+        "name": "string"
+      },
+      "emits": [
+        "service:restarting",
+        "service:restarted"
+      ],
+      "kind": "mutation",
+      "replaces": "POST /api/services/:c/restart",
+      "returns": "void"
+    },
+    "service_settings": {
+      "args": {
+        "name": "string"
+      },
+      "kind": "query",
+      "replaces": "none — new in the desktop app",
+      "returns": "ServiceSetting[]"
+    },
+    "service_start": {
+      "args": {
+        "name": "string"
+      },
+      "emits": [
+        "service:starting",
+        "service:started"
+      ],
+      "kind": "mutation",
+      "replaces": "POST /api/services/:c/start",
+      "returns": "void"
+    },
+    "service_stop": {
+      "args": {
+        "name": "string"
+      },
+      "emits": [
+        "service:stopping",
+        "service:stopped"
+      ],
+      "kind": "mutation",
+      "replaces": "POST /api/services/:c/stop",
+      "returns": "void"
+    },
+    "services_list": {
+      "args": {},
+      "kind": "query",
+      "replaces": "GET /api/services",
+      "returns": "Service[]"
+    },
+    "system_accent": {
+      "args": {},
+      "kind": "query",
+      "returns": "{ available: boolean, name: string|null, hex: string|null }"
+    },
+    "template_override": {
+      "args": {
+        "path": "string"
+      },
+      "kind": "mutation",
+      "replaces": "none — new in the desktop app",
+      "returns": "string"
+    },
+    "template_revert": {
+      "args": {
+        "path": "string"
+      },
+      "kind": "mutation",
+      "replaces": "none — new in the desktop app",
+      "returns": "void"
+    },
+    "templates_list": {
+      "args": {},
+      "kind": "query",
+      "replaces": "none — new in the desktop app",
+      "returns": "Array<{ path: string, overridden: boolean }>"
+    },
+    "terminal_open_external": {
+      "args": {
+        "target": "PtyTarget"
+      },
+      "kind": "mutation",
+      "replaces": "POST /api/terminal/:c/open",
+      "returns": "void",
+      "v1Change": "Always works. The HTTP version returned HTTP 400 with 'Terminal cannot be opened from containerized environment' — it could never succeed in the shipped configuration."
+    },
+    "tray_relabel": {
+      "args": {},
+      "kind": "command",
+      "returns": "void"
+    },
+    "tunnel_start": {
+      "args": {
+        "name": "string"
+      },
+      "emits": [
+        "tunnel:progress",
+        "tunnel:done"
+      ],
+      "kind": "operation",
+      "returns": "OperationId"
+    },
+    "tunnel_status": {
+      "args": {},
+      "kind": "query",
+      "returns": "TunnelStatus[]"
+    },
+    "tunnel_stop": {
+      "args": {
+        "name": "string"
+      },
+      "kind": "mutation",
+      "returns": "void"
+    },
+    "updater_status": {
+      "args": {},
+      "kind": "query",
+      "returns": "{ configured: boolean, hasPublicKey: boolean, endpoints: number }"
+    },
+    "updates_check": {
+      "args": {},
+      "kind": "query",
+      "returns": "UpdateInfo",
+      "status": "deferred"
+    },
+    "window_close_action": {
+      "args": {
+        "action": "\"tray\" | \"quit\" | \"stopAndQuit\"",
+        "remember": "boolean"
+      },
+      "kind": "command",
+      "returns": "void"
+    },
+    "worker_options": {
+      "args": {
+        "name": "string"
+      },
+      "kind": "query",
+      "returns": "string[]"
+    },
+    "worker_start": {
+      "args": {
+        "kind": "'queue' | 'scheduler' | 'horizon'",
+        "name": "string"
+      },
+      "kind": "mutation",
+      "returns": "void"
+    },
+    "worker_status": {
+      "args": {},
+      "kind": "query",
+      "returns": "WorkerStatus[]"
+    },
+    "worker_stop": {
+      "args": {
+        "kind": "'queue' | 'scheduler' | 'horizon'",
+        "name": "string"
+      },
+      "kind": "mutation",
+      "returns": "void"
+    },
+    "workspace_get": {
+      "args": {},
+      "kind": "query",
+      "returns": "Workspace"
+    },
+    "workspace_pick": {
+      "args": {},
+      "kind": "mutation",
+      "returns": "Workspace?"
+    },
+    "workspace_set": {
+      "args": {
+        "path": "string"
+      },
+      "kind": "mutation",
+      "returns": "Workspace"
+    },
+    "xdebug_set": {
+      "args": {
+        "enabled": "bool",
+        "name": "string"
+      },
+      "emits": [
+        "xdebug:changed"
+      ],
+      "kind": "mutation",
+      "returns": "XdebugStatus"
+    },
+    "xdebug_status": {
+      "args": {
+        "name": "string"
+      },
+      "kind": "query",
+      "returns": "XdebugStatus"
+    }
+  },
+  "contractVersion": "1.0.0",
+  "events": {
+    "_removed": {
+      "generate:error": "Removed: `generate:done` carries `success` and `error`, and generate_run returns Err as well. A second failure channel is one more thing to keep consistent for no gain.",
+      "terminal:error": "Removed: pty_open returns Err when the shell cannot start, which is the only case this covered."
+    },
+    "app:close_requested": {
+      "payload": {}
+    },
+    "build:built": {
+      "payload": "FinishedEvent"
+    },
+    "build:error": {
+      "payload": {
+        "error": "string",
+        "log_path": "string?",
+        "operation_id": "string",
+        "project": "string"
+      }
+    },
+    "build:progress": {
+      "payload": {
+        "line": "string",
+        "operation_id": "string",
+        "project": "string"
+      }
+    },
+    "build:start": {
+      "payload": {
+        "operation_id": "string",
+        "project": "string"
+      }
+    },
+    "build:success": {
+      "payload": "FinishedEvent"
+    },
+    "certs:changed": {
+      "payload": {
+        "added": "string[]",
+        "removed": "string[]"
+      }
+    },
+    "compose:done": {
+      "payload": "FinishedEvent"
+    },
+    "compose:progress": {
+      "payload": "ProgressEvent"
+    },
+    "container:state_changed": {
+      "payload": {
+        "name": "string",
+        "running": "bool",
+        "state": "string"
+      }
+    },
+    "db:done": {
+      "payload": {
+        "action": "'dump'|'restore'",
+        "bytes": "number",
+        "operationId": "string",
+        "path": "string",
+        "service": "string"
+      }
+    },
+    "db:error": {
+      "payload": {
+        "error": "string",
+        "operationId": "string",
+        "service": "string"
+      }
+    },
+    "db:progress": {
+      "payload": {
+        "line": "string",
+        "operationId": "string"
+      }
+    },
+    "db:start": {
+      "payload": {
+        "action": "'dump'|'restore'",
+        "operationId": "string",
+        "path": "string",
+        "service": "string"
+      }
+    },
+    "devserver:changed": {
+      "payload": {
+        "enabled": "bool",
+        "project": "string"
+      }
+    },
+    "engine:status_changed": {
+      "payload": "EngineStatus"
+    },
+    "generate:done": {
+      "payload": {
+        "operation_id": "string",
+        "projects": "u32",
+        "services": "u32"
+      }
+    },
+    "generate:progress": {
+      "payload": {
+        "line": "string",
+        "operation_id": "string",
+        "subject": "string — the SCOPE, not a project name. A caller that marked a project busy before invoking generate_run must clear that flag itself."
+      }
+    },
+    "generate:start": {
+      "payload": {
+        "operation_id": "string",
+        "scope": "string",
+        "subject": "string — the scope again, because progress and done are subjected on it and a reader that opens an operation under a different subject never closes it"
+      }
+    },
+    "hosts:changed": {
+      "payload": {
+        "added": "string[]",
+        "removed": "string[]"
+      }
+    },
+    "logs:closed": {
+      "payload": {
+        "stream_id": "string"
+      }
+    },
+    "logs:line": {
+      "payload": {
+        "container": "string",
+        "line": "string",
+        "source": "string? (LogFile.id, fanout only)",
+        "stream": "'stdout'|'stderr'",
+        "stream_id": "string"
+      }
+    },
+    "logs:sources": {
+      "payload": {
+        "followed": "number",
+        "projects": "number",
+        "stream_id": "string",
+        "total": "number"
+      }
+    },
+    "manifest:changed": {
+      "emittedBy": "the fs-watcher on projects/*/stackvo.json",
+      "payload": {
+        "path": "string",
+        "project": "string"
+      }
+    },
+    "php_ini:changed": {
+      "payload": {
+        "exists": "bool",
+        "project": "string"
+      }
+    },
+    "preset:applied": {
+      "payload": {
+        "changed": "number"
+      }
+    },
+    "project:created": {
+      "payload": {
+        "project": "string"
+      }
+    },
+    "project:creating": {
+      "payload": {
+        "project": "string"
+      }
+    },
+    "project:deleted": {
+      "payload": {
+        "project": "string"
+      }
+    },
+    "project:deleting": {
+      "payload": {
+        "project": "string"
+      }
+    },
+    "project:error": {
+      "payload": {
+        "error": "string",
+        "project": "string"
+      }
+    },
+    "project:restarted": {
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source.",
+      "emittedDynamically": true,
+      "payload": {
+        "project": "string",
+        "running": "bool"
+      }
+    },
+    "project:restarting": {
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source.",
+      "emittedDynamically": true,
+      "payload": {
+        "project": "string"
+      }
+    },
+    "project:started": {
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source.",
+      "emittedDynamically": true,
+      "payload": {
+        "project": "string",
+        "running": "bool"
+      }
+    },
+    "project:starting": {
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source.",
+      "emittedDynamically": true,
+      "payload": {
+        "project": "string"
+      }
+    },
+    "project:stopped": {
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source.",
+      "emittedDynamically": true,
+      "payload": {
+        "project": "string",
+        "running": "bool"
+      }
+    },
+    "project:stopping": {
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source.",
+      "emittedDynamically": true,
+      "payload": {
+        "project": "string"
+      }
+    },
+    "scaffold:done": {
+      "payload": "FinishedEvent"
+    },
+    "scaffold:progress": {
+      "payload": "ProgressEvent"
+    },
+    "service:disabled": {
+      "payload": {
+        "configured": "bool",
+        "running": "bool",
+        "service": "string"
+      }
+    },
+    "service:disabling": {
+      "payload": {
+        "service": "string"
+      }
+    },
+    "service:enabled": {
+      "payload": {
+        "configured": "bool",
+        "running": "bool",
+        "service": "string"
+      }
+    },
+    "service:enabling": {
+      "payload": {
+        "service": "string"
+      }
+    },
+    "service:error": {
+      "payload": {
+        "error": "string",
+        "service": "string"
+      }
+    },
+    "service:progress": {
+      "payload": {
+        "percent": "u8?",
+        "service": "string",
+        "step": "string"
+      }
+    },
+    "service:restarted": {
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source.",
+      "emittedDynamically": true,
+      "payload": {
+        "running": "bool",
+        "service": "string"
+      }
+    },
+    "service:restarting": {
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source.",
+      "emittedDynamically": true,
+      "payload": {
+        "service": "string"
+      }
+    },
+    "service:started": {
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source.",
+      "emittedDynamically": true,
+      "payload": {
+        "running": "bool",
+        "service": "string"
+      }
+    },
+    "service:starting": {
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source.",
+      "emittedDynamically": true,
+      "payload": {
+        "service": "string"
+      }
+    },
+    "service:stopped": {
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source.",
+      "emittedDynamically": true,
+      "payload": {
+        "running": "bool",
+        "service": "string"
+      }
+    },
+    "service:stopping": {
+      "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source.",
+      "emittedDynamically": true,
+      "payload": {
+        "service": "string"
+      }
+    },
+    "terminal:closed": {
+      "payload": {
+        "exit_code": "i32",
+        "session_id": "string"
+      },
+      "renamedFrom": "terminal-closed"
+    },
+    "terminal:output": {
+      "payload": {
+        "data": "string",
+        "session_id": "string"
+      },
+      "renamedFrom": "terminal-output"
+    },
+    "terminal:ready": {
+      "payload": {
+        "session_id": "string"
+      },
+      "renamedFrom": "terminal-ready"
+    },
+    "tunnel:done": {
+      "payload": "FinishedEvent"
+    },
+    "tunnel:progress": {
+      "payload": "ProgressEvent"
+    },
+    "xdebug:changed": {
+      "payload": {
+        "enabled": "bool",
+        "project": "string"
+      }
+    }
+  },
+  "types": {
+    "Adoptable": {
+      "compose_file": "string?",
+      "detected": "Detected",
+      "has_files": "bool",
+      "name": "string",
+      "path": "string"
+    },
+    "Catalog": {
+      "default_server": "string",
+      "php_extensions": [
+        {
+          "in_default_set": "bool",
+          "install": "string",
+          "min_php": "string?",
+          "name": "string",
+          "removed_in": "string?"
+        }
+      ],
+      "runtimes": [
+        {
+          "available": "bool",
+          "default": "string",
+          "id": "string",
+          "versions": "string[]"
+        }
+      ],
+      "servers": "string[]"
+    },
+    "CertPlan": {
+      "add": "string[]",
+      "cert_path": "string",
+      "changed": "bool",
+      "covered": "string[]",
+      "domains": "string[]",
+      "install_ca": "bool",
+      "rejected": "string[]",
+      "reloaded": "bool (cert_apply only)",
+      "reloadedNote": "Writing the certificate is not enough to change what a browser gets. Traefik's file provider watches generated/traefik/dynamic, and the certificates are not in it — routes.yml only points at them, and a certFile is read while the dynamic configuration is parsed. So cert_apply rewrites the watched files with their own bytes to force a reparse. Observed on a real checkout: Traefik up two days, serving a certificate a day older than the one on disk. False after an apply means the new certificate is on disk but not yet served.",
+      "remove": "string[]"
+    },
+    "CertStatus": {
+      "ca_path": "string?",
+      "ca_root": "string?",
+      "ca_trusted": "bool?",
+      "cert_path": "string?",
+      "covered": "string[]",
+      "days_remaining": "number?",
+      "expired": "bool",
+      "key_path": "string?",
+      "missing": "string[]",
+      "mkcert_available": "bool",
+      "mkcert_version": "string?",
+      "not_after": "string?",
+      "required": "string[]",
+      "ssl_enabled": "bool",
+      "stale": "bool"
+    },
+    "ContainerStats": {
+      "cpu_percent": "f32",
+      "memory_limit": "u64",
+      "memory_percent": "f32",
+      "memory_used": "u64",
+      "net_rx": "u64",
+      "net_tx": "u64"
+    },
+    "DbTarget": {
+      "container": "string",
+      "database": "string?",
+      "enabled": "bool",
+      "extension": "string",
+      "kind": "'mysql'|'mariadb'|'postgres'|'mongo'",
+      "running": "bool",
+      "service": "string",
+      "user": "string?"
+    },
+    "DependencyReport": {
+      "dependencies": [
+        {
+          "name": "string",
+          "running": "bool",
+          "type": "'required'|'optional'"
+        }
+      ],
+      "description": "string",
+      "has_unmet_dependencies": "bool",
+      "internal": "string[]",
+      "service": "string"
+    },
+    "Detected": {
+      "confidence": "'certain'|'likely'|'guess'",
+      "document_root": "string?",
+      "evidence": "string[]",
+      "framework": "string?",
+      "node_port": "number?",
+      "node_start": "string?",
+      "node_version": "string?",
+      "php_version": "string?",
+      "runtime": "'php'|'node'",
+      "server": "string"
+    },
+    "DevServerStatus": {
+      "command": "string",
+      "config_file": "string?",
+      "domain": "string?",
+      "enabled": "bool",
+      "host_allowed": "bool?",
+      "mounted": "bool?",
+      "needs_recreate": "bool",
+      "overlay_path": "string",
+      "port": "number",
+      "production_command": "string?",
+      "running": "bool",
+      "snippet": "string?",
+      "supported": "bool",
+      "tool": "'vite'|'nuxt'|'next'|'unknown'"
+    },
+    "DiskOwner": {
+      "containerRw": "u64",
+      "id": "string",
+      "image": "string?",
+      "imageDedicated": "bool",
+      "imageSize": "u64",
+      "running": "bool"
+    },
+    "DockerfilePreview": {
+      "bashOutputPath": "string",
+      "dockerfile": "string",
+      "matchesBashOutput": "bool",
+      "project": "string",
+      "runtime": "string",
+      "server": "string?",
+      "skipped": "[{extension, reason}] — what the Bash generator drops without telling anyone"
+    },
+    "Doctor": {
+      "extensions": [
+        {
+          "detail": "string",
+          "extension": "string",
+          "isDefaultSet": "bool",
+          "phpVersion": "string",
+          "subject": "string (project name, or `.env`)"
+        }
+      ],
+      "extensionsNote": "**Added after reading `tools/validate-contracts.mjs`'s output instead of its summary line.** Three of that tool's four errors on this checkout are C-06 — all one root cause, `imap` removed in PHP 8.2, sitting in two project manifests AND in the stack's default extension set — and every one is local and fixable. The desktop app reported none of them, because the doctor knew about ports, disk and hosts and nothing about extensions. It matters more than a lint: the Bash generator SKIPS A BAD EXTENSION SILENTLY, so nothing fails and nothing is logged, and the symptom is a fatal `Call to undefined function imap_open()` at runtime with nothing connecting it to a build that reported success. `isDefaultSet` entries come first because they are the worse case — a project created right now, with nothing customised, cannot build. The default PHP version is itself contested (DEFAULT_PHP_VERSION vs SUPPORTED_LANGUAGES_PHP_DEFAULT, CONFLICTS.md C-12), so BOTH are checked rather than one being picked: an extension failing on either is a problem whichever key wins. Project rows reuse manifest::normalize's own C-06/C-07 findings rather than restating the rule.",
+      "generated": {
+        "detail": "string?",
+        "state": "'ok'|'warn'|'fail'|'unknown'"
+      },
+      "hostsMissing": "string[]",
+      "ports": [
+        {
+          "ours": "bool",
+          "pid": "u32?",
+          "port": "u16",
+          "process": "string?",
+          "requiredBy": "string",
+          "state": "'ok'|'warn'|'fail'|'unknown'"
+        }
+      ],
+      "preflight": "Preflight",
+      "space": "SystemResources?"
+    },
+    "DumpsStatus": {
+      "address": "string",
+      "available": "bool",
+      "binary": "string",
+      "configured": "bool",
+      "runtime": "string"
+    },
+    "EngineStatus": {
+      "api_version": "string?",
+      "context": "string?",
+      "error": "string?",
+      "platform": "'docker-desktop'|'colima'|'orbstack'|'engine'|'unknown'",
+      "reachable": "bool",
+      "socket_path": "string?",
+      "version": "string?"
+    },
+    "FanoutStream": {
+      "followed": "number",
+      "projects": "number",
+      "stream_id": "string",
+      "total": "number"
+    },
+    "FinishedEvent": {
+      "duration_ms": "u64",
+      "error": "string?",
+      "log_path": "string?",
+      "operation_id": "string",
+      "subject": "string",
+      "success": "bool"
+    },
+    "GeneratorReport": {
+      "differed": "u32",
+      "files": "[{ file, path, status: 'match'|'differ'|'missing'|'error', firstDifferenceLine?, error? }]",
+      "matched": "u32",
+      "readyToTakeOver": "bool",
+      "warnings": "string[] — configuration problems the port can see and StackVo does not report, e.g. C-20"
+    },
+    "HostStats": {
+      "cpu": "CpuStats",
+      "disk": "DiskStats",
+      "memory": "MemoryStats",
+      "network": "NetworkStats",
+      "storage": "StorageStats",
+      "timestamp": "u64"
+    },
+    "HostsEntry": {
+      "configured": "bool",
+      "domain": "string",
+      "ip": "string",
+      "managed_by_stackvo": "bool"
+    },
+    "HostsPlan": {
+      "add": "string[]",
+      "changed": "bool",
+      "path": "string",
+      "preview": "string",
+      "remove": "string[]"
+    },
+    "HtmlCheck": {
+      "partial": "f64",
+      "supported": "f64",
+      "tests": "u32",
+      "unsupported": "f64",
+      "warnings": [
+        {
+          "category": "string",
+          "found": "u32",
+          "partial": "f64",
+          "supported": "f64",
+          "title": "string",
+          "unsupported": "f64"
+        }
+      ]
+    },
+    "LinkCheck": {
+      "errors": "u32",
+      "links": [
+        {
+          "status": "string",
+          "statusCode": "u16",
+          "url": "string"
+        }
+      ]
+    },
+    "LogFile": {
+      "bytes": "u64",
+      "group": "'application'|'server'",
+      "id": "string",
+      "label": "string",
+      "modified": "i64? (unix seconds)"
+    },
+    "MailAttachment": {
+      "contentType": "string",
+      "fileName": "string",
+      "partId": "string",
+      "size": "u64"
+    },
+    "MailBody": {
+      "attachments": "MailAttachment[]",
+      "headers": "[{ \"name\": \"string\", \"value\": \"string\" }]",
+      "html": "string?",
+      "size": "u64?",
+      "text": "string?"
+    },
+    "MailMessage": {
+      "bcc": "string[]",
+      "cc": "string[]",
+      "date": "string?",
+      "from": "string",
+      "id": "string",
+      "read": "bool",
+      "replyTo": "string[]",
+      "snippet": "string?",
+      "subject": "string",
+      "to": "string[]"
+    },
+    "MailStatus": {
+      "available": "bool",
+      "enabled": "bool",
+      "error": "string?",
+      "kind": "'mailhog'|'mailpit'|null",
+      "running": "bool",
+      "service": "string?",
+      "total": "number",
+      "ui_url": "string?",
+      "unread": "number?"
+    },
+    "Migration": {
+      "app_service": "string?",
+      "document_root": "string?",
+      "domain": "string?",
+      "evidence": "string[]",
+      "extensions": "string[]",
+      "node_version": "string?",
+      "php_version": "string?",
+      "port": "number?",
+      "runtime": "'php'|'node'|null",
+      "server": "string?",
+      "services": [
+        {
+          "from": "string (compose service)",
+          "id": "string (catalog id)",
+          "image": "string",
+          "version": "string?"
+        }
+      ],
+      "source": "string (compose file path)",
+      "unmapped": "string[]"
+    },
+    "MigrationPlan": {
+      "already_managed": "bool",
+      "env": "PresetPlan",
+      "migration": "Migration",
+      "spec": "ProjectSpec"
+    },
+    "OperationId": "string",
+    "PhpIniStatus": {
+      "container_path": "string",
+      "effective": "Record<string, string>?",
+      "effectiveNote": "What PHP in the RUNNING container reports right now, from one `docker exec php -r ini_get`. Null when nothing is running. Read rather than assumed because assuming was wrong: measured on a real stack, `php -i` says `Loaded Configuration File => (none)` — the official images ship no php.ini at all, so conf.d is not one layer among several but the only one — and `max_execution_time` is 0 under FPM, not the 30 the manual lists. The form uses these as placeholders, so it never shows a default the container does not have; it is also where an override is confirmed to have landed after a restart.",
+      "exists": "bool",
+      "mounted": "bool?",
+      "needs_recreate": "bool",
+      "overlay_path": "string",
+      "path": "string",
+      "running": "bool",
+      "supported": "bool",
+      "unmanaged": "Record<string, string>",
+      "values": "Record<string, string>",
+      "warning": "string?"
+    },
+    "Port": {
+      "container": "u16",
+      "host": "u16?",
+      "protocol": "'tcp'|'udp'"
+    },
+    "Preferences": {
+      "autostart": "bool",
+      "editor_command": "string?",
+      "locale": "'tr'|'en'",
+      "notify_on_build": "bool",
+      "start_minimized": "bool",
+      "theme": "'light'|'dark'|'system'"
+    },
+    "Preflight": {
+      "os": "'macos'|'windows'|'linux'",
+      "ready": "bool",
+      "requirements": [
+        {
+          "detail": "string?",
+          "fixable": "bool",
+          "id": "'workspace'|'engine'|'compose'|'network'|'projects'|'bash'|'mkcert'",
+          "state": "'ok'|'warn'|'fail'|'unknown'"
+        }
+      ]
+    },
+    "Preset": {
+      "description": "string?",
+      "kind": "'stackvo.preset'",
+      "name": "string?",
+      "services": "Record<string, { enabled: bool, version?: string }>",
+      "settings": "Record<string, string>",
+      "version": "number"
+    },
+    "PresetPlan": {
+      "changes": [
+        {
+          "from": "string?",
+          "key": "string (.env key)",
+          "kind": "'service'|'setting'",
+          "subject": "string",
+          "to": "string"
+        }
+      ],
+      "description": "string?",
+      "name": "string?",
+      "needs_regenerate": "bool",
+      "rejected": "string[]",
+      "unchanged": "number"
+    },
+    "ProfileFile": {
+      "bytes": "number",
+      "compressed": "bool",
+      "id": "string (cachegrind.out.*)",
+      "modified": "i64? (unix seconds)"
+    },
+    "ProfileReport": {
+      "cmd": "string",
+      "creator": "string",
+      "events": "string[]",
+      "function_count": "number",
+      "functions": [
+        {
+          "calls": "number",
+          "file": "string",
+          "inclusive_time": "number",
+          "name": "string",
+          "percent": "number",
+          "self_memory": "number",
+          "self_time": "number"
+        }
+      ],
+      "self_total": "number",
+      "summary": "number[]",
+      "truncated": "bool"
+    },
+    "ProfilerStatus": {
+      "bytes": "number",
+      "directory": "string",
+      "mode": "'debug'|'profile'",
+      "profiles": "ProfileFile[]",
+      "trigger": "string (XDEBUG_TRIGGER)",
+      "xdebug": "XdebugStatus"
+    },
+    "ProgressEvent": {
+      "line": "string",
+      "operation_id": "string",
+      "subject": "string"
+    },
+    "Project": {
+      "built": "bool",
+      "container_name": "string",
+      "domain": "string",
+      "domain_configured": "bool",
+      "generated_stale": "bool",
+      "manifest": "ProjectManifest",
+      "manifest_errors": "string[]",
+      "manifest_valid": "bool",
+      "name": "string",
+      "path": "string",
+      "ports": "Port[]",
+      "running": "bool",
+      "runtime": "'php'|'node'"
+    },
+    "ProjectLogFile": {
+      "...": "LogFile",
+      "project": "string"
+    },
+    "ProjectManifest": {
+      "$ref": "project.schema.json"
+    },
+    "ProjectSpec": {
+      "$ref": "project.schema.json"
+    },
+    "PruneReport": {
+      "imagesDeleted": "u64",
+      "spaceReclaimed": "u64",
+      "volumesDeleted": "u64"
+    },
+    "PtyTarget": {
+      "oneOf": [
+        {
+          "kind": "'container'",
+          "name": "string",
+          "shell": "string?"
+        },
+        {
+          "cwd": "string",
+          "kind": "'host'"
+        }
+      ]
+    },
+    "QuickCommand": {
+      "about": "string",
+      "because": "string (the marker file)",
+      "display": "string",
+      "id": "string",
+      "interactive": "bool"
+    },
+    "ReleasePlan": {
+      "app_path": "string",
+      "base_image": "string",
+      "dockerfile": "string (empty for retag)",
+      "excluded": "[pattern, reason][]",
+      "runtime": "string",
+      "strategy": "'layer'|'retag'",
+      "tag": "string",
+      "warnings": "string[]"
+    },
+    "ReleaseResult": {
+      "plan": "ReleasePlan",
+      "verification": "{ env_files: string[], xdebug_active: bool?, has_app: bool, clean: bool }"
+    },
+    "Service": {
+      "category": "string",
+      "container_name": "string",
+      "enabled": "bool",
+      "id": "string",
+      "name": "string",
+      "ports": "Port[]",
+      "running": "bool",
+      "url": "string?",
+      "version": "string"
+    },
+    "StatSample": {
+      "cpu": "f32",
+      "memory": "f32",
+      "t": "u64"
+    },
+    "SystemResources": {
+      "images": {
+        "in_use": "u32",
+        "size": "u64",
+        "total": "u32",
+        "unused": "u32"
+      },
+      "volumes": {
+        "in_use": "u32",
+        "size": "u64",
+        "total": "u32",
+        "unused": "u32"
+      }
+    },
+    "TunnelStatus": {
+      "container": "string",
+      "project": "string",
+      "running": "bool",
+      "url": "string?"
+    },
+    "UpdateInfo": {
+      "available": "bool",
+      "version": "string?"
+    },
+    "ValidationReport": {
+      "errors": [
+        {
+          "code": "string",
+          "message": "string",
+          "path": "string"
+        }
+      ],
+      "valid": "bool",
+      "warnings": [
+        {
+          "message": "string",
+          "path": "string"
+        }
+      ]
+    },
+    "WorkerStatus": {
+      "container": "string",
+      "kind": "'queue'|'scheduler'|'horizon'",
+      "project": "string",
+      "restarts": "i64?",
+      "running": "bool"
+    },
+    "Workspace": {
+      "env_file": "string?",
+      "projects_dir": "string?",
+      "root": "string?",
+      "source": "'stored'|'env'|'discovered'|'none'",
+      "stackvo_version": "string?",
+      "valid": "bool"
+    },
+    "XdebugStatus": {
+      "active": "bool?",
+      "container_path": "string",
+      "enabled": "bool",
+      "host_path": "string?",
+      "ide_key": "string",
+      "mode": "string",
+      "needs_rebuild": "bool",
+      "overlay_path": "string",
+      "pecl_version": "string?",
+      "php_version": "string?",
+      "port": "number",
+      "running": "bool",
+      "server_name": "string?",
+      "supported": "bool"
+    }
+  }
+}

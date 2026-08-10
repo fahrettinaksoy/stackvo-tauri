@@ -10,7 +10,7 @@ The front end is JavaScript and the back end is Rust. Nothing in the toolchain
 joins them: a command's argument names, its return shape and its error codes
 exist twice, and the compiler can see only one copy.
 
-`contracts/ipc.json` is the other copy — 148 commands, 59 events, 58 named
+`contracts/ipc.json` is the other copy — 149 commands, 57 events, 58 named
 types, and for most entries a `why` explaining what the command exists for and
 what it replaced. It is the document the front-end client is written against,
 the readiness review is argued from, and `tests/ipc.spec.js` checks the

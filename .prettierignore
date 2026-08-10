@@ -1,0 +1,8 @@
+# Generated files. Reformatting one puts its writer and Prettier in permanent
+# disagreement: the generator rewrites it, Prettier rewrites it back, and the
+# diff belongs to neither.
+NOTICE.md
+contracts/surface.lock.json
+
+# Coverage output — v8's HTML reporter ships its own bundled assets.
+coverage/

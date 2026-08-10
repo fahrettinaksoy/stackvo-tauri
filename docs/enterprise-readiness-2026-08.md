@@ -2185,6 +2185,13 @@ anlatan belge ayrıdır.
 |  19 | Docker trait + proptest + criterion | ⬜ başlanmadı         | §35.2                                                              |
 |  20 | Keystore ile sır yönetimi           | ⬜ başlanmadı         | §35.2                                                              |
 
+**Bu tablo eksikti ve eksikliği yapısaldı.** §14, raporun _kendi gövdesinde_
+teşhis ettiği her şeyi listelemiyordu: §6.3'ün sürüm kanalları, §9'un
+performans ölçümü, §13'ün denetim izi gibi maddeler hiç numara almadı,
+dolayısıyla burada da görünmediler ve **hiç kimse tarafından takip
+edilmediler.** Beşi §36'da kapatıldı; kalanların tamamı artık numaralanmış
+hâlde **§37'de** ve bu tablonun devamı orasıdır.
+
 ### 35.2 Sıradaki adım: §14.18–20
 
 §14.16 (§33) ve §14.17 (§34) kapandı. Kalan üçü de hiç başlanmadı ve hiçbiri
@@ -2316,4 +2323,295 @@ runner gerekiyor).
    `~/.tauri/stackvo.key`'de (mod 600, repoya girmedi), parolasız.
 3. **Apple / Windows imzalama secret'ları** girilmedi — artık eksikse release
    log'unda uyarı çıkıyor (§17.1), ama hâlâ eksikler.
-4. **Kapsam eşiği** yok. Sayılar var (§25.4); eşik bir politika kararı.
+4. ~~**Kapsam eşiği** yok.~~ **Kapandı — §36.1.** Eşik kondu, CI kapısı var.
+
+---
+
+## 36. Takip listesinde olmayan beş madde
+
+Bu turun konusu §14 listesi değil. §14 mühendislik borcunu sayıyordu; raporun
+**gövdesinde** teşhis edilip §14'e hiç girmemiş, dolayısıyla §35.1 durum
+tablosunda da görünmeyen — yani kimsenin takip etmediği — maddeler vardı. Beşi
+kapatıldı.
+
+Ortak özellikleri: hiçbiri "özellik" değil, hepsi **bir iddianın doğru
+kalmasını sağlayan mekanizma.** Bu yüzden beşi de bir dosya değil, bir dosya
+artı onu koda bağlayan bir kapı olarak indi.
+
+### 36.1 Kapsam eşiği _(§14.5'in yarım bıraktığı yarısı, §17.5.4, §35.4.4)_
+
+§14.5 "eşiksiz başla, sadece gör" diyordu ve haklıydı: 30,70%'te konan bir
+eşik ya boşluğu onaylar ya ilk koşuda düşer. O gerekçenin bir son kullanma
+tarihi vardı ve geçti — sayılar dört tur izlendi (Rust 61,60 → 64,07; frontend
+30,70 → 89,70).
+
+`tools/coverage-floors.mjs` tek kaynak: `vitest.config.js` eşikleri oradan
+okuyor, CI'ın yeni "Hold the floors" adımı da Rust raporunu ona karşı tutuyor.
+Politikanın iki yerde yazılması, bir gün ikisinin farklı şeyler söylemesi
+demekti.
+
+| | Ölçülen | Eşik | Payın gerekçesi |
+| --- | ---: | ---: | --- |
+| Rust satır | %64,07 | **%60** | Ölçüm macOS'ta, CI Ubuntu'da — `cfg` dalları farklı derleniyor |
+| Frontend satır | %89,70 | **%85** | Testleri henüz yazılmamış bir modülün ilk commit'i düşürmesin |
+| Frontend dal | %77,17 | **%72** | aynı |
+
+**`functions` bilinçli olarak eşiksiz.** v8 her ok fonksiyonunu sayıyor ve bir
+SFC şablonu render fonksiyonu içinde onlarca üretiyor; %53 "frontend'in yarısı
+test edilmemiş" demek değil, "bir derleyicinin ürettiği kapanışların yarısı
+jsdom'dan çağrılamıyor" demek. Üzerine eylem alınamayan bir sayıya eşik koymak,
+insanlara kırmızı bir kapıyı görmezden gelmeyi öğretir.
+
+Eksik rapor **geçmiyor, düşüyor**: ölçüm adımları `continue-on-error` olduğu
+için "rapor üretilmedi" durumu sessizce yeşil olabilirdi, ki görmediği için
+geçen bir kapı hiç olmayandan kötüdür.
+
+### 36.2 Gizlilik beyanı _(§4.3)_
+
+Rapor "opt-in telemetri ya da 'telemetri yoktur' satırı — ikisi de kabul
+edilebilir, belirsizlik değil" demişti. Belirsizlik on ay durdu.
+
+`PRIVACY.md`: ne saklanıyor (dosya, yol, süre), ne çıkıyor (uygulamanın kendi
+inisiyatifiyle **yalnızca iki adres**: güncelleme endpoint'i ve loopback'teki
+mail catcher), kullanıcının isteğiyle ne çıkıyor, Docker imaj derlemesi
+sırasında ne indiriliyor. Artı korumadığı şeyler — `.env`'deki düz metin
+şifreler, tünelin siteyi **herkese açık** hâle getirmesi.
+
+Asıl iş beyan değil, **kapı**: `src-tauri/tests/privacy_claims.rs` üretim
+kodundaki (ve frontend'deki, ve `tauri.conf.json`'daki) her `http(s)://`
+adresini tarıyor ve `PRIVACY.md`'de adı geçmeyen bir host bulursa build'i
+kırıyor. Yer tutucular, loopback, `.loc`/`.test` ve RFC 2606 adresleri
+**kural** ile eleniyor — "görmezden gelinecek hostlar" listesiyle değil, çünkü
+öyle bir listenin onuncu satırı düşünülmeden eklenir ve önemli olan o olur.
+
+Mutasyonla denendi: `mail.rs`'e gizlice bir `https://metrics.…/collect`
+konduğunda test onu adıyla bildiriyor.
+
+### 36.3 NOTICE — ve neden repoda durması yetmiyor
+
+§13'ün "üçüncü taraf lisans bildirimi: yok" satırı. MIT, BSD, ISC ve
+Apache-2.0'ın hepsi bildirimin **yazılımla birlikte yolculuk etmesini**
+istiyor; `.dmg` alan kişi repoyu görmüyor, dolayısıyla depodaki bir dosya bu
+yükümlülüğü karşılamıyor.
+
+- `tools/generate-notice.mjs` — `Cargo.lock` ve `package-lock.json`'dan üretiyor:
+  **572 Rust crate + 40 npm paketi**, lisans metinleri ve telif satırlarıyla.
+- `NOTICE.md` `include_str!` ile **ikiliye derleniyor** (`licences.rs`), bundle
+  resource olarak değil: resource, çalışma anında çözülen ve hiçbir şeye
+  çözülebilen bir yol; derlenmiş bildirim ya oradadır ya build düşmüştür.
+- Yeni `licences_notice` komutu + About penceresinde okunabilir bir panel.
+- `npm run notice:check` CI'ın supply-chain job'ında: bir bağımlılık bildirimsiz
+  geldiğinde adıyla düşüyor.
+
+**Üretecin ilk iki sürümü yanlıştı ve ikisi de ölçümle yakalandı.** Kilit
+dosyasının `dev` bayrağına bakan sürüm 107 paket sayıyordu — 28 `@esbuild/*` ve
+24 `@rollup/rollup-*` platform ikilisi dahil, yani bir bundler'ın parçaları
+"kullanıcıya giden" listesindeydi. Grafiği yürüyen sürüm 13 saydı, çünkü
+çözücü üst seviye `node_modules`'a bakmayı unutuyordu. Doğrusu 40. Bir sayının
+makul görünmesi doğru olduğu anlamına gelmiyor; ikisi de makul görünüyordu.
+
+### 36.4 ADR 0008 — kırıcı sözleşme değişikliği nedir
+
+§12: `contractVersion` alanı var, neyin major sayıldığı **tanımsız**. Tanımsız
+bir sürüm numarası, kimsenin geriye doğru okuyamadığı bir süstür.
+
+ADR 0008 kuralı yazıyor, ve kural prose olarak kalmıyor:
+`contracts/surface.lock.json` **son yayınlanan** çağrı yüzeyini tutuyor,
+`src-tauri/tests/contract_version.rs` her `cargo test`'te farkı sınıflandırıyor
+ve `contractVersion` yetmiyorsa build'i kırıyor — hangi komutun, hangi
+argümanın, hangi alanın istediğini söyleyerek.
+
+Bu tur onu gerçek bir vakayla denedi: `licences_notice` eklendi → kapı
+"contractVersion 1.0.0, en az 1.1.0 olmalı, sebep: `licences_notice` yeni"
+dedi → sürüm **1.1.0**'a çıktı.
+
+Yan kazanç: ADR 0006'nın açıkça "güvene bırakıldı" dediği yarı kapandı.
+`contract_agreement.rs` komut **kümesini** koda karşı tutuyordu; şekilleri
+kimse tutmuyordu, yani `Project`'ten düşen bir alan hiçbir komutun `returns`
+değerini değiştirmediği için sessizce geçerdi. Adlandırılmış tipler artık alan
+alan karşılaştırılıyor.
+
+Sınırı da yazmak gerekiyor: bu, **sözleşmeyi sözleşmeye** karşı tutan bir
+kontrol. Rust struct'ından düşen ama sözleşmeden düşmeyen bir alan burada da
+görünmez — o boşluğu kapatan şey `tauri-specta` (§14.10).
+
+### 36.5 platform-matrix yeniden ölçüldü _(§D)_
+
+Doküman yanlış yazılmamıştı; **bayatlamıştı**. 142 komut derken 149, 47 dosya
+derken 95, 32.515 satır derken 37.914 vardı. Prose'daki bir sayının yaşlanmaya
+karşı hiçbir savunması yok — ölçüm olmaktan çıkıp bir ölçümün hatırası oluyor,
+ve okuyucu hangisine baktığını ayırt edemiyor.
+
+Her sayı yeniden sayıldı ve `src-tauri/tests/platform_matrix_claims.rs` ile
+koda bağlandı. En değerlisi bir sayı değil, bir **özellik**: `invoke(` kelimesi
+`ipc.js` dışında sıfır yerde geçiyor — tüm web argümanı buna dayanıyor, ve
+ikinci bir `invoke(` bulguyu yanlış yapar.
+
+Elle sınıflandırılan dört satır (bollard / compose / dosya sistemi / ayrıcalık)
+gate dışında bırakıldı **ve yöntemleri yazıldı**. Bunlar kodun ne _anlama_
+geldiğine dair yargılar; bir testin onları çözüyormuş gibi yapması, önlemek
+için var olduğu bayat sayıdan daha kötü olurdu.
+
+### 36.6 Yolda çıkan dört gerçek hata
+
+Beş maddenin hiçbiri hata avı değildi. Dördü yine de çıktı — ve dördü de
+"yanlış olduğunda hiçbir şeyin şikâyet etmediği" sınıfından:
+
+1. **`npm run test:js` aralıklı kırmızıydı** — ölçüldü: sekiz koşunun üçü ile
+   beşi arası. `git stash` ile doğrulandı, benim değişikliğim değil (§35.3.9
+   kuralı). **İki ayrı sebebi vardı ve ilk teşhis yarımdı:**
+
+   - **`App.vue`'nun async `onMounted`'i.** `boot()` beklenirken bileşen unmount
+     edilirse `onUnmounted` çoktan koşmuş oluyor ve **sonra** `metrics.start()`
+     çalışıyor; sahipsiz kalan iki saniyelik zamanlayıcıyı artık hiçbir şey
+     temizleyemiyor. Aynı sınıf `listenAll` handle'larını da sızdırıyordu.
+     Düzeltme: `disposed` bayrağı + `keep()`. Regresyon testi mutasyonla denendi.
+   - **Asıl hacim: `app-shell.spec.js`'in kendisi.** On bir test shell mount
+     edip hiç unmount etmiyordu; her biri suite'in geri kalanı boyunca 2 ve 5
+     saniyede bir yoklamaya devam ediyor, sonra yıkılmış bir `document` üzerinde
+     patlıyordu. İlk düzeltmeden sonra da düşmeye devam etti — **ve benim yeni
+     testim, tam olarak bu sızıntı yüzünden düştü.**
+
+   İkinci sebep ancak yığın izi alınarak bulundu (`Timeout._onTimeout →
+   metrics.js:74`), çünkü dosya tek başına koştuğunda hiç düşmüyor: sızan
+   zamanlayıcının ateşlenmesi için suite'in yavaş olması gerekiyor, ki bu da
+   yalnızca tam koşuda oluyor. Temizlik on bir teste `unmount()` eklenerek
+   değil, `mountShell()`'in mount ettiğini kaydedip `afterEach`'in hepsini
+   indirmesiyle yapıldı — aksi hâlde yazılacak bir sonraki test on ikincisi
+   olurdu. **Sekiz ardışık tam koşu temiz.**
+2. **"59 olay" on aydır yanlıştı.** Sözleşmenin `events` nesnesindeki `_note` ve
+   `_removed` bölüm yorumları olay olarak sayılıyordu — gerçek sayı **57**. Asıl
+   kayda değer olan: `architecture_claims.rs` bunu doğruluyordu ve **aynı hatayı
+   yapıyordu**. Belgenin hatasını paylaşan bir kapı, ikinci bir görüş değildir.
+3. **NOTICE üretecinin iki yanlış sürümü** (§36.3).
+4. **Kendi satır sayım hatam.** platform-matrix'e 37.969 yazmıştım; kapı
+   kurulur kurulmaz 37.914 olduğunu söyledi. Fark tam olarak 55 — modül başına
+   bir fazladan satır, yani sayma yönteminin kendi hatası. Kapının ilk
+   yakaladığı şeyin onu yazan kişi olması, kapının çalıştığının kanıtı.
+
+### 36.7 Sayılar
+
+| | Önce | Sonra |
+| --- | ---: | ---: |
+| Rust testleri | 538 | **556** |
+| Frontend testleri | 533 | **536** |
+| Rust satır kapsamı | %64,05 | **%64,07** (eşik %60) |
+| Frontend satır kapsamı | %89,65 | **%89,70** (eşik %85) |
+| IPC komutu | 148 | **149** |
+| `contractVersion` | 1.0.0 | **1.1.0** |
+| ADR | 7 | **8** |
+| Belgeyi koda bağlayan test dosyası | 2 | **5** |
+| Aralıklı düşen frontend suite | ~%40 | **hayır** (8 ardışık temiz tam koşu) |
+
+Doğrulama: `cargo test` 556/556, `cargo clippy -D warnings` temiz,
+`cargo fmt --check` temiz, `npm run lint` 0, `npm run build` temiz,
+`npm run notice:check` 612 paketi kapsıyor, `npm run coverage:floors` dört
+eşiği de geçiyor. `npm run contracts:check` **bu makinede koşturulamadı** —
+`../stackvo` checkout'u yok (§2.1'in kaydettiği harici bağımlılık); CI'da
+koşuyor.
+
+---
+
+## 37. Kalan işlerin tam listesi
+
+Bu bölüm §35.1'in devamı ve raporun **tek açık iş kuyruğu**. Var olma sebebi
+§35.1'in altında yazılı: §14 listesi, raporun kendi gövdesinde teşhis edilen
+her şeyi numaralandırmamıştı, ve numarası olmayan madde takip edilmiyor. Sürüm
+kanalları (§6.3) on ay boyunca tam olarak bu yüzden hiçbir listede görünmedi —
+kusur olarak değil, **hiç sayılmamış** olarak.
+
+Kural: bir madde ancak buradan çıkarılabilir, ve çıkarken §36 gibi bir uygulama
+kaydı bırakır.
+
+### 37.1 Durum tablosu
+
+Numaralar §14'ün devamı. "Doğrulandı" sütunu, maddenin bugün hâlâ açık
+olduğunun bu turda ağaca karşı kontrol edildiğini söyler.
+
+|   # | Madde                                              | Kaynak | Durum          | Doğrulandı                                              |
+| --: | -------------------------------------------------- | ------ | -------------- | ------------------------------------------------------- |
+|   2 | Güncelleme endpoint'i                              | §6.1   | ⚠️ **blokaj**  | `latest.json` → HTTP 404; repo yok                      |
+|  10 | `tauri-specta` ile tip üretimi                     | §2.2   | ⛔ ertelendi   | `Cargo.toml`'da specta izi yok                          |
+|  12 | E2E (`tauri-driver`)                               | §3.2   | ⛔ engelli     | Repoda driver/wdio/playwright yok; Linux runner gerek   |
+|  18 | Merkezî politika + private registry ön eki         | §13    | ⬜ tasarlandı  | `policy.rs` yok (§35.2'de tasarım hazır)                |
+|  19 | Docker trait + `proptest` + `criterion`            | §3.3–4 | ⬜ başlanmadı  | `benches/` yok, üç crate de bağımlılıklarda yok         |
+|  20 | Keystore ile sır yönetimi                          | §5.2   | ⬜ başlanmadı  | `keyring` bağımlılıklarda yok                           |
+|  21 | **Sürüm kanalları, kademeli dağıtım, geri alma**   | §6.3   | ⬜ başlanmadı  | Tek `latest.json`, tek kanal, geri alma yolu yok        |
+|  22 | Platform kapsamı ve paketleme                      | §6.4   | ⬜ başlanmadı  | `release.yml` dört hedef: Linux aarch64 ve Win ARM64 yok |
+|  23 | Tray/menü etiketleri Rust'ta sabit                 | §7.2   | ⬜ başlanmadı  | `lib.rs:115` hâlâ `== "tr"` boolean'ı                   |
+|  24 | RTL                                                | §7.3   | 🟡 yarım       | Bayrak ve taşıma var; Vuetify `rtl` yapılandırması yok  |
+|  25 | Erişilebilirlik beyanı (VPAT / EN 301 549)         | §8     | ⬜ başlanmadı  | Beyan yok; §14.12 olmadan üretilemez                    |
+|  26 | Performans bütçesi: `criterion` + `size-limit`     | §9     | ⬜ başlanmadı  | Benchmark yok, bundle bütçesi yok                       |
+|  27 | Sıcak yollar: `list_projects` cache, gizli pencere | §9     | ⬜ başlanmadı  | Cache yok; `is_visible()` kod tabanında hiç geçmiyor    |
+|  28 | `stats_history` kalıcılığı                         | §10    | ⬜ başlanmadı  | `commands.rs:42` hâlâ `Mutex<HashMap>`, süreç ömürlü    |
+|  29 | Mutex poisoning                                    | §10    | ⬜ başlanmadı  | `commands.rs`'te 14 `lock()`; `parking_lot` yok         |
+|  30 | Denetim izi (audit log)                            | §13    | ⬜ başlanmadı  | Ayrı, döndürülmeyen bir audit log yok                   |
+|  31 | Air-gapped kurulum                                 | §13    | ⬜ başlanmadı  | Offline imaj paketi yolu yok                            |
+|  32 | Destek / sürüm ömrü politikası                     | §13    | ⬜ başlanmadı  | SECURITY.md: "yalnızca en son"                          |
+|  33 | Sözleşme kapısının kalan harici bağımlılığı        | §2.1   | 🟡 yarım       | `ci.yml:212` hâlâ `stackvo/stackvo` checkout'u yapıyor  |
+|  34 | Web sürümü / HTTP ikilisi                          | matris | ⬜ başlanmadı  | `src/bin/` yalnızca `stackvo-mcp.rs`                    |
+|  35 | Windows ve Linux dallarının çalıştırılması         | matris | ⬜ başlanmadı  | UAC, polkit, ConPTY, `certutil` hiç koşturulmadı        |
+
+Kapananlar bu tabloda yok: §36'daki beş madde (kapsam eşiği, gizlilik beyanı,
+NOTICE, sözleşme sürüm politikası, matrisin yeniden ölçümü) ve §14'ün 1, 3–9,
+11, 13–17 numaralı maddeleri.
+
+### 37.2 §14.21 — kanal işleri, ayrıntısıyla
+
+Kullanıcının adıyla sorduğu madde bu ve listede olmamasının bedeli somut:
+**bugün kötü bir sürüm çıkarsa yapılabilecek tek şey yeni bir sürüm çıkarmak,
+o da güncelleme almış herkese anında gidiyor.** Geri alma yok, yavaşlatma yok,
+durdurma yok.
+
+Bugünkü durum, doğrulanarak: `tauri.conf.json` → tek `endpoints` girdisi, tek
+`latest.json`, kanal kavramı yok.
+
+Yapılacak iş, artan maliyetle:
+
+1. **Acil durdurma anahtarı** — en ucuzu ve en değerlisi. `latest.json`'a bir
+   alan (`"paused": true`) ve istemci tarafında ona bakan bir kontrol; bir
+   sürümün dağıtımını **yayınlamadan** durdurmayı mümkün kılar. Bir günlük iş,
+   ve diğer üçünün ön koşulu değil.
+2. **Kanallar** (`stable` / `beta`). Tauri updater endpoint şablonunu
+   destekliyor; `latest-{{channel}}.json` ve tercihte bir kanal seçici. Kanalın
+   kullanıcı tercihi olması gerekiyor, ve §14.18'in politika katmanı geldiğinde
+   **kilitlenebilir** olması (kurumsal ihtiyaç: "güncelleme kanalı kilitli").
+3. **Kademeli dağıtım.** `latest.json`'da bir yüzde alanı, istemcide kararlı
+   bir hash (makine kimliği değil — gizlilik beyanına yeni bir alan eklememek
+   için kurulum başına rastgele, kalıcı bir sayı yeter). Yüzde dışındaki
+   istemci güncellemeyi görmez.
+4. **Geri alma.** `latest.json`'ın daha eski bir sürümü göstermesi tek başına
+   yetmez: Tauri updater sürüm karşılaştırması yapıyor ve aşağı inmez.
+   Gerçek geri alma, "bu sürümü durdur" + yeni bir yama sürümü demektir — yani
+   (1) olmadan geri alma diye bir şey yok.
+
+**Bağımlılık:** dördü de §14.2'nin arkasında. Endpoint 404 olduğu sürece kanal
+mantığı yazılabilir ama **çalıştırılamaz**, ve bu raporun kendi kuralına göre
+(§22.1) çalıştırılamayan altyapı gönderilmez.
+
+### 37.3 Bir haftalık olanlar
+
+§14'ün ilk sekizi gibi, ucuz ve birbirine bağlı olmayanlar:
+
+- **§14.32 destek politikası** — SECURITY.md'ye bir paragraf. "Yalnızca en son"
+  bugünkü gerçek; yazılı olması kurumsal satın almada sorulan şey.
+- **§14.29 mutex poisoning** — `parking_lot` ya da sekiz çağrı yerinde bilinçli
+  kurtarma. `prefs_set`'in `unwrap_or_else(|e| e.into_inner())` deseni zaten
+  doğru olanı; kalanlar ona hizalanır.
+- **§14.27'nin yarısı** — `if window.is_visible()` ile arka plan yoklama
+  aralığını uzatmak. Tek koşul, ölçülmemiş bir pil maliyetini kaldırır.
+- **§14.23** — tray/menü etiketlerini `tray_relabel` üzerinden frontend'in
+  beslemesi. Komut zaten kayıtlı; üçüncü dilin kod değişikliği olmaktan çıkması
+  buna bağlı.
+- **§14.21.1** — yukarıdaki durdurma anahtarı, endpoint ayağa kalktığı gün.
+
+### 37.4 Bu listenin kendisi nasıl doğru kalır
+
+§36'nın beş maddesi de bir belgeyi koda bağlayan bir kapı bıraktı. Bu liste
+öyle bir kapı **bırakamaz**: "yapılmadı" bir kodun ölçülebilir özelliği değil,
+bir niyetin kaydı. Elde olan tek şey, her satırın **bugün doğrulanmış** olması
+ve neyin bakılarak doğrulandığının yazılı olması — bir sonraki oturum tabloyu
+okumak yerine aynı kontrolleri tekrarlayabilir.
+
+Bu, §11'in tezinin sınırıdır ve yazılması gerekir: doğrulanabilir olan her şey
+doğrulandı; bu tablo doğrulanabilir olanın dışında kalan kısımdır.

@@ -152,7 +152,7 @@ guarding nothing. Generating the list outright was the obvious move and is the
 wrong one: dispatch cannot be generated, so a generated list advertises tools
 that fail when called.
 
-**Not exposed:** the rest of the mutating surface. 48 of the 144 commands take
+**Not exposed:** the rest of the mutating surface. 48 of the 145 commands take
 an `AppHandle` because they report progress through Tauri's event system, and a
 stdio subprocess has no app to emit into. Decoupling that is a refactor of its
 own; pretending otherwise would mean advertising `project_build` and having it
@@ -164,6 +164,14 @@ The app writes a rotating log — seven days, then it drops the oldest.
 **Settings → Application log** shows where and opens the folder. Password and
 token values are masked as the log is written, so it is safe to attach to an
 issue, but read it first.
+
+**Settings → Diagnostic bundle** packages the same log with `preflight`,
+`doctor`, the engine state and the version into one zip, masked a second time on
+the way in. What it holds and what it deliberately leaves out — no `.env`, no
+project sources — is listed in [PRIVACY.md](PRIVACY.md), along with everything
+this app stores and every host it can reach. There is no telemetry; that
+sentence is held up by a test rather than by a promise
+(`src-tauri/tests/privacy_claims.rs`).
 
 ### Where things are kept
 
@@ -218,6 +226,13 @@ Phase 0 turned up four live bugs in shipped StackVo, found purely by writing the
 | 2 ✅  | Container control via `bollard`; streamed build/log progress                       |
 | 3 ✅  | Tray, notifications, fs-watcher, hosts helper, PTY, autostart, single-instance     |
 | 4 🚧  | Generator port to Rust, native Windows, signed auto-updates                        |
+
+**What is still open is written down, not remembered.**
+[`docs/enterprise-readiness-2026-08.md` §37](docs/enterprise-readiness-2026-08.md)
+is the single work queue: every engineering item this project has diagnosed and
+not yet closed, numbered, with what was checked to confirm it is still open.
+The three that are not code — the update endpoint, the signing secrets and the
+Apple/Windows certificates — are in §35.4, because no commit can close them.
 
 ## How it is built
 

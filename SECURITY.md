@@ -29,6 +29,17 @@ The webview itself is deliberately weak: `capabilities/default.json` grants no
 blanket plugin permissions, and everything above happens in typed Rust commands
 behind the IPC boundary.
 
+## What it sends, and to whom
+
+Nothing on its own initiative except the update check. There is no telemetry,
+no analytics and no crash reporting service; [PRIVACY.md](PRIVACY.md) lists
+every host the shipped code can reach, what is stored on disk and for how long,
+and `src-tauri/tests/privacy_claims.rs` fails the build when a host appears in
+the code that the document does not name.
+
+A build that contacts something not on that list is a vulnerability report, not
+a feature request.
+
 ## What is in scope
 
 - Escaping the workspace — reading or writing outside `<workspace>/projects/`

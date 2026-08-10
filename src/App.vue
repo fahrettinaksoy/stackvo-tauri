@@ -197,9 +197,32 @@ function onFocus() {
 }
 
 let enginePoll = null;
-let teardown = null;
-let offClose = null;
-let offTray = null;
+
+/**
+ * Everything installed after the boot awaits, and whether this shell still
+ * exists to own it.
+ *
+ * `onMounted` is async, so every line after its first `await` runs at a moment
+ * when the component may already be gone — a window closed during a slow boot,
+ * or a test that unmounts while `boot()` is in flight. `onUnmounted` has run by
+ * then and stopped things that had not started yet, so a poll installed
+ * afterwards outlives the component that installed it and nothing can ever
+ * clear it.
+ *
+ * That is not hypothetical: it is why `metrics.start()`'s two-second timer went
+ * on firing after the test environment had been torn down, reading
+ * `document.visibilityState` on a `document` that no longer existed. It failed
+ * roughly one run in two — a timer that leaks is a race, and a race in CI is a
+ * red build nobody can reproduce.
+ */
+let disposed = false;
+const disposers = [];
+
+/** Hold an unlisten handle — or, if the shell is already gone, spend it now. */
+function keep(off) {
+  if (disposed) off?.();
+  else disposers.push(off);
+}
 
 onMounted(async () => {
   // Before anything else that paints: the saved theme, colours and type size
@@ -208,32 +231,40 @@ onMounted(async () => {
 
   await app.boot();
   await ops.bind();
+  if (disposed) return;
+
   metrics.start();
   if (app.hasWorkspace) inventory.loadAll();
 
-  teardown = await listenAll(REFRESH_TRIGGERS, () => inventory.loadAll());
+  keep(await listenAll(REFRESH_TRIGGERS, () => inventory.loadAll()));
 
   // Rust prevents the close and hands the decision here when the preference is
   // "ask"; every other value is applied natively without a round trip.
-  offClose = await listenAll(['app:close_requested'], () => {
-    showCloseDialog.value = true;
-  });
+  keep(
+    await listenAll(['app:close_requested'], () => {
+      showCloseDialog.value = true;
+    })
+  );
 
   // A project picked from the tray. Routing is decided here rather than in
   // Rust: the route table and the guard that waits for a workspace both live
   // on this side, and a second answer to "can this page open yet" is how the
   // two come to disagree.
-  offTray = await listenAll(['tray:open_project', 'tray:navigate'], (event, payload) => {
-    if (!payload) return;
-    if (event === 'tray:open_project') {
-      router.push({ name: 'ProjectDetail', params: { name: payload } });
-    } else {
-      // The payload is the route's own name, so the tray never has to know
-      // what path a page lives at — that is the router's business and it has
-      // moved before.
-      router.push({ name: payload }).catch(() => {});
-    }
-  });
+  keep(
+    await listenAll(['tray:open_project', 'tray:navigate'], (event, payload) => {
+      if (!payload) return;
+      if (event === 'tray:open_project') {
+        router.push({ name: 'ProjectDetail', params: { name: payload } });
+      } else {
+        // The payload is the route's own name, so the tray never has to know
+        // what path a page lives at — that is the router's business and it has
+        // moved before.
+        router.push({ name: payload }).catch(() => {});
+      }
+    })
+  );
+
+  if (disposed) return;
 
   enginePoll = setInterval(() => {
     if (document.visibilityState === 'visible') app.refreshEngine();
@@ -245,13 +276,15 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  // First, so anything still in flight above installs nothing further.
+  disposed = true;
+
   window.removeEventListener('focus', onFocus);
   metrics.stop();
   ops.unbind();
-  teardown?.();
-  offClose?.();
-  offTray?.();
+  for (const off of disposers.splice(0)) off?.();
   if (enginePoll) clearInterval(enginePoll);
+  enginePoll = null;
 });
 </script>
 

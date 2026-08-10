@@ -21,7 +21,10 @@
     "test:js": "vitest run",
     "test:js:watch": "vitest",
     "test:js:coverage": "vitest run --coverage",
-    "test:rs:coverage": "cargo llvm-cov --manifest-path src-tauri/Cargo.toml --summary-only",
+    "test:rs:coverage": "cargo llvm-cov --manifest-path src-tauri/Cargo.toml --summary-only && cargo llvm-cov report --manifest-path src-tauri/Cargo.toml --json --summary-only > rust-coverage.json && node tools/check-coverage.mjs --rust",
+    "coverage:floors": "node tools/check-coverage.mjs",
+    "notice": "node tools/generate-notice.mjs",
+    "notice:check": "node tools/generate-notice.mjs --check",
     "lint": "eslint . && prettier --check \"src/**/*.{js,vue}\"",
     "lint:fix": "eslint . --fix && prettier --write \"src/**/*.{js,vue}\"",
     "audit": "cargo deny --manifest-path src-tauri/Cargo.toml check && npm audit --omit=dev --audit-level=moderate"
