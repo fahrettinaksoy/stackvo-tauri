@@ -249,7 +249,7 @@ jobs:
       # Cryptographic proof of which workflow, commit and runner produced each
       # file, verifiable with `gh attestation verify <file> --repo <owner>/<repo>`.
       - name: Attest what built these artifacts
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           # `artifactPaths` is a JSON array; the action takes a comma- or
           # newline-separated list.
