@@ -208,7 +208,7 @@ jobs:
 
       - name: Attach the SBOM to the release
         if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sbom
           path: sbom/
@@ -269,7 +269,7 @@ jobs:
           done | tee "checksums/SHA256SUMS-${{ matrix.target }}.txt"
 
       - name: Attach the checksums
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: checksums-${{ matrix.target }}
           path: checksums/
