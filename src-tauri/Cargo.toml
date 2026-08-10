@@ -50,7 +50,7 @@ sysinfo = "0.39"
 # added aes, bzip2, zstd, xz, lzma and ppmd for an archive that only ever holds
 # text. `zip` itself is already built on Windows, where `tauri-plugin-updater`
 # takes it to unpack an update.
-zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 
 # CPU time breakdown (user/nice/system/idle). sysinfo only exposes an aggregate
 # percentage, and the dashboard shows the split — so this fills the one gap that
