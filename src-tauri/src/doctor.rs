@@ -826,6 +826,72 @@ pub struct Doctor {
     pub space: Option<crate::engine::SystemResources>,
     /// Extensions that will be dropped from a build without anyone being told.
     pub extensions: Vec<ExtensionProblem>,
+    /// Credentials in the keystore that the Bash CLI would misread.
+    pub keystore: KeystoreCheck,
+}
+
+/// What a workspace with keystore-backed credentials means for the other tool.
+///
+/// This is the one consequence of ADR 0010 that nothing in the app can fix.
+/// `stackvo.sh` reads `.env` line by line and would take the literal string
+/// `keychain:SERVICE_MYSQL_ROOT_PASSWORD@a1b2c3d4` for the password — so a
+/// fresh MySQL container comes up on a root password nobody chose, and the only
+/// symptom is that a connection somewhere else stops working.
+///
+/// A row here rather than a warning at move time only, because the move might
+/// have been six months ago and the person now running `stackvo.sh` might be
+/// somebody else on the same team.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct KeystoreCheck {
+    pub state: State,
+    /// The keys whose value now lives in the keystore.
+    pub moved: Vec<String>,
+    /// Of those, the ones the keystore would not produce right now — a locked
+    /// keychain, or an entry deleted from Keychain Access. Generation refuses
+    /// while this is non-empty, so it is the more urgent half.
+    pub unresolved: Vec<String>,
+}
+
+/// Read the `.env` text and ask what it says about the keystore.
+///
+/// The text, not a loaded [`crate::config::Env`]: loading replaces a reference
+/// with the value behind it, which is exactly the fact being reported.
+fn keystore_check(root: Option<&Path>) -> KeystoreCheck {
+    let Some(root) = root else {
+        return KeystoreCheck {
+            state: State::Unknown,
+            moved: Vec::new(),
+            unresolved: Vec::new(),
+        };
+    };
+
+    let text = std::fs::read_to_string(root.join(".env")).unwrap_or_default();
+    let mut moved = Vec::new();
+    let mut unresolved = Vec::new();
+
+    for (key, value) in crate::config::Env::parse(&text).raw() {
+        let Some(entry) = crate::secrets::entry_of(value) else {
+            continue;
+        };
+        moved.push(key.clone());
+        if !matches!(crate::secrets::read(entry), Ok(Some(_))) {
+            unresolved.push(key.clone());
+        }
+    }
+
+    KeystoreCheck {
+        // A workspace with nothing moved is `Ok` and says nothing, which is
+        // nearly every workspace. `Warn` rather than `Error` for the ordinary
+        // moved case: it is working, and the row exists to name a consequence
+        // rather than to report a fault.
+        state: match (moved.is_empty(), unresolved.is_empty()) {
+            (true, _) => State::Ok,
+            (false, true) => State::Warn,
+            (false, false) => State::Fail,
+        },
+        moved,
+        unresolved,
+    }
 }
 
 /// Assemble the whole report. Shared by the IPC command and the MCP tool.
@@ -883,6 +949,7 @@ pub async fn run(root: Option<&Path>) -> Doctor {
         // Reads files only, so it survives the engine being down — which is
         // exactly when somebody is reading this page.
         extensions: root.map(extension_problems).unwrap_or_default(),
+        keystore: keystore_check(root),
     }
 }
 

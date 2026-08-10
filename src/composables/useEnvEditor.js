@@ -51,6 +51,21 @@ export function useEnvEditor() {
   /** What the user has changed and not yet written. */
   const edits = ref({});
 
+  /**
+   * What an administrator decided, if this machine is managed.
+   *
+   * A fourth layer above the three, and the only one the user cannot move. It
+   * lives here rather than in each pane for the same reason the diff does: six
+   * panes edit one file, and six copies of "is this key locked" would be six
+   * chances for one of them to forget to ask.
+   *
+   * Keys only — `policy_status` never returns values, because `envGet` is the
+   * reader that redacts secrets and this must not be a way around it. What the
+   * managed value *is* still arrives through `env`, which is where the policy
+   * already put it.
+   */
+  const policy = ref({ active: false, source: null, managed: [], locked: [], error: null });
+
   const error = ref(null);
   const saving = ref(false);
   const saved = ref(false);
@@ -66,7 +81,23 @@ export function useEnvEditor() {
 
   async function loadDefaults() {
     defaults.value = await api.envDefaults().catch(() => ({}));
+    // Alongside the defaults rather than in `load`: both are answers about the
+    // shape of the form, read once when a pane opens, where `load` is the file
+    // and is re-read after every save.
+    const status = await api.policyStatus().catch(() => null);
+    if (status) policy.value = status;
   }
+
+  /**
+   * Is this key an administrator's rather than the user's?
+   *
+   * `managed` is "the policy sets it"; `locked` is "and you may not change
+   * it". Only the second disables a field — a managed-but-unlocked value is a
+   * default that arrived from somewhere else, which is worth showing and not
+   * worth preventing.
+   */
+  const isManaged = (key) => policy.value.managed?.includes(key) ?? false;
+  const isLocked = (key) => policy.value.locked?.includes(key) ?? false;
 
   async function load() {
     error.value = null;
@@ -159,6 +190,9 @@ export function useEnvEditor() {
     env,
     defaults,
     edits,
+    policy,
+    isManaged,
+    isLocked,
     error,
     saving,
     saved,

@@ -158,6 +158,14 @@ hints! {
          Times are whole seconds. -1 means unlimited.";
     SERVER_DIRECTIVES_UNSUPPORTED = "serverDirectivesUnsupported",
         "Only nginx, caddy and frankenphp have a generated config to add directives to.";
+    SETTING_IS_MANAGED = "settingIsManaged",
+        "This value comes from a policy file on this machine. Ask whoever administers it.";
+    UNLOCK_THE_KEYSTORE = "unlockTheKeystore",
+        "Unlock your keychain and try again — the password for this setting is stored there.";
+    ONLY_CREDENTIALS_MOVE = "onlyCredentialsMove",
+        "Only passwords, tokens and server ids can be kept in the keystore.";
+    KEYSTORE_ENTRY_IS_GONE = "keystoreEntryIsGone",
+        "The entry was removed from the keystore. Set the value again to restore the service.";
 
     // ---------------------------------------------------------------- presets & templates
     PRESET_IS_EXPORTED_JSON = "presetIsExportedJson",

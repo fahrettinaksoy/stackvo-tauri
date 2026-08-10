@@ -234,7 +234,7 @@ pub fn stamp(unix_seconds: i64) -> String {
 /// Days since 1970-01-01 to a civil date. Howard Hinnant's `civil_from_days`,
 /// which is the algorithm every date library uses; exact for any value a
 /// `SystemTime` on this machine can produce.
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
+pub(crate) fn civil_from_days(z: i64) -> (i64, u32, u32) {
     // Shift the epoch to 0000-03-01 so leap day lands at the end of the year and
     // the month arithmetic below needs no special case for February.
     let z = z + 719_468;

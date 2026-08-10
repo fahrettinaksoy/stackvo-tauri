@@ -29,13 +29,15 @@ jobs:
           cache: npm
 
       # Tauri's Linux build needs the webkit/gtk headers; the other two ship
-      # their webview with the OS.
+      # their webview with the OS. `libdbus-1-dev` is the keystore: on Linux the
+      # Secret Service is reached over D-Bus, and without the headers the build
+      # fails here and nowhere a developer on macOS would ever see it.
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
-            librsvg2-dev patchelf libssl-dev
+            librsvg2-dev patchelf libssl-dev libdbus-1-dev
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -57,6 +59,14 @@ jobs:
 
       - name: Build the front end
         run: npm run build
+
+      # Ubuntu only, like the lint and unit-test steps above: the bundle is the
+      # same bytes on every platform, and asking three runners the same question
+      # buys nothing. Immediately after the build, because it reads `dist/` and
+      # a later job would have to rebuild to see it.
+      - name: Hold the bundle budget
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run bundle:budget
 
       # Everything below runs on all three platforms, so the cfg-gated code is
       # actually compiled somewhere rather than only written.
@@ -115,7 +125,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
-            librsvg2-dev patchelf libssl-dev
+            librsvg2-dev patchelf libssl-dev libdbus-1-dev
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -260,8 +270,15 @@ jobs:
       - name: Seed .env
         run: cp stackvo-checkout/.env.example stackvo-checkout/.env
 
+      # `--allow-no-manifests` records a real hole rather than papering over
+      # one: `stackvo/stackvo` ships no `projects/` directory, so suite A — the
+      # manifests against project.schema.json — has never actually run here. It
+      # was a warning before, which is how that went unnoticed; the flag makes
+      # the omission a decision written down where it is read. Remove it the day
+      # upstream carries an example project, and suite A starts earning its
+      # place in this job.
       - name: Validate contracts
-        run: node tools/validate-contracts.mjs --root stackvo-checkout
+        run: node tools/validate-contracts.mjs --root stackvo-checkout --allow-no-manifests
 
       - name: Measure .env usage
         run: node tools/measure-env-usage.mjs --root stackvo-checkout

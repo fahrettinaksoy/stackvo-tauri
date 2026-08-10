@@ -15,7 +15,7 @@
  * Zero dependencies — it implements the specific rules rather than pulling in a schema engine,
  * so it runs in CI and in a fresh clone with nothing installed.
  *
- *   node tools/validate-contracts.mjs [--root ../stackvo] [--json]
+ *   node tools/validate-contracts.mjs [--root ../stackvo] [--json] [--allow-no-manifests]
  */
 
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
@@ -29,6 +29,19 @@ const CONTRACTS = join(HERE, '..', 'contracts');
 
 const argv = process.argv.slice(2);
 const asJson = argv.includes('--json');
+
+// Suite A needs manifests to check. Finding none is an error by default,
+// because the likeliest cause is a `--root` pointing somewhere that is not a
+// StackVo checkout — and this repo's own parent directory resolves to a folder
+// of the same name, so that mistake is one keystroke away and used to produce a
+// confident "0 error(s)".
+//
+// The flag exists because there is one honest case: `stackvo/stackvo` itself
+// carries no `projects/` directory, so CI's checkout has nothing for suite A to
+// read. That is a real hole and it belongs in the workflow file where someone
+// will see it, not in a warning stream nobody reads.
+const allowNoManifests = argv.includes('--allow-no-manifests');
+
 const rootFlag = argv.indexOf('--root');
 const STACKVO_ROOT = resolve(
   rootFlag !== -1
@@ -382,8 +395,21 @@ for (const dir of projectDirs) {
   }
 }
 
+// An error, not a warning, unless the caller declared it expects none: suite A
+// is the whole reason this validator reads a StackVo checkout, and with no
+// manifests it asserts nothing while still printing "0 error(s)". A gate whose
+// green means "looked at nothing" is worse than no gate, which is the lesson
+// the coverage floors already learned.
 if (manifestCount === 0)
-  warn('A', 'projects/', 'NO_MANIFESTS', `no stackvo.json found under ${projectsDir}`);
+  (allowNoManifests ? warn : err)(
+    'A',
+    'projects/',
+    'NO_MANIFESTS',
+    `no stackvo.json found under ${projectsDir} — suite A checked nothing.` +
+      (allowNoManifests
+        ? ' Expected: --allow-no-manifests was passed.'
+        : ' Is --root pointing at a StackVo checkout? Pass --allow-no-manifests if it genuinely has none.')
+  );
 
 // ================================================================ SUITE B — extension catalog
 

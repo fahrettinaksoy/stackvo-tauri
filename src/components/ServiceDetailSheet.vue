@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n';
 import { useDisplay } from 'vuetify';
 import { api } from '@/lib/ipc';
 import { listenAll } from '@/lib/events';
+import { useCopyTick } from '@/composables/useCopyTick';
 import SideSheet from '@/components/SideSheet.vue';
 import ErrorAlert from '@/components/ErrorAlert.vue';
 import LogView from '@/components/LogView.vue';
@@ -31,6 +32,7 @@ const emit = defineEmits(['update:modelValue']);
 
 const { t } = useI18n();
 const display = useDisplay();
+const { copied, copy } = useCopyTick();
 
 /**
  * Sized against the window rather than in fixed pixels, unlike the other
@@ -119,6 +121,80 @@ async function toggleReveal(credential) {
     error.value = e;
   }
 }
+
+// ---------------------------------------------------- connection strings
+
+/**
+ * The two addresses this service answers on, or null when it has none.
+ *
+ * Null is the normal answer for most rows — an admin UI is opened at its
+ * domain, which is a row above — so the whole section is hidden rather than
+ * shown empty.
+ */
+const connection = ref(null);
+/** Set once the user has asked for the password; dropped when the sheet moves. */
+const connectionRevealed = ref(false);
+
+async function loadConnection(service, reveal = false) {
+  if (!service) return;
+  try {
+    connection.value = await api.serviceConnection(service.id, reveal);
+    connectionRevealed.value = reveal;
+  } catch (e) {
+    error.value = e;
+    connection.value = null;
+  }
+}
+
+/**
+ * Copy the string that works, while the screen keeps showing bullets.
+ *
+ * A masked URI on the clipboard is a string that fails to connect, so this
+ * fetches the real one — the same deliberate ask the eye makes — and does not
+ * put it on screen. Revealing and copying are different intentions: one is "let
+ * me read it", the other "let me use it", and only the first belongs in a
+ * screenshot.
+ */
+async function copyUri(endpoint) {
+  let value = endpoint.uri;
+  if (connection.value?.masked) {
+    try {
+      const live = await api.serviceConnection(props.service.id, true);
+      value = endpoint.key === 'host' ? live?.fromHost?.uri : live?.fromContainer?.uri;
+    } catch (e) {
+      error.value = e;
+      return;
+    }
+  }
+  await copy(value, `uri-${endpoint.key}`);
+}
+
+/**
+ * The endpoints in the order they are read, with the label each one needs.
+ *
+ * The host address comes first because it is the one somebody has open a
+ * client for. `fromHost` is null when a running container publishes nothing,
+ * and that row is dropped rather than filled with an address that would fail.
+ */
+const endpoints = computed(() => {
+  if (!connection.value) return [];
+  return [
+    connection.value.fromHost && {
+      key: 'host',
+      label: t('servicesView.fromHost'),
+      hint: t('servicesView.fromHostHint'),
+      icon: 'mdi-laptop',
+      ...connection.value.fromHost,
+    },
+    {
+      key: 'container',
+      label: t('servicesView.fromContainer'),
+      hint: t('servicesView.fromContainerHint'),
+      icon: 'mdi-docker',
+      ...connection.value.fromContainer,
+    },
+  ].filter(Boolean);
+});
 
 /**
  * The icon a credential gets, from what the key is rather than from a list
@@ -275,7 +351,11 @@ watch(
     dbResult.value = '';
     openMessage.value = null;
     body.value = null;
+    // A revealed password does not follow the sheet to the next service.
+    connection.value = null;
+    connectionRevealed.value = false;
     load(props.service);
+    loadConnection(props.service);
     loadMail();
     api.dbTargets().then(
       (targets) => (dbTargets.value = targets),
@@ -506,6 +586,62 @@ onUnmounted(() => stopDbEvents?.());
         </div>
       </div>
 
+      <!-- Connection ---------------------------------------------------- -->
+      <!-- Only for the services somebody points a client at. An admin UI is
+           opened at its domain, which is the row above this. -->
+      <template v-if="connection">
+        <div class="sheet-group">{{ t('servicesView.connection') }}</div>
+
+        <!-- The distinction this section exists for. Without it the container
+             name above is the obvious thing to paste into Compass, and it
+             cannot resolve from the host. -->
+        <div class="text-caption text-medium-emphasis mb-2">
+          {{ t('servicesView.connectionSubtitle') }}
+        </div>
+
+        <div v-for="endpoint in endpoints" :key="endpoint.key" class="endpoint">
+          <div class="endpoint-head">
+            <v-icon size="small" class="mr-1">{{ endpoint.icon }}</v-icon>
+            <span class="font-weight-medium">{{ endpoint.label }}</span>
+            <span class="text-medium-emphasis ml-2">{{ endpoint.hint }}</span>
+          </div>
+          <div class="endpoint-row">
+            <code class="endpoint-uri">{{ endpoint.uri }}</code>
+            <!-- Copies the working string even while the screen shows bullets:
+                 a masked URI on the clipboard is one that fails to connect. -->
+            <v-btn
+              icon
+              size="x-small"
+              variant="text"
+              :aria-label="t('app.copy')"
+              @click="copyUri(endpoint)"
+            >
+              <v-icon size="small">
+                {{ copied === `uri-${endpoint.key}` ? 'mdi-check' : 'mdi-content-copy' }}
+              </v-icon>
+              <v-tooltip activator="parent">{{ t('app.copy') }}</v-tooltip>
+            </v-btn>
+          </div>
+        </div>
+
+        <!-- Offered only where a password is actually in the string. -->
+        <v-btn
+          v-if="connection.masked || connectionRevealed"
+          size="x-small"
+          variant="text"
+          class="mt-1"
+          :prepend-icon="connectionRevealed ? 'mdi-eye-off-outline' : 'mdi-eye-outline'"
+          :aria-pressed="connectionRevealed"
+          @click="loadConnection(service, !connectionRevealed)"
+        >
+          {{ connectionRevealed ? t('servicesView.hide') : t('servicesView.reveal') }}
+        </v-btn>
+
+        <div v-if="!connection.fromHost" class="text-caption text-warning mt-1">
+          {{ t('servicesView.notPublished') }}
+        </div>
+      </template>
+
       <!-- Credentials --------------------------------------------------- -->
       <div class="sheet-group">{{ t('servicesView.credentials') }}</div>
 
@@ -688,6 +824,34 @@ onUnmounted(() => stopDbEvents?.());
   gap: 8px;
   min-height: 30px;
   font-size: 0.8rem;
+}
+
+.endpoint {
+  margin-bottom: 8px;
+}
+
+.endpoint-head {
+  display: flex;
+  align-items: center;
+  font-size: 0.75rem;
+}
+
+.endpoint-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* A URI with a database name and a query on the end runs past the sheet in a
+   narrow window; it wraps rather than scrolling sideways, because the part that
+   would be cut off is the part that is easy to get wrong. */
+.endpoint-uri {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  word-break: break-all;
+  flex: 1 1 auto;
+  user-select: all;
 }
 
 .credential-key {

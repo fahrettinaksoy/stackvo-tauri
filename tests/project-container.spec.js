@@ -147,7 +147,7 @@ describe('the tunnel', () => {
 
 describe('the workers', () => {
   beforeEach(() => {
-    replies.workerOptions = ['queue', 'schedule'];
+    replies.workerOptions = ['queue', 'scheduler'];
     replies.workerStatus = [
       { project: 'shop', kind: 'queue', restarts: 2 },
       { project: 'blog', kind: 'queue', restarts: 0 },
@@ -160,7 +160,7 @@ describe('the workers', () => {
 
     expect(w.workers.value).toHaveLength(1);
     expect(w.workerFor('queue').restarts).toBe(2);
-    expect(w.workerFor('schedule'), 'an offered kind that is not running').toBe(null);
+    expect(w.workerFor('scheduler'), 'an offered kind that is not running').toBe(null);
   });
 
   /** One button per kind, and what it does depends on what is running now. */
@@ -176,8 +176,8 @@ describe('the workers', () => {
     expect(calls[0]).toEqual(['workerStop', 'shop', 'queue']);
 
     calls.length = 0;
-    await w.toggle('schedule');
-    expect(calls[0]).toEqual(['workerStart', 'shop', 'schedule']);
+    await w.toggle('scheduler');
+    expect(calls[0]).toEqual(['workerStart', 'shop', 'scheduler']);
   });
 
   /** The busy key is the kind, so only the pressed row's button spins. */
@@ -188,8 +188,8 @@ describe('the workers', () => {
     const w = useWorkers(ref('shop'));
     await w.load();
 
-    const done = w.toggle('schedule');
-    expect(w.busy.value).toBe('schedule');
+    const done = w.toggle('scheduler');
+    expect(w.busy.value).toBe('scheduler');
     settle(null);
     await done;
     expect(w.busy.value).toBe(null);
@@ -213,7 +213,7 @@ describe('the workers', () => {
     const w = useWorkers(ref('shop'));
     await w.load();
 
-    expect(await w.toggle('schedule')).toBe(false);
+    expect(await w.toggle('scheduler')).toBe(false);
     expect(w.error.value.code).toBe('DOCKER_UNAVAILABLE');
     expect(w.busy.value).toBe(null);
   });

@@ -42,6 +42,10 @@ export const EVENTS = {
   generate: ['generate:start', 'generate:progress', 'generate:done'],
   compose: ['compose:progress', 'compose:done'],
   logs: ['logs:line', 'logs:closed'],
+  // Declared in the contract since the port and unlisted here until a view
+  // finally opened a session — which is the same ten-month gap that left the
+  // four `pty_*` wrappers with no caller.
+  terminal: ['terminal:ready', 'terminal:output', 'terminal:closed'],
 };
 
 /**

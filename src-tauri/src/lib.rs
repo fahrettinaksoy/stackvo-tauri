@@ -2,11 +2,14 @@ pub mod appdir;
 pub mod applog;
 pub mod apps;
 pub mod atomic;
+pub mod audit;
 pub mod certs;
 pub mod commands;
 pub mod config;
+pub mod connect;
 pub mod contracts;
 pub mod crash;
+pub mod daemon;
 pub mod db;
 pub mod debugbridge;
 pub mod detect;
@@ -33,6 +36,7 @@ pub mod menu;
 pub mod migrate;
 pub mod paths;
 pub mod phpini;
+pub mod policy;
 pub mod preflight;
 pub mod preset;
 pub mod profile;
@@ -42,8 +46,10 @@ pub mod quickcmd;
 pub mod release;
 pub mod runner;
 pub mod scaffold;
+pub mod secrets;
 pub mod skeleton;
 pub mod stats;
+pub mod stats_store;
 pub mod template;
 pub mod tray;
 pub mod tunnel;
@@ -110,25 +116,13 @@ pub fn run() {
 
             // Localised from the same preference the tray reads, so the menu
             // bar does not sit in English beside a Turkish window.
-            let turkish = commands::prefs_get()
-                .ok()
-                .and_then(|p| p.get("language").and_then(|v| v.as_str().map(String::from)))
-                .is_some_and(|l| l == "tr");
-            let labels = if turkish {
-                menu::Labels {
-                    about: "StackVo Hakkında".into(),
-                    docs: "Belgeler".into(),
-                    source: "Kaynak kodu".into(),
-                    issues: "Sorun bildir".into(),
-                }
-            } else {
-                menu::Labels {
-                    about: "About StackVo".into(),
-                    docs: "Documentation".into(),
-                    source: "Source code".into(),
-                    issues: "Report an issue".into(),
-                }
-            };
+            //
+            // These are the built-in two languages only, and deliberately: the
+            // webview has not booted yet, so the front end's catalog cannot have
+            // arrived. It replaces this the moment it does, through
+            // `tray_relabel` — which is what keeps a third language out of this
+            // file.
+            let labels = tray::menu_labels();
             // From the config rather than spelled again here: the menu bar showing a
             // different name from the bundle is how `stackvo-desktop` ended up in it.
             let product = app
@@ -178,11 +172,7 @@ pub fn run() {
             let watcher = watcher::Handle::new();
             {
                 let state = app.state::<AppState>();
-                let root = state
-                    .workspace
-                    .lock()
-                    .ok()
-                    .and_then(|w| w.require_root().ok());
+                let root = commands::recover(&state.workspace).require_root().ok();
                 watcher.retarget(&handle, root);
             }
             app.manage(watcher);
@@ -247,11 +237,28 @@ pub fn run() {
             // Per-container history, so a freshly opened detail view has a
             // sparkline instead of a single point. The web UI sampled this too,
             // but kept it in the dashboard container, so it died on restart.
+            //
+            // The interval follows the window: nobody is reading a sparkline
+            // that is not on screen, and this was the app's only unattended
+            // recurring call to the daemon. See `stats_sample_interval` for why
+            // it slows down rather than stopping.
             let stats_handle = handle.clone();
             tauri::async_runtime::spawn(async move {
                 loop {
                     commands::sample_container_stats(&stats_handle).await;
-                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+
+                    // A window that cannot be asked is treated as visible. The
+                    // failure mode of guessing the other way is a sparkline
+                    // that quietly samples five times too slowly for the life
+                    // of the process, which nothing would report.
+                    let visible = stats_handle
+                        .get_webview_window(MAIN_WINDOW)
+                        .map(|w| {
+                            w.is_visible().unwrap_or(true) && !w.is_minimized().unwrap_or(false)
+                        })
+                        .unwrap_or(true);
+
+                    tokio::time::sleep(commands::stats_sample_interval(visible)).await;
                 }
             });
 
@@ -385,6 +392,7 @@ pub fn run() {
             commands::db_targets,
             commands::db_dump,
             commands::db_restore,
+            commands::service_connection,
             commands::xdebug_status,
             commands::xdebug_set,
             commands::php_ini_status,
@@ -397,6 +405,7 @@ pub fn run() {
             commands::release_plan,
             commands::release_build,
             commands::release_save,
+            commands::release_load,
             commands::profiler_status,
             commands::profiler_set_mode,
             commands::profiler_read,
@@ -444,6 +453,10 @@ pub fn run() {
             commands::open_folder,
             commands::updater_status,
             commands::licences_notice,
+            commands::policy_status,
+            commands::secrets_status,
+            commands::secret_move,
+            commands::secret_restore,
             commands::system_accent,
             commands::logs_info,
             commands::diagnostics_bundle,

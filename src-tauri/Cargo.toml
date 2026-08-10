@@ -60,6 +60,29 @@ systemstat = "0.2"
 # Stream combinators for bollard's log and stats streams.
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
+# The OS keystore — Keychain, Credential Manager, Secret Service — for the
+# database passwords that otherwise sit in plain text in a file that gets backed
+# up and synced. `secrets.rs` carries the reasoning and ADR 0010 its limits.
+#
+# Measured before adding, and it is not the same on all three platforms. A build
+# gains **one** crate on macOS and Windows, where the native stores are already
+# in the graph via Tauri, and **fourteen** on Linux, where the Secret Service
+# session is D-Bus plus its own encrypted handshake (aes, cbc, hkdf, hmac, and
+# num/num-* for the Diffie-Hellman). `Cargo.lock` gains twenty-nine, because it
+# resolves every target at once — that larger number is the one `NOTICE.md` is
+# generated from, and the smaller one is what a user installs.
+#
+# `crypto-rust` rather than `crypto-openssl` so that handshake does not put an
+# OpenSSL build in front of a Linux user. `linux-native` was the cheaper option
+# and is wrong: it is the kernel keyring, scoped to a session and gone at reboot,
+# and a password store that empties itself is not one.
+keyring = { version = "3", default-features = false, features = [
+  "apple-native",
+  "windows-native",
+  "sync-secret-service",
+  "crypto-rust",
+] }
+
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # `io-std` is for the MCP server, which speaks JSON-RPC over stdin and stdout.
@@ -120,6 +143,16 @@ tauri-plugin-autostart = "2"
 
 [features]
 default = []
+
+# Benchmarks only. Kept out of the default feature set and out of CI — see the
+# module comment on `benches/render.rs` for why a criterion run is a measuring
+# instrument here rather than a gate.
+[dev-dependencies]
+criterion = { version = "0.7", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "render"
+harness = false
 
 [profile.release]
 codegen-units = 1

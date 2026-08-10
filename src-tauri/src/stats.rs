@@ -348,7 +348,7 @@ impl Sampler {
         let mut rx_delta = 0u64;
         let mut tx_delta = 0u64;
 
-        for (_name, data) in self.networks.iter() {
+        for data in self.networks.values() {
             rx_total += data.total_received();
             tx_total += data.total_transmitted();
             rx_delta += data.received();

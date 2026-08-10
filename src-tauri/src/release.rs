@@ -397,9 +397,112 @@ pub async fn save(tag: &str, path: &Path) -> Result<u64> {
     Ok(std::fs::metadata(path).map(|m| m.len()).unwrap_or(0))
 }
 
+/// Read a tarball written by `save` back into the local daemon.
+///
+/// The return trip `save` never had. A machine with no route to a registry
+/// could be handed an image but not given one, which made the export half a
+/// feature with nowhere to land — the readiness report tracks the pair as
+/// "air-gapped install" and had it down as not started, because half a round
+/// trip is not one.
+///
+/// The tags are returned rather than discarded. `docker load` writes them to
+/// stdout as `Loaded image: name:tag`, and they are the only way the caller can
+/// name what it just installed: the tarball's file name is whatever somebody
+/// called it, and a stream can carry several images.
+pub async fn load(path: &Path) -> Result<Vec<String>> {
+    // Checked here rather than left to Docker: `docker load` answers a missing
+    // file with an error about the *archive* being invalid, which reads as a
+    // corrupt bundle and sends the user looking at the wrong thing.
+    if !path.exists() {
+        return Err(Error::new(
+            Code::NotFound,
+            format!("no image archive at {}", path.display()),
+        ));
+    }
+
+    let output = tokio::process::Command::new("docker")
+        .args(["load", "-i"])
+        .arg(path)
+        .output()
+        .await
+        .map_err(|e| Error::io("running docker load", e))?;
+
+    if !output.status.success() {
+        return Err(Error::new(
+            Code::BuildFailed,
+            format!(
+                "docker load failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ));
+    }
+
+    Ok(loaded_tags(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// The image names in `docker load`'s output.
+///
+/// Split out to be testable without a daemon. Two shapes appear: `Loaded image:
+/// x:1` for a tagged image and `Loaded image ID: sha256:…` for one that carries
+/// none. The second is deliberately kept — an untagged image did load, and
+/// reporting nothing at all would read as a bundle that contained nothing.
+fn loaded_tags(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            line.strip_prefix("Loaded image: ")
+                .or_else(|| line.strip_prefix("Loaded image ID: "))
+        })
+        .map(str::to_string)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `docker load`'s output, both shapes it comes in.
+    ///
+    /// Parsed rather than assumed to be one line: a tarball can carry several
+    /// images, and a bundle of a whole stack is the case this exists for.
+    #[test]
+    fn the_loaded_image_names_are_read_out_of_dockers_own_output() {
+        let stdout = "Loaded image: stackvo-shop:1.4\n\
+                      Loaded image: stackvo-blog:latest\n";
+        assert_eq!(
+            loaded_tags(stdout),
+            vec!["stackvo-shop:1.4", "stackvo-blog:latest"]
+        );
+
+        // An untagged image reports its id. Dropping it would answer an empty
+        // list for a load that genuinely installed something, which reads as an
+        // empty bundle rather than an untagged one.
+        let untagged = "Loaded image ID: sha256:9f2a1c\n";
+        assert_eq!(loaded_tags(untagged), vec!["sha256:9f2a1c"]);
+
+        // Progress chatter is not an image.
+        let noisy = "The image stackvo-shop:1.4 already exists, renaming the old one\n\
+                     Loaded image: stackvo-shop:1.4\n";
+        assert_eq!(loaded_tags(noisy), vec!["stackvo-shop:1.4"]);
+
+        assert!(loaded_tags("").is_empty());
+    }
+
+    /// A missing bundle is named as missing, without reaching for Docker.
+    #[tokio::test]
+    async fn a_bundle_that_is_not_there_is_not_a_corrupt_archive() {
+        let path = std::env::temp_dir().join("stackvo-no-such-bundle-9e1a.tar");
+        let _ = std::fs::remove_file(&path);
+
+        let refused = load(&path).await.expect_err("a missing file cannot load");
+        assert_eq!(refused.code, Code::NotFound);
+        assert!(
+            refused.message.contains("stackvo-no-such-bundle-9e1a"),
+            "the error names the path it looked at, got: {}",
+            refused.message
+        );
+    }
 
     /// Measured, not assumed. A PHP project's image holds one file in
     /// `/var/www/html` because the source is bind-mounted; a node image holds

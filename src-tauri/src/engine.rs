@@ -683,20 +683,58 @@ pub fn container_name(id: &str) -> String {
     }
 }
 
-/// Turn a bollard error into a typed one. A 404 from the daemon is NOT_FOUND,
-/// not "engine unreachable" — the old code lumped both into a 500.
-fn lifecycle_error(action: &str, name: &str, err: bollard::errors::Error) -> Error {
-    if let bollard::errors::Error::DockerResponseServerError {
-        status_code: 404, ..
-    } = err
-    {
-        return Error::not_found(format!("container {name}"))
-            .with_hint(crate::hints::PROJECT_MAY_NOT_BE_BUILT);
+/// The HTTP status behind a bollard error, when there was one.
+///
+/// The only place a bollard type is turned into something `daemon` can read.
+/// Everything else about "what does this answer mean" lives there, where it can
+/// be tested against every status a daemon could send rather than against the
+/// two somebody happened to reproduce.
+fn status_of(err: &bollard::errors::Error) -> Option<u16> {
+    match err {
+        bollard::errors::Error::DockerResponseServerError { status_code, .. } => Some(*status_code),
+        // A transport failure: no status exists, and nothing is known about the
+        // subject. `daemon::classify` never reads that as satisfied.
+        _ => None,
     }
-    Error::new(
-        Code::EngineUnreachable,
-        format!("Cannot {action} {name}: {err}"),
-    )
+}
+
+/// The error a failed call becomes, for the sites that have nothing to settle.
+///
+/// `settle` is for calls where an error can still mean success; this is for the
+/// ones where any error is an error and only its *classification* is in
+/// question.
+fn daemon_error(
+    action: crate::daemon::Action,
+    subject: &str,
+    err: bollard::errors::Error,
+) -> Error {
+    let verdict = crate::daemon::classify(action, status_of(&err));
+    crate::daemon::error(action, subject, verdict, &err.to_string())
+}
+
+/// Settle one lifecycle call against the daemon's answer.
+///
+/// The six inline `match` arms this replaced each encoded the same three
+/// decisions — was it done, is it absent, is that absence what was asked for —
+/// and each encoded them separately. A seventh call site would have had to
+/// guess; now it names an `Action` and the rule is already written.
+fn settle(
+    action: crate::daemon::Action,
+    subject: &str,
+    outcome: std::result::Result<(), bollard::errors::Error>,
+) -> Result<()> {
+    let Err(err) = outcome else {
+        return Ok(());
+    };
+    match crate::daemon::classify(action, status_of(&err)) {
+        crate::daemon::Verdict::Satisfied => Ok(()),
+        verdict => Err(crate::daemon::error(
+            action,
+            subject,
+            verdict,
+            &err.to_string(),
+        )),
+    }
 }
 
 pub async fn start_container(id: &str) -> Result<()> {
@@ -704,17 +742,13 @@ pub async fn start_container(id: &str) -> Result<()> {
     let name = container_name(id);
     let docker = connect()?;
 
-    match docker
-        .start_container(&name, None::<StartContainerOptions>)
-        .await
-    {
-        Ok(()) => Ok(()),
-        // 304 = already started. Idempotent by contract, so this is success.
-        Err(bollard::errors::Error::DockerResponseServerError {
-            status_code: 304, ..
-        }) => Ok(()),
-        Err(e) => Err(lifecycle_error("start", &name, e)),
-    }
+    settle(
+        crate::daemon::Action::Start,
+        &name,
+        docker
+            .start_container(&name, None::<StartContainerOptions>)
+            .await,
+    )
 }
 
 pub async fn stop_container(id: &str) -> Result<()> {
@@ -722,17 +756,13 @@ pub async fn stop_container(id: &str) -> Result<()> {
     let name = container_name(id);
     let docker = connect()?;
 
-    match docker
-        .stop_container(&name, None::<StopContainerOptions>)
-        .await
-    {
-        Ok(()) => Ok(()),
-        // 304 = already stopped.
-        Err(bollard::errors::Error::DockerResponseServerError {
-            status_code: 304, ..
-        }) => Ok(()),
-        Err(e) => Err(lifecycle_error("stop", &name, e)),
-    }
+    settle(
+        crate::daemon::Action::Stop,
+        &name,
+        docker
+            .stop_container(&name, None::<StopContainerOptions>)
+            .await,
+    )
 }
 
 /// Delete a container, running or not.
@@ -755,13 +785,11 @@ pub async fn remove_container(id: &str) -> Result<()> {
         .v(true)
         .build();
 
-    match docker.remove_container(&name, Some(options)).await {
-        Ok(()) => Ok(()),
-        Err(bollard::errors::Error::DockerResponseServerError {
-            status_code: 404, ..
-        }) => Ok(()),
-        Err(e) => Err(lifecycle_error("remove", &name, e)),
-    }
+    settle(
+        crate::daemon::Action::RemoveContainer,
+        &name,
+        docker.remove_container(&name, Some(options)).await,
+    )
 }
 
 /// Is this `repo:tag` an image built for `repository`?
@@ -807,12 +835,17 @@ pub async fn remove_project_images(project: &str) -> Result<Vec<String>> {
         let options = RemoveImageOptionsBuilder::default().build();
         match docker.remove_image(&tag, Some(options), None).await {
             Ok(_) => removed.push(tag),
-            // 404: already gone. 409: another container holds it.
-            Err(bollard::errors::Error::DockerResponseServerError {
-                status_code: 404 | 409,
-                ..
-            }) => {}
-            Err(e) => return Err(lifecycle_error("remove image", &tag, e)),
+            // 404 is already gone and 409 is held by another container; both
+            // leave the caller with what it asked for. `daemon` decides which.
+            Err(e) => {
+                let action = crate::daemon::Action::RemoveImage;
+                match crate::daemon::classify(action, status_of(&e)) {
+                    crate::daemon::Verdict::Satisfied => {}
+                    verdict => {
+                        return Err(crate::daemon::error(action, &tag, verdict, &e.to_string()))
+                    }
+                }
+            }
         }
     }
 
@@ -838,11 +871,15 @@ pub async fn remove_image(tag: &str) -> Result<bool> {
         .await
     {
         Ok(_) => Ok(true),
-        Err(bollard::errors::Error::DockerResponseServerError {
-            status_code: 404 | 409,
-            ..
-        }) => Ok(false),
-        Err(e) => Err(lifecycle_error("remove image", tag, e)),
+        // `false` rather than an error: nothing was removed, and the caller
+        // asked whether anything was.
+        Err(e) => {
+            let action = crate::daemon::Action::RemoveImage;
+            match crate::daemon::classify(action, status_of(&e)) {
+                crate::daemon::Verdict::Satisfied => Ok(false),
+                verdict => Err(crate::daemon::error(action, tag, verdict, &e.to_string())),
+            }
+        }
     }
 }
 
@@ -879,16 +916,13 @@ pub async fn remove_volume(name: &str) -> Result<()> {
     use bollard::query_parameters::RemoveVolumeOptions;
 
     let docker = connect()?;
-    match docker
-        .remove_volume(name, None::<RemoveVolumeOptions>)
-        .await
-    {
-        Ok(()) => Ok(()),
-        Err(bollard::errors::Error::DockerResponseServerError {
-            status_code: 404, ..
-        }) => Ok(()),
-        Err(e) => Err(lifecycle_error("remove volume", name, e)),
-    }
+    settle(
+        crate::daemon::Action::RemoveVolume,
+        name,
+        docker
+            .remove_volume(name, None::<RemoveVolumeOptions>)
+            .await,
+    )
 }
 
 pub async fn restart_container(id: &str) -> Result<()> {
@@ -899,7 +933,7 @@ pub async fn restart_container(id: &str) -> Result<()> {
     docker
         .restart_container(&name, None::<RestartContainerOptions>)
         .await
-        .map_err(|e| lifecycle_error("restart", &name, e))
+        .map_err(|e| daemon_error(crate::daemon::Action::Restart, &name, e))
 }
 
 /// Does the shared network exist?
@@ -933,7 +967,7 @@ pub async fn network_create(name: &str) -> Result<()> {
         })
         .await
         .map(|_| ())
-        .map_err(|e| lifecycle_error("create network", name, e))
+        .map_err(|e| daemon_error(crate::daemon::Action::CreateNetwork, name, e))
 }
 
 // ---------------------------------------------------------------- inspect
@@ -981,7 +1015,7 @@ pub async fn inspect(id: &str) -> Result<ContainerDetails> {
     let info = docker
         .inspect_container(&name, None::<InspectContainerOptions>)
         .await
-        .map_err(|e| lifecycle_error("inspect", &name, e))?;
+        .map_err(|e| daemon_error(crate::daemon::Action::Inspect, &name, e))?;
 
     let state = info.state.as_ref();
     let ports = info
@@ -1073,7 +1107,7 @@ pub async fn inspect(id: &str) -> Result<ContainerDetails> {
             .into_iter()
             .map(|entry| match entry.split_once('=') {
                 Some((k, v)) if crate::config::Env::is_secret(k) && !v.is_empty() => {
-                    format!("{k}=••••••••")
+                    format!("{k}={}", crate::config::MASK)
                 }
                 _ => entry,
             })
@@ -1124,7 +1158,7 @@ pub async fn container_stats(id: &str) -> Result<ContainerStats> {
         .next()
         .await
         .ok_or_else(|| Error::not_found(format!("stats for {name}")))?
-        .map_err(|e| lifecycle_error("read stats for", &name, e))?;
+        .map_err(|e| daemon_error(crate::daemon::Action::ReadStats, &name, e))?;
 
     let cpu = sample.cpu_stats.as_ref();
     let pre = sample.precpu_stats.as_ref();

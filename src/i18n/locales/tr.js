@@ -15,6 +15,7 @@ export default {
     never: '—',
     cancel: 'Vazgeç',
     close: 'Kapat',
+    copy: 'Kopyala',
     documentation: 'Belgeler',
     buyMeCoffee: 'Bir kahve ısmarla',
     socialMedia: 'Sosyal medya',
@@ -54,6 +55,27 @@ export default {
     running: 'Çalışıyor',
     stopped: 'Durdu',
     containers: 'Konteynerler',
+  },
+
+  /**
+   * Tepsi simgesi ve native menü çubuğu — ikisini de Rust çiziyor.
+   *
+   * Yalnızca başka yerde karşılığı olmayan dizeler burada: tepsinin dört
+   * gezinme girdisi `nav`'dan, motor sözcükleri `system`'den, menü çubuğunun üç
+   * bağlantısı `about.links`'ten geliyor.
+   */
+  tray: {
+    checking: 'Docker denetleniyor…',
+    show: "StackVo'yu aç",
+    quit: 'Çık',
+    engineDown: 'Docker çalışmıyor',
+    engineUp: 'Docker çalışıyor',
+    noWorkspace: 'StackVo dizini seçilmedi',
+    noProjects: 'Proje yok',
+    containers: 'Konteynerler: {count}',
+    more: '+{count} proje daha…',
+    runningSummary: '{running}/{total} proje çalışıyor',
+    menuAbout: 'StackVo Hakkında',
   },
 
   quickActions: {
@@ -138,6 +160,15 @@ export default {
     gateway: 'Ağ geçidi',
     portMappings: 'Port eşlemeleri',
     internal: 'yalnızca iç ağ',
+    connection: 'Bağlantı dizesi',
+    connectionSubtitle:
+      'Bir servisin iki adresi vardır. Konteyner adı yalnızca Docker ağının içinde çözülür — bu makinedeki bir istemcinin yayınlanan portu kullanması gerekir.',
+    fromHost: 'Bu makineden',
+    fromHostHint: 'Compass, TablePlus, psql',
+    fromContainer: 'Başka bir konteynerden',
+    fromContainerHint: 'projenizin kendi uygulaması',
+    notPublished:
+      'Konteyner çalışıyor ama host tarafına hiçbir port yayınlamıyor; bu makineden erişilemez.',
     credentials: 'Kimlik bilgileri',
     noCredentials: 'Bu servis .env üzerinden kimlik bilgisi tanımlamıyor.',
     reveal: 'Değeri göster',
@@ -543,6 +574,10 @@ export default {
   },
 
   release: {
+    load: 'Paket yükle',
+    loadExplain:
+      'Kaydet’in yazdığı bir .tar dosyasını bu makinenin Docker’ına geri okur. İnternete kapalı bir devrin alıcı ucu olduğu için ne proje ne plan gerektirir.',
+    loaded: 'Docker şunları aldı:',
     title: 'Üretim imajı',
     explain:
       'Bu projenin hâlihazırda çalıştırdığı imajdan türetilen, dağıtılabilir bir imaj — aynı PHP sürümü, aynı eklentiler, aynı web sunucusu. Onun kopyası değil: geliştirme imajında uygulama kodu yok (kaynak diskinizden bağlanıyor) ve Xdebug taşıyor.',
@@ -938,6 +973,42 @@ export default {
       nodejsHint:
         'PHP konteyneri içindeki varlık derlemeleri için — Node projesi çalışma zamanından ayrıdır.',
     },
+    secrets: {
+      title: 'Kimlik bilgileri nerede tutuluyor',
+      description:
+        'Veritabanı şifreleri, token’lar ve sunucu kimlikleri .env yerine bu makinenin anahtar deposunda durabilir.',
+      whatItDoes:
+        'Bir kimlik bilgisini taşımak, onu Keychain, Credential Manager veya Secret Service içine kaydeder ve .env’de bir referans bırakır. Değer artık yedeklenen, senkronlanan ve destek konularına yapıştırılan dosyada değil.',
+      stillGenerated:
+        'Değer hâlâ generated/docker-compose.dynamic.yml içine yazılıyor — Compose onu oradan okuyor. Bu işlem şifreyi .env’den çıkarır; diskten çıkarmaz.',
+      cliCannotRead:
+        'stackvo.sh komut satırı aracı bunları okuyamaz. Bu çalışma alanında onu da kullanıyorsanız kimlik bilgilerini .env’de bırakın.',
+      noKeystore:
+        'Bu makinede uygulamanın ulaşabildiği bir anahtar deposu yok, bu yüzden hiçbir şey taşınamaz.',
+      unresolvable:
+        'Bu kimlik bilgileri anahtar deposunu işaret ediyor ama depo cevap vermedi. Çözülene kadar dosya üretimi engelli — anahtar zincirinizi açın ya da değeri geri alın.',
+      none: 'Bu çalışma alanında tanımlı kimlik bilgisi yok.',
+      inKeystore: 'Anahtar deposunda',
+      inEnvFile: '.env içinde, düz metin',
+      move: 'Taşı',
+      restore: 'Geri al',
+    },
+    policy: {
+      title: 'Bu makine yönetiliyor',
+      body: 'Bu makinedeki bir politika dosyası {count} ayarı belirliyor. Kilitlediği değerler burada değiştirilemez.',
+      source: 'Politika dosyası:',
+      registry: 'İmajlar şunun üzerinden çekiliyor:',
+      notASecurityBoundary:
+        'Politika dosyası, bu uygulamaya kurumunuzun niyetini bildirir. Bir güvenlik sınırı değildir — STACKVO_POLICY_FILE ile başka bir dosyaya yönlendirilebilir.',
+      brokenTitle: 'Politika dosyası tam olarak uygulanmadı',
+      brokenBody:
+        'Aşağıdaki kısımlardan hiçbiri uygulanmadı ve uygulamanın geri kalanı yönetilmiyormuş gibi çalışıyor. Bu dosyayı dağıtan kişi muhtemelen yürürlükte olduğunu sanıyor.',
+      managed: 'Yönetiliyor',
+      managedHint: 'Bu değer, bu makinedeki bir politika dosyasından geliyor.',
+      locked: 'Kilitli',
+      lockedHint:
+        'Bir politika dosyası bu değeri belirliyor ve burada değiştirilmesine izin vermiyor.',
+    },
     shape: {
       title: 'Alan adı ve ağ',
       sectionDesc: 'Projelere nereden erişileceği ve nasıl sunulacağı.',
@@ -1104,6 +1175,15 @@ export default {
     cancel: 'Vazgeç',
   },
 
+  terminal: {
+    title: 'Terminal',
+    explain:
+      'Bu projenin konteyneri içinde bir kabuk, pencerenin içinde. Sistem terminali hâlâ başlıktan bir tık uzakta — bu, sayfadan çıkmadan hızlı bir bakış için.',
+    needsRunning: 'Önce projeyi başlatın — kabuk konteynerin içinde çalışır.',
+    start: 'Kabuk aç',
+    stop: 'Kapat',
+    exited: 'Kabuk sonlandı ({code}).',
+  },
   workers: {
     title: 'İşçiler',
     explain:
@@ -1418,6 +1498,14 @@ export default {
       'Boyutlar, isteğe bağlı K, M veya G ekiyle bir sayıdır — 256M, 1G, 512. Süreler tam saniyedir. -1 sınırsız demektir.',
     serverDirectivesUnsupported:
       'Yalnızca nginx, caddy ve frankenphp için direktif eklenebilecek üretilmiş bir yapılandırma var.',
+    unlockTheKeystore:
+      'Anahtar zincirinizi açıp yeniden deneyin — bu ayarın şifresi orada saklanıyor.',
+    onlyCredentialsMove:
+      'Anahtar deposunda yalnızca şifreler, token’lar ve sunucu kimlikleri tutulabilir.',
+    keystoreEntryIsGone:
+      'Giriş anahtar deposundan silinmiş. Servisi geri getirmek için değeri yeniden girin.',
+    settingIsManaged:
+      'Bu değer, bu makinedeki bir politika dosyasından geliyor. Makineyi yöneten kişiye danışın.',
     presetIsExportedJson:
       'Bir hazır ayar, Ayarlar → Hazır ayarlar bölümünün dışa aktardığı JSON dosyasıdır.',
     presetWrongFile:
@@ -1458,6 +1546,7 @@ export default {
     GENERATE_FAILED: 'Üretim başarısız oldu.',
     BUILD_FAILED: 'Derleme başarısız oldu.',
     PERMISSION_DENIED: 'Yetki verilmedi.',
+    FORBIDDEN: 'Bu makinedeki bir politika buna izin vermiyor.',
     CONFLICT: 'Bu işlem zaten çalışıyor.',
     UNKNOWN: 'Beklenmeyen bir hata oluştu.',
   },

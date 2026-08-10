@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, toRef, watch } from 'vue';
+import { onMounted, ref, toRef, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRelease } from '@/composables/useRelease';
 import ErrorAlert from '@/components/ErrorAlert.vue';
@@ -17,7 +17,12 @@ const props = defineProps({
 
 const { t } = useI18n();
 
-const { plan, tag, result, busy, error, load, build, save } = useRelease(toRef(props, 'name'));
+const { plan, tag, result, busy, error, load, build, save, loadBundle } = useRelease(
+  toRef(props, 'name')
+);
+
+/** What `docker load` said it installed, so the answer is Docker's, not ours. */
+const loaded = ref(null);
 
 // Loaded on mount, and again when the route moves to another project. The
 // view used to call this as part of one big `load()`; owning it here means the
@@ -29,6 +34,21 @@ watch(() => props.name, load);
 async function saveTo() {
   const { save: choose } = await import('@tauri-apps/plugin-dialog');
   await save((defaultPath) => choose({ defaultPath }));
+}
+
+/**
+ * The other direction, and the reason it is on this pane rather than a page of
+ * its own: the bundle a machine receives is the artefact this pane produced.
+ *
+ * Offered whether or not this project has a plan — the receiving machine may
+ * have no checkout at all, and refusing to open a tarball because the *local*
+ * project is unbuilt would be answering the wrong question.
+ */
+async function loadFrom() {
+  const { open: choose } = await import('@tauri-apps/plugin-dialog');
+  loaded.value = await loadBundle(() =>
+    choose({ multiple: false, filters: [{ name: 'Docker image', extensions: ['tar'] }] })
+  );
 }
 </script>
 
@@ -139,5 +159,29 @@ async function saveTo() {
         </v-btn>
       </template>
     </template>
+
+    <!-- LOAD ------------------------------------------------------------- -->
+    <!-- Outside the plan/build/verify chain above, deliberately: this is the
+         step that runs on the machine that received the bundle, and that
+         machine has nothing to plan. -->
+    <v-divider class="my-4" />
+    <div class="text-caption text-medium-emphasis mb-2">{{ t('release.loadExplain') }}</div>
+    <v-btn
+      variant="tonal"
+      prepend-icon="mdi-upload-outline"
+      :loading="busy === 'loadBundle'"
+      :disabled="!!busy"
+      @click="loadFrom"
+    >
+      {{ t('release.load') }}
+    </v-btn>
+    <v-alert v-if="loaded?.length" type="success" variant="tonal" density="compact" class="mt-3">
+      {{ t('release.loaded') }}
+      <ul class="mt-1">
+        <li v-for="image in loaded" :key="image">
+          <code>{{ image }}</code>
+        </li>
+      </ul>
+    </v-alert>
   </v-card>
 </template>

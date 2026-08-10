@@ -214,6 +214,13 @@ export const api = {
   dbDump: (service, path) => call('db_dump', { service, path }),
   /** DESTRUCTIVE — replaces the target database. Confirm before calling. */
   dbRestore: (service, path) => call('db_restore', { service, path }),
+  /**
+   * The string a client is pasted into, or null for a service without one.
+   *
+   * Two addresses come back: the host one and the container one. The password
+   * is bullets until `reveal` — the same act `envReveal` is.
+   */
+  serviceConnection: (service, reveal = false) => call('service_connection', { service, reveal }),
 
   // --- Xdebug ---------------------------------------------------------------
   // Three answers, not one: asked for in the manifest, compiled into the image,
@@ -255,6 +262,8 @@ export const api = {
   /** Builds, then runs the result and asks whether it leaked an .env. */
   releaseBuild: (name, tag = null) => call('release_build', { name, tag }),
   releaseSave: (name, path, tag = null) => call('release_save', { name, tag, path }),
+  /** Read a bundle back in on a machine that may have no registry at all. */
+  releaseLoad: (path) => call('release_load', { path }),
 
   // Xdebug's own profiler. Blackfire needs an account and SPX is not in the
   // extension contract; xdebug.mode=profile needs neither.
@@ -351,13 +360,27 @@ export const api = {
   updaterStatus: () => call('updater_status'),
   /** The third-party licence notice compiled into this build, as markdown. */
   licencesNotice: () => call('licences_notice'),
+  /**
+   * What an administrator has decided on this machine, if anything.
+   *
+   * Keys only, never values — `envGet` is the redacting reader and this must
+   * not become a way past it.
+   */
+  policyStatus: () => call('policy_status'),
+  /** Where each credential lives, and whether this machine has a keystore. */
+  secretsStatus: () => call('secrets_status'),
+  /** Move one credential out of `.env` and into the OS keystore. */
+  secretMove: (key) => call('secret_move', { key }),
+  /** Put it back in `.env` and forget the keystore entry. */
+  secretRestore: (key) => call('secret_restore', { key }),
   /** The desktop's own accent colour, so the app can match it. */
   systemAccent: () => call('system_accent'),
   logsInfo: () => call('logs_info'),
   /** Writes the diagnostic archive to a path the user chose in the save dialog. */
   diagnosticsBundle: (path) => call('diagnostics_bundle', { path }),
   localeGet: () => call('locale_get'),
-  trayRelabel: () => call('tray_relabel'),
+  /** Redraw the tray and menu bar, optionally adopting a new catalog first. */
+  trayRelabel: (labels) => call('tray_relabel', { labels }),
   appsAvailable: () => call('apps_available'),
   windowCloseAction: (action, remember) => call('window_close_action', { action, remember }),
 

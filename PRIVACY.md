@@ -30,18 +30,30 @@ Everything here is a plain file on your own machine. Nothing is encrypted at
 rest and nothing needs a password to read, because none of it leaves the
 account it belongs to.
 
-| What                              | Where                                                                                                                                    | How long                                                                                                                 |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `preferences.json` — app settings | macOS `~/Library/Application Support/StackVo`, Windows `%APPDATA%\StackVo`, Linux `~/.config/stackvo`                                    | Until you delete it                                                                                                      |
-| `preferences.corrupt-<UTC>.json`  | Beside it                                                                                                                                | Until you delete it — a file that failed to parse, kept rather than overwritten so the settings it held can be recovered |
-| Application log, rotated daily    | macOS `~/Library/Logs/StackVo`, Windows `%LOCALAPPDATA%\StackVo\logs`, Linux `~/.local/state/stackvo/logs`                               | **7 files**, oldest deleted automatically                                                                                |
-| `crash-<UTC>-<pid>.txt`           | With the logs                                                                                                                            | **10 reports**, oldest deleted automatically                                                                             |
-| Diagnostic bundle (`.zip`)        | Only where you choose to save it, from the system save dialog                                                                            | Yours — the app never keeps a copy                                                                                       |
-| Stack configuration and projects  | Your workspace: `.env`, `stackvo.json`, generated compose and server files, project sources, container logs under `logs/projects/<name>` | Until you delete them                                                                                                    |
+| What                                                                                                                                                                             | Where                                                                                                                                    | How long                                                                                                                                                               |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `preferences.json` — app settings                                                                                                                                                | macOS `~/Library/Application Support/StackVo`, Windows `%APPDATA%\StackVo`, Linux `~/.config/stackvo`                                    | Until you delete it                                                                                                                                                    |
+| `preferences.corrupt-<UTC>.json`                                                                                                                                                 | Beside it                                                                                                                                | Until you delete it — a file that failed to parse, kept rather than overwritten so the settings it held can be recovered                                               |
+| `stats-history.json` — CPU and memory readings per container, so a chart is not empty after a restart                                                                            | Beside `preferences.json`                                                                                                                | **2 hours** of samples. Older readings are discarded when the file is read, not merely hidden — a longer gap would draw as a flat line rather than as absence          |
+| Application log, rotated daily                                                                                                                                                   | macOS `~/Library/Logs/StackVo`, Windows `%LOCALAPPDATA%\StackVo\logs`, Linux `~/.local/state/stackvo/logs`                               | **7 files**, oldest deleted automatically                                                                                                                              |
+| `crash-<UTC>-<pid>.txt`                                                                                                                                                          | With the logs                                                                                                                            | **10 reports**, oldest deleted automatically                                                                                                                           |
+| `audit.jsonl` — one line per privileged or irreversible act: host-file writes, certificate trust, project deletion, `.env` keys changed, database restores, image bundles loaded | With the logs                                                                                                                            | **Never deleted by the app.** That is the point of it — a record rotated away after a week cannot answer a question asked after two. Keys and names only, never values |
+| Diagnostic bundle (`.zip`)                                                                                                                                                       | Only where you choose to save it, from the system save dialog                                                                            | Yours — the app never keeps a copy                                                                                                                                     |
+| Stack configuration and projects                                                                                                                                                 | Your workspace: `.env`, `stackvo.json`, generated compose and server files, project sources, container logs under `logs/projects/<name>` | Until you delete them                                                                                                                                                  |
 
 Deleting all four of the app's own locations is supported and loses nothing but
 settings and history. The workspace is separate on purpose: it is the stack, not
 the app.
+
+**One file is read and never written**, and it is worth naming here because it
+is the only one somebody other than you may have put there: a policy file at
+`/Library/Managed Preferences/com.stackvo.desktop.json` (macOS),
+`%ProgramData%\StackVo\policy.json` (Windows) or `/etc/stackvo/policy.json`
+(Linux). If your machine is managed, that file can set app settings, prevent
+you from changing them, and **redirect every image pull to a registry your
+organisation runs** rather than Docker Hub. **Settings** shows you when one is
+in force and which file it is. Nothing is sent to it or about it; it is an
+input, not a destination.
 
 ### What the log contains
 
@@ -87,7 +99,7 @@ it.
 | What you do                     | Where it goes                                                                                                                                                                                                                                                                        |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Create a project from a Git URL | The remote **you** typed, over the credentials your own `git` is configured with                                                                                                                                                                                                     |
-| Start the stack                 | Whatever registry the images name — Docker Hub by default. Your Docker daemon does this, with its own configuration                                                                                                                                                                  |
+| Start the stack                 | Whatever registry the images name — Docker Hub by default, or the one a policy file on a managed machine names instead. Your Docker daemon does this, with its own configuration                                                                                                     |
 | Open a share tunnel             | `cloudflared` publishes the site at a `trycloudflare.com` address. **The URL is public**: anyone who has it reaches the site on your machine, without a password, until you stop the tunnel                                                                                          |
 | Follow a link in the app        | Your browser opens it. The app's own links point at `stackvo.github.io`, `github.com`, `docs.docker.com`, and — from the support and share menus — `bsky.app`, `buymeacoffee.com`, `discord.gg`, `fosstodon.org`, `reddit.com`, `twitter.com`, `www.linkedin.com`, `www.youtube.com` |
 | Send a diagnostic bundle        | Wherever you send it                                                                                                                                                                                                                                                                 |
@@ -106,10 +118,26 @@ into your workspace — you can read every one of them before building.
 
 Naming these is more useful than a reassurance:
 
-- **`.env` holds database passwords in plain text.** File permissions are the
-  only boundary. On a managed machine that file is also whatever your backup and
-  sync tools do with it. The readiness review tracks OS-keystore storage as a
-  future contract change; today this is the honest state.
+- **Database passwords are on the disk in plain text, in two files.** `.env`
+  holds them, and so does `generated/docker-compose.dynamic.yml`, which is what
+  Compose actually reads and which is rendered from `.env` on every generate.
+  File permissions are the only boundary. On a managed machine `.env` is also
+  whatever your backup and sync tools do with it.
+
+  **Settings → Where credentials are kept** moves a credential into this
+  machine's keystore — Keychain, Credential Manager, or the Secret Service —
+  and leaves a `keychain:` reference in `.env` in its place. That takes it out
+  of the file that gets backed up, synced and pasted into support threads. **It
+  does not take it off the disk**: the real value is still rendered into
+  `generated/docker-compose.dynamic.yml`, because that is where Compose reads it
+  from. Getting it out of there too changes the generated bytes and is tracked
+  as a v2 change — see
+  [ADR 0010](docs/adr/0010-secrets-move-out-of-env-not-off-the-disk.md).
+
+  The `stackvo.sh` command-line tool cannot read a moved credential and would
+  use the reference string as the password. If you use both tools on one
+  workspace, leave the credentials in `.env`.
+
 - **Docker access is total.** The app manages containers, so it can read and
   write anything those containers mount — including your project sources.
 - **A tunnel is a publication.** See above; it is the one action in the app that

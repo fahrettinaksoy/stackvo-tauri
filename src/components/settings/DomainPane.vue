@@ -12,6 +12,7 @@ import {
 } from '@/composables/useStackShape';
 import SettingsGroup from '@/components/SettingsGroup.vue';
 import ErrorAlert from '@/components/ErrorAlert.vue';
+import ManagedBadge from '@/components/settings/ManagedBadge.vue';
 
 /**
  * How the stack is addressed: the domain suffix, the hosts file, the proxy and
@@ -54,6 +55,7 @@ const {
   saved,
   routingChanged,
   suffixChanged,
+  isLocked,
 } = env;
 
 const {
@@ -133,6 +135,7 @@ onMounted(() => {
           :label="t('settings.shape.suffixLabel')"
           :hint="t('settings.shape.suffixLabelHint')"
           :rules="suffixLabelRules"
+          :disabled="isLocked('DEFAULT_TLD_SUFFIX')"
           prepend-inner-icon="mdi-tag-outline"
           persistent-hint
           density="comfortable"
@@ -147,6 +150,7 @@ onMounted(() => {
           :label="t('settings.shape.suffixTld')"
           :hint="t('settings.shape.suffixTldHint')"
           :rules="suffixTldRules"
+          :disabled="isLocked('DEFAULT_TLD_SUFFIX')"
           prepend-inner-icon="mdi-web"
           persistent-hint
           density="comfortable"
@@ -168,8 +172,9 @@ onMounted(() => {
       <v-chip size="small" variant="tonal" prepend-icon="mdi-database-outline">
         phpmyadmin.{{ effective('DEFAULT_TLD_SUFFIX') }}
       </v-chip>
+      <ManagedBadge env-key="DEFAULT_TLD_SUFFIX" />
       <v-btn
-        v-if="!isDefault('DEFAULT_TLD_SUFFIX')"
+        v-if="!isDefault('DEFAULT_TLD_SUFFIX') && !isLocked('DEFAULT_TLD_SUFFIX')"
         size="x-small"
         variant="text"
         prepend-icon="mdi-restore"
@@ -293,6 +298,7 @@ onMounted(() => {
           :label="t('settings.shape.network')"
           :hint="t('settings.shape.networkHint')"
           :rules="networkRules"
+          :disabled="isLocked('DOCKER_DEFAULT_NETWORK')"
           prepend-inner-icon="mdi-lan"
           persistent-hint
           density="comfortable"
@@ -300,8 +306,9 @@ onMounted(() => {
           @update:model-value="(v) => edit('DOCKER_DEFAULT_NETWORK', v)"
         >
           <template #append-inner>
+            <ManagedBadge env-key="DOCKER_DEFAULT_NETWORK" class="mr-1" />
             <v-tooltip
-              v-if="!isDefault('DOCKER_DEFAULT_NETWORK')"
+              v-if="!isDefault('DOCKER_DEFAULT_NETWORK') && !isLocked('DOCKER_DEFAULT_NETWORK')"
               :text="t('settings.shape.reset')"
               location="top"
             >

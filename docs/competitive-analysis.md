@@ -916,18 +916,28 @@ standing decisions were both taken in Sprint 17 — recorded here because the
 | --- | --- | --- |
 | **P2-11 four runtime generators** | **delivered** (Sprint 18) | Nothing. The predicted contract change happened — `project.schema.json` gained a runtime enum of six and a shared lang block — but the cost estimate collapsed once the shape was found: one `LangConfig` (version, optional install/build, start, port) serves all four, one template renders them, and compose reuses node's service block byte-for-byte in structure. Both open ends closed in Sprint 19: the Bash CLI is deleted, and the Rust version list runs to 1.84. |
 
-**The roadmap is complete — and as of Sprint 19, so is the housekeeping.**
-Every P0–P3 item is delivered or closed by decision, and the three upstream
-leftovers are done: `core/cli` and the root `stackvo.sh` launcher are deleted
-(the audit first proved the app spawns no shell anywhere — certificates call
-mkcert directly, the script mention in `certs.rs` was only a docstring — so
-the `bash` preflight requirement is gone too, and the workspace marker moved
-from `core/cli/stackvo.sh` to `core/templates`); the Rust version list runs
-to 1.84; and the mail question closed on the owner's terms in Sprint 20:
-both catchers ship, neither is on by default, and the Mail nav destination
-offers the one-click enable-and-start when its page finds no catcher running. The only line
-left open anywhere is upstream's `mongo-express` profile naming (C-09), which
-is a one-word template question, not a dependency.
+**The roadmap is complete — and as of Sprint 19, so is the housekeeping in this
+repository.** Every P0–P3 item is delivered or closed by decision. The app no
+longer spawns a shell anywhere — the audit proved it, certificates call mkcert
+directly, the script mention in `certs.rs` was only a docstring — so the `bash`
+preflight requirement is gone and the workspace marker moved from
+`core/cli/stackvo.sh` to `core/templates`. The Rust version list runs to 1.84.
+And the mail question closed on the owner's terms in Sprint 20: both catchers
+ship, neither is on by default, and the Mail nav destination offers the
+one-click enable-and-start when its page finds no catcher running.
+
+**Correction (10 August 2026).** This paragraph used to say `core/cli` and the
+root `stackvo.sh` "are deleted". Checked against the public repository rather
+than against intent: `github.com/stackvo/stackvo` still carries **both**, plus
+`core/ui`, on a `main` last pushed 2026-06-29. What is true is the sentence
+above — *this* app needs neither. Deleting them upstream is a decision nobody
+has taken, and writing it as done is how a dependency stops being tracked. The
+same check turned up the more expensive version of this: upstream has no
+`projects/` directory at all, so the contract validator's manifest suite has
+never run in CI — see the readiness report §38.4.
+
+The only *contract* line left open is upstream's `mongo-express` profile naming
+(C-09), a one-word template question rather than a dependency.
 
 And one carried forward from §7, the only piece of the Bash removal still open:
 

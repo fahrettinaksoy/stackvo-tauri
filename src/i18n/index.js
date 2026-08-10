@@ -2,6 +2,12 @@ import { createI18n } from 'vue-i18n';
 import { en as vuetifyEn, tr as vuetifyTr } from 'vuetify/locale';
 import tr from './locales/tr';
 import en from './locales/en';
+// Statically, unlike `@/lib/ipc` below: that one is deferred to break a cycle,
+// and this one imports nothing. Loading it dynamically added a module
+// resolution to the boot chain, which `boot()` awaits — one `flushPromises()`
+// in `app-shell.spec.js` stopped being enough and the requirements gate was
+// asserted before it had rendered.
+import { trayLabels } from '@/lib/trayLabels';
 
 const STORAGE_KEY = 'stackvo.locale';
 
@@ -55,9 +61,14 @@ export async function setLocale(locale) {
   // The tray menu is built in Rust and cannot see localStorage, so the choice
   // has to reach preferences.json as well — and the menu has to be re-labelled,
   // or it keeps the old language until the next launch and reads as broken.
+  //
+  // The words go with it. Rust holds a fallback table for the two languages it
+  // was born with, but it is only reached before the webview boots; from here
+  // on the catalog below is what the tray says, which is what stops a third
+  // language from being a change to `tray.rs`.
   const { api } = await import('@/lib/ipc');
   await api.prefsSet({ locale }).catch(() => {});
-  await api.trayRelabel().catch(() => {});
+  await api.trayRelabel(trayLabels(i18n.global.t)).catch(() => {});
 }
 
 /**
@@ -76,8 +87,16 @@ export async function setLocale(locale) {
 export async function syncLocale() {
   const { api } = await import('@/lib/ipc');
   const resolved = await api.localeGet().catch(() => null);
-  if (resolved !== 'tr' && resolved !== 'en') return;
 
-  localStorage.setItem(STORAGE_KEY, resolved);
-  if (i18n.global.locale.value !== resolved) i18n.global.locale.value = resolved;
+  if (resolved === 'tr' || resolved === 'en') {
+    localStorage.setItem(STORAGE_KEY, resolved);
+    if (i18n.global.locale.value !== resolved) i18n.global.locale.value = resolved;
+  }
+
+  // Sent even when the language did not change, and even when Rust answered
+  // with something this build does not ship. The tray was drawn from the
+  // fallback table during `setup()`, and handing it the real catalog now is
+  // what makes that table a bootstrap detail rather than a second translation
+  // of the app — including for a locale the fallback has never heard of.
+  await api.trayRelabel(trayLabels(i18n.global.t)).catch(() => {});
 }
