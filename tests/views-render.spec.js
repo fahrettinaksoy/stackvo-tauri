@@ -263,6 +263,58 @@ describe('what the pages show once there is data', () => {
     expect(text).toContain('0.1.0');
     wrapper.unmount();
   });
+
+  /**
+   * The licence notice, which is a legal obligation rather than a feature.
+   *
+   * MIT, BSD, ISC and Apache-2.0 all require the notice to travel with the
+   * software, and a `NOTICE.md` in the repository does not travel with a
+   * `.dmg`. So the text is compiled into the binary and this window is the only
+   * place somebody holding just the app can read it — which makes "the button
+   * opens it" the assertion that the obligation is actually met.
+   */
+  it('About opens the third-party notice compiled into the build', async () => {
+    replies.licencesNotice = '# Third-party notices\n\n| bollard | 0.21.0 | Apache-2.0 |';
+    const wrapper = await render(About);
+
+    const button = wrapper
+      .findAll('button')
+      .find((b) => b.text().includes(en.about.licences));
+    expect(button, 'no licences button in the About window').toBeTruthy();
+
+    await button.trigger('click');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+
+    // The dialog teleports to <body>, so the wrapper's own tree does not hold
+    // it — the same reason the shell suite stubs its dialogs out.
+    expect(document.body.textContent).toContain('Third-party notices');
+    expect(document.body.textContent).toContain('bollard');
+
+    wrapper.unmount();
+    delete replies.licencesNotice;
+  });
+
+  /**
+   * A build that cannot answer must say so. An empty panel reads as "this app
+   * has no dependencies", which is the one thing it certainly is not.
+   */
+  it('About says so when the notice cannot be read', async () => {
+    replies.licencesNotice = () => Promise.reject(new Error('no notice'));
+    const wrapper = await render(About);
+
+    const button = wrapper
+      .findAll('button')
+      .find((b) => b.text().includes(en.about.licences));
+    await button.trigger('click');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+
+    expect(document.body.textContent).toContain(en.about.licencesFailed);
+
+    wrapper.unmount();
+    delete replies.licencesNotice;
+  });
 });
 
 /**

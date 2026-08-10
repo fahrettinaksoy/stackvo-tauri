@@ -79,12 +79,19 @@ jobs:
   # `Settings.vue`'s 3,172 any of them reached. A count of tests answers "is
   # there effort here"; only coverage answers "is there a hole here".
   #
-  # **No threshold, deliberately.** A floor picked before anyone has seen the
+  # **There is a floor now.** This job reported and never failed for four rounds
+  # of work, on the argument that a threshold picked before anyone has seen the
   # number is either low enough to bless the gap or high enough to fail on the
-  # first run, and both teach the team to write tests that move a percentage.
-  # This job reports into the run summary and never fails the build. Turning it
-  # into a gate is a separate, informed decision — one line in vitest.config.js
-  # and a `--fail-under-lines` here.
+  # first run. The numbers have since been watched across those rounds — Rust
+  # 61.60 → 64.34, front end 30.70 → 89.65 — so the floors in
+  # `tools/coverage-floors.mjs` are set from evidence, sit below the measurement
+  # with stated headroom, and exist to answer one question the report never
+  # could: *did that just get worse.*
+  #
+  # The measuring steps stay `continue-on-error` so a failing test still
+  # produces a table rather than taking this job down for a reason `build`
+  # already reports. The gate is a separate final step, and it fails when a
+  # report is missing rather than passing on an empty comparison.
   #
   # Ubuntu only: coverage is a property of the code, not of the platform, and
   # the cfg-gated Windows and macOS branches are covered by `build` compiling
@@ -139,6 +146,17 @@ jobs:
           cargo llvm-cov --manifest-path src-tauri/Cargo.toml \
             --ignore-run-fail --summary-only | tee rust-coverage.txt
 
+      # `report` re-reads the profiling data the step above already produced, so
+      # this is a second rendering of one measurement rather than a second run
+      # of the test suite. The gate reads the JSON; the summary below reads the
+      # text. Parsing a percentage out of a column-aligned table is how a gate
+      # starts silently comparing the wrong number.
+      - name: Render the Rust report for the gate
+        continue-on-error: true
+        run: |
+          cargo llvm-cov report --manifest-path src-tauri/Cargo.toml \
+            --json --summary-only > rust-coverage.json
+
       - name: Measure the front end
         continue-on-error: true
         run: npm run test:js:coverage
@@ -171,6 +189,12 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # The only step in this job that can fail it. Deliberately last: the
+      # summary above is written first, so a breach is read next to the numbers
+      # that caused it instead of in an empty run page.
+      - name: Hold the floors
+        run: node tools/check-coverage.mjs
+
   # Supply chain. One platform is enough — the dependency graph is the same
   # everywhere, and installing cargo-deny three times to get one answer is waste.
   supply-chain:
@@ -200,6 +224,20 @@ jobs:
       # user, and failing the build on one blocks work for no gain in safety.
       - name: npm audit
         run: npm audit --omit=dev --audit-level=moderate
+
+      # The other half of a supply chain: what we owe the people whose code we
+      # ship. Every permissive licence here requires its notice to travel with
+      # the binary, and NOTICE.md is compiled into it — so a dependency added
+      # without regenerating the notice ships an incomplete one. This compares
+      # the inventory against Cargo.lock and package-lock.json and fails when
+      # something shipped is not named.
+      #
+      # Only the inventory. The licence *texts* are read out of the local
+      # package sources and depend on which platforms have been fetched; a gate
+      # that goes red because nobody built for Windows is a gate that gets
+      # switched off.
+      - name: Third-party notices
+        run: npm run notice:check
 
   # The contract checks need a StackVo checkout to compare against, so they run
   # separately and only where one can be fetched.

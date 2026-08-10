@@ -23,6 +23,7 @@ pub mod git;
 pub mod hints;
 pub mod hosts;
 pub mod inflight;
+pub mod licences;
 pub mod locale;
 pub mod logging;
 pub mod mail;
@@ -442,6 +443,7 @@ pub fn run() {
             commands::open_in_browser,
             commands::open_folder,
             commands::updater_status,
+            commands::licences_notice,
             commands::system_accent,
             commands::logs_info,
             commands::diagnostics_bundle,

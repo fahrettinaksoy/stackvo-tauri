@@ -75,6 +75,21 @@ const { i18n } = await import('@/i18n');
 
 const vuetify = createVuetify({ components, directives });
 
+/**
+ * Every shell this file has mounted and not yet taken down.
+ *
+ * A mounted shell polls — two seconds for host metrics, five for the engine —
+ * and eleven of the mounts in this file were never unmounted, so their timers
+ * ran for the rest of the suite and then fired against a `document` the
+ * environment had already torn down. It surfaced as "ReferenceError: document
+ * is not defined" attributed to whichever file happened to be running, failed
+ * about one run in two, and had no test name on it.
+ *
+ * Tracking the mounts here rather than adding `unmount()` to eleven tests is
+ * deliberate: the next test to be written would have been the twelfth.
+ */
+const shells = [];
+
 function mountShell() {
   const router = createRouter({
     history: createMemoryHistory(),
@@ -87,7 +102,7 @@ function mountShell() {
     ],
   });
 
-  return mount(App, {
+  const shell = mount(App, {
     global: {
       plugins: [createPinia(), router, vuetify, i18n],
       stubs: {
@@ -99,11 +114,24 @@ function mountShell() {
       },
     },
   });
+
+  shells.push(shell);
+  return shell;
 }
 
 let wrapper;
 beforeEach(() => {
   wrapper = mountShell();
+});
+
+// Whoever mounts, unmounts — including the tests that forgot to.
+afterEach(() => {
+  for (const shell of shells.splice(0)) {
+    // A test may have taken its own shell down already; `exists()` is false
+    // once a wrapper is unmounted, and unmounting twice warns.
+    if (shell.exists()) shell.unmount();
+  }
+  wrapper = null;
 });
 
 describe('the navigation drawer', () => {
@@ -248,6 +276,8 @@ describe('the requirements gate', () => {
   });
 
   afterEach(() => {
+    gate?.unmount();
+    gate = null;
     ipc.preflight = null;
     for (const key of Object.keys(calls)) delete calls[key];
   });
@@ -588,6 +618,46 @@ describe('the bootstrap gate', () => {
     // Everything this screen does can be done again from inside the app, so a
     // setup that will not complete must not be the end of the road.
     expect(shell.text()).toContain(i18n.global.t('bootstrap.retry'));
+  });
+});
+
+/**
+ * The shell's `onMounted` is async, which means every line after its first
+ * `await` runs at a time when the component may already be gone: a window
+ * closed during a slow boot, or — the case that produced this — a test that
+ * unmounts while `boot()` is in flight.
+ *
+ * The failure it caused had no test name on it. `metrics.start()` ran after
+ * `onUnmounted` had already called `metrics.stop()`, so its two-second timer
+ * belonged to nothing and nothing could clear it; long after the file finished,
+ * it read `document.visibilityState` on a torn-down environment and vitest
+ * reported an uncaught exception against whichever file happened to be running.
+ * It failed about one run in two.
+ */
+describe('a shell that is unmounted while booting', () => {
+  afterEach(() => {
+    for (const key of Object.keys(calls)) delete calls[key];
+  });
+
+  it('starts no polling it cannot stop', async () => {
+    // The file-level shell first: it is mid-boot too, and this test is about
+    // there being exactly one thing that could poll.
+    wrapper.unmount();
+    wrapper = null;
+
+    const polled = vi.fn(() => null);
+    calls.host_stats = polled;
+
+    const shell = mountShell();
+    shell.unmount();
+    // The awaited half of `onMounted` resolves here, after the unmount.
+    await flushPromises();
+
+    expect(
+      polled,
+      'the metrics poll started after the shell was unmounted — the timer it \
+installs has no owner and nothing will clear it'
+    ).not.toHaveBeenCalled();
   });
 });
 

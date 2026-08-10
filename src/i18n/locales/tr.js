@@ -758,6 +758,10 @@ export default {
       sponsor: 'Bir kahve ısmarla',
     },
     copyright: 'MIT lisanslı · © 2026 Fahrettin Aksoy',
+    licences: 'Üçüncü taraf lisansları',
+    licencesDesc: 'Bu sürümle birlikte gelen bildirimler, derlendiği hâliyle.',
+    licencesFailed: 'Lisans bildirimi bu sürümden okunamadı.',
+    close: 'Kapat',
   },
   settings: {
     servers: {

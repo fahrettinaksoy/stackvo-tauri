@@ -34,17 +34,39 @@ Ayrıntı için §4e.
 
 ## 1. Ölçüm
 
-| | Sayı |
-|---|---|
-| Toplam IPC komutu | 142 |
-| Frontend kaynak dosyası | 47 |
-| Bunlardan `@tauri-apps` kullanan | 12 |
-| **Veri katmanının geçtiği fonksiyon** | **1** (`src/lib/ipc.js` → `call()`) |
-| Docker'a bollard (API) ile giden komut | 12 |
-| Docker'a `docker compose` (CLI) ile giden komut | 16 |
-| Host dosya sistemine dokunan komut | 17 |
-| Ayrıcalık (parola) gerektiren komut | 9 |
-| Masaüstüne özgü komut | 15 (bunların yalnızca **4**'ü web'de gerçekten anlamsız — §4c) |
+**Yeniden ölçüldü: 8 Ağustos 2026.** İlk sürümdeki sayılar 2026-08-07'ye aitti
+ve o tarihten sonra ağaç büyüdü: bu tablodaki her satır bugün yeniden sayıldı.
+Sayıların bayatlaması bu dokümanın kendi tezine aykırıydı ve düzeltilmesi tek
+başına yetmezdi — bu yüzden mekanik olarak sayılabilenler artık
+`src-tauri/tests/platform_matrix_claims.rs` tarafından koda karşı tutuluyor ve
+yanlış bir sayı build'i kırıyor.
+
+| | Sayı | Nasıl sayıldı |
+|---|---|---|
+| Toplam IPC komutu | **149** | `contracts/ipc.json` → `commands` (146 Rust + 3 `frontend-plugin`) |
+| Bunlardan `#[tauri::command]` olarak yazılmış | **145** | `commands.rs`, `#[cfg(test)]` dışı |
+| Frontend kaynak dosyası | **95** | `src/**/*.{js,vue}`, spec dosyaları hariç |
+| Bunlardan `@tauri-apps` kullanan | **15** | aynı küme içinde metin taraması |
+| **Veri katmanının geçtiği fonksiyon** | **1** (`src/lib/ipc.js` → `call()`) | `invoke(` `ipc.js` dışında **0** yerde geçiyor |
+| `ipc.js` sarmalayıcısı | **142** | `api` nesnesinin üye sayısı |
+| Rust kaynağı | **55 modül, 37.914 satır** | `src-tauri/src/*.rs` |
+
+Aşağıdaki dört satır **elle sınıflandırma** ve gate'e dahil değil — çünkü
+sınıflandırma "komutun gövdesindeki doğrudan çağrı" ile yapılıyor ve bir
+yardımcı fonksiyonun içinden Docker'a inen komut bu sayıya girmiyor. Yöntem
+yazılıyor ki sayı, bir sonraki okuyucunun yeniden üretebileceği bir şey olsun:
+
+| | Sayı | Yöntem |
+|---|---|---|
+| Docker'a bollard (API) ile giden komut | 15 | gövdesinde `engine::` çağrısı |
+| Docker'a `docker compose` (CLI) ile giden komut | 14 | gövdesinde `runner::` / `compose_*` |
+| Host dosya sistemine dokunan komut | 34 | `std::fs`, `workspace::`, `scaffold::`, `config::Env`, `env_writer::` |
+| Ayrıcalık (parola) gerektiren komut | 6 | `elevate::` ya da hosts yazan yol |
+
+_(İlk sürüm sırasıyla 12 / 16 / 17 / 9 diyordu. Fark hem ağacın büyümesinden
+hem de yöntemin o zaman yazılmamış olmasından geliyor — iki sayıyı
+karşılaştırmak için ikisinin de nasıl elde edildiğini bilmek gerekir, ve bu
+dokümanın ilk sürümünde o bilgi yoktu.)_
 
 Veri yolunun tek fonksiyondan geçmesi, bu raporun en önemli tek bulgusu:
 
@@ -55,8 +77,9 @@ export async function call(command, args = {}) {
 }
 ```
 
-136 sarmalayıcının hepsi buradan geçiyor. Gövdesi değişirse kalan 46 dosya
-değişmez.
+142 sarmalayıcının hepsi buradan geçiyor. Gövdesi değişirse kalan 94 dosya
+değişmez — ve bu iddia artık bir ölçüm: `invoke(` kelimesi `ipc.js` dışında
+sıfır yerde geçiyor, test bunu her koşuda doğruluyor.
 
 ---
 
@@ -257,7 +280,7 @@ yanlış çıktı. Aynı riskin Windows ve Linux'ta da olduğunu varsaymak doğr
 
 Bir soru olarak geldiği için ayrıca cevaplıyorum: **web arayüzünün arkasındaki
 API Rust olur.** Node.js ya da başka bir dilde ikinci bir uygulama yazmak, bu
-projede 32.515 satırlık çekirdeği baştan yazmak demektir — Docker istemcisi,
+projede 37.914 satırlık çekirdeği baştan yazmak demektir — Docker istemcisi,
 compose üreteci, şablon motoru, sertifika yönetimi, hosts ayrıştırıcısı, PTY,
 doctor, migrate. Ve ardından iki uygulamanın sonsuza kadar aynı şeyi söylemesini
 sağlamak.
@@ -284,7 +307,7 @@ değil, tekrarlanabilir bir olgu.
 
 ```
 src-tauri/
-├── src/lib.rs          32.515 satır — hiç değişmez
+├── src/lib.rs          37.914 satır — hiç değişmez
 ├── src/main.rs         Tauri ikilisi (bugünkü)
 └── src/bin/serve.rs    YENİ — HTTP ikilisi, host üzerinde
 
@@ -302,8 +325,8 @@ async fn projects(State(ctx): State<Ctx>) -> Json<Vec<Project>> {
 }
 ```
 
-Gövdeler zaten var — Tauri komutlarının altındaki saf fonksiyonlar. 141
-komutun 108'i `State<'_, AppState>` alıyor; bunlar ince sarmalayıcılar ve
+Gövdeler zaten var — Tauri komutlarının altındaki saf fonksiyonlar. 145
+komutun 112'si `State<'_, AppState>` alıyor; bunlar ince sarmalayıcılar ve
 altlarındaki mantık örneklerin çağırdığı fonksiyonlarda.
 
 Frontend tarafında değişen tek şey:
@@ -327,7 +350,7 @@ Yönlendirme mekanik. Asıl iş üç yerde.
 | Adım | Büyüklük | Not |
 |---|---|---|
 | `call()` gövdesini taşıyıcıya göre ayır | ~20 satır, 1 dosya | `invoke` frontend'de yalnızca burada geçiyor |
-| 142 komut için HTTP yönlendirici | mekanik | `contracts/ipc.json` argüman ve dönüşleri zaten tarif ediyor |
+| 149 komut için HTTP yönlendirici | mekanik | `contracts/ipc.json` argüman ve dönüşleri zaten tarif ediyor |
 | **Akışlar** (log, stats, events) | orta | Tauri olayından SSE/WebSocket'e; taşıyıcı değişikliği ama yeniden yazım |
 | **Kimlik doğrulama** | küçük ama **atlanamaz** | §5d |
 | Yetenek katmanı (4 komut için arayüz gizleme) | küçük | 12 dosyaya dokunur |
@@ -349,6 +372,28 @@ Bir token ya da eşdeğeri **ilk günden** olmalı, sonradan eklenecek bir madde
 olarak değil. İş listesindeki en küçük kalem ama atlanması en kolay ve sonucu
 en ağır olanı.
 
+### 5e. Durum: hiçbiri başlanmadı _(10 Ağustos 2026'da doğrulandı)_
+
+§5c bir iş listesi, ve bir iş listesinin en sessiz hâli, kimsenin ne kadarının
+yapıldığını söylemediği hâlidir. Bugün ölçüldü: **sıfırı yapıldı.**
+
+| Kontrol | Bugün |
+| --- | --- |
+| `src-tauri/src/bin/` | yalnızca `stackvo-mcp.rs` — HTTP ikilisi **yok** |
+| `call()` gövdesi | tek taşıyıcı (`invoke`), dallanma yok |
+| HTTP yönlendirici / SSE / token | yok |
+
+Bu maddeler kurumsal olgunluk raporunun tek iş kuyruğuna **§14.34** olarak
+girdi (`docs/enterprise-readiness-2026-08.md` §37); orada takip edilirler.
+İkinci bir yerde ayrı bir liste tutmak, iki listenin farklı şeyler söylediği
+günün başlangıcı olurdu.
+
+Aynı kuyruğa **§14.35** olarak giren ikinci madde §4d ile §7'nin kaydettiği
+şey: Windows ve Linux sütunları hâlâ **okunarak** yazılmış durumda. UAC dalı,
+polkit dalı, `certutil` yolu ve ConPTY bu oturumda da çalıştırılmadı — ve bu
+doküman, aynı sınıf varsayımın macOS'ta üç kez yanlış çıktığını kendi içinde
+kaydediyor.
+
 ---
 
 ## 6. Özet cevap
@@ -364,9 +409,15 @@ en ağır olanı.
 | Native kabuk (terminal, editör, seçici) | ✅ sunucu GUI oturumundaysa host'ta açılır |
 | Tepsi, native menü, otomatik başlatma/güncelleme | ❌ tarayıcı sekmesinin kapsamı dışında |
 
-Bugünkü 142 komutun **~138'i** web'de çalışır. Geriye kalan 4'ü — tepsi, native
-menü, otomatik başlatma, otomatik güncelleme — *masaüstü penceresinin kendisine*
-ait şeyler; web arayüzünün eksiği değil, kapsamı dışı.
+Bugünkü **149** komutun **145'i** web'de çalışır. Geriye kalan dördü, adlarıyla:
+`tray_relabel`, `window_close_action`, `updater_status`, `updates_check` — tepsi,
+pencere kapatma davranışı ve otomatik güncelleme. Hepsi *masaüstü penceresinin
+kendisine* ait şeyler; web arayüzünün eksiği değil, kapsamı dışı.
+
+_(Bu dört ad, "yaklaşık" demek yerine sayılabilir olsun diye yazıldı — ilk sürüm
+"~138" diyordu ve hangi dördünün kastedildiği hiçbir yerde yazmıyordu. Test bu
+dördünün sözleşmede hâlâ var olduğunu doğruluyor; biri yeniden adlandırılırsa bu
+paragraf sessizce yanlış olmaz.)_
 
 İlk taslakta bu sayı 127 idi. Farkı yaratan, §0'daki varsayım: web'e ulaşmak
 için masaüstü kurulu olacaksa, sunucu host'ta ve bir GUI oturumu içindedir —
@@ -377,8 +428,8 @@ arayüze ulaşan kişinin makinesinde çoktan çözülmüştür.
 Bu tabloyu mümkün kılan iki karar:
 
 1. **Veri yolu tek bir `call()` fonksiyonundan geçiyor.** `invoke` kelimesi
-   47 dosyalık arayüzde tam olarak bir yerde geçiyor. Bu karar alınmamış olsaydı
-   aynı iş 136 çağrı yerine yayılmış olurdu.
+   95 dosyalık arayüzde tam olarak bir yerde geçiyor. Bu karar alınmamış olsaydı
+   aynı iş 142 çağrı yerine yayılmış olurdu.
 2. **Çekirdek Tauri'ye değil, Tauri çekirdeğe bağlı.** `lib.rs` bir kütüphane;
    `main.rs` onu kullanan ince bir ikili. İkinci bir ikili eklemek mimari bir
    değişiklik değil, mevcut yapının zaten desteklediği bir şey.
@@ -408,3 +459,30 @@ Bu raporda aynı riski taşıyan satırlar:
 
 Risk düşük olan tek grup, Docker'ın kendisi: bollard platformdan bağımsız bir
 HTTP istemcisi ve `docker compose` her yerde aynı ikili.
+
+### 7a. Artık makine tarafından tutulan satırlar _(8 Ağustos 2026'da eklendi)_
+
+Yukarıdaki risk tablosu bir eksiği görmemişti: **sayıların kendisi.** İlk sürüm
+doğru sayılarla yazıldı, sonra ağaç büyüdü ve doküman sessizce yanlışa döndü —
+142 komut derken 149, 47 dosya derken 95, 32.515 satır derken 37.914 vardı.
+Yanlış olduğunda hiçbir şeyin şikâyet etmediği bir yüzey, yanlış kalır.
+
+`src-tauri/tests/platform_matrix_claims.rs` bu dokümanın sayılabilir
+iddialarını her `cargo test`'te koda karşı tutuyor:
+
+| Tutulan | Nasıl |
+| --- | --- |
+| Komut sayısı (sözleşme ve `commands.rs`) | `contracts/ipc.json` + öznitelik taraması |
+| Frontend dosya sayısı ve `@tauri-apps` kullananlar | `src/**` taraması |
+| **`invoke(` yalnızca `ipc.js`'te** | Tüm web argümanının dayandığı özellik; ikinci bir `invoke(` bulguyu yanlış yapar |
+| Web'de karşılığı olmayan dört komutun **adı** | Sözleşmede hâlâ var mı, ve doküman hâlâ adlarını söylüyor mu |
+| Rust modül sayısı ve satır sayısı | `src-tauri/src/*.rs` |
+
+Tutulmayanlar bilinçli: platform sütunları, akış argümanı ve §1'in "elle
+sınıflandırma" diye işaretlediği dört sayı. Bunlar kodun ne *anlama* geldiğine
+dair yargılar, ve bir testin onları çözüyormuş gibi yapması, bu bölümün önlemek
+için var olduğu bayat sayıdan daha kötü bir yalan olurdu.
+
+_(Bu kapı kurulur kurulmaz kendi yazarını yakaladı: satır sayısını 37.969 diye
+yazmıştım, doğrusu 37.914. Aradaki 55, modül başına bir fazladan satır — yani
+sayma yönteminin kendi hatası, tam olarak bu testin var olma sebebi.)_

@@ -758,6 +758,10 @@ export default {
       sponsor: 'Buy me a coffee',
     },
     copyright: 'MIT licensed · © 2026 Fahrettin Aksoy',
+    licences: 'Third-party licences',
+    licencesDesc: 'The notices this build ships with, exactly as compiled in.',
+    licencesFailed: 'The licence notice could not be read from this build.',
+    close: 'Close',
   },
   settings: {
     servers: {

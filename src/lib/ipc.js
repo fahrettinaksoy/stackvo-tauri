@@ -349,6 +349,8 @@ export const api = {
   projectManifestWrite: (name, manifest) => call('project_manifest_write', { name, manifest }),
 
   updaterStatus: () => call('updater_status'),
+  /** The third-party licence notice compiled into this build, as markdown. */
+  licencesNotice: () => call('licences_notice'),
   /** The desktop's own accent colour, so the app can match it. */
   systemAccent: () => call('system_accent'),
   logsInfo: () => call('logs_info'),

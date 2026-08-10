@@ -5139,6 +5139,19 @@ pub fn updater_status() -> serde_json::Value {
     })
 }
 
+/// The third-party licence notice this build was compiled with.
+///
+/// A command rather than a file the front end fetches, for the same reason
+/// `updater_status` reads `include_str!`'d configuration: a notice read at run
+/// time from a path is a notice that can be absent, and an app that quietly
+/// ships no attribution is the state the notice exists to end. What this
+/// returns is the text in the binary or nothing at all — there is no third
+/// outcome. [`crate::licences`] carries the rest of the reasoning.
+#[tauri::command]
+pub fn licences_notice() -> &'static str {
+    crate::licences::NOTICE
+}
+
 /// The user's language: what they chose, else what the machine is set to.
 ///
 /// The order and the detection live in [`crate::locale`], because the window

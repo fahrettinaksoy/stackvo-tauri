@@ -36,6 +36,19 @@ if (!globalThis.IntersectionObserver) {
   };
 }
 
+// `VOverlay` — every dialog, menu and tooltip — reads `visualViewport` while
+// positioning itself, and jsdom does not declare the global at all, so the
+// reference *throws* rather than being undefined. A component that opens a
+// dialog therefore could not be tested, which is how the About window's licence
+// notice nearly shipped with no test behind it.
+//
+// Declared as `undefined` rather than faked: Vuetify falls back to `window`
+// when it is absent, and a stub reporting a plausible viewport would let a test
+// assert on a layout that never happened.
+if (!('visualViewport' in globalThis)) {
+  globalThis.visualViewport = undefined;
+}
+
 // Vuetify's display composable reads this on mount; jsdom has no media engine.
 if (!globalThis.matchMedia) {
   globalThis.matchMedia = (query) => ({

@@ -165,8 +165,22 @@ fn the_counts_match_the_tree() {
 
     let contract = read(&repo_root().join("contracts/ipc.json"));
     let value: serde_json::Value = serde_json::from_str(&contract).expect("valid JSON");
-    let commands = value["commands"].as_object().expect("commands object").len();
-    let events = value["events"].as_object().expect("events object").len();
+    let commands = value["commands"]
+        .as_object()
+        .expect("commands object")
+        .len();
+
+    // `_note` and `_removed` are section comments, not events. Counting the
+    // object's keys called them two — and the document said 59 events for
+    // months while the contract declared 57, with this test agreeing because it
+    // made the same mistake. A gate that shares the document's error is not a
+    // second opinion.
+    let events = value["events"]
+        .as_object()
+        .expect("events object")
+        .keys()
+        .filter(|name| !name.starts_with('_'))
+        .count();
 
     assert!(
         doc.contains(&format!("{commands} commands")),
