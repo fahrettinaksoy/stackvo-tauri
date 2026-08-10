@@ -116,6 +116,97 @@ fn last_snapshot() -> Snapshot {
         })
 }
 
+/// The strings the front end sent, in whatever language it is currently in.
+///
+/// This is what makes a third language stop being a change to this file. The
+/// table in `tr` below is no longer the app's translation of the tray — it is
+/// the fallback for the window before the webview has booted, when nothing has
+/// been sent yet and the tray already exists.
+///
+/// Keyed rather than typed on purpose: a struct would put every one of these
+/// strings in `contracts/ipc.json` as a named field, so adding a menu entry
+/// would be a contract change on top of a code change. The keys are checked
+/// instead — `tray_relabel` refuses a catalog missing any of them, so a partial
+/// send cannot half-translate the menu, and `tests/tray-labels.spec.js` reads
+/// the fallback table out of this file to prove the front end sends all of it.
+static FED: std::sync::Mutex<Option<std::collections::BTreeMap<String, String>>> =
+    std::sync::Mutex::new(None);
+
+/// Every key the tray needs before it can be drawn in a language.
+///
+/// The order is the order they appear in the menu, which is the order somebody
+/// adding a string will read.
+pub const LABEL_KEYS: &[&str] = &[
+    "checking",
+    "show",
+    "quit",
+    "engineDown",
+    "noWorkspace",
+    "engineUp",
+    "docker",
+    "running",
+    "stopped",
+    "noProjects",
+    "navProjects",
+    "navServices",
+    "navLogs",
+    "navSettings",
+    "containers",
+    "more",
+    "runningSummary",
+    // The macOS menu bar, which `menu::Labels` already said belonged here:
+    // "the translations live in the frontend's locale files, and a second copy
+    // in Rust is a second thing to keep in step." `lib.rs` kept one anyway.
+    "menuAbout",
+    "menuDocs",
+    "menuSource",
+    "menuIssues",
+];
+
+/// The menu bar's text, from the fed catalog or the fallback table.
+pub fn menu_labels() -> crate::menu::Labels {
+    let lang = locale();
+    crate::menu::Labels {
+        about: tr(&lang, "menuAbout"),
+        docs: tr(&lang, "menuDocs"),
+        source: tr(&lang, "menuSource"),
+        issues: tr(&lang, "menuIssues"),
+    }
+}
+
+/// Adopt a catalog from the front end, or clear it.
+///
+/// Errors rather than accepting a partial one: a menu with three items in
+/// Turkish and the rest in English is worse than one that stayed English, and
+/// the caller is the only party that can tell the difference between "I forgot
+/// a key" and "this language has no word for it".
+pub fn set_labels(
+    labels: Option<std::collections::BTreeMap<String, String>>,
+) -> crate::error::Result<()> {
+    if let Some(sent) = &labels {
+        let missing: Vec<&str> = LABEL_KEYS
+            .iter()
+            .copied()
+            .filter(|k| !sent.contains_key(*k))
+            .collect();
+        if !missing.is_empty() {
+            return Err(crate::error::Error::new(
+                crate::error::Code::InvalidInput,
+                format!("tray label catalog is missing: {}", missing.join(", ")),
+            ));
+        }
+    }
+    *FED.lock().unwrap_or_else(|e| e.into_inner()) = labels;
+    Ok(())
+}
+
+fn fed(key: &str) -> Option<String> {
+    FED.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|m| m.get(key).cloned())
+}
+
 /// The tray's own strings.
 ///
 /// The rest of the app speaks two languages through vue-i18n, but the tray is
@@ -128,6 +219,9 @@ fn last_snapshot() -> Snapshot {
 /// appears here it belongs in both places, and `tray_strings_cover_every_key`
 /// checks the two locales stay in step with each other.
 fn tr(locale: &str, key: &str) -> String {
+    if let Some(sent) = fed(key) {
+        return sent;
+    }
     let turkish = locale.starts_with("tr");
     match (key, turkish) {
         ("checking", true) => "Docker denetleniyor…",
@@ -158,12 +252,35 @@ fn tr(locale: &str, key: &str) -> String {
         ("navLogs", false) => "Logs",
         ("navSettings", true) => "Ayarlar",
         ("navSettings", false) => "Settings",
+        ("menuAbout", true) => "StackVo Hakkında",
+        ("menuAbout", false) => "About StackVo",
+        ("menuDocs", true) => "Belgeler",
+        ("menuDocs", false) => "Documentation",
+        ("menuSource", true) => "Kaynak kodu",
+        ("menuSource", false) => "Source code",
+        ("menuIssues", true) => "Sorun bildir",
+        ("menuIssues", false) => "Report an issue",
         _ => key,
     }
     .to_string()
 }
 
+/// The three counted labels take their number through `{count}` / `{running}` /
+/// `{total}` placeholders rather than by position.
+///
+/// Position would have been cheaper and wrong: Turkish puts the count first in
+/// "3/5 proje çalışıyor" and English does too, but a language that does not is
+/// exactly the language this work exists to make possible without touching Rust.
+fn fill(template: &str, pairs: &[(&str, usize)]) -> String {
+    pairs.iter().fold(template.to_string(), |acc, (name, n)| {
+        acc.replace(&format!("{{{name}}}"), &n.to_string())
+    })
+}
+
 fn containers_label(locale: &str, count: usize) -> String {
+    if let Some(template) = fed("containers") {
+        return fill(&template, &[("count", count)]);
+    }
     if locale.starts_with("tr") {
         format!("Konteynerler: {count}")
     } else {
@@ -172,6 +289,9 @@ fn containers_label(locale: &str, count: usize) -> String {
 }
 
 fn more_label(locale: &str, count: usize) -> String {
+    if let Some(template) = fed("more") {
+        return fill(&template, &[("count", count)]);
+    }
     if locale.starts_with("tr") {
         format!("+{count} proje daha…")
     } else {
@@ -181,6 +301,9 @@ fn more_label(locale: &str, count: usize) -> String {
 
 /// `{running}/{total}` reads the same in both languages; only the noun differs.
 fn running_summary(locale: &str, running: usize, total: usize) -> String {
+    if let Some(template) = fed("runningSummary") {
+        return fill(&template, &[("running", running), ("total", total)]);
+    }
     if locale.starts_with("tr") {
         format!("{running}/{total} proje çalışıyor")
     } else {
@@ -377,6 +500,17 @@ pub fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
 /// Without this the tray keeps whatever it was built with until the next
 /// launch, which reads as the setting not having worked.
 pub fn relabel<R: Runtime>(app: &AppHandle<R>) {
+    // The menu bar first, and unconditionally: it is not the tray's menu, so a
+    // machine with no tray icon still gets its language changed.
+    let product = app
+        .config()
+        .product_name
+        .clone()
+        .unwrap_or_else(|| "StackVo".to_string());
+    if let Ok(menu) = crate::menu::build(app, &menu_labels(), &product) {
+        let _ = app.set_menu(menu);
+    }
+
     let Some(tray) = app.tray_by_id("main") else {
         return;
     };
@@ -463,6 +597,107 @@ pub async fn refresh(app: AppHandle) {
 mod tests {
     use super::*;
 
+    /// `FED` is process-wide, and `cargo test` runs this module in parallel.
+    ///
+    /// Without this, a test that seeds a catalog would change what `tr` answers
+    /// for every other test running at that instant — and only sometimes, which
+    /// is the failure mode §36.6 of the readiness report spent a round chasing.
+    /// Every test that reads or writes the catalog takes this, and the seeding
+    /// helper always puts it back.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Run `f` with a catalog in place, then restore the empty one.
+    fn with_labels<T>(pairs: &[(&str, &str)], f: impl FnOnce() -> T) -> T {
+        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        let mut catalog: std::collections::BTreeMap<String, String> = LABEL_KEYS
+            .iter()
+            .map(|k| (k.to_string(), format!("fallback-{k}")))
+            .collect();
+        for (key, value) in pairs {
+            catalog.insert(key.to_string(), value.to_string());
+        }
+        set_labels(Some(catalog)).expect("a complete catalog is accepted");
+
+        let out = f();
+        set_labels(None).expect("clearing is always allowed");
+        out
+    }
+
+    /// For the tests that must see the built-in table rather than a catalog.
+    fn with_no_labels<T>(f: impl FnOnce() -> T) -> T {
+        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        set_labels(None).expect("clearing is always allowed");
+        f()
+    }
+
+    /// What the front end sends wins over the table compiled into the binary.
+    #[test]
+    fn a_sent_catalog_replaces_the_built_in_table() {
+        with_labels(
+            &[("quit", "Bezárás"), ("show", "StackVo megnyitása")],
+            || {
+                // Hungarian: a language neither arm of the `match` has heard of,
+                // which is the whole point — this is what a third language looks
+                // like without a change to this file.
+                assert_eq!(tr("hu", "quit"), "Bezárás");
+                assert_eq!(tr("tr", "quit"), "Bezárás", "the locale no longer decides");
+                assert_eq!(tr("en", "show"), "StackVo megnyitása");
+            },
+        );
+
+        with_no_labels(|| {
+            assert_eq!(tr("tr", "quit"), "Çık", "cleared, the table is back");
+            assert_eq!(tr("en", "quit"), "Quit");
+        });
+    }
+
+    /// The counted labels place their numbers where the language file says.
+    #[test]
+    fn the_counted_labels_fill_placeholders_rather_than_concatenating() {
+        with_labels(
+            &[
+                ("containers", "{count} konteyner"),
+                ("more", "{count} tane daha"),
+                ("runningSummary", "toplam {total} projeden {running} tanesi"),
+            ],
+            || {
+                assert_eq!(containers_label("hu", 13), "13 konteyner");
+                assert_eq!(more_label("hu", 4), "4 tane daha");
+                // Reversed against English's order on purpose: a template that
+                // could only append would not be able to express this.
+                assert_eq!(
+                    running_summary("hu", 3, 7),
+                    "toplam 7 projeden 3 tanesi",
+                    "both numbers land, and in the template's order"
+                );
+            },
+        );
+    }
+
+    /// A partial catalog is refused rather than half-applied.
+    #[test]
+    fn a_catalog_missing_keys_is_refused_and_names_them() {
+        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        let mut partial = std::collections::BTreeMap::new();
+        partial.insert("quit".to_string(), "Bezárás".to_string());
+
+        let refused = set_labels(Some(partial)).expect_err("a partial catalog is not adopted");
+        assert!(
+            refused.message.contains("show") && refused.message.contains("menuAbout"),
+            "the error names what is missing, got: {}",
+            refused.message
+        );
+
+        set_labels(None).expect("clearing is always allowed");
+        assert_eq!(
+            tr("en", "quit"),
+            "Quit",
+            "a refused catalog leaves nothing behind"
+        );
+    }
+
     #[test]
     fn a_project_id_round_trips_through_the_menu() {
         // The name is carried in the id rather than in a side table, so it has
@@ -538,10 +773,12 @@ mod tests {
 
     #[test]
     fn the_container_count_is_labelled_in_both_languages() {
-        assert!(containers_label("tr", 13).contains("13"));
-        assert!(containers_label("en", 13).contains("13"));
-        assert_ne!(containers_label("tr", 13), containers_label("en", 13));
-        assert_ne!(more_label("tr", 4), more_label("en", 4));
+        with_no_labels(|| {
+            assert!(containers_label("tr", 13).contains("13"));
+            assert!(containers_label("en", 13).contains("13"));
+            assert_ne!(containers_label("tr", 13), containers_label("en", 13));
+            assert_ne!(more_label("tr", 4), more_label("en", 4));
+        });
     }
 
     #[test]
@@ -571,20 +808,24 @@ mod tests {
 
     #[test]
     fn an_unknown_locale_gets_english() {
-        assert_eq!(tr("de", "quit"), "Quit");
-        assert_eq!(tr("", "quit"), "Quit");
+        with_no_labels(|| {
+            assert_eq!(tr("de", "quit"), "Quit");
+            assert_eq!(tr("", "quit"), "Quit");
+        });
     }
 
     #[test]
     fn a_regional_turkish_tag_is_still_turkish() {
         // vue-i18n stores "tr", but a system-derived value can be "tr-TR".
-        assert_eq!(tr("tr-TR", "quit"), tr("tr", "quit"));
+        with_no_labels(|| assert_eq!(tr("tr-TR", "quit"), tr("tr", "quit")));
     }
 
     #[test]
     fn the_summary_counts_are_placed_in_both_languages() {
-        assert!(running_summary("tr", 2, 5).contains("2/5"));
-        assert!(running_summary("en", 2, 5).contains("2/5"));
-        assert_ne!(running_summary("tr", 2, 5), running_summary("en", 2, 5));
+        with_no_labels(|| {
+            assert!(running_summary("tr", 2, 5).contains("2/5"));
+            assert!(running_summary("en", 2, 5).contains("2/5"));
+            assert_ne!(running_summary("tr", 2, 5), running_summary("en", 2, 5));
+        });
     }
 }

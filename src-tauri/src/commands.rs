@@ -10,6 +10,7 @@
 use crate::applog;
 use crate::certs;
 use crate::config::Env;
+use crate::connect;
 use crate::contracts::{env_schema, php_extensions};
 use crate::db;
 use crate::detect;
@@ -25,8 +26,32 @@ use serde::Serialize;
 use std::sync::Mutex;
 use tauri::State;
 
-/// container name -> (unix seconds, cpu %, memory %).
-type StatsHistory = std::collections::HashMap<String, Vec<(u64, f64, f64)>>;
+/// container name -> (unix seconds, cpu %, memory %). Owned by `stats_store`,
+/// which is also what loads it at startup and writes it back after each round.
+use crate::stats_store::StatsHistory;
+
+/// Take a lock on app state, recovering from poisoning instead of skipping.
+///
+/// Poisoning means some other thread panicked while holding this mutex. None of
+/// the state behind these locks is left *structurally* invalid by that: they are
+/// a cached `Workspace`, a `HashMap` of abort handles and a `HashMap` of sample
+/// series, and the operations are `insert`, `remove` and `retain`. So the real
+/// choice is between carrying on with the data and refusing to touch it — and
+/// refusing was, until now, spelled `if let Ok(mut x) = …lock()`, which does
+/// nothing at all and says nothing about it.
+///
+/// Each of those silences had a specific cost. A `workspace_set` whose cache
+/// write is skipped leaves every later command resolving the directory the user
+/// just navigated away from. A log stream whose handle is never recorded cannot
+/// be aborted, and `container_logs_close` still answers `Ok(())` — the tail runs
+/// until the process exits. A skipped `stats_history.retain` never drops dead
+/// containers, so the series grow without bound.
+///
+/// `prefs_set` already chose recovery for its write lock. This is the rest of
+/// the file agreeing with it rather than each call site deciding alone.
+pub(crate) fn recover<T>(lock: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// CPU percentages and network rates are deltas, so the sampler must persist
 /// between calls. The workspace is cached to avoid re-walking the discovery
@@ -58,17 +83,22 @@ impl AppState {
             sampler: Mutex::new(Sampler::new()),
             workspace: Mutex::new(workspace::resolve()),
             log_streams: Mutex::new(std::collections::HashMap::new()),
-            stats_history: Mutex::new(std::collections::HashMap::new()),
+            // Read back rather than started empty, so the first detail view
+            // after a launch has a sparkline instead of one point. Anything
+            // that expired while the app was closed is dropped on the way in —
+            // see `stats_store`, where that filter is the whole difficulty.
+            stats_history: Mutex::new(
+                crate::stats_store::path()
+                    .map(|p| crate::stats_store::load_from(&p, crate::stats_store::now()))
+                    .unwrap_or_default(),
+            ),
             inflight: crate::inflight::Registry::new(),
             generate_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
     fn root(&self) -> Result<std::path::PathBuf> {
-        self.workspace
-            .lock()
-            .map_err(|_| Error::new(crate::error::Code::IoError, "state lock poisoned"))?
-            .require_root()
+        recover(&self.workspace).require_root()
     }
 }
 
@@ -96,9 +126,7 @@ pub fn bootstrap_complete(state: State<'_, AppState>) -> Result<()> {
 #[tauri::command]
 pub fn workspace_get(state: State<'_, AppState>) -> Result<Workspace> {
     let ws = workspace::resolve();
-    if let Ok(mut cached) = state.workspace.lock() {
-        *cached = ws.clone();
-    }
+    *recover(&state.workspace) = ws.clone();
     Ok(ws)
 }
 
@@ -115,9 +143,7 @@ pub fn workspace_set(
     watcher: State<'_, crate::watcher::Handle>,
 ) -> Result<Workspace> {
     let ws = workspace::set_projects(&path)?;
-    if let Ok(mut cached) = state.workspace.lock() {
-        *cached = ws.clone();
-    }
+    *recover(&state.workspace) = ws.clone();
     // Move the file watcher with the choice, or it keeps reporting changes in
     // the tree the user just left. It takes the app root and reads the pointer
     // itself — handing it the project directory would make it watch a
@@ -144,10 +170,7 @@ pub fn engine_start() -> Result<()> {
 
 #[tauri::command]
 pub fn host_stats(state: State<'_, AppState>) -> Result<HostStats> {
-    let mut sampler = state
-        .sampler
-        .lock()
-        .map_err(|_| Error::new(crate::error::Code::IoError, "sampler lock poisoned"))?;
+    let mut sampler = recover(&state.sampler);
     Ok(sampler.sample())
 }
 
@@ -825,19 +848,15 @@ pub async fn container_logs_open(
         .abort_handle()
     };
 
-    if let Ok(mut streams) = state.log_streams.lock() {
-        streams.insert(stream_id.clone(), handle);
-    }
+    recover(&state.log_streams).insert(stream_id.clone(), handle);
 
     Ok(stream_id)
 }
 
 #[tauri::command]
 pub fn container_logs_close(state: State<'_, AppState>, stream_id: String) -> Result<()> {
-    if let Ok(mut streams) = state.log_streams.lock() {
-        if let Some(handle) = streams.remove(&stream_id) {
-            handle.abort();
-        }
+    if let Some(handle) = recover(&state.log_streams).remove(&stream_id) {
+        handle.abort();
     }
     Ok(())
 }
@@ -934,9 +953,7 @@ pub async fn app_log_open(
         .abort_handle()
     };
 
-    if let Ok(mut streams) = state.log_streams.lock() {
-        streams.insert(stream_id.clone(), handle);
-    }
+    recover(&state.log_streams).insert(stream_id.clone(), handle);
 
     Ok(stream_id)
 }
@@ -1036,9 +1053,7 @@ pub async fn app_logs_all_open(
         .abort_handle()
     };
 
-    if let Ok(mut streams) = state.log_streams.lock() {
-        streams.insert(stream_id.clone(), handle);
-    }
+    recover(&state.log_streams).insert(stream_id.clone(), handle);
 
     Ok(FanoutStream {
         stream_id,
@@ -1068,7 +1083,21 @@ pub fn env_set(
     patch: std::collections::BTreeMap<String, String>,
 ) -> Result<()> {
     let root = state.root()?;
-    env_writer::apply(&root, &patch)
+    let outcome = env_writer::apply(&root, &patch);
+
+    // The keys, never the values. `.env` is where the passwords are, and a
+    // trail that carries them is one nobody can hand to anybody — the same rule
+    // `logging.rs` states about payloads.
+    crate::audit::record(
+        "env_set",
+        patch.keys().cloned().collect::<Vec<_>>().join(", "),
+        if outcome.is_ok() {
+            crate::audit::Outcome::Ok
+        } else {
+            crate::audit::Outcome::Failed
+        },
+    );
+    outcome
 }
 
 /// Enable a service: flip the .env key, regenerate, then bring its profile up.
@@ -1153,7 +1182,7 @@ pub fn service_settings(state: State<'_, AppState>, name: String) -> Result<Vec<
                 key: key.to_string(),
                 env_key: env_key.clone(),
                 value: if secret {
-                    "••••••••".to_string()
+                    crate::config::MASK.to_string()
                 } else {
                     value.clone()
                 },
@@ -1799,7 +1828,24 @@ pub fn hosts_apply(
     // and the loser's marker block is overwritten by a plan computed before it
     // existed.
     let _busy = state.inflight.acquire("hosts")?;
-    let plan = hosts::apply(&add, &remove)?;
+
+    // Audited on both paths. A refused elevation prompt is the outcome most
+    // worth having a record of: nothing changed, and the fact that somebody
+    // tried is the whole content of the entry.
+    let plan = hosts::apply(&add, &remove).inspect_err(|e| {
+        crate::audit::record_with(
+            "hosts_apply",
+            add.join(", "),
+            crate::audit::Outcome::Failed,
+            Some(e.message.clone()),
+        )
+    })?;
+    crate::audit::record_with(
+        "hosts_apply",
+        plan.add.join(", "),
+        crate::audit::Outcome::Ok,
+        Some(format!("removed: {}", plan.remove.join(", "))),
+    );
     events::emit(
         &app,
         "hosts:changed",
@@ -2216,6 +2262,26 @@ pub async fn db_targets(state: State<'_, AppState>) -> Result<Vec<db::DbTarget>>
     db::targets(&root).await
 }
 
+/// The string a client is pasted into, for one service.
+///
+/// `null` for a service nobody connects to with one — an admin UI is opened at
+/// its domain, which the sheet already shows. Two addresses come back rather
+/// than one because a service has two and they are not interchangeable: see
+/// [`crate::connect`], which exists because the obvious guess (`stackvo-mongo`
+/// in Compass, on the host) is the one that cannot work.
+///
+/// `reveal` is the same act `env_reveal` is: the password is bullets until
+/// somebody asks for it, on a click, for one service.
+#[tauri::command]
+pub async fn service_connection(
+    state: State<'_, AppState>,
+    service: String,
+    reveal: bool,
+) -> Result<Option<connect::Connection>> {
+    let root = state.root()?;
+    connect::of(&root, &service, reveal).await
+}
+
 /// Read a database out to a file the user chose.
 #[tauri::command]
 pub async fn db_dump(
@@ -2281,6 +2347,22 @@ async fn db_operation(
     } else {
         db::restore(&root, &service, &target, progress).await
     };
+
+    // A restore replaces data that was there; a dump only reads it. Only the
+    // first is audited — the bar is "would somebody have to account for this?",
+    // and a backup is the answer to that question rather than an instance of it.
+    if action == "restore" {
+        crate::audit::record_with(
+            "db_restore",
+            &service,
+            if outcome.is_ok() {
+                crate::audit::Outcome::Ok
+            } else {
+                crate::audit::Outcome::Failed
+            },
+            Some(format!("from {path}")),
+        );
+    }
 
     match outcome {
         Ok(bytes) => {
@@ -2546,6 +2628,29 @@ pub async fn release_save(
     let root = state.root()?;
     let plan = crate::release::plan(&root, &name, tag)?;
     crate::release::save(&plan.tag, std::path::Path::new(&path)).await
+}
+
+/// Read a tarball back in. Returns the image names the daemon adopted.
+///
+/// No workspace and no project name: a bundle is loaded on the machine that
+/// received it, which is precisely the machine that may have neither.
+#[tauri::command]
+pub async fn release_load(path: String) -> Result<Vec<String>> {
+    let loaded = crate::release::load(std::path::Path::new(&path)).await;
+
+    // What landed, by name, because that is the part a bundle's file name does
+    // not tell anyone — and installing an image from elsewhere is the act this
+    // trail exists for.
+    crate::audit::record_with(
+        "release_load",
+        &path,
+        match &loaded {
+            Ok(_) => crate::audit::Outcome::Ok,
+            Err(_) => crate::audit::Outcome::Failed,
+        },
+        loaded.as_ref().ok().map(|images| images.join(", ")),
+    );
+    loaded
 }
 
 // ------------------------------------------------------------------ profiler
@@ -3095,7 +3200,24 @@ pub async fn cert_apply(
     // the same reason.
     let _busy = state.inflight.acquire("certs")?;
 
-    let plan = certs::apply(&root, install_ca.unwrap_or(true)).await?;
+    let plan = certs::apply(&root, install_ca.unwrap_or(true))
+        .await
+        .inspect_err(|e| {
+            crate::audit::record_with(
+                "cert_apply",
+                "*",
+                crate::audit::Outcome::Failed,
+                Some(e.message.clone()),
+            )
+        })?;
+    crate::audit::record_with(
+        "cert_apply",
+        plan.domains.join(", "),
+        crate::audit::Outcome::Ok,
+        install_ca
+            .unwrap_or(true)
+            .then(|| "CA trust requested".to_string()),
+    );
     events::emit(
         &app,
         "certs:changed",
@@ -3801,6 +3923,20 @@ pub async fn project_delete(
             }
         }
 
+        // Recorded before the tree goes, not after: if `remove_dir_all` dies
+        // half way there is no "after", and a partially deleted project is
+        // exactly the state somebody comes back asking about.
+        crate::audit::record_with(
+            "project_delete",
+            &name,
+            crate::audit::Outcome::Ok,
+            Some(if remove_files.unwrap_or(false) {
+                "source removed".into()
+            } else {
+                "manifest only, source kept".to_string()
+            }),
+        );
+
         if remove_files.unwrap_or(false) {
             remove_project_dir(&dir)
                 .await
@@ -4142,10 +4278,7 @@ pub fn container_stats_history(
     state: State<'_, AppState>,
     name: String,
 ) -> Result<Vec<serde_json::Value>> {
-    let history = state
-        .stats_history
-        .lock()
-        .map_err(|_| Error::new(Code::IoError, "stats history lock poisoned"))?;
+    let history = recover(&state.stats_history);
 
     Ok(history
         .get(&engine::container_name(&name))
@@ -4961,7 +5094,7 @@ pub fn prefs_set(patch: serde_json::Value) -> Result<serde_json::Value> {
     // the second write drops the first. Held only across this synchronous body,
     // so it never crosses an await.
     static WRITE_LOCK: Mutex<()> = Mutex::new(());
-    let _serialised = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _serialised = recover(&WRITE_LOCK);
 
     let mut current = prefs_get()?;
 
@@ -5037,6 +5170,169 @@ pub fn env_reveal(state: State<'_, AppState>, key: String) -> Result<String> {
     env.get(&key)
         .map(str::to_string)
         .ok_or_else(|| Error::new(Code::NotFound, format!("{key} is not set in .env")))
+}
+
+// ---------------------------------------------------------------- secrets
+
+/// Which credentials are in the keystore, which are in the file, and whether
+/// this machine has a keystore at all.
+///
+/// One call rather than three because the pane needs all of it to render a
+/// single row per key, and because "there is no keystore here" has to reach the
+/// UI before it offers a button that cannot work — a headless Linux box with no
+/// Secret Service is a real machine somebody runs this on.
+#[tauri::command]
+pub fn secrets_status(state: State<'_, AppState>) -> Result<serde_json::Value> {
+    let root = state.root()?;
+
+    // The *file*, not `Env::load`: loading resolves a reference into the value
+    // it points at, which is precisely the fact this command reports on.
+    let text = std::fs::read_to_string(root.join(".env")).unwrap_or_default();
+    let on_disk = Env::parse(&text);
+
+    let keys: Vec<serde_json::Value> = on_disk
+        .raw()
+        .iter()
+        .filter(|(key, _)| crate::secrets::is_movable(key))
+        .map(|(key, value)| {
+            let entry = crate::secrets::entry_of(value);
+            serde_json::json!({
+                "key": key,
+                "moved": entry.is_some(),
+                // Only asked of keys that claim to be in the store, and never
+                // the value itself — this is a status call, and `env_reveal` is
+                // the one deliberate way a password crosses the boundary.
+                "resolvable": match entry {
+                    Some(name) => crate::secrets::read(name).ok().flatten().is_some(),
+                    None => !value.is_empty(),
+                },
+                "set": !value.is_empty(),
+            })
+        })
+        .collect();
+
+    Ok(serde_json::json!({
+        "available": crate::secrets::available(),
+        "keys": keys,
+    }))
+}
+
+/// Move one credential out of `.env` and into the keystore.
+///
+/// Deliberately one key at a time and never automatic. The Bash CLI reads
+/// `.env` directly and would take `keychain:…` for the password itself, so this
+/// is a decision with a consequence somebody has to be told about — see
+/// [`crate::secrets`] and ADR 0010. A sweep that moved every credential at
+/// once would be the same decision made silently, twelve times.
+#[tauri::command]
+pub fn secret_move(state: State<'_, AppState>, key: String) -> Result<()> {
+    let root = state.root()?;
+
+    if !crate::secrets::is_movable(&key) {
+        return Err(
+            Error::new(Code::InvalidInput, format!("`{key}` is not a credential"))
+                .with_hint(crate::hints::ONLY_CREDENTIALS_MOVE),
+        );
+    }
+
+    let text = std::fs::read_to_string(root.join(".env")).unwrap_or_default();
+    let on_disk = Env::parse(&text);
+    let value = on_disk.get(&key).unwrap_or_default();
+
+    if crate::secrets::is_reference(value) {
+        // Not an error: the end state the caller asked for is the state it is
+        // already in, and failing here would make a double click a failure.
+        return Ok(());
+    }
+    if value.is_empty() {
+        return Err(Error::new(
+            Code::NotFound,
+            format!("`{key}` has no value in .env to move"),
+        ));
+    }
+
+    let entry = crate::secrets::new_entry(&key, &root);
+    crate::secrets::write(&entry, value)?;
+
+    // The reference replaces the value only once the value is safely stored.
+    // The other order loses the password if the write fails.
+    let outcome = env_writer::apply(
+        &root,
+        &std::collections::BTreeMap::from([(
+            key.clone(),
+            crate::secrets::reference_for(&key, &root),
+        )]),
+    );
+
+    if outcome.is_err() {
+        // Leave nothing behind: an entry nothing points at is a password in the
+        // user's keychain that no screen in this app will ever show them again.
+        let _ = crate::secrets::delete(&entry);
+    }
+
+    crate::audit::record(
+        "secret_move",
+        &key,
+        if outcome.is_ok() {
+            crate::audit::Outcome::Ok
+        } else {
+            crate::audit::Outcome::Failed
+        },
+    );
+    outcome
+}
+
+/// Put a credential back in `.env` and forget the keystore entry.
+///
+/// The way out, and it exists because the way in has a cost the user may only
+/// discover afterwards — the first time they run `stackvo.sh` on the same
+/// workspace. A one-way door here would mean hand-editing `.env` with a value
+/// the app will not show, which is not a way out at all.
+#[tauri::command]
+pub fn secret_restore(state: State<'_, AppState>, key: String) -> Result<()> {
+    let root = state.root()?;
+
+    let text = std::fs::read_to_string(root.join(".env")).unwrap_or_default();
+    let on_disk = Env::parse(&text);
+    let Some(entry) = crate::secrets::entry_of(on_disk.get(&key).unwrap_or_default()) else {
+        return Err(Error::new(
+            Code::NotFound,
+            format!("`{key}` is not stored in the keystore"),
+        ));
+    };
+
+    let Some(value) = crate::secrets::read(entry)? else {
+        return Err(Error::new(
+            Code::NotFound,
+            format!("the keystore has no entry named `{entry}`"),
+        )
+        .with_hint(crate::hints::KEYSTORE_ENTRY_IS_GONE));
+    };
+
+    // `apply_verbatim`, because `apply` would see the key is currently a
+    // reference and send this value straight back to the keystore — which is
+    // the correct rule everywhere except in the one command whose job is to
+    // undo it.
+    let outcome = env_writer::apply_verbatim(
+        &root,
+        &std::collections::BTreeMap::from([(key.clone(), value)]),
+    );
+    if outcome.is_ok() {
+        // Only after the file has it. Deleting first and failing to write would
+        // destroy the password.
+        crate::secrets::delete(entry)?;
+    }
+
+    crate::audit::record(
+        "secret_restore",
+        &key,
+        if outcome.is_ok() {
+            crate::audit::Outcome::Ok
+        } else {
+            crate::audit::Outcome::Failed
+        },
+    );
+    outcome
 }
 
 // ---------------------------------------------------------------- system accent
@@ -5152,6 +5448,33 @@ pub fn licences_notice() -> &'static str {
     crate::licences::NOTICE
 }
 
+/// What an administrator has decided on this machine, if anything.
+///
+/// Every field here exists so a Settings pane can explain itself rather than
+/// just refusing. A greyed-out field with no reason reads as a broken app; one
+/// that says which file it came from is something the user can act on, even if
+/// the action is to go and ask somebody.
+///
+/// `error` is returned rather than logged for the reason [`crate::policy`]
+/// gives: a policy that quietly did nothing is one the administrator who
+/// deployed it believes is in force. Somebody has to see it, and the machine
+/// where it is visible is this one.
+#[tauri::command]
+pub fn policy_status() -> serde_json::Value {
+    let policy = crate::policy::current();
+    serde_json::json!({
+        "active": policy.is_active(),
+        "source": policy.source().map(|p| p.display().to_string()),
+        // The keys only. A managed value is not a secret, but this is a
+        // status call and the values are already on the wire through
+        // `env_get` — with its redaction, which this would be a way around.
+        "managed": policy.settings().keys().collect::<Vec<_>>(),
+        "locked": policy.locked().iter().collect::<Vec<_>>(),
+        "registryPrefix": policy.registry_prefix(),
+        "error": policy.error(),
+    })
+}
+
 /// The user's language: what they chose, else what the machine is set to.
 ///
 /// The order and the detection live in [`crate::locale`], because the window
@@ -5179,8 +5502,16 @@ pub fn locale_get() -> String {
 /// Re-label the tray after a language change, so the setting takes effect
 /// without a restart.
 #[tauri::command]
-pub fn tray_relabel(app: AppHandle) {
+pub fn tray_relabel(
+    app: AppHandle,
+    labels: Option<std::collections::BTreeMap<String, String>>,
+) -> Result<()> {
+    // Adopted before the redraw, not after: `relabel` reads the catalog while
+    // it builds, so setting it afterwards would leave the menu one language
+    // behind until the next call.
+    crate::tray::set_labels(labels)?;
     crate::tray::relabel(&app);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -5474,11 +5805,24 @@ pub fn workspace_pick(
         .map_err(|e| Error::new(Code::IoError, format!("could not resolve the folder: {e}")))?;
 
     let ws = workspace::set_projects(&path)?;
-    if let Ok(mut cached) = state.workspace.lock() {
-        *cached = ws.clone();
-    }
+    *recover(&state.workspace) = ws.clone();
     watcher.retarget(&app, ws.require_root().ok());
     Ok(Some(ws))
+}
+
+/// How often to sample per-container stats, given whether anyone can see them.
+///
+/// Stretched rather than stopped when the window is away. Stopping would be the
+/// obvious saving and the wrong one: this series exists so that opening a
+/// project's detail view shows a sparkline instead of a single point, and a
+/// sampler that idles while hidden hands back an empty chart at exactly the
+/// moment somebody looks at it. Five times slower keeps the history continuous
+/// — coarser, but continuous — for a fifth of the daemon calls.
+///
+/// The tray's own 15-second refresh is deliberately *not* gated on this. A tray
+/// that stops updating while the window is closed has lost the one job it has.
+pub fn stats_sample_interval(window_visible: bool) -> std::time::Duration {
+    std::time::Duration::from_secs(if window_visible { 60 } else { 300 })
 }
 
 /// One round of per-container sampling, called from the background timer.
@@ -5512,9 +5856,7 @@ pub async fn sample_container_stats(app: &AppHandle) {
         .keys()
         .map(|id| engine::container_name(id))
         .collect();
-    if let Ok(mut history) = state.stats_history.lock() {
-        history.retain(|name, _| live.contains(name));
-    }
+    recover(&state.stats_history).retain(|name, _| live.contains(name));
 
     for (id, info) in containers {
         if !info.running {
@@ -5524,14 +5866,30 @@ pub async fn sample_container_stats(app: &AppHandle) {
             continue;
         };
 
-        if let Ok(mut history) = state.stats_history.lock() {
-            let series = history.entry(engine::container_name(&id)).or_default();
-            series.push((now, stats.cpu_percent, stats.memory_percent));
-            if series.len() > 120 {
-                let excess = series.len() - 120;
-                series.drain(0..excess);
-            }
+        let mut history = recover(&state.stats_history);
+        let series = history.entry(engine::container_name(&id)).or_default();
+        series.push((now, stats.cpu_percent, stats.memory_percent));
+        if series.len() > 120 {
+            let excess = series.len() - 120;
+            series.drain(0..excess);
         }
+    }
+
+    // Written after the whole round rather than after each container: one
+    // atomic replacement per minute, of a file bounded by the same 120-sample
+    // cap that bounds the map.
+    //
+    // On every round, not at shutdown. A cache only written on the way out is
+    // one that is empty after precisely the exits worth surviving — a crash,
+    // a force quit, a machine that lost power — and `crash.rs` exists because
+    // this app does crash sometimes.
+    //
+    // The result is dropped on purpose. A history that cannot be written is a
+    // sparkline that starts empty next launch; stopping the sampler over it
+    // would trade that for a sparkline that is empty now.
+    if let Some(path) = crate::stats_store::path() {
+        let snapshot = recover(&state.stats_history).clone();
+        let _ = crate::stats_store::save_to(&path, &snapshot);
     }
 }
 
@@ -5653,6 +6011,27 @@ pub fn render_generated(root: &std::path::Path) -> Result<Rendered> {
     use crate::generator;
 
     let env = Env::load(root)?;
+
+    // Before anything is rendered, because the failure is silent otherwise.
+    //
+    // A key whose keystore entry did not answer is *absent* from the map, so
+    // `{{ SERVICE_MYSQL_ROOT_PASSWORD | default('root') }}` renders `root` and
+    // a database comes up on a password the user last set years ago and does
+    // not know is in force. Every other consumer of `Env` can live with a
+    // missing key; this one writes it into a file that starts a container.
+    let unresolved = env.unresolved_secrets();
+    if !unresolved.is_empty() {
+        return Err(Error::new(
+            Code::PermissionDenied,
+            format!(
+                "the keystore did not produce a value for {}",
+                unresolved.join(", ")
+            ),
+        )
+        .with_hint(crate::hints::UNLOCK_THE_KEYSTORE)
+        .with_details(serde_json::json!({ "keys": unresolved })));
+    }
+
     let limits = generator::ServerSettings::from_env(&env);
     let extras = generator::ServerExtras::load(root, &env);
     let opts = generator::ToolchainOptions {
@@ -5855,6 +6234,24 @@ pub fn render_generated(root: &std::path::Path) -> Result<Rendered> {
         scope: "services",
         content: generator::render_traefik_routes(&traefik),
     });
+
+    // ---- the registry mirror ----
+    //
+    // Last, and over the rendered text rather than inside each renderer. Every
+    // image reference in the workspace passes through this function on its way
+    // to disk, so one pass here covers the project Dockerfiles, both compose
+    // files and every service template at once — and a renderer added next
+    // year is covered without anybody remembering to do it.
+    //
+    // `crate::policy` carries the three references this deliberately leaves
+    // alone, each of which would otherwise break a build.
+    if let Some(prefix) = crate::policy::current().registry_prefix() {
+        for file in &mut files {
+            if crate::policy::rewrites(&file.label) {
+                file.content = crate::policy::rewrite(&file.content, prefix);
+            }
+        }
+    }
 
     Ok((files, errors))
 }
@@ -6074,6 +6471,119 @@ pub async fn generate_with(
                 "report": verify_generator(&root)?,
             }))
         }
+    }
+}
+
+#[cfg(test)]
+mod sampling_tests {
+    use super::*;
+
+    /// A hidden window samples slower, and still samples.
+    ///
+    /// The second half is the assertion that matters. "Stop polling when
+    /// hidden" is the obvious reading of the saving, and it would empty the
+    /// series this sampler exists to fill — the bug would appear as a detail
+    /// view with one data point, blamed on the chart.
+    #[test]
+    fn a_hidden_window_stretches_the_interval_without_stopping_it() {
+        let visible = stats_sample_interval(true);
+        let hidden = stats_sample_interval(false);
+
+        assert!(
+            hidden > visible,
+            "a hidden window must cost less: {hidden:?} is not longer than {visible:?}"
+        );
+        assert!(
+            !hidden.is_zero(),
+            "a hidden window still samples — the history has to stay continuous"
+        );
+
+        // Bounded on both sides. Too close together and the change buys
+        // nothing; too far apart and reopening the window shows a sparkline
+        // with a visible hole in it.
+        let ratio = hidden.as_secs() / visible.as_secs();
+        assert!(
+            (2..=10).contains(&ratio),
+            "the hidden interval is {ratio}× the visible one, which is outside \
+             the range where this is worth doing"
+        );
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+
+    /// A poisoned lock still hands over the data, and the write lands.
+    ///
+    /// Written against a real poisoning rather than a simulated one: a thread
+    /// panics while holding the guard, which is the only way the standard
+    /// library sets the flag. The nine call sites this replaced would each have
+    /// taken the `else` branch here and returned having done nothing.
+    #[test]
+    fn a_poisoned_lock_is_recovered_rather_than_skipped() {
+        let lock = std::sync::Arc::new(Mutex::new(vec!["before"]));
+
+        let poisoner = std::sync::Arc::clone(&lock);
+        let died = std::thread::spawn(move || {
+            let _guard = poisoner.lock().unwrap();
+            panic!("while holding the lock");
+        })
+        .join();
+        assert!(died.is_err(), "the thread was supposed to panic");
+        assert!(
+            lock.is_poisoned(),
+            "a panic under the guard poisons the lock"
+        );
+
+        recover(&lock).push("after");
+
+        assert_eq!(
+            *recover(&lock),
+            vec!["before", "after"],
+            "the value survives the poisoning and the write is applied"
+        );
+    }
+
+    /// The silent pattern does not come back.
+    ///
+    /// `if let Ok(mut x) = …lock()` compiles, reads as handling, and does
+    /// nothing on the one path it exists for. It survived ten months and 556
+    /// tests precisely because a skipped cache write and a skipped registry
+    /// insert both look exactly like success from the outside — there is no
+    /// observable behaviour for a test to assert on. So the gate is on the
+    /// source: this file locks through `recover` or it does not lock.
+    #[test]
+    fn no_lock_in_this_file_is_taken_by_the_silently_skipping_pattern() {
+        let source = include_str!("commands.rs");
+
+        // Only the production half. The test modules below deliberately poison
+        // a mutex by hand, and a scanner that reads its own source finds its own
+        // search string — the first version of this test failed on the line
+        // doing the searching.
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map(|(before, _)| before)
+            .expect("commands.rs has test modules");
+
+        let offenders: Vec<_> = production
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.contains(".lock()"))
+            // `recover`'s own body, and the doc comment naming the pattern it
+            // replaced. The async `generate_lock` is a Tokio mutex, which has no
+            // poisoning to skip.
+            .filter(|(_, line)| !line.trim_start().starts_with("///"))
+            .filter(|(_, line)| !line.contains("unwrap_or_else"))
+            .filter(|(_, line)| !line.contains(".await"))
+            .map(|(i, line)| format!("  line {}: {}", i + 1, line.trim()))
+            .collect();
+
+        assert!(
+            offenders.is_empty(),
+            "these take a std Mutex without going through `recover`:\n{}",
+            offenders.join("\n")
+        );
     }
 }
 

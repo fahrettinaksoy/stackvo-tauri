@@ -20,8 +20,8 @@ Three parts, in the order a request travels:
 | Part                                | Where                | Size                    |
 | ----------------------------------- | -------------------- | ----------------------- |
 | Front end — Vue 3, Vuetify 3, Pinia | `src/`               | 24k lines               |
-| Back end — Rust, 55 modules         | `src-tauri/src/`     | 38k lines               |
-| The boundary between them           | `contracts/ipc.json` | 149 commands, 57 events |
+| Back end — Rust, 61 modules         | `src-tauri/src/`     | 38k lines               |
+| The boundary between them           | `contracts/ipc.json` | 155 commands, 57 events |
 
 The two halves never share a type. They share a **contract**, and §5 is about
 why that is a deliberate cost rather than an omission.
@@ -71,7 +71,7 @@ document behind it:
 
 ### 3.1 Layers
 
-`src-tauri/src/` is flat — 55 modules, no subdirectories — but it is not
+`src-tauri/src/` is flat — 61 modules, no subdirectories — but it is not
 unstructured. There are four bands, and the dependency arrows only ever point
 downward:
 
@@ -79,10 +79,10 @@ downward:
   entry              1.3k   lib.rs, main.rs, menu, tray — plugins, state, the
       │                     handler list, the window
       ▼
-  commands.rs        6.7k   the IPC surface: 145 #[tauri::command] functions
+  commands.rs        6.7k   the IPC surface: 151 #[tauri::command] functions
       │                     argument validation, orchestration, nothing else
       ▼
-  domain            22.7k   31 modules: generator, manifest, certs, hosts,
+  domain            22.7k   32 modules: generator, manifest, certs, hosts,
       │                     mail, xdebug, profile, preset, migrate, doctor, …
       │                     one subject each; no Tauri types
       ▼
@@ -196,7 +196,7 @@ rejections".
 
 ## 5. The contract
 
-`contracts/ipc.json` is the specification of the boundary: 149 commands, 57
+`contracts/ipc.json` is the specification of the boundary: 155 commands, 57
 events, 58 named types, 3 error shapes, and — for most entries — a `why`.
 
 It is a **hand-maintained document, not generated code**, and that is the
@@ -278,16 +278,18 @@ decision, and its consequences including the ones nobody wanted. They are
 numbered so a later one can supersede an earlier one, which is the property a
 code comment cannot have.
 
-| #                                                           | Decision                                            |
-| ----------------------------------------------------------- | --------------------------------------------------- |
-| [0001](docs/adr/0001-tauri-free-domain.md)                  | The domain band knows nothing about Tauri           |
-| [0002](docs/adr/0002-generated-files-are-rendered.md)       | Generated files are rendered, never edited          |
-| [0003](docs/adr/0003-one-operation-per-subject.md)          | One operation per subject, enforced in the back end |
-| [0004](docs/adr/0004-errors-are-codes-not-strings.md)       | Errors are codes with catalogued hints              |
-| [0005](docs/adr/0005-progress-through-a-sink.md)            | Long operations report through a sink               |
-| [0006](docs/adr/0006-a-hand-written-contract.md)            | The IPC contract is written, not generated          |
-| [0007](docs/adr/0007-one-privileged-call.md)                | Exactly one privileged call                         |
-| [0008](docs/adr/0008-what-a-breaking-contract-change-is.md) | What a breaking contract change is                  |
+| #                                                                 | Decision                                            |
+| ----------------------------------------------------------------- | --------------------------------------------------- |
+| [0001](docs/adr/0001-tauri-free-domain.md)                        | The domain band knows nothing about Tauri           |
+| [0002](docs/adr/0002-generated-files-are-rendered.md)             | Generated files are rendered, never edited          |
+| [0003](docs/adr/0003-one-operation-per-subject.md)                | One operation per subject, enforced in the back end |
+| [0004](docs/adr/0004-errors-are-codes-not-strings.md)             | Errors are codes with catalogued hints              |
+| [0005](docs/adr/0005-progress-through-a-sink.md)                  | Long operations report through a sink               |
+| [0006](docs/adr/0006-a-hand-written-contract.md)                  | The IPC contract is written, not generated          |
+| [0007](docs/adr/0007-one-privileged-call.md)                      | Exactly one privileged call                         |
+| [0008](docs/adr/0008-what-a-breaking-contract-change-is.md)       | What a breaking contract change is                  |
+| [0009](docs/adr/0009-a-policy-file-is-not-a-lock.md)              | A policy file is not a lock                         |
+| [0010](docs/adr/0010-secrets-move-out-of-env-not-off-the-disk.md) | Secrets move out of `.env`, not off the disk        |
 
 ---
 
@@ -299,7 +301,7 @@ first draft named a module as weakly tested that was 94% covered, and counted 33
 of something there were 60 of.
 
 So the checkable claims here are checked. `src-tauri/tests/readme_claims.rs`
-covers `README.md`; the counts above (55 modules, 145 commands, 149 contract
+covers `README.md`; the counts above (61 modules, 151 commands, 155 contract
 entries, 533 front-end and 538 Rust tests) come from `contract_agreement.rs` and from the module list itself, and
 a claim that drifts fails a test rather than aging quietly.
 

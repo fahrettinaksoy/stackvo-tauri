@@ -17,6 +17,7 @@ import OverviewPane from '@/components/project/OverviewPane.vue';
 import ProfilerPane from '@/components/project/ProfilerPane.vue';
 import TunnelPane from '@/components/project/TunnelPane.vue';
 import WorkersPane from '@/components/project/WorkersPane.vue';
+import TerminalPane from '@/components/project/TerminalPane.vue';
 import XdebugPane from '@/components/project/XdebugPane.vue';
 import ReleasePane from '@/components/project/ReleasePane.vue';
 import { useOperationsStore } from '@/stores/operations';
@@ -726,6 +727,15 @@ onUnmounted(() => {
         <!-- WORKERS --------------------------------------------------------- -->
         <template v-if="shows('container')">
           <WorkersPane :name="name" :running="running" />
+        </template>
+
+        <!-- TERMINAL ------------------------------------------------------- -->
+        <!-- Beside the container it attaches to, rather than on a page of its
+             own: a shell is something you want *while* looking at the thing it
+             runs in. The header still offers the system terminal for the other
+             case. -->
+        <template v-if="shows('container')">
+          <TerminalPane :container-name="project?.containerName" :running="running" />
         </template>
 
         <!-- MANIFEST ------------------------------------------------------ -->

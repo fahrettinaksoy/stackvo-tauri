@@ -1,3 +1,5 @@
+import { afterEach } from 'vitest';
+
 /**
  * Browser APIs jsdom does not implement, stubbed so components can mount.
  *
@@ -13,6 +15,47 @@
  * depends on layout needs a real browser — see the note about `tauri-driver` in
  * `views-render.spec.js`.
  */
+
+/**
+ * A missing translation key fails the test that asked for it.
+ *
+ * `i18n.spec.js` already scans the source for `t('some.key')` and demands every
+ * one of them exist. That scan is static, so it can only see keys written as
+ * literals — and 34 call sites are not: `t(`preflight.${r.id}`)`,
+ * `t(`workers.${kind}`)`, `t(`bootstrap.${step}`)`. For those the key is a
+ * value the backend supplies, and no regex can know which values are possible.
+ *
+ * So the two halves are complementary rather than redundant: the static scan
+ * proves the literal keys exist, and this proves the dynamic ones resolved for
+ * the data a test actually drove through them. Without it, `WorkersPane` asked
+ * for `workers.schedule` for ten months — a kind `worker.rs` cannot emit — and
+ * every suite printed the warning and passed, because vue-i18n returns the key
+ * itself when it finds nothing and a rendered `workers.schedule` is a string
+ * like any other.
+ *
+ * Only "Not found" is caught. Falling back from `tr` to `en` warns too and is
+ * legitimate — the locale files are checked for parity elsewhere.
+ */
+const missingKeys = [];
+const realWarn = console.warn;
+console.warn = (...args) => {
+  const first = typeof args[0] === 'string' ? args[0] : '';
+  const missing = first.match(/Not found '(.+?)' key in '(.+?)' locale messages/);
+  if (missing) missingKeys.push(`${missing[1]} (${missing[2]})`);
+  realWarn(...args);
+};
+
+afterEach(() => {
+  if (!missingKeys.length) return;
+  const seen = [...new Set(missingKeys)];
+  missingKeys.length = 0;
+  throw new Error(
+    `translation keys asked for but not defined:\n  ${seen.join('\n  ')}\n` +
+      'A dynamic t(`prefix.${value}`) resolved to a key no locale defines — ' +
+      'either the value cannot occur and the fixture is wrong, or it can and ' +
+      'the locales are missing it.'
+  );
+});
 
 if (!globalThis.ResizeObserver) {
   globalThis.ResizeObserver = class ResizeObserver {

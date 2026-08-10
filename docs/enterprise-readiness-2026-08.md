@@ -2528,33 +2528,37 @@ kaydı bırakır.
 Numaralar §14'ün devamı. "Doğrulandı" sütunu, maddenin bugün hâlâ açık
 olduğunun bu turda ağaca karşı kontrol edildiğini söyler.
 
-|   # | Madde                                              | Kaynak | Durum          | Doğrulandı                                              |
-| --: | -------------------------------------------------- | ------ | -------------- | ------------------------------------------------------- |
-|   2 | Güncelleme endpoint'i                              | §6.1   | ⚠️ **blokaj**  | `latest.json` → HTTP 404; repo yok                      |
-|  10 | `tauri-specta` ile tip üretimi                     | §2.2   | ⛔ ertelendi   | `Cargo.toml`'da specta izi yok                          |
-|  12 | E2E (`tauri-driver`)                               | §3.2   | ⛔ engelli     | Repoda driver/wdio/playwright yok; Linux runner gerek   |
-|  18 | Merkezî politika + private registry ön eki         | §13    | ⬜ tasarlandı  | `policy.rs` yok (§35.2'de tasarım hazır)                |
-|  19 | Docker trait + `proptest` + `criterion`            | §3.3–4 | ⬜ başlanmadı  | `benches/` yok, üç crate de bağımlılıklarda yok         |
-|  20 | Keystore ile sır yönetimi                          | §5.2   | ⬜ başlanmadı  | `keyring` bağımlılıklarda yok                           |
-|  21 | **Sürüm kanalları, kademeli dağıtım, geri alma**   | §6.3   | ⬜ başlanmadı  | Tek `latest.json`, tek kanal, geri alma yolu yok        |
-|  22 | Platform kapsamı ve paketleme                      | §6.4   | ⬜ başlanmadı  | `release.yml` dört hedef: Linux aarch64 ve Win ARM64 yok |
-|  23 | Tray/menü etiketleri Rust'ta sabit                 | §7.2   | ⬜ başlanmadı  | `lib.rs:115` hâlâ `== "tr"` boolean'ı                   |
-|  24 | RTL                                                | §7.3   | 🟡 yarım       | Bayrak ve taşıma var; Vuetify `rtl` yapılandırması yok  |
-|  25 | Erişilebilirlik beyanı (VPAT / EN 301 549)         | §8     | ⬜ başlanmadı  | Beyan yok; §14.12 olmadan üretilemez                    |
-|  26 | Performans bütçesi: `criterion` + `size-limit`     | §9     | ⬜ başlanmadı  | Benchmark yok, bundle bütçesi yok                       |
-|  27 | Sıcak yollar: `list_projects` cache, gizli pencere | §9     | ⬜ başlanmadı  | Cache yok; `is_visible()` kod tabanında hiç geçmiyor    |
-|  28 | `stats_history` kalıcılığı                         | §10    | ⬜ başlanmadı  | `commands.rs:42` hâlâ `Mutex<HashMap>`, süreç ömürlü    |
-|  29 | Mutex poisoning                                    | §10    | ⬜ başlanmadı  | `commands.rs`'te 14 `lock()`; `parking_lot` yok         |
-|  30 | Denetim izi (audit log)                            | §13    | ⬜ başlanmadı  | Ayrı, döndürülmeyen bir audit log yok                   |
-|  31 | Air-gapped kurulum                                 | §13    | ⬜ başlanmadı  | Offline imaj paketi yolu yok                            |
-|  32 | Destek / sürüm ömrü politikası                     | §13    | ⬜ başlanmadı  | SECURITY.md: "yalnızca en son"                          |
-|  33 | Sözleşme kapısının kalan harici bağımlılığı        | §2.1   | 🟡 yarım       | `ci.yml:212` hâlâ `stackvo/stackvo` checkout'u yapıyor  |
-|  34 | Web sürümü / HTTP ikilisi                          | matris | ⬜ başlanmadı  | `src/bin/` yalnızca `stackvo-mcp.rs`                    |
-|  35 | Windows ve Linux dallarının çalıştırılması         | matris | ⬜ başlanmadı  | UAC, polkit, ConPTY, `certutil` hiç koşturulmadı        |
+Satır referansları **§38'de yeniden ölçüldü** ve altısı düzeltildi; #32 kuyruktan
+düştü, çünkü hiç açık olmamıştı. Gerekçeler §38.2'de.
+
+|   # | Madde                                              | Kaynak | Durum         | Doğrulandı (10 Ağustos 2026)                                  |
+| --: | -------------------------------------------------- | ------ | ------------- | ------------------------------------------------------------- |
+|   2 | Güncelleme endpoint'i                              | §6.1   | ⚠️ **blokaj** | `latest.json` → HTTP 404 (çağrıldı); repo yok                 |
+|  10 | `tauri-specta` ile tip üretimi                     | §2.2   | ⛔ ertelendi  | `specta`/`ts-rs`/`typeshare` üçü de bağımlılıkta yok          |
+|  12 | E2E (`tauri-driver`)                               | §3.2   | ⛔ engelli    | driver/wdio/playwright yok; **CI'da e2e job'ı da yok**        |
+|  18 | Merkezî politika + private registry ön eki         | §13    | ✅ **kapandı** | `policy.rs`, `Code::Forbidden`, ADR 0009 — §44                 |
+|  19 | Docker karar katmanı + `criterion`                 | §3.3–4 | ✅ **kapandı** | `daemon.rs`; 11 çağrı yeri, yerleşim kapıda — §43              |
+|  20 | Keystore ile sır yönetimi                          | §5.2   | ✅ **kapandı** | `secrets.rs`, `keyring`, ADR 0010 — §45                        |
+|  21 | **Sürüm kanalları, kademeli dağıtım, geri alma**   | §6.3   | ⬜ başlanmadı | `channel`/`rollout`/`paused` sıfır isabet                     |
+|  22 | Platform kapsamı ve paketleme                      | §6.4   | ⬜ başlanmadı | Dört hedef; Linux aarch64 ve Win ARM64 yok                    |
+|  23 | Tray/menü etiketleri Rust'ta sabit                 | §7.2   | ✅ **kapandı** | Katalog frontend'den besleniyor — §39.2                       |
+|  24 | RTL                                                | §7.3   | 🟡 yarım      | Bağ artık **test edilmiş** (§39.4); RTL dili hâlâ yok         |
+|  25 | Erişilebilirlik beyanı (VPAT / EN 301 549)         | §8     | ⬜ başlanmadı | Beyan yok; §14.12 olmadan üretilemez                          |
+|  26 | Performans bütçesi: `criterion` + bundle           | §9     | ✅ **kapandı** | Bundle **kapı**, criterion **ölçüm** — ayrımı §41.2'de        |
+|  27 | Sıcak yollar: `list_projects` cache, gizli pencere | §9     | 🟡 yarım      | Gizli pencere **kapandı** (§39.3); cache hâlâ yok             |
+|  28 | `stats_history` kalıcılığı                         | §10    | ✅ **kapandı** | `stats_store`; 2 saatlik pencere, bayat örnek geri gelmiyor    |
+|  29 | Mutex poisoning                                    | §10    | ✅ **kapandı** | 12'si `recover` üzerinden; kaynak kapısı var — §39.1          |
+|  30 | Denetim izi (audit log)                            | §13    | ✅ **kapandı** | `audit.jsonl`, dönmeyen; altı eylem, kapsam kapıda            |
+|  31 | Air-gapped kurulum                                 | §13    | 🟡 yarım      | Gidiş-dönüş tam **ve arayüzde** (§39.5, §40.3); paket yolu yok |
+|  33 | Sözleşme kapısının kalan harici bağımlılığı        | §2.1   | 🟡 yarım      | Checkout var ama **suite A hiç koşmamış** — §38.4             |
+|  34 | Web sürümü / HTTP ikilisi                          | matris | ⬜ başlanmadı | `src/bin/` yalnızca `stackvo-mcp.rs`; `invoke(` tek dosyada   |
+|  35 | Windows ve Linux dallarının çalıştırılması         | matris | ⬜ başlanmadı | CI üç OS'ta koşuyor; **ayrıcalık yolları** koşmadı — §38.2    |
+|  36 | Gömülü PTY hiçbir arayüzden çağrılmıyor            | §38.5  | ✅ **kapandı** | `TerminalPane` + `useTerminal`; sözleşme değişmedi — §40       |
 
 Kapananlar bu tabloda yok: §36'daki beş madde (kapsam eşiği, gizlilik beyanı,
-NOTICE, sözleşme sürüm politikası, matrisin yeniden ölçümü) ve §14'ün 1, 3–9,
-11, 13–17 numaralı maddeleri.
+NOTICE, sözleşme sürüm politikası, matrisin yeniden ölçümü), §38'in kapattığı
+üçü (clippy kapısı, i18n çalışma zamanı kapısı, `NO_MANIFESTS`), §14'ün 1, 3–9,
+11, 13–17 numaralı maddeleri, ve **#32** — §38.2.
 
 ### 37.2 §14.21 — kanal işleri, ayrıntısıyla
 
@@ -2593,11 +2597,11 @@ mantığı yazılabilir ama **çalıştırılamaz**, ve bu raporun kendi kuralı
 
 §14'ün ilk sekizi gibi, ucuz ve birbirine bağlı olmayanlar:
 
-- **§14.32 destek politikası** — SECURITY.md'ye bir paragraf. "Yalnızca en son"
-  bugünkü gerçek; yazılı olması kurumsal satın almada sorulan şey.
-- **§14.29 mutex poisoning** — `parking_lot` ya da sekiz çağrı yerinde bilinçli
+- ~~**§14.32 destek politikası**~~ — **madde hiç var olmamıştı**, §38.2.
+- **§14.29 mutex poisoning** — `parking_lot` ya da dokuz çağrı yerinde bilinçli
   kurtarma. `prefs_set`'in `unwrap_or_else(|e| e.into_inner())` deseni zaten
-  doğru olanı; kalanlar ona hizalanır.
+  doğru olanı; kalanlar ona hizalanır. Kazanç panik önlemek değil — bu kod
+  hiç `unwrap()` etmiyor — **dokuz sessiz atlamayı** görünür yapmak (§38.2).
 - **§14.27'nin yarısı** — `if window.is_visible()` ile arka plan yoklama
   aralığını uzatmak. Tek koşul, ölçülmemiş bir pil maliyetini kaldırır.
 - **§14.23** — tray/menü etiketlerini `tray_relabel` üzerinden frontend'in
@@ -2615,3 +2619,991 @@ okumak yerine aynı kontrolleri tekrarlayabilir.
 
 Bu, §11'in tezinin sınırıdır ve yazılması gerekir: doğrulanabilir olan her şey
 doğrulandı; bu tablo doğrulanabilir olanın dışında kalan kısımdır.
+
+**§38 bu paragrafı sınadı ve yarısını çürüttü.** "Her satır bugün doğrulanmış"
+bir güvence değilmiş: altı satır yanlıştı, biri (#32) hiç açık değildi, ve
+tablonun kendi kanıt sütunu maddeyi kapatan metni alıntılıyordu. Bir kontrolün
+_yapıldığının_ yazılı olması, yapıldığı anlamına gelmiyor.
+
+---
+
+## 38. Doğrulama turu — tablonun kendisi ölçüldü
+
+Bu turun konusu yeni iş değil. §37.1'in her satırı, "bugün doğrulandı" iddiası
+dahil, **bağımsız olarak ağaca karşı** kontrol edildi: her madde için literal adı
+arandı, sonra _başka bir isimle eş değer bir çözüm var mı_ diye arandı, sonra
+varsa arayüze bağlı mı diye bakıldı. Son adım olmasaydı §38.5 bulunamazdı.
+
+### 38.1 Ağaç yeşil değildi
+
+Testlerin sayıları doğruydu — `cargo test` **556/556**, `vitest` **536/536**,
+ikisi de sıfır hata. `npm run lint`, `npm run build`, `cargo fmt --check`,
+`npm run notice:check` temiz. Ama:
+
+| Kapı | §36.7 ne diyordu | Ölçüm |
+| --- | --- | --- |
+| `cargo clippy -D warnings` | "temiz" | **düşüyor** |
+| `npm run contracts:check` | "bu makinede koşturulamadı" | **koştu**: 0 hata, 6 uyarı |
+
+`stats.rs:351`'deki `for (_name, data) in …iter()` §35.0'da "bir clippy
+**uyarısı**, bu oturumdan önce de vardı" diye kaydedilmişti. `-D warnings`
+altında bir uyarı değil, **derleme hatası** — ve `ci.yml` tam o komutu üç OS'ta
+koşuyor. Yani `main` üzerindeki CI kırmızıydı ve rapor onu yeşil sayıyordu.
+Düzeltmesi `.values()`, tek satır.
+
+Ders §36.1'in kapsam için öğrendiğinin aynısı, bir kez daha: **bir kapının
+varlığı, o kapıdan geçildiği anlamına gelmiyor.** Fark şu ki bu sefer kapı
+çalışıyordu; onu koşturmayan, kapının çıktısını okuduğunu sanan bir kayıttı.
+
+`contracts:check` iddiası da yanlıştı ve sebebi tuhaf: `--root ../stackvo`,
+bu deponun kendi ebeveyninde aynı adlı bir dizin olduğu için **projenin
+kendisine** çözülüyor. Koştu, ve "0 hata" dedi — §38.4'ün konusu.
+
+### 38.2 §37.1'in altı yanlış satırı
+
+Tablo 21 madde sayıyordu. On beşi tam olarak yazdığı gibi açık çıktı. Altısı
+değildi:
+
+**#32 — hiç açık değildi.** `SECURITY.md` **ilk commit'ten** (`7969add`) beri
+`## Supported versions — Only the latest release. This is a pre-1.0 project and
+there is no backport branch.` taşıyor; `git log -S` ile doğrulandı. Tablonun
+kanıt sütunu maddeyi kapatan cümleyi alıntılıyor ve yanına "⬜ başlanmadı"
+yazıyordu, §37.3 de hâlâ yazılmasını öneriyordu. Kuyruktan düştü.
+
+**#24 — gerekçe yanlıştı.** "Vuetify `rtl` yapılandırması yok" deniyordu;
+`appearance.js:291-293` tam olarak onu yapıyor, üstelik doğru yere — `isRtl`
+computed'ına değil, türetildiği per-locale map'e. Gerçek boşluk başka: **RTL bir
+dil hiç gelmiyor** (`locales/` yalnızca `en`, `tr`) ve mevcut tek test
+toggle'ın `set({rtl:true})` çağırdığını ölçüyor, düzenin aynalandığını değil.
+
+**#23 — "başlanmadı"dan fazlası vardı.** `tray_relabel` kayıtlı **ve frontend
+zaten çağırıyor** (`i18n/index.js:60`). Ama `tray::relabel` hiç etiket almıyor —
+`build_menu`'yü yeniden çağırıyor, o da `lib.rs:116`'daki `== "tr"` boolean'ına
+düşüyor. Mekanizma var, veri akışı yok; madde açık ama yarım.
+
+**#31 — yarısı vardı.** `release::save` = `docker save -o`, `release_save`
+olarak kayıtlı bir IPC komutu. İhracat yarısı çalışıyor; `docker load` sıfır
+isabet.
+
+**#35 — fazla genişti.** `ci.yml` `os: [ubuntu, macos, windows]` — 556 Rust
+testinin tamamı üçünde de koşuyor. Koşmayan şey, etkileşimli ayrıcalık yolları:
+`hosts.rs`'in `pkexec`'i ve PowerShell `-Verb RunAs`'ı, `certs.rs`'in
+`certutil`'i. Bunlar parola istemi açar, gözetimsiz CI'da koşamaz.
+
+**#29 — risk yanlış tarif edilmişti.** 14 `lock()` çağrısının dağılımı: 3'ü
+`map_err` ile hata döndürüyor, 1'i `into_inner()` ile kurtarıyor, 1'i tokio
+mutex'i (poisoning yok), ve **9'u `if let Ok(…)`** — yani poison hâlinde
+sessizce hiçbir şey yapmıyor. Tehlike panik değil; `unwrap()` hiç yok. Tehlike,
+log akışı kaydının, workspace cache'inin ve stats geçmişinin **sessizce
+atlanması**.
+
+### 38.3 Statik i18n kapısının göremediği yer
+
+`i18n.spec.js` kaynaktaki `t('some.key')` çağrılarını tarayıp hepsinin
+tanımlı olmasını istiyor. Tarama **statik**, dolayısıyla yalnızca literal
+yazılmış anahtarları görebiliyor — ve **34 çağrı yeri literal değil**:
+`` t(`preflight.${r.id}`) ``, `` t(`bootstrap.${step}`) ``,
+`` t(`workers.${kind}`) ``. Onlarda anahtar, arka ucun verdiği bir değer.
+
+Deliğin canlı örneği her koşuda stderr'e düşüyordu:
+
+```text
+[intlify] Not found 'workers.schedule' key in 'en' locale messages.
+```
+
+`worker.rs:42-44` yalnızca `queue`/`scheduler`/`horizon` üretiyor ve locale de
+bu üçünü tanımlıyor. Ama iki test dosyası fikstürde `'schedule'` gönderiyordu —
+arka ucun **gönderemeyeceği** bir kind. Bu, §35.3.7'nin kendi kuralının ihlali,
+ve a11y testi `WorkersPane`'i öyle mount ettiği için var olmayan bir durumun
+erişilebilirliğini doğruluyordu.
+
+Fikstürler düzeltildi, ama asıl iş kapı: `tests/setup.js` artık vue-i18n'in
+"Not found" uyarısını yakalayıp **onu isteyen testi düşürüyor**. İki yarı
+birbirini tamamlıyor — statik tarama literal anahtarların var olduğunu, bu da
+dinamik olanların bir testin gerçekten sürdüğü veri için çözüldüğünü kanıtlıyor.
+Yalnızca "Not found" yakalanıyor; `tr`'den `en`'e düşmek de uyarı üretir ve
+meşrudur. Mutasyonla denendi: fikstür geri bozulduğunda kapı testi adıyla
+düşürüyor.
+
+### 38.4 Suite A hiç koşmamış
+
+`NO_MANIFESTS` bir **uyarıydı**. Yani manifest bulunmayan bir çalıştırma
+"0 error(s)" yazıp `exit 0` veriyordu. Yanlış bir `--root` — ki bu depoda bir
+tuş uzaklıkta — kapıyı yeşil geçiriyordu.
+
+Ve kontrol edilince asıl mesele çıktı: **`stackvo/stackvo` deposunda
+`projects/` dizini yok** (GitHub API: repo 200, `contents/projects` 404). CI o
+depoyu checkout edip validator'ı ona doğrultuyor, dolayısıyla **suite A — bu
+aracın var olma sebebi olan manifest kontrolleri — CI'da hiç koşmamış.** Her
+koşuda uyarıyı basmış ve geçmiş.
+
+Düzeltme iki parçalı, çünkü tek başına hata yapmak CI'ı çözümsüz biçimde
+kırardı:
+
+- Varsayılan artık **hata**: yanlış köke doğrultulmuş yerel bir koşu düşüyor.
+- `--allow-no-manifests` bayrağı, "bu kökte gerçekten manifest yok" diyen
+  çağrıyı geçirir; `ci.yml` onu **yorumuyla birlikte** taşıyor.
+
+Boşluk kapanmadı — _görünür_ oldu. Bir uyarı akışında kimsenin okumadığı bir
+satır, artık workflow dosyasında duran ve gerekçesi yazılı bir karar. Upstream
+bir örnek proje taşıdığı gün bayrak kalkar ve suite A ilk kez iş yapar.
+
+### 38.5 Gömülü PTY: gönderilmiş, ulaşılamaz
+
+`contracts:check`'in altı uyarısı §35.0'da "henüz hiçbir görünümün çağırmadığı
+sarmalayıcı" diye geçilmişti. Beşi PTY'nin, ve fazlalık bir sarmalayıcı değil:
+
+| Var | Yok |
+| --- | --- |
+| `pty.rs` — 501 satır, 4 test | `xterm` bağımlılığı |
+| `pty_open/write/resize/close` kayıtlı | terminal bileşeni |
+| `terminal:ready/output/closed` sözleşmede | olayları dinleyen hiçbir şey |
+| `ipc.js`'te 4 sarmalayıcı | onları çağıran hiçbir `.vue` |
+
+Ayrım önemli, çünkü ilk teşhis fazla genişti: **harici terminal çalışıyor.**
+`terminal_open_external` dört yerden çağrılıyor (`App.vue`, `Projects.vue`,
+`ProjectDetail.vue`, `ServiceDetailSheet.vue`), ve `open_external_command` hızlı
+komutları taşıyor. Öksüz olan yalnızca **gömülü** PTY.
+
+Bu, `competitive-gaps` §2.1'in "container **ve** host PTY" satırını StackVo'nun
+gücü olarak sayması sebebiyle önemli: özellik arka uçta var ve test edilmiş,
+kullanıcı ona dokunamıyor.
+
+Kapatılmadı, ve sebebi yazılmalı: ADR 0008'e göre bir komut ya da olayı silmek
+**major**, yani 4 komut + 3 olay çıkarmak `contractVersion`'ı 2.0.0'a taşır. Bu
+sözleşmenin üç dış tüketicisi var (StackVo CLI, `stackvo-mcp`, ön yüz) ve
+çalışmayan bir yüzeyi temizlemek için major sürüm harcamak, sessiz bir
+değişikliğe gürültülü bir sinyaldir. Doğru son durak arayüze bağlamak — sözleşme
+hiç değişmez ve pahalı yarı zaten yazılmış — ama o bir **özellik**, ve bu tur bir
+doğrulama turuydu. Madde **#36** olarak numaralandı; §37.4'ün kuralı gereği
+kuyruktan ancak bir uygulama kaydı bırakarak çıkabilir.
+
+### 38.6 Sayılar
+
+| | Önce | Sonra |
+| --- | ---: | ---: |
+| Rust testleri | 556 | **556** |
+| Frontend testleri | 536 | **536** |
+| `cargo clippy -D warnings` | **düşüyor** | temiz |
+| Boş girdide `contracts:check` | `exit 0` | **`exit 1`** |
+| Dinamik i18n anahtarını ölçen kapı | yok | **`tests/setup.js`** |
+| Sessiz i18n uyarısı (her koşuda) | 2 | **0** |
+| §37.1'in yanlış satırı | 6 | **0** |
+| Açık madde | 21 | **20** (#32 düştü, #36 eklendi) |
+
+Doğrulama: `cargo test` 556/556, `cargo clippy --all-targets -D warnings`
+temiz, `cargo fmt --check` temiz, `npm run test:js` 536/536 ve **sıfır** stderr
+uyarısı, `npm run lint` 0, `npm run build` temiz, `npm run notice:check` temiz,
+`contracts:check` bayraksız `exit 1` / bayrakla `exit 0`.
+
+Bu turun hiçbir maddesi özellik değildi. Beşi de **var olan bir iddiayı doğru
+hâle getirdi** — projenin kendi tezi zaten bu.
+
+---
+
+## 39. "Ucuz küme" — §37.3'ün beş maddesi
+
+§38 tabloyu ölçtü; bu tur onun ucuz ucunu kapattı. Ortak özellikleri, §36'nın
+beşi gibi: hiçbiri özellik değil, hepsi **sessizce yanlış olabilen bir şeyi
+gürültülü hâle getiriyor.**
+
+### 39.1 §14.29 — dokuz sessiz atlama
+
+Rapor bunu "mutex poisoning" diye sayıyordu ve panikten korkuyordu. §38.2'nin
+ölçtüğü gibi kod hiç `unwrap()` etmiyor; tehlike bunun tersiydi —
+`if let Ok(mut x) = …lock()` **hiçbir şey yapmadan** geçiyordu.
+
+Bedeli soyut değil. `workspace_set`'in cache yazması atlanırsa sonraki her komut
+kullanıcının **az önce terk ettiği** dizini çözer. Bir log akışının handle'ı
+kaydedilmezse `container_logs_close` onu durduramaz ve yine `Ok(())` döner —
+kuyruk süreç ölene kadar akar. `stats_history.retain` atlanırsa ölü konteynerler
+hiç düşmez.
+
+On iki çağrı yeri artık tek bir `recover` üzerinden geçiyor —
+`prefs_set`'in zaten doğru olan `unwrap_or_else(|e| e.into_inner())` deseni,
+dosyanın geri kalanına yayılmış hâli. Poisoning'de veri **yapısal olarak geçerli**
+kalıyor (`insert`, `remove`, `retain` üzerinde bir `HashMap`), yani seçim
+"devam et" ile "hiçbir şey yapma" arasındaydı.
+
+İki test: biri gerçekten poison edilmiş bir kilidi (bir thread guard'ı tutarken
+panikliyor) kurtarıyor, diğeri **kaynak kapısı** — `commands.rs`'te `recover`
+dışında `.lock()` kalırsa düşüyor. İkincisi gerekli, çünkü atlanan bir cache
+yazması ile başarılı bir cache yazması dışarıdan **aynı görünüyor**: iddia
+edilecek davranış yok. Kapı geliştirme sırasında iki kez kendi yazarını yakaladı
+(önce kendi tarama satırını, sonra tokio mutex'ini).
+
+### 39.2 §14.23 — üçüncü dil artık kod değişikliği değil
+
+`tray.rs` iki dili `match (key, turkish)` tablosunda tutuyordu: 14 anahtar, iki
+biçimli etiket, artı `lib.rs`'in menü çubuğu için kendi kopyası. `menu::Labels`
+zaten doğrusunu yazmıştı — *"çeviriler frontend'in locale dosyalarında yaşar,
+Rust'taki ikinci kopya ayrı bir yük"* — ve `lib.rs` yine bir kopya tutuyordu.
+
+Yön tersine çevrildi. `trayLabels()` katalogu vue-i18n'den kuruyor, `syncLocale`
+açılışta ve her dil değişiminde gönderiyor. Rust'ın tablosu **silinmedi**:
+tepsi `setup()` sırasında, webview var olmadan önce çiziliyor, o ilk saniye için
+bir şeyin orada olması gerekiyor. Ama artık bir bootstrap ayrıntısı, uygulamanın
+kendi tepsi çevirisi değil.
+
+Üç karar yazılmalı:
+
+- **Katalog map, tipli struct değil.** Struct her yeni menü girdisini
+  sözleşme değişikliği yapardı. Bunun yerine **anahtarlar denetleniyor**:
+  eksik anahtar taşıyan katalog `INVALID_INPUT` ile reddediliyor, çünkü menünün
+  üçte biri Türkçe geri kalanı İngilizce, İngilizce kalmış menüden kötüdür.
+- **Sayılı etiketler `{count}` / `{running}` / `{total}` taşıyor.** Rust sayıyı
+  biliyor, dil dosyası sırayı. Konumsal birleştirme, bu işin var olma sebebi olan
+  dili — sayıyı başka yere koyan dili — ifade edemezdi.
+- **Paylaşılanlar kopyalanmadı.** Gezinme girdileri `nav`'dan, motor sözcükleri
+  `system`'den, menü bağlantıları `about.links`'ten geliyor. Yalnızca başka
+  karşılığı olmayan 11 dize yeni.
+
+Kapı diller arası: `tests/tray-labels.spec.js` `LABEL_KEYS`'i **Rust kaynağından
+okuyup** JS'in ürettiğiyle karşılaştırıyor. Gerekli, çünkü unutulan bir anahtar
+hiçbir şeyi çökertmiyor — Rust reddedip tablosuna düşüyor ve tepsi sessizce
+İngilizce kalıyor, yani düzeltilen hatanın ta kendisi.
+
+`tray_relabel` opsiyonel bir argüman kazandı → ADR 0008'e göre **minor**;
+`contractVersion` 1.1.0 zaten kilidin 1.0.0'ının üstünde, bu yüzden bump
+gerekmedi. Kapı bunu kendisi hesapladı.
+
+**Ve bir tuzak:** `FED` process-wide, `cargo test` paralel koşuyor. Katalog
+tohumlayan bir test, o anda koşan her testin `tr()` cevabını değiştirirdi — yani
+§36.6'nın bir tur harcadığı aralıklı hata sınıfı. Katalogu okuyan ya da yazan
+her test artık aynı `SERIAL` kilidini alıyor.
+
+### 39.3 §14.27'nin yarısı — pencere yokken daha seyrek
+
+Uygulamanın gözetimsiz tekrarlayan tek daemon çağrısı 60 saniyelik stats
+örnekleyicisiydi. Artık pencere gizli ya da simge durumundayken 300 saniye.
+
+**Durdurulmadı, uzatıldı** — ve bu ayrım maddenin kendisinden önemli. Durdurmak
+bariz tasarruf ve yanlış olanı: bu seri, proje detayına girildiğinde tek nokta
+yerine sparkline olsun diye var, ve gizliyken uyuyan bir örnekleyici tam da
+birisi baktığı anda boş grafik verir. Testin asıl iddiası bu — aralık uzadı
+**ve sıfır olmadı**.
+
+Tepsinin 15 saniyelik yenilemesi bilerek dışarıda: pencere kapalıyken güncellemeyi
+kesen bir tepsi, sahip olduğu tek işi kaybetmiştir.
+
+### 39.4 §14.24 — bağ vardı, onu tutan yoktu
+
+§38.2 tablonun gerekçesini düzeltmişti: Vuetify bağlantısı `appearance.js`'te
+zaten var, üstelik doğru yerde. Eksik olan bir testti. Var olan tek test
+*düğmenin* `set({rtl: true})` çağırdığını ölçüyordu — sonucunu değil.
+
+Bu boşluk ilginç, çünkü kırılma şekli sessiz: `isRtl` map üzerinden türetilmiş
+bir `computed`, ona atamak **kabul edilip yutuluyor**. Ayar kalıcı olur, düğme
+açık görünür, hiçbir bileşen yön değiştirmez. `appearance.js`'in yorumu bunun
+bir kez çözüldüğünü kaydediyor; doğru kalmasını sağlayan bir şey yoktu.
+
+Mutasyonla denendi: `isRtl`'e yazan sürüm üç testin ikisini düşürüyor.
+
+Madde **kapanmadı** ve kapanmamalı: RTL bir dil hâlâ gelmiyor. Ama §39.2'den
+sonra bir dil eklemek artık gerçekten bir çeviri işi — Rust değişikliği değil.
+
+### 39.5 §14.31'in yarısı — gidiş vardı, dönüş yoktu
+
+`release_save` `docker save` yapıyordu ve karşılığı yoktu. Kayıt defterine yolu
+olmayan bir makineye imaj **verilebiliyor ama yüklenemiyordu**, yani ihracat
+yarısı inecek yeri olmayan bir özellikti.
+
+`release_load` onu kapatıyor. İki karar: eksik dosya Docker'a bırakılmadan
+`NOT_FOUND` ile cevaplanıyor (Docker buna "geçersiz arşiv" der ve kullanıcıyı
+bozuk paket aramaya yollar), ve adlar `docker load`'un kendi stdout'undan
+okunuyor — çünkü başka hiçbir şey bilmiyor: dosya adı birinin koyduğu şey, ve
+tek akış birden çok imaj taşıyabilir. Etiketsiz imaj **id'siyle** bildiriliyor,
+düşürülmüyor: yüklendi, ve boş cevap boş paket gibi okunur.
+
+Madde açık kalıyor — tüm yığını paketleyen yol hâlâ yok.
+
+### 39.6 Kapıların zincirleme yakaladıkları
+
+Bu turun en öğretici kısmı, yazılan kod değil kapıların tepkisi. Bir komut
+eklemek `architecture_claims`'i düşürdü (149 → 150), `rustfmt` satır sayısını
+değiştirdi ve `platform_matrix_claims`'i düşürdü, üç kez. Her seferinde bir
+belge güncellendi. §11'in tezi çalışıyor.
+
+**Ama bir kapı çalışmıyordu.** `assert_states`, dokümanın **tamamında** düz
+alt-dizi araması yapıyordu — `doc.contains("96")`. Frontend dosya sayısı
+tabloda **95**, ağaçta **96**, ve kapı yeşildi: çünkü §7'nin *daha önceki bir
+sayım hatasını* anlatan paragrafında **37.969** geçiyor ve "96" onun içinde.
+
+Yani sayıları bayatlamaktan koruyan kapı, bayat bir sayıyı geçirdi — ve onu
+gizleyen şey, aynı şeyin son olduğunda yazılmış paragraftı. Arama artık §1
+ölçüm tablosuyla sınırlı ve rakam sınırı istiyor (`219`, `38.219`'un içinde bir
+iddia değildir). Mutasyonla denendi: eski hâlin kaçırdığı 95 → 96 farkını yeni
+hâli yakalıyor.
+
+### 39.7 Sayılar
+
+| | Önce | Sonra |
+| --- | ---: | ---: |
+| Rust testleri | 556 | **564** |
+| Frontend testleri | 536 | **542** |
+| IPC komutu | 149 | **150** |
+| `commands.rs`'te `recover` dışı `.lock()` | 13 | **0** |
+| Tepsi dizesi Rust'ta sabit | 20 | **0** (yedek olarak duruyor) |
+| Gizli pencerede daemon çağrısı | 60 sn'de bir | **300 sn'de bir** |
+| Belgeyi koda bağlayan kapının kapsamı | tüm dosya | **ölçüm tablosu** |
+
+Doğrulama: `cargo test` 564/564, `cargo clippy --all-targets -D warnings` temiz,
+`cargo fmt --check` temiz, `npm run test:js` 542/542 ve sıfır stderr uyarısı,
+`npm run lint` 0, `npm run build` temiz, `npm run notice:check` temiz,
+`contracts:check` bayraksız `exit 1` / bayrakla `exit 0`.
+
+---
+
+## 40. §14.36 — gömülü PTY arayüze bağlandı
+
+§38.5 bu maddeyi numaralandırırken kapatmamıştı ve gerekçesi yazılıydı: silmek
+ADR 0008'e göre **major**, ve çalışmayan bir yüzeyi temizlemek için 2.0.0
+harcamak, üç dış tüketicisi olan bir sözleşmede gürültülü bir sinyal. Doğru son
+durak arayüze bağlamaktı; bu tur onu yaptı. **Sözleşme hiç değişmedi.**
+
+### 40.1 Ne eksikti
+
+Hiçbir şey — arka uçta. `pty.rs` 501 satır ve 4 test, dört komut kayıtlı, üç
+olay sözleşmede tanımlı, `ipc.js`'te dört sarmalayıcı. Eksik olan tek şey onları
+çağıran bir görünümdü, ve o boşluk on ay `contracts:check`'in uyarı akışında
+"henüz hiçbir görünümün çağırmadığı sarmalayıcı" diye durdu.
+
+`src/lib/events.js`'in `EVENTS` haritasında `terminal` grubu da yoktu — yani
+olaylar sözleşmede vardı, frontend'in kayıt defterinde yoktu. Aynı boşluğun
+ikinci yüzü.
+
+### 40.2 Üç karar
+
+**Ayrım korundu.** `terminal_open_external` — sistem terminalini açan, dört
+yerden çağrılan komut — dokunulmadı. Kullanıcının kendi profiliyle kendi
+kabuğunu istediği durumda hâlâ doğru cevap o. Bu, diğer yarısı: projenin yanında
+yaşayan bir oturum.
+
+**xterm istek üzerine yükleniyor.** `import()` `start()`'ın içinde, dosyanın
+başında değil. Build bunu doğruluyor: **332 KB ayrı bir chunk**, yani kabuk
+istemeyen bir proje sayfası onu indirmiyor.
+
+**Pane mount olmakla süreç başlatmıyor.** Sayfadaki diğer her pane bir şey
+*okuyor*; bu, yalnızca sayfa yeterince kaydırıldığı için bir konteynerde kabuk
+başlatırdı, ve her ziyarette yeniden.
+
+### 40.3 Ve kendi açtığım deliği kapattım
+
+§39.5'te `release_load` eklemiştim ve arayüzden çağıran hiçbir şey yoktu — yani
+bu turda kapattığım sorunun bir örneğini kendim üretmiştim. `contracts:check`
+onu ilk koşuda bildirdi. `ReleasePane` artık paketi geri yüklüyor; uyarı sayısı
+**6 → 1**'e indi (kalan `appsAvailable`, bu turdan önce de vardı).
+
+### 40.4 Testin bulduğu sızıntı
+
+Yedi test yazıldı ve biri gerçek bir hata buldu — üstelik tam yazılma sebebi
+olan sınıftan. `open()` iki kez `await` ediyor ve görünüm arada gidebiliyor;
+`disposed` kontrolünü **abonelikten sonra** koymuştum ama `pty_open`
+döndükten sonra koymamıştım. Sonuç: unmount sırasında açılan bir kabuk, artık var
+olmayan bir bileşene yazılıyordu — `onUnmounted` çoktan koşmuş, yani onu
+kapatacak hiçbir şey kalmamış. Süreç orada kalırdı.
+
+Testin ilk hâli yalnızca `sessionId`'nin null olduğunu iddia ediyordu, ki bu
+sızıntının kendisi değil **unutulduğunun** kanıtı. Şimdi `ptyClose`'un
+çağrıldığını iddia ediyor.
+
+Diğer altısı, sessizce yanlış olabilecek şeylere bakıyor: abonelik komuttan
+**önce** kuruluyor (bir kabuk promise dönmeden prompt basar, sonradan takılan
+dinleyici o ilk parçayı sessizce kaybeder), olaylar `session_id` ile
+filtreleniyor (Tauri olayları global — filtresiz iki terminal birbirinin
+baytlarını görür ve ikincisi *çalışıyor gibi* görünür), ve görünüm gittiğinde
+kabuk kapanıyor.
+
+### 40.5 Yol boyunca: bir kapı daha eksikti
+
+§39.6 `assert_states`'in kapsamını daralttı. Bu tur, o kapının **hiç bakmadığı**
+bir satır çıktı: `ipc.js` sarmalayıcı sayısı. Doküman **142** diyordu, gerçek
+**143**'tü, ve `cargo test` yeşildi — çünkü o satırı ölçen bir test yoktu.
+Ölçüm tablosundaki tek denetlenmeyen sayıydı. Artık `ipc_wrapper_count()` ile
+tutuluyor.
+
+### 40.6 Sayılar
+
+| | Önce | Sonra |
+| --- | ---: | ---: |
+| Rust testleri | 564 | **564** |
+| Frontend testleri | 542 | **550** |
+| `contracts:check` UNUSED_API uyarısı | 6 | **1** |
+| `ipc.js` sarmalayıcısı | 142 (yanlış) | **143** (kapıda) |
+| Frontend kaynak dosyası | 96 | **98** |
+| npm bağımlılığı (NOTICE) | 40 | **42** |
+| xterm'in bundle maliyeti | — | **ayrı chunk, 332 KB** |
+
+Doğrulama: `cargo test` 564/564, `cargo clippy --all-targets -D warnings` temiz,
+`cargo fmt --check` temiz, `npm run test:js` 550/550, `npm run lint` 0,
+`npm run build` temiz, `npm run notice:check` 614 paketi kapsıyor,
+`contracts:check` bayraksız `exit 1` / bayrakla `exit 0`.
+
+---
+
+## 41. §14.26 — performans bütçesi
+
+Madde "`criterion` + `size-limit`" diye yazılmıştı. İkisi de geldi, ama **aynı
+statüde değil**, ve o ayrım maddenin kendisinden önemli.
+
+### 41.1 Bundle: kapı, ve ham bayt
+
+`tools/bundle-budget.mjs` politikayı, `tools/check-bundle.mjs` kapıyı tutuyor —
+`coverage-floors.mjs` / `check-coverage.mjs` çiftinin aynısı, aynı gerekçeyle:
+politika iki yerde yazılırsa bir gün ikisi farklı şey söyler.
+
+**`size-limit` paketi kullanılmadı.** Bu repodaki her ölçüm aracı
+(`generate-notice`, `check-coverage`, `validate-contracts`) sıfır bağımlılıkla
+elle yazılmış; onlarca paketlik bir ağaç, `statSync` ile toplanabilen bir sayı
+için orantısız.
+
+**Ve gzip değil, ham bayt** — ki bu alışılmış cevabın tersi. Her bundle aracı
+gzip'i varsayılan alır, çünkü web'de önemli olan ağdan geçen şeydir. **Burada
+hiçbir şey ağdan geçmiyor:** Tauri WebView'i uygulama paketindeki dosyaları
+diskten okuyor, yani sıkıştırılmış boyut hiç gerçekleşmeyen bir aktarımı tarif
+ediyor. Kullanıcının ödediği şey okunan ve **ayrıştırılan** bayt; ikisi de ham.
+Gzip'i bütçelemek ayrıca en muhtemel regresyonu gizlerdi: büyük ve iyi
+sıkışan bir bağımlılık — bir locale tablosu, bir ikon seti — gzip'i az,
+ayrıştırma süresini çok hareket ettirir.
+
+İki sayı, iki soru. `eager` pencere boyayabilmeden önce yüklenen küme; hangi
+dosyaların bu kümede olduğu **`dist/index.html`'den okunuyor**, elde tutulan bir
+listeden değil — build cevabı zaten yazıyor ve elle tutulan liste ilk chunk
+yeniden adlandırıldığında bayatlar. `total` her varlık; `xterm`'in 325 KB'ı ilk
+boyamaya girmediği için doğru şekilde bedava, ama sonsuza kadar bedava değil.
+
+Üç yol da denendi: build yokken `exit 1` (§36.1'in dersi — `dist/` gitignore'da,
+yani "build yok" bu kapının **olağan** durumu, nadir değil), tavan aşıldığında
+`exit 1`, normalde `exit 0`.
+
+Bir hata yol boyunca düzeltildi: ilk `measured.totalKb` 2612 yazılmıştı, `du -sk`
+ile alınmıştı, o da disk **bloklarını** sayar. Gerçek bayt toplamı 2502. Bir
+yöntemle ölçülüp başka bir yöntemle dayatılan bütçe, yuvarlama kuralı kadar
+kayar.
+
+### 41.2 Criterion: ölçüm, kapı değil — ve bu bir karar
+
+`benches/render.rs` generator'ın sıcak yolunu ölçüyor: `template::render`,
+gerçek bir checkout'ta 32 dosyanın her birinin geçtiği fonksiyon. İlk sayılar bu
+makinede: 20 servislik bir compose dosyası **~32 µs**, değişkeni olmayan aynı
+dosya **~25 µs**.
+
+**CI'a konmadı, ve sebebi yazılmalı.** GitHub runner'ları paylaşımlı makineler;
+koşudan koşuya varyans, yakalanmak istenen regresyonlardan rutin olarak geniş.
+Yakalayacak kadar dar bir eşik hiçbir şeyin değişmediği koşularda düşer,
+düşmeyecek kadar geniş bir eşik hiçbir şey yakalamaz. İki durumda da sonuç aynı,
+ve bu depo onu zaten bir kez yazmış: **insanların görmezden gelmeyi öğrendiği
+kırmızı bir kapı, hiç olmayandan kötüdür** (§36.1, `functions` eşiği).
+
+Yani bundle **kapı**, çünkü baytlar her makinede aynı; criterion **değil**,
+çünkü nanosaniyeler değil. Anlamlı karşılaştırma criterion'ın kendi geçmişine
+karşı olanı (`target/criterion`), bir ay önce başka bir makinede kaydedilmiş bir
+sayıya karşı olanı değil.
+
+Bu, maddeyi yarım bırakmak değil: istenen şey bir performans **bütçesiydi**, ve
+bütçelenebilir olan bütçelendi. Ölçülebilir ama dayatılamayan kısım ölçüm olarak
+kaldı, statüsü yazılı hâlde.
+
+### 41.3 Sayılar
+
+| | Değer |
+| --- | ---: |
+| eager (ilk boyama) | **1344,7 KB** / tavan 1500 |
+| total (her varlık) | **2502,2 KB** / tavan 3000 |
+| `render` (20 servis) | **~32 µs** |
+| `render` (değişkensiz) | **~25 µs** |
+| Yeni npm bağımlılığı | **0** |
+| Yeni Rust dev-dependency | **1** (`criterion`, gönderilmiyor) |
+
+Doğrulama: `cargo test` 564/564, `cargo clippy --all-targets -D warnings` temiz,
+`npm run notice:check` 614 paketi kapsıyor (criterion dev-dependency olduğu için
+listede yok, ki doğrusu bu), `npm run bundle:budget` `exit 0`.
+
+---
+
+## 42. §14.28 ve §14.30 — kalıcılık ve denetim izi
+
+İki madde, tek ortak nokta: ikisi de "bir dosya yaz" gibi görünüyor ve ikisinde
+de asıl iş **ne yazılmayacağına** karar vermek.
+
+### 42.1 §14.28 — zor kısım yazmak değil, geri okumak
+
+`sample_container_stats` süreç ömrü boyunca bir `HashMap` dolduruyordu, ve
+üstündeki yorum ne için olduğunu söylüyordu: proje detayına girildiğinde tek
+nokta yerine sparkline. Bu yalnızca **uzun süre açık kalmış** bir pencere için
+doğruydu; uygulama kapandığında seri süreçle gidiyor, ve her açılıştan sonraki
+iki saat tam da kaçınılmak istenen grafiği gösteriyordu.
+
+Kalıcılığın kolay yarısı `serde_json` + `atomic::write`. Zor yarısı şu: **olduğu
+gibi geri okunan bir zaman serisi, zaman hakkında bir yalandır.** Cuma kapanıp
+pazartesi açılan bir uygulama grafiğe üç günlük örnekler verir, ve sparkline
+verileni sürekliymiş gibi çizer — hafta sonundan gelen düz çizgi "boşta duran
+konteyner" diye okunur, "hiç çalışmayan" diye değil.
+
+Bu yüzden yükleme yaşa göre **filtreli**: `RETENTION`'dan (2 saat — 120
+örneğin 60 saniyelik aralıkta zaten anlamı) eski her şey girişte düşüyor. En
+kötü durum "seri olduğundan kısa", "seri yanlış" değil. Her örneği düşen bir
+konteyner de anahtarıyla birlikte siliniyor: boş bir seri grafikte düz bir
+çizgi çizer, ki bu bir yokluk beyanı değil bir iddia.
+
+Bozuk dosya `preferences.json`'ın duruşunu izliyor (§18.2), ama daha zayıf bir
+gerekçeyle — bu bir **önbellek**. Ayrıştırılamayan bir prefs dosyası
+kullanıcının ayarlarına mal olur ve saklanmayı hak eder; bu, bir sparkline'ın
+ilk saatine mal olur. Buradaki hiçbir şey uygulamanın açılmasını engelleyemez.
+
+Yazma her turda, kapanışta değil: yalnızca çıkışta yazılan bir önbellek, tam da
+hayatta kalmaya değer çıkışlardan sonra boştur — çökme, zorla kapatma, elektrik
+kesintisi. `crash.rs` zaten bu uygulamanın çöktüğü için var.
+
+### 42.2 §14.30 — bir log seviyesi değil, ikinci bir dosya
+
+`logging.rs` zaten bir tanılama logu yazıyor, ve bu kasten o değil. İkisi
+önemli olan her özellikte ayrılıyor: biri "neden başarısız oldu"yu, diğeri "ne
+yapıldı ve ne zaman"ı cevaplıyor; biri günlük dönüyor ve yedincisi siliniyor,
+diğeri **hiç dönmüyor**.
+
+Dönme satırı işin tamamı, ve ayrı bir dosya olmasının sebebi bu. Yedi gün sonra
+kendini silen bir kayıt "bu host girdisi ne zaman eklendi" sorusunu
+cevaplayamaz, ki o soru tam olarak üç hafta sonra sorulur.
+
+**Kapsam, madde sayısından önemli.** Yalnızca bu uygulamanın dışında bir şeyi
+değiştiren ve düğmeye tekrar basarak geri alınamayan eylemler: `/etc/hosts`
+yazımı, sertifika güveni, proje silme, `.env` yazımı, veritabanı geri yükleme,
+imaj paketi yükleme. Konteyner başlatmak **yok**, okuma yapan hiçbir şey yok.
+Rutin trafiği kaydeden bir denetim izi kimsenin okumadığı bir izdir, ve
+okunmayan bir iz delil değil, dosyadır. Ölçüt "birinin bunun hesabını vermesi
+gerekir mi", "bir şey oldu mu" değil.
+
+Üç karar daha:
+
+- **JSON Lines, JSON dizisi değil.** Bir dizi, eklemek için yeniden yazılmak
+  zorundadır — yani yazma sırasındaki bir çökme tek satıra değil tüm geçmişe mal
+  olur. `atomic::write` değiştirilen bir dosya için doğru araç, **büyüyen** bir
+  dosya için tam olarak yanlış olanı.
+- **Kimlik alanı yok**, ve bu tembellik değil dürüstlük. Bu, klavyedeki kişi
+  olarak koşan tek kullanıcılı bir masaüstü uygulaması. Bir `actor` sütunu her
+  satırda tekrarlanan OS hesabı olurdu — bir yetkilendirme kaydı gibi okunur ve
+  değildir. Dosyanın sahibi olan hesap cevabın kendisi.
+- **Hata yutuluyor, ve burası uygulamada bunun doğru cevap olduğu tek yer.**
+  Alternatif, denetim satırı saklanamadığı için bir `/etc/hosts` yazımını
+  başarısız kılmaktır — bir kayıt tutma sorununu kesintiye çevirir. İz,
+  uygulama hakkında delildir; uygulamaya katılan bir taraf değil.
+
+`.env` girdisi **anahtarları** taşıyor, değerleri değil — parolaların yaşadığı
+yer orası, ve onları taşıyan bir iz kimseye verilemez. Bunu bir yorum değil bir
+test tutuyor.
+
+### 42.3 Bir doküman listesi, koda bağlı
+
+`audit.rs`'in modül yorumu altı maddelik bir liste ile açılıyor. Yorumdaki
+liste hiçbir şeyin tutmadığı bir vaattir — ve buradaki başarısızlık en kötü
+biçimde sessiz: **girdisi eksik bir denetim izi, hiçbir şeyin olmadığı bir
+makinenin iziyle birebir aynı görünür.**
+
+`tests/audit_coverage.rs` vaadi yorumdan okuyup koda karşı tutuyor. Çağrı yeri
+olmayan bir madde düşüyor, çağrı yeri silinip maddesi bırakılan da. Ayrıca
+`logging.rs`'in `audit.jsonl`'i tanımadığını doğruluyor — rotasyon 7 dosya
+tutup gerisini siler, ki bu dosyanın var olma sebebi tam olarak onu yapmamak.
+
+Mutasyonla denendi: bir eylem adı değiştirildiğinde kapı maddeyi **adıyla**
+bildiriyor.
+
+Yol boyunca kapı bir kez yanlış çıktı ve düzeltilen kapı oldu, kod değil: ilk
+sürüm argüman listesini "ilk `)`'e kadar" diye kesiyordu ve o parantez
+`keys()`'in içine düşüyordu, yani doğru olan üretim kodunu yanlış bildirdi.
+
+### 42.4 Sayılar
+
+| | Önce | Sonra |
+| --- | ---: | ---: |
+| Rust testleri | 569 | **577** |
+| Rust modülü | 55 | **57** |
+| Denetlenen ayrıcalıklı eylem | 0 | **6** |
+| Yeniden başlatmadan sonra sparkline | tek nokta | **2 saate kadar geçmiş** |
+| `PRIVACY.md`'de sayılan dosya | 6 | **8** |
+
+Doğrulama: `cargo test` 577/577, `cargo clippy --all-targets -D warnings` temiz,
+`cargo fmt --check` temiz, `npm run test:js` 550/550, `npm run lint` 0,
+`npm run bundle:budget` `exit 0`, `npm run notice:check` temiz.
+
+---
+
+## 43. §14.19 — Docker'ın cevabı, karar katmanı olarak
+
+Madde "Docker trait + proptest + criterion" diye yazılmıştı. `criterion` §41'de
+geldi. Kalan ikisi için, maddeyi harfiyen uygulamak **yanlış şeyi üretirdi** ve
+bunun neden böyle olduğu yazılmalı.
+
+### 43.1 Neden bollard üzerinde bir trait değil
+
+Yirmi dört metotlu bir `trait DockerApi` ve sahte bir uygulaması, maddenin bariz
+okuması. Aynı zamanda neredeyse tamamı geçiş katmanı olurdu: her metot
+argümanlarını iletir ve geleni döndürür, yani sahteye karşı yazılan testler bir
+iletme fonksiyonunun ilettiğini test ederdi.
+
+Oysa gerçekten ulaşılması zor **ve** gerçekten sonuçlu olan kod, çağrı değil —
+**çağrıdan sonraki `match` kolu**:
+
+```text
+Err(DockerResponseServerError { status_code: 304, .. }) => Ok(())
+```
+
+`engine.rs`'te bunlardan on bir tane vardı, her biri belirli bir HTTP
+durumunun başarı mı, yokluk mu, yoksa bildirilmeye değer bir arıza mı
+olduğuna ayrı ayrı karar veriyordu. Her birini çalıştırmak belirli bir durumdaki
+canlı bir daemon gerektiriyor, ki hiçbirinin hiç test edilmemiş olmasının sebebi
+tam olarak bu. Ve yanlış olduklarında sessizler: başarı diye okunan bir durum
+kodu, hâlâ çalışan bir konteyneri "durduruldu" diye bildirir.
+
+Bu yüzden dikiş **taşıma katmanının değil, kararın** etrafına çizildi.
+`daemon.rs` saf: sınırından hiçbir bollard tipi geçmiyor, I/O yok, async yok.
+`engine.rs` doğrudan çağrılarını koruyor ve cevabın ne anlama geldiğini buraya
+soruyor.
+
+### 43.2 Aynı 404, eyleme göre iki farklı şey
+
+Kuralın kendisi bu, ve dağınık hâlde altı ayrı yerde yazılmıştı:
+
+- **start / stop / restart** — 404, konteynerin orada olmadığı anlamına gelir ve
+  çağıran onun *çalışmasını* ya da *durmasını* istedi. İkisi de olamaz. Gerçek
+  bir NOT_FOUND.
+- **remove** — 404, zaten gittiği anlamına gelir, ki çağıranın istediği tam
+  olarak buydu. Bunu hata saymak, bir projeyi silmeyi ikinci denemede
+  başarısız kılar.
+
+409 yalnızca imajlar için başarı: başka bir konteyner onu tutuyor demektir ve
+bırakmak doğru sonuçtur. Aynı `mysql:8.0`'ı paylaşan iki servis olağan bir
+düzen.
+
+### 43.3 Proptest yerine tükenmiş uzay
+
+`proptest` bağımlılığı eklenmedi, ve bu bir eksiklik değil. Buradaki en önemli
+özellik — **tanınmayan hiçbir durum kodu asla başarı diye okunmaz** — 65.536
+değerin tamamı üzerinde bir döngüyle doğrudan kanıtlanabiliyor. Uzayın *bir
+kısmını* örnekleyip gerisine şans diyen bir üreteç, tamamını gezen bir `for`
+döngüsünden zayıftır; ve bir bağımlılık, verdiğinden azını veriyorsa
+eklenmemelidir.
+
+Bu özelliğin önemi, engellediği hatanın sessizliğinde: gerçekleşmemiş bir
+`stop`, durdurulmuş bir konteyner olarak bildirilir.
+
+### 43.4 Çıkarmanın bulduğu hata
+
+`lifecycle_error` ürettiği **her** NOT_FOUND'a `container {name}` yazıyordu —
+eksik bir **volume** için de, eksik bir **network** için de. Mesaj yanlış türden
+bir nesneyi adlandırıyor, ve ona iliştirilen ipucu ("proje henüz derlenmemiş
+olabilir") kullanıcıya arızayla hiç ilgisi olmayan bir projeyi derlemesini
+söylüyordu.
+
+Dağınık hâlde bu görünmezdi: her çağrı yeri kendi mesajını üretiyor gibi
+duruyor. Tek bir fonksiyonda toplanınca, `subject_noun()`'ın olmaması derhal
+göze battı. **Çıkarmanın getirisi test edilebilirlik kadar bu.**
+
+### 43.5 Ve çıkarılmış kalmasını sağlayan kapı
+
+Kararları çıkarmak, ancak çıkarılmış kaldıkları sürece bir işe yarar. Durum
+kodunu satır içinde eşleştiren yedinci bir çağrı yeri her şeyi başladığı yere
+geri götürür — ve incelemede tamamen sıradan görünürdü.
+
+`daemon::placement_tests` `engine.rs`'i tarıyor: tek adaptör (`status_of`)
+dışında `status_code` okuyan bir satır varsa düşüyor. Mutasyonla denendi, satır
+numarasıyla bildiriyor.
+
+Bugün: `engine.rs`'te `lifecycle_error` **0**, doğrudan `status_code` eşleşmesi
+**0**.
+
+### 43.6 Sayılar
+
+| | Önce | Sonra |
+| --- | ---: | ---: |
+| Rust testleri | 577 | **587** |
+| Rust modülü | 57 | **58** |
+| Daemon kararı için test | 0 | **10** |
+| `engine.rs`'te satır içi durum kararı | 11 | **0** |
+| Kapsanan durum kodu | 2 (elle) | **65.536 × 9 eylem** |
+| Yeni bağımlılık | — | **0** (proptest eklenmedi, §43.3) |
+
+Doğrulama: `cargo test` 587/587, `cargo clippy --all-targets -D warnings` temiz,
+`cargo fmt --check` temiz, `npm run test:js` 550/550, `npm run lint` 0,
+`npm run bundle:budget` `exit 0`, `npm run notice:check` temiz.
+
+---
+
+## 44. §14.18 — merkezî politika ve private registry
+
+C kümesinin ilk maddesi. Tasarımı §35.2'de yazılıydı; bu bölüm inen hâli ve
+yazarken çıkan üç şeyi kaydediyor.
+
+### 44.1 Maddenin durumu: yarım inmiş bir modülün ikinci denemesi
+
+Bu madde daha önce **başlanıp geri alınmıştı**: `policy.rs` yazılmış, `lib.rs`'e
+hiç bağlanmamış ve `Code::Forbidden` olmadığı için derlenmemişti. O turda
+dosyanın silinip tasarımın §35.2'ye yazılması doğru karardı — ama tasarımın
+kendisi de eksikti: dosyanın **ne olmadığını** söylemiyordu.
+
+Bu turda önce o söylendi (ADR 0009), sonra kod yazıldı.
+
+### 44.2 Bu bir güvenlik sınırı değil — ve bunu söylemek işin yarısı
+
+Uygulama, normal yapılandırılmış bir makinede kullanıcının kendi hesabının çoğu
+zaman **yazabileceği** bir dosyayı okuyor. `STACKVO_POLICY_FILE` onu istenen
+yere yönlendiriyor. İkisi de doğru ve ikisi de kusur değil.
+
+Alternatif, tersini ima etmekti: override'ı gizlemek, yalnızca root'a ait bir
+yol okumak, izinler yanlışsa açılmamak. Bu hiçbir şey kazandırmazdı — masaüstü
+uygulaması kullanıcı olarak çalışır, okuyabildiği her şey başka bir şeye
+okutulabilir — ama var olmayan bir garantiyi ima ederdi.
+
+**Anahtarı üstüne yapıştırılmış bir kilit satmak, hiç kilit satmamaktan
+kötüdür**, çünkü birileri ona göre plan yapar.
+
+Katmanın gerçekten kazandırdığı şey ayrı ve yeterli: yüz makineye kimse bir şey
+yazmadan bir varsayılan iner, kilitli bir anahtar iyi niyetli bir kullanıcının
+kendi yığınını bozmasını engeller, ve Ayarlar paneli bir alanın **neden**
+düzenlenemediğini söyleyebilir — bozuk görünmek yerine.
+
+Bu cümle beş yerde geçiyor (`policy.rs`, ADR 0009, `contracts/ipc.json`,
+`PolicyNotice.vue`, `en.js`) ve **kapıda**: `policy_claims.rs` beşini de
+tarıyor. Sebebi basit — bu, sonraki bir düzenlemenin "temizleyeceği" türden bir
+çekince, ve o temizlik geriye bir garanti gibi okunan bir özellik bırakır.
+
+### 44.3 Yazarken çıkan üç kural
+
+**Ayarlamadığı bir anahtarı kilitleyemez.** `"locked": ["SSL_ENABLE"]` — karşılık
+gelen bir `settings` girişi olmadan — "değişmesin" der ama "neye" demez, yani
+her makineyi elindekinde tutar. Bu, yönetilen bir filonun tam tersi. Böyle bir
+giriş düşürülüyor ve `error`'da adıyla bildiriliyor.
+
+**Öncelik: gömülü varsayılan < `.env` < politika.** Ters olsaydı, bayat bir
+`.env`'in sessizce ezdiği bir yönetici ayarı politika değil, öneri olurdu.
+
+**Bozuk politika uygulamayı açılmaz yapmaz — ama sessiz de kalmaz.** Ayrıştırma
+hatası boş bir politika üretiyor; hata `policy_status` ile dönüyor ve Ayarlar'da
+`warning` olarak görünüyor. Üç sonuçtan en kötüsü, sessizce hiçbir şey yapan bir
+politikadır: onu dağıtan yöneticinin yürürlükte sandığı politika.
+
+### 44.4 Mirror: üç istisna ve bir doğruluk şartı
+
+Yeniden yazma **render edilmiş metin** üzerinde, hepsini üreten tek fonksiyonun
+sonunda yapılıyor — yirmi `.tpl` dosyasında değil. Şablonlar Bash üreticisiyle
+olan sözleşme; onları düzenlemek her differential karşılaştırmayı porta ilgisiz
+bir sebeple düşürür ve çalışma alanının kendi kopyalarını yine ıskalardı.
+
+Üç referans olduğu gibi bırakılıyor:
+
+| Referans | Neden dokunulmuyor |
+| --- | --- |
+| `ghcr.io/x/y`, `localhost:5000/z` | Docker'ın kendi kuralı: ilk parça `.` ya da `:` içeriyorsa veya `localhost` ise host'tur. Kasıtlı bir seçimi yönlendirmek mirror'ın işi değil |
+| Zaten önekle başlayan | İkinci render ikinci yeniden yazma olmamalı; `proxy/proxy/mysql` 404'tür |
+| `stackvo-*` | Bu makinede Compose ile üretiliyor, hiçbir registry'de yok. Önek onları aynı anda hem çekilemez hem inşa edilemez yapar |
+
+Dördüncüsü istisna değil, **doğruluk şartı**: aynı dosyadaki daha önceki bir
+`FROM … AS base` ile tanımlanmış `FROM base`, bir imaj değil bir **derleme
+aşaması**. Ona önek eklemek, çalışan bir çok aşamalı derlemeyi hiç var olmamış
+bir şeyin çekilmesine çevirir. `rewrite` aşama adlarını tarayarak topluyor —
+Docker'ın çözdüğü gibi.
+
+### 44.5 Kapı kendi mutasyonuyla yakalandı
+
+`policy_claims.rs`'in ilk hâli platform yollarını **dosya düzeyinde** arıyordu.
+Mutasyon denemesinde `default_path()` içindeki Linux yolu değiştirildi ve
+**test geçti** — çünkü aynı dize yirmi satır yukarıdaki modül yorumundaki
+tabloda duruyordu.
+
+Bu, §36.1'in "görmediği için geçen bir kapı hiç olmayandan kötüdür" kuralının
+tam örneği, ve kapının kendisinde çıktı. Düzeltme: prose yarısı ile kod yarısı
+ayrı okunuyor (`policy_code()` hem modül yorumunu hem `#[cfg(test)]` bloğunu
+kesiyor — ikincisi de gerekliydi, çünkü test fikstürü aynı yolu kullanıyor ve
+kendi test verisiyle tatmin olan bir kapı hiçbir şeyle tatmin olmuş demektir).
+
+İkinci denemede mutasyon **düştü**, ve altı kapının altısı da mutasyonla
+denendi:
+
+| Mutasyon | Kapı |
+| --- | --- |
+| Sözleşmeden `FORBIDDEN` kaldırıldı | `every_error_code_is_in_the_contract_and_the_reverse` |
+| `rewrites()` Dockerfile'ları atlayacak şekilde daraltıldı | `every_generated_file_with_images_in_it_is_rewritten` |
+| `env_writer::apply`'dan politika kontrolü silindi | `the_env_writer_refuses_locked_keys` |
+| "not a security boundary" cümlesi değiştirildi | `the_documentation_keeps_saying_it_is_not_a_security_boundary` |
+| `default_path()` içindeki Linux/macOS yolu değiştirildi | `the_code_reads_the_paths_the_documentation_advertises` |
+| `useEnvEditor`'dan `policyStatus` çağrısı silindi | 5 frontend testi düştü |
+
+### 44.6 Yolda kapatılan takipsiz bir açık
+
+`contract_agreement.rs` komutları ve olayları sözleşmeye bağlıyordu; **hata
+kodları hiç kontrol edilmiyordu**. Yani `Code::Forbidden`, yalnızca Rust'ın
+bildiği bir dize olarak da inebilirdi — ve frontend bu kodların üzerine
+`switch` yazıyor.
+
+`policy_claims.rs` iki yönlü kapatıyor: sözleşmede olmayan bir kod da düşer,
+hiçbir yerde üretilmeyen bir sözleşme kodu da (frontend'in ele aldığı ve asla
+görmediği bir dal, ölü daldır). Bugün her iki küme de 13 elemanlı.
+
+### 44.7 İnenler
+
+| | |
+| --- | --- |
+| `src-tauri/src/policy.rs` | Saf ayrıştırıcı + mirror; 19 test |
+| `Code::Forbidden` | `PERMISSION_DENIED`'dan kasten ayrı — o, parola ile cevaplanabilir; bu asla |
+| `policy_status` komutu | Sözleşme girişi + `ipc.js` sarmalayıcısı; anahtar döner, **değer dönmez** |
+| `env_writer::check_unlocked` | Tek uygulama noktası; 4 test |
+| `Env::apply_policy` | `load`'un sonunda; `parse` saf kaldı; 2 test |
+| `ManagedBadge.vue` / `PolicyNotice.vue` | Rozet ve sayfa üstü bildirim; 9 test |
+| ADR 0009 | Kararın kendisi ve **maliyeti** |
+| `policy_claims.rs` | 6 kapı |
+
+| | Önce | Sonra |
+| --- | ---: | ---: |
+| Rust testleri | 587 | **621** |
+| Frontend testleri | 552 | **561** |
+| Hata kodu kapısı | yok | **iki yönlü** |
+| Yeni bağımlılık | — | **0** |
+
+Doğrulama: `cargo test` 621/621, `cargo clippy --all-targets -D warnings` temiz,
+`cargo fmt --check` temiz, `npx vitest run` 561/561, `npm run lint` 0,
+`npm run build` temiz, `npm run bundle:budget` `exit 0` (eager 1346,7 KB /
+1500 KB), `npm run notice:check` temiz, `validate-contracts` `exit 0`.
+
+---
+
+## 45. §14.20 — sırlar OS keystore'una
+
+§5.2 "veritabanı şifreleri `.env` içinde düz metin" diyordu ve bunu bir _v2
+sözleşme değişikliği_ olarak işaretlemişti. Yazarken §5.2'nin saymadığı bir şey
+çıktı, ve bu maddenin ne iddia edebileceğini değiştirdi.
+
+### 45.1 Sır tek dosyada değil, iki dosyadaydı
+
+`generated/docker-compose.dynamic.yml`,
+`{{ SERVICE_MYSQL_ROOT_PASSWORD | default('root') }}` şablonundan render
+ediliyor — yani gerçek şifre **her zaman** oraya da yazılıyordu. §5.2 `.env`'i
+saydı ve durdu.
+
+Bu, değişiklikten vazgeçmek için sebep değil; ama "sırlar artık diskte değil"
+diye anlatmamak için sebep — ki bir keystore özelliğinden normalde anlaşılan
+budur.
+
+İnen şey şu: `.env`'den çıkıyor, diskten çıkmıyor. `.env` elle bakılan,
+yedeklenen, senkronlanan ve destek konularına yapıştırılan dosya; `generated/`
+ise ADR 0002'nin "her seferinde sıfırdan yeniden yazılır" dediği çıktı.
+**Gerçek ama kısmî bir azaltma** — ve dürüst olan, hangisi olduğunu söylemek.
+Bu cümle altı yerde geçiyor ve `secrets_claims.rs` altısını da tarıyor.
+
+`generated/`'dan da çıkarmak `${VAR}` render edip değeri `docker compose`'a
+process ortamından vermek demek. Bu (a) render edilen baytları değiştirir, yani
+tüm portun güvenlik mekanizması olan differential karşılaştırma her serviste
+düşer, (b) elle çalıştırılan `docker compose up`'ı bozar. İkisi de çözülebilir,
+ikisi de sessizce çözülemez — ADR 0010'a yazıldı, yarım başlanmadı.
+
+### 45.2 Boş dize, `root`'tan daha kötü
+
+`template::pass_braces` sırayı `env.get(name).or(default)` olarak kuruyor: **var
+ama boş** bir değer, şablonun kendi `| default('root')` değerini yener.
+
+Yani çözülemeyen bir referansı `""` ile bırakmak
+`MYSQL_ROOT_PASSWORD: ""` render ederdi — bir anahtar zinciri kilitli olduğu
+için **şifresiz** bir veritabanı. Alternatif (anahtarı düşürüp `root`'a
+düşmek) daha sessiz bir şekilde kötü: konteyner, kullanıcının yıllar önce
+koyduğu ve yürürlükte olduğunu bilmediği bir şifreyle kalkar.
+
+`secrets::resolve` bu yüzden anahtarı **kaldırıyor** ve adını döndürüyor;
+`render_generated` hiçbir şey yazmadan önce reddediyor. Kapı sırayı da tutuyor:
+kontrol `files.push`'tan önce olmalı, ve mutasyonla iki yönden denendi.
+
+### 45.3 Taşınan anahtar taşınmış kalır
+
+`env_writer::apply` `.env`'in **o anki satırına** bakıyor. Referanssa, yeni değer
+keystore'a gidiyor, dosyaya değil. Bu kural olmasa, anahtarı içeren herhangi bir
+Ayarlar panelinden gelen ilk kayıt şifreyi geri yazardı — kullanıcı **Kaydet**
+dışında hiçbir şeye basmadan ve ekranda hiçbir şey söylenmeden.
+
+Kontrol `.env` **metnini** okumak zorunda: yüklenmiş bir `Env`, referansı zaten
+arkasındaki değerle değiştirmiştir ve o noktada taşınmış anahtarı hiç
+taşınmamış olandan ayırt edecek bir şey kalmaz.
+
+`apply_verbatim` istisna ve **tek** çağıranı var — `secret_restore`, ki işi
+zaten bu yönlendirmeyi geri almak. Kapı çağıran sayısını birde tutuyor.
+
+### 45.4 Referans türetme değil, veri
+
+Giriş adı `SERVICE_MYSQL_ROOT_PASSWORD@a1b2c3d4` — anahtar önce, çünkü Keychain
+Access'te gözle aranan o; özet sonra, çünkü bir makinedeki iki çalışma alanı tek
+girişi paylaşmamalı.
+
+Anahtardan ve yoldan **üretiliyor**, ama arama için asla **yeniden
+hesaplanmıyor**: `.env` onu aynen taşıyor. Yeniden hesaplamak, birisi çalışma
+alanı dizinini taşıdığı anda tüm sırlarını sessizce öksüz bırakırdı.
+
+Özet FNV-1a, altı satır elle yazıldı — `DefaultHasher` değil, çünkü çıktısı Rust
+sürümleri arasında açıkça garanti edilmiyor ve bu değer süreçten uzun yaşayan
+bir dosyaya iniyor. Hiçbir şey bozulmazdı; ama tanımı "o yıl standart kütüphane
+ne yaptıysa" olan kalıcı bir tanımlayıcı yazılmaz.
+
+### 45.5 Bash CLI'ın okuyamaması, keskin kenar
+
+`stackvo.sh` `.env`'i satır satır okuyor ve `keychain:…` dizesini şifrenin
+kendisi sanır — taze bir MySQL konteyneri kimsenin seçmediği bir root şifresiyle
+kalkar ve bunu hiçbir şey duyurmaz.
+
+Bu yüzden taşıma **tek tek**, açık, ve **geri alınabilir**. Hepsini birden
+taşıyan bir süpürme, aynı kararı sessizce on iki kez vermek olurdu.
+`doctor` da bir satır kazandı: iki aracın da kullanıldığı bir çalışma alanını
+bildiriyor — taşıma altı ay önce yapılmış ve `stackvo.sh`'ı şimdi çalıştıran
+başka biri olabilir.
+
+### 45.6 Ölçülen bağımlılık maliyeti
+
+| Ölçüm | Yeni crate |
+| --- | ---: |
+| macOS / Windows derlemesi | **1** |
+| Linux derlemesi | **14** (aes, cbc, hkdf, hmac, num/num-\*, D-Bus el sıkışması) |
+| `Cargo.lock` (tüm hedefler) | **29** — `NOTICE.md` bundan üretiliyor |
+
+`crypto-rust`, `crypto-openssl` değil: hiçbir Linux kullanıcısının önüne bir
+OpenSSL derlemesi çıkmasın diye. `linux-native` daha ucuzdu ve yanlış — o,
+oturuma bağlı ve yeniden başlatmada silinen kernel keyring'i; kendini boşaltan
+bir şifre deposu, şifre deposu değildir.
+
+CI'a `libdbus-1-dev` eklendi. macOS'ta çalışan bir geliştiricinin asla
+göremeyeceği bir yerde kırılırdı.
+
+### 45.7 Test kendi hatamı buldu
+
+`SecretsPane`'de başarısız bir taşımadan sonra hata mesajı ekranda görünmüyordu:
+`catch` bloğu `error.value`'yu yazıyor, ardından çağrılan `load()` ilk işi olarak
+`error.value = null` yapıyordu. Panel taze, sessiz ve sorunsuz görünen bir liste
+gösteriyordu.
+
+Test mesajın ekranda olmasını iddia ettiği için yakalandı. Sıra tersine çevrildi
+ve sebep koda yazıldı.
+
+Kapının kendi tarayıcısı da bir kez yanlıştı: ilk `#[cfg(test)]`'te kesmek
+`policy_claims`'te doğruydu ama `commands.rs`'te değil — dosyada dokuz tane var
+ve ilki bu testin baktığı her şeyin iki bin satır üstünde. O sürüm
+`render_generated`'ı "yok" diye bildirdi. Tarayıcı artık test modüllerini
+bulundukları yerde çıkarıp gerisini birleştiriyor.
+
+### 45.8 İnenler
+
+| | |
+| --- | --- |
+| `src-tauri/src/secrets.rs` | Referans biçimi, sınıflandırma, çözümleme; 9 test |
+| `keyring` bağımlılığı | Ölçülmüş, üç platform için ayrı ayrı |
+| `secrets_status` / `secret_move` / `secret_restore` | Sözleşme + `ipc.js` + denetim izi |
+| `env_writer::apply_verbatim` | Tek çağıranlı istisna, kapıda |
+| `Env::unresolved_secrets` | Üreticinin reddettiği durum |
+| `doctor::KeystoreCheck` | İki aracın çakıştığı çalışma alanı |
+| `SecretsPane.vue` | Sonucu **önce** söyleyen panel; 8 test |
+| ADR 0010 | Karar, bulgu ve maliyet |
+| `secrets_claims.rs` | 5 kapı, altısı mutasyonla denendi |
+
+| | Önce | Sonra |
+| --- | ---: | ---: |
+| Rust testleri | 621 | **636** |
+| Frontend testleri | 561 | **570** |
+| Düz metin şifre tutan dosya | 2 | **1** (isteğe bağlı) |
+
+Doğrulama: `cargo test` 636/636, `cargo clippy --all-targets -D warnings` temiz,
+`cargo fmt --check` temiz, `npx vitest run` 570/570, `npm run lint` 0,
+`npm run build` temiz, `npm run bundle:budget` `exit 0` (eager 1349,7 KB /
+1500 KB), `npm run notice:check` 643 paket, `validate-contracts` `exit 0`.

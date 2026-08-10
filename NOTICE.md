@@ -17,7 +17,7 @@ notice that is a superset beats four that differ and cannot be told apart.
 Build-time and test-only dependencies are excluded: their code is not in
 the binary.
 
-Counted from 572 Rust crates and 40 npm packages.
+Counted from 601 Rust crates and 42 npm packages.
 
 ## Summary
 
@@ -31,7 +31,7 @@ Counted from 572 Rust crates and 40 npm packages.
 | Apache-2.0 AND MIT | 1 |  |
 | Apache-2.0 OR BSL-1.0 | 1 |  |
 | Apache-2.0 OR ISC OR MIT | 3 |  |
-| Apache-2.0 OR MIT | 52 | 1 |
+| Apache-2.0 OR MIT | 53 | 1 |
 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | 5 |  |
 | Apache-2.0/MIT | 4 |  |
 | BSD-2-Clause |  | 1 |
@@ -48,8 +48,8 @@ Counted from 572 Rust crates and 40 npm packages.
 | ISC | 5 | 1 |
 | ISC AND (Apache-2.0 OR ISC) | 1 |  |
 | ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause AND (Apache-2.0 OR ISC OR MIT) AND (Apache-2.0 OR ISC OR MIT-0) | 1 |  |
-| MIT | 130 | 29 |
-| MIT OR Apache-2.0 | 261 | 6 |
+| MIT | 138 | 31 |
+| MIT OR Apache-2.0 | 281 | 6 |
 | MIT OR Apache-2.0 OR LGPL-2.1-or-later | 2 |  |
 | MIT OR Apache-2.0 OR Zlib | 3 |  |
 | MIT OR Zlib OR Apache-2.0 | 1 |  |
@@ -61,13 +61,14 @@ Counted from 572 Rust crates and 40 npm packages.
 | Unlicense/MIT | 2 |  |
 | Zlib | 1 |  |
 | Zlib OR Apache-2.0 OR MIT | 20 |  |
-| **Total** | **572** | **40** |
+| **Total** | **601** | **42** |
 
-## Rust crates (572)
+## Rust crates (601)
 
 | Package | Version | Licence |
 | --- | --- | --- |
 | adler2 | 2.0.1 | 0BSD OR MIT OR Apache-2.0 |
+| aes | 0.8.4 | MIT OR Apache-2.0 |
 | aho-corasick | 1.1.4 | Unlicense OR MIT |
 | alloc-no-stdlib | 2.0.4 | BSD-3-Clause |
 | alloc-stdlib | 0.2.4 | BSD-3-Clause |
@@ -100,6 +101,7 @@ Counted from 572 Rust crates and 40 npm packages.
 | bitflags | 1.3.2 | MIT/Apache-2.0 |
 | bitflags | 2.13.1 | MIT OR Apache-2.0 |
 | block-buffer | 0.10.4 | MIT OR Apache-2.0 |
+| block-padding | 0.3.3 | MIT OR Apache-2.0 |
 | block2 | 0.6.2 | MIT |
 | blocking | 1.6.2 | Apache-2.0 OR MIT |
 | bollard | 0.21.0 | Apache-2.0 |
@@ -117,11 +119,13 @@ Counted from 572 Rust crates and 40 npm packages.
 | camino | 1.2.4 | MIT OR Apache-2.0 |
 | cargo_metadata | 0.19.2 | MIT |
 | cargo-platform | 0.1.9 | MIT OR Apache-2.0 |
+| cbc | 0.1.2 | MIT OR Apache-2.0 |
 | cesu8 | 1.1.0 | Apache-2.0/MIT |
 | cfb | 0.7.3 | MIT |
 | cfg-if | 1.0.4 | MIT OR Apache-2.0 |
 | chacha20 | 0.10.1 | MIT OR Apache-2.0 |
 | chrono | 0.4.45 | MIT OR Apache-2.0 |
+| cipher | 0.4.4 | MIT OR Apache-2.0 |
 | combine | 4.6.7 | MIT |
 | concurrent-queue | 2.5.0 | Apache-2.0 OR MIT |
 | cookie | 0.18.1 | MIT OR Apache-2.0 |
@@ -145,6 +149,7 @@ Counted from 572 Rust crates and 40 npm packages.
 | darling_macro | 0.23.0 | MIT |
 | data-encoding | 2.11.0 | MIT |
 | dbus | 0.9.12 | Apache-2.0/MIT |
+| dbus-secret-service | 4.1.0 | MIT OR Apache-2.0 |
 | der-parser | 10.0.0 | MIT OR Apache-2.0 |
 | deranged | 0.5.8 | MIT OR Apache-2.0 |
 | derive_arbitrary | 1.4.2 | MIT OR Apache-2.0 |
@@ -226,6 +231,8 @@ Counted from 572 Rust crates and 40 npm packages.
 | heck | 0.5.0 | MIT OR Apache-2.0 |
 | hermit-abi | 0.5.2 | MIT OR Apache-2.0 |
 | hex | 0.4.3 | MIT OR Apache-2.0 |
+| hkdf | 0.12.4 | MIT OR Apache-2.0 |
+| hmac | 0.12.1 | MIT OR Apache-2.0 |
 | html5ever | 0.38.0 | MIT OR Apache-2.0 |
 | http | 1.4.2 | MIT OR Apache-2.0 |
 | http-body | 1.1.0 | MIT |
@@ -257,6 +264,7 @@ Counted from 572 Rust crates and 40 npm packages.
 | infer | 0.19.0 | MIT |
 | inotify | 0.11.4 | ISC |
 | inotify-sys | 0.1.8 | ISC |
+| inout | 0.1.4 | MIT OR Apache-2.0 |
 | ipnet | 2.12.0 | MIT OR Apache-2.0 |
 | is-docker | 0.2.0 | MIT |
 | is-wsl | 0.4.0 | MIT |
@@ -273,6 +281,7 @@ Counted from 572 Rust crates and 40 npm packages.
 | json-patch | 3.0.1 | MIT/Apache-2.0 |
 | jsonptr | 0.6.3 | MIT OR Apache-2.0 |
 | keyboard-types | 0.7.0 | MIT OR Apache-2.0 |
+| keyring | 3.6.3 | MIT OR Apache-2.0 |
 | kqueue | 1.2.0 | MIT |
 | kqueue-sys | 1.1.2 | MIT |
 | kstat-rs | 0.2.4 | MIT OR Apache-2.0 |
@@ -304,17 +313,22 @@ Counted from 572 Rust crates and 40 npm packages.
 | ndk-sys | 0.6.0+11769913 | MIT OR Apache-2.0 |
 | new_debug_unreachable | 1.0.6 | MIT |
 | nix | 0.28.0 | MIT |
+| nix | 0.29.0 | MIT |
 | nom | 7.1.3 | MIT |
 | notify | 8.2.0 | CC0-1.0 |
 | notify-rust | 4.18.0 | MIT OR Apache-2.0 |
 | notify-types | 2.1.0 | MIT OR Apache-2.0 |
 | ntapi | 0.4.3 | Apache-2.0 OR MIT |
 | nu-ansi-term | 0.50.3 | MIT |
+| num | 0.4.3 | MIT OR Apache-2.0 |
 | num_enum | 0.7.6 | BSD-3-Clause OR MIT OR Apache-2.0 |
 | num_enum_derive | 0.7.6 | BSD-3-Clause OR MIT OR Apache-2.0 |
 | num-bigint | 0.4.8 | MIT OR Apache-2.0 |
+| num-complex | 0.4.6 | MIT OR Apache-2.0 |
 | num-conv | 0.2.2 | MIT OR Apache-2.0 |
 | num-integer | 0.1.46 | MIT OR Apache-2.0 |
+| num-iter | 0.1.46 | MIT OR Apache-2.0 |
+| num-rational | 0.4.2 | MIT OR Apache-2.0 |
 | num-traits | 0.2.19 | MIT OR Apache-2.0 |
 | objc2 | 0.6.4 | MIT |
 | objc2-app-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
@@ -378,9 +392,12 @@ Counted from 572 Rust crates and 40 npm packages.
 | r-efi | 5.3.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later |
 | r-efi | 6.0.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later |
 | rand | 0.10.2 | MIT OR Apache-2.0 |
+| rand | 0.8.7 | MIT OR Apache-2.0 |
 | rand | 0.9.5 | MIT OR Apache-2.0 |
+| rand_chacha | 0.3.1 | MIT OR Apache-2.0 |
 | rand_chacha | 0.9.0 | MIT OR Apache-2.0 |
 | rand_core | 0.10.1 | MIT OR Apache-2.0 |
+| rand_core | 0.6.4 | MIT OR Apache-2.0 |
 | rand_core | 0.9.5 | MIT OR Apache-2.0 |
 | rand_pcg | 0.10.2 | MIT OR Apache-2.0 |
 | raw-window-handle | 0.6.2 | MIT OR Apache-2.0 OR Zlib |
@@ -413,6 +430,8 @@ Counted from 572 Rust crates and 40 npm packages.
 | schemars | 1.2.1 | MIT |
 | schemars_derive | 0.8.22 | MIT |
 | scopeguard | 1.2.0 | MIT OR Apache-2.0 |
+| secret-service | 4.0.0 | MIT OR Apache-2.0 |
+| security-framework | 2.11.1 | MIT OR Apache-2.0 |
 | security-framework | 3.7.0 | MIT OR Apache-2.0 |
 | security-framework-sys | 2.17.0 | MIT OR Apache-2.0 |
 | selectors | 0.36.1 | MPL-2.0 |
@@ -433,6 +452,7 @@ Counted from 572 Rust crates and 40 npm packages.
 | serialize-to-javascript | 0.1.2 | MIT OR Apache-2.0 |
 | serialize-to-javascript-impl | 0.1.2 | MIT OR Apache-2.0 |
 | servo_arc | 0.4.3 | MIT OR Apache-2.0 |
+| sha1 | 0.10.7 | MIT OR Apache-2.0 |
 | sha2 | 0.10.9 | MIT OR Apache-2.0 |
 | sharded-slab | 0.1.7 | MIT |
 | shared_library | 0.1.9 | Apache-2.0/MIT |
@@ -449,6 +469,7 @@ Counted from 572 Rust crates and 40 npm packages.
 | soup3 | 0.5.0 | MIT |
 | soup3-sys | 0.5.0 | MIT |
 | stable_deref_trait | 1.2.1 | MIT OR Apache-2.0 |
+| static_assertions | 1.1.0 | MIT OR Apache-2.0 |
 | string_cache | 0.9.0 | MIT OR Apache-2.0 |
 | strsim | 0.11.1 | MIT |
 | subtle | 2.6.1 | BSD-3-Clause |
@@ -621,26 +642,34 @@ Counted from 572 Rust crates and 40 npm packages.
 | x11-dl | 2.21.0 | MIT |
 | x509-parser | 0.18.1 | MIT OR Apache-2.0 |
 | xattr | 1.6.1 | MIT OR Apache-2.0 |
+| xdg-home | 1.3.0 | MIT |
 | yoke | 0.8.3 | Unicode-3.0 |
 | yoke-derive | 0.8.2 | Unicode-3.0 |
+| zbus | 4.4.0 | MIT |
 | zbus | 5.18.0 | MIT |
+| zbus_macros | 4.4.0 | MIT |
 | zbus_macros | 5.18.0 | MIT |
+| zbus_names | 3.0.0 | MIT |
 | zbus_names | 4.3.4 | MIT |
 | zerocopy | 0.8.55 | BSD-2-Clause OR Apache-2.0 OR MIT |
 | zerocopy-derive | 0.8.55 | BSD-2-Clause OR Apache-2.0 OR MIT |
 | zerofrom | 0.1.8 | Unicode-3.0 |
 | zerofrom-derive | 0.1.7 | Unicode-3.0 |
 | zeroize | 1.9.0 | Apache-2.0 OR MIT |
+| zeroize_derive | 1.5.0 | Apache-2.0 OR MIT |
 | zerotrie | 0.2.4 | Unicode-3.0 |
 | zerovec | 0.11.6 | Unicode-3.0 |
 | zerovec-derive | 0.11.3 | Unicode-3.0 |
 | zip | 4.6.1 | MIT |
 | zmij | 1.0.23 | MIT |
+| zvariant | 4.2.0 | MIT |
 | zvariant | 5.13.1 | MIT |
+| zvariant_derive | 4.2.0 | MIT |
 | zvariant_derive | 5.13.1 | MIT |
+| zvariant_utils | 2.1.0 | MIT |
 | zvariant_utils | 3.5.0 | MIT |
 
-## npm packages (40)
+## npm packages (42)
 
 | Package | Version | Licence |
 | --- | --- | --- |
@@ -670,6 +699,8 @@ Counted from 572 Rust crates and 40 npm packages.
 | @vue/runtime-dom | 3.5.40 | MIT |
 | @vue/server-renderer | 3.5.40 | MIT |
 | @vue/shared | 3.5.40 | MIT |
+| @xterm/addon-fit | 0.11.0 | MIT |
+| @xterm/xterm | 6.0.0 | MIT |
 | csstype | 3.2.3 | MIT |
 | entities | 7.0.1 | BSD-2-Clause |
 | estree-walker | 2.0.2 | MIT |
@@ -699,6 +730,7 @@ be carried.
 - Copyright (c) 2009-2013 Mozilla Foundation
 - Copyright (c) 2010 The Rust Project Developers
 - Copyright (c) 2012-2013 Mozilla Foundation
+- Copyright (c) 2012-2013, Christopher Jeffrey (https://github.com/chjj/)
 - Copyright (c) 2013 Nicolas Silva
 - Copyright (c) 2013-2014 The Rust Project Developers.
 - Copyright (c) 2013-2016 The rust-url developers
@@ -716,6 +748,7 @@ be carried.
 - Copyright (c) 2014 The Rust Project Developers
 - Copyright (c) 2014 The html5ever Project Developers
 - Copyright (c) 2014, Kang Seonghoon.
+- Copyright (c) 2014-2016, SourceLair Private Company (https://www.sourcelair.com)
 - Copyright (c) 2014-2017 Melissa O'Neill and PCG Project contributors
 - Copyright (c) 2014-2018 David Henningsson <diwic@ubuntu.com> and other contributors
 - Copyright (c) 2014-2019 Geoffroy Couprie
@@ -744,6 +777,7 @@ be carried.
 - Copyright (c) 2015 steffengy
 - Copyright (c) 2015-20 [these people](https://github.com/Rich-Harris/estree-walker/graphs/contributors)
 - Copyright (c) 2015-2018 The winapi-rs Developers
+- Copyright (c) 2015-2018 Vlad Filippov
 - Copyright (c) 2015-2020 Doug Tangren
 - Copyright (c) 2015-2020 Julien Cretin
 - Copyright (c) 2015-2020 The rust-hex Developers
@@ -764,11 +798,14 @@ be carried.
 - Copyright (c) 2016 Titus Wormer <tituswormer@gmail.com>
 - Copyright (c) 2016 Tomasz Miąsko
 - Copyright (c) 2016 William Orr <will@worrbase.com>
+- Copyright (c) 2016 keyring Developers
+- Copyright (c) 2016 secret-service Developers
 - Copyright (c) 2016, Joseph Birr-Pixton <jpixton@gmail.com>
 - Copyright (c) 2016--2017
 - Copyright (c) 2016--2023
 - Copyright (c) 2016-2017 Isis Agora Lovecruft, Henry de Valence. All rights reserved.
 - Copyright (c) 2016-2019 Ulrik Sverdrup "bluss" and scopeguard developers
+- Copyright (c) 2016-2020 RustCrypto Developers
 - Copyright (c) 2016-2021 Diggory Blake, and other contributors.
 - Copyright (c) 2016-2024 Isis Agora Lovecruft. All rights reserved.
 - Copyright (c) 2016-2026 Sean McArthur
@@ -786,6 +823,7 @@ be carried.
 - Copyright (c) 2017 Jose Narvaez
 - Copyright (c) 2017 Maik Klein
 - Copyright (c) 2017 Matthew D. Steele
+- Copyright (c) 2017 Nikolai Vazquez
 - Copyright (c) 2017 Pierre Chifflier
 - Copyright (c) 2017 Pierre Krieger
 - Copyright (c) 2017 Pyfisch
@@ -799,12 +837,14 @@ be carried.
 - Copyright (c) 2017 quininer kel
 - Copyright (c) 2017 tokio-jsonrpc developers
 - Copyright (c) 2017-2018 Fredrik Nicol
+- Copyright (c) 2017-2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
 - Copyright (c) 2017-2020 Google Inc.
 - Copyright (c) 2017-2021 qDot
 - Copyright (c) 2017-2021, The Gtk-rs Project Developers.
 - Copyright (c) 2017-2023 Maik Klein, Maja Kądziołka
 - Copyright (c) 2017-2024 oyvindln
 - Copyright (c) 2018 Akash Kurdekar
+- Copyright (c) 2018 Artyom Pavlov
 - Copyright (c) 2018 Ashley Mannix, Christopher Armstrong, Dylan DPC, Hunar Roop Kahlon
 - Copyright (c) 2018 Carl Lerche
 - Copyright (c) 2018 Jorge Aparicio
@@ -817,6 +857,8 @@ be carried.
 - Copyright (c) 2018-2019 Sean McArthur
 - Copyright (c) 2018-2019 The RustCrypto Project Developers
 - Copyright (c) 2018-2019 dirs-rs contributors
+- Copyright (c) 2018-2021 RustCrypto Developers
+- Copyright (c) 2018-2022 RustCrypto Developers
 - Copyright (c) 2018-2023 Sean McArthur
 - Copyright (c) 2018-2024 The rust-random Project Developers
 - Copyright (c) 2018-2025 The rust-random Project Developers
@@ -838,6 +880,7 @@ be carried.
 - Copyright (c) 2019 Tokio Contributors
 - Copyright (c) 2019 Tower Contributors
 - Copyright (c) 2019 Yoshua Wuyts
+- Copyright (c) 2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
 - Copyright (c) 2019-2020 CreepySkeleton
 - Copyright (c) 2019-2021 Tower Contributors
 - Copyright (c) 2019-2025 Frank Denis
@@ -866,8 +909,10 @@ be carried.
 - Copyright (c) 2021-2022 The Nushell Project Developers
 - Copyright (c) 2021-2024 Oleksii Raspopov, Kostiantyn Denysov, Anton Verinov
 - Copyright (c) 2022 1Password
+- Copyright (c) 2022 Artyom Pavlov
 - Copyright (c) 2022 Bartłomiej Maryńczak
 - Copyright (c) 2022 Chance Dinkins
+- Copyright (c) 2022 The RustCrypto Project Developers
 - Copyright (c) 2022 zzzgydi
 - Copyright (c) 2022-2022 Tauri Programme within The Commons Conservancy
 - Copyright (c) 2023 4lDO2
@@ -926,6 +971,7 @@ be carried.
 - Copyright 2024 Jacob Pratt et al.
 - Copyright 2024 Justin Ridgewell <justin@ridgewell.name>
 - Copyright [2017] [Maik Klein]
+- Copyright [2017] [keyring developers]
 - Copyright © 1991-2023 Unicode, Inc.
 - Copyright © 1993,2004 Sun Microsystems or
 - Copyright © 2003-2009 Bruce D. Evans or

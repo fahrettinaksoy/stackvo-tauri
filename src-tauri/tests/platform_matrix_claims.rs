@@ -74,12 +74,55 @@ fn front_end_files() -> Vec<PathBuf> {
 /// Asserting on `contains` rather than parsing the table: the counts appear in
 /// prose as well, and a document that fixed the table while leaving "142
 /// commands" three paragraphs down would have passed a stricter-looking test.
+/// The §1 table, which is where the machine-checked counts live.
+///
+/// Scoped rather than searched whole, and the reason is not hypothetical. This
+/// gate used to ask `doc.contains("96")` of the entire document, so it passed
+/// while the table said **95** front-end files against a tree of 96 — because
+/// §7's account of an *earlier* miscount says 37.969, and "96" is in there. A
+/// stale number survived the gate built to catch stale numbers, hidden by the
+/// paragraph describing the last time that happened.
+///
+/// The second `| | Sayı |` table is the manual classification, and stays out on
+/// purpose: the module doc above says why a test must not pretend to settle it.
+fn measurement_table(doc: &str) -> &str {
+    let start = doc
+        .find("| | Sayı | Nasıl sayıldı |")
+        .expect("docs/platform-matrix.md still has its §1 measurement table");
+    let table = &doc[start..];
+    &table[..table.find("\n\n").unwrap_or(table.len())]
+}
+
+/// Is `needle` stated as a number here, rather than buried inside a longer one?
+///
+/// `219` is a substring of `38.219` and `14` of `149`; a plain `contains` reads
+/// either as a claim that was made. The neighbours have to be non-numeric for
+/// it to count.
+fn states_number(section: &str, needle: &str) -> bool {
+    let numeric = |b: u8| b.is_ascii_digit() || b == b'.' || b == b',';
+    let bytes = section.as_bytes();
+    let mut from = 0;
+
+    while let Some(offset) = section[from..].find(needle) {
+        let start = from + offset;
+        let end = start + needle.len();
+        let clear_before = start == 0 || !numeric(bytes[start - 1]);
+        let clear_after = end >= bytes.len() || !numeric(bytes[end]);
+        if clear_before && clear_after {
+            return true;
+        }
+        from = start + 1;
+    }
+    false
+}
+
 fn assert_states(doc: &str, number: usize, what: &str) {
+    let table = measurement_table(doc);
     assert!(
-        doc.contains(&number.to_string()),
-        "docs/platform-matrix.md does not state {number}, which is the current \
-         count of {what}. Re-measure the document — every number in it is a \
-         claim about this tree."
+        states_number(table, &number.to_string()),
+        "the measurement table in docs/platform-matrix.md does not state \
+         {number}, which is the current count of {what}. Re-measure the \
+         document — every number in it is a claim about this tree."
     );
 }
 
@@ -135,6 +178,40 @@ fn the_front_end_counts_are_the_tree() {
         .filter(|path| read(path).contains("@tauri-apps"))
         .count();
     assert_states(&doc, with_tauri, "front-end files importing @tauri-apps");
+
+    assert_states(&doc, ipc_wrapper_count(), "wrappers on the `api` object");
+}
+
+/// Members of the `api` object in `src/lib/ipc.js`.
+///
+/// This row of the table was the one number in it that nothing checked. It said
+/// 142 against an object of 143, and every test passed — which is precisely the
+/// failure the document's own §7 warns about, surviving inside the file built
+/// to prevent it. The count is only meaningful because `api` is a flat object
+/// literal: one member per line, two spaces in, and nothing nested.
+fn ipc_wrapper_count() -> usize {
+    let source = read(&repo_root().join("src/lib/ipc.js"));
+    let body = source
+        .split_once("export const api = {")
+        .expect("ipc.js still exports an `api` object")
+        .1;
+    let body = &body[..body.find("\n};").expect("the object is closed")];
+
+    body.lines()
+        .filter(|line| {
+            // `  name: ` at exactly one level of indentation. Doc comments and
+            // the bodies of multi-line wrappers are indented further or start
+            // with a comment marker.
+            let Some(rest) = line.strip_prefix("  ") else {
+                return false;
+            };
+            let mut chars = rest.chars();
+            chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+                && rest
+                    .split_once(':')
+                    .is_some_and(|(name, _)| name.chars().all(|c| c.is_ascii_alphanumeric()))
+        })
+        .count()
 }
 
 /// The document's central finding: one function is the whole data path.
@@ -211,12 +288,12 @@ fn the_rust_source_size_is_current() {
     assert_states(&doc, modules, "Rust modules");
 
     // Written with a thousands separator in the document, as Turkish prose
-    // does: 37.969. A raw `37969` would never be found.
+    // does: 38.219. A raw `38219` would never be found.
     let grouped = format!("{}.{:03}", lines / 1000, lines % 1000);
     assert!(
-        doc.contains(&grouped),
-        "docs/platform-matrix.md does not state {grouped} lines of Rust, which \
-         is what `src-tauri/src/*.rs` holds"
+        states_number(measurement_table(&doc), &grouped),
+        "the measurement table in docs/platform-matrix.md does not state \
+         {grouped} lines of Rust, which is what `src-tauri/src/*.rs` holds"
     );
 }
 

@@ -28,6 +28,13 @@ pub enum Code {
     /// looks like a StackVo checkout. Desktop-specific: the web UI could not
     /// hit this because it was mounted inside the repo it managed.
     NoWorkspace,
+    /// An administrator's policy says no — see [`crate::policy`].
+    ///
+    /// Deliberately not `PERMISSION_DENIED`, which in this app means the OS
+    /// refused: elevation cancelled, a file the user cannot write. Those are
+    /// answered by retrying with a password. This one never is, and a UI that
+    /// offered to elevate would be promising something that cannot happen.
+    Forbidden,
 }
 
 impl Code {
@@ -45,6 +52,7 @@ impl Code {
             Code::IoError => "IO_ERROR",
             Code::Conflict => "CONFLICT",
             Code::NoWorkspace => "NO_WORKSPACE",
+            Code::Forbidden => "FORBIDDEN",
         }
     }
 }

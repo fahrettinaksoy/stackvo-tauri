@@ -21,16 +21,18 @@ and this directory stop describing the same set.
 
 ## The records
 
-| #                                                  | Decision                                            | Status                     |
-| -------------------------------------------------- | --------------------------------------------------- | -------------------------- |
-| [0001](0001-tauri-free-domain.md)                  | The domain band knows nothing about Tauri           | accepted                   |
-| [0002](0002-generated-files-are-rendered.md)       | Generated files are rendered, never edited          | accepted                   |
-| [0003](0003-one-operation-per-subject.md)          | One operation per subject, enforced in the back end | accepted                   |
-| [0004](0004-errors-are-codes-not-strings.md)       | Errors are codes with catalogued hints              | accepted                   |
-| [0005](0005-progress-through-a-sink.md)            | Long operations report through a sink               | accepted                   |
-| [0006](0006-a-hand-written-contract.md)            | The IPC contract is written, not generated          | accepted, with a successor |
-| [0007](0007-one-privileged-call.md)                | Exactly one privileged call                         | accepted                   |
-| [0008](0008-what-a-breaking-contract-change-is.md) | What a breaking contract change is                  | accepted                   |
+| #                                                        | Decision                                            | Status                     |
+| -------------------------------------------------------- | --------------------------------------------------- | -------------------------- |
+| [0001](0001-tauri-free-domain.md)                        | The domain band knows nothing about Tauri           | accepted                   |
+| [0002](0002-generated-files-are-rendered.md)             | Generated files are rendered, never edited          | accepted                   |
+| [0003](0003-one-operation-per-subject.md)                | One operation per subject, enforced in the back end | accepted                   |
+| [0004](0004-errors-are-codes-not-strings.md)             | Errors are codes with catalogued hints              | accepted                   |
+| [0005](0005-progress-through-a-sink.md)                  | Long operations report through a sink               | accepted                   |
+| [0006](0006-a-hand-written-contract.md)                  | The IPC contract is written, not generated          | accepted, with a successor |
+| [0007](0007-one-privileged-call.md)                      | Exactly one privileged call                         | accepted                   |
+| [0008](0008-what-a-breaking-contract-change-is.md)       | What a breaking contract change is                  | accepted                   |
+| [0009](0009-a-policy-file-is-not-a-lock.md)              | A policy file is not a lock                         | accepted                   |
+| [0010](0010-secrets-move-out-of-env-not-off-the-disk.md) | Secrets move out of `.env`, not off the disk        | accepted                   |
 
 ## Writing a new one
 

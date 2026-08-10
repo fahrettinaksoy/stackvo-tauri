@@ -15,6 +15,7 @@ export default {
     never: '—',
     cancel: 'Cancel',
     close: 'Close',
+    copy: 'Copy',
     documentation: 'Documentation',
     buyMeCoffee: 'Buy me a coffee',
     socialMedia: 'Social media',
@@ -53,6 +54,32 @@ export default {
     running: 'Running',
     stopped: 'Stopped',
     containers: 'Containers',
+  },
+
+  /**
+   * The tray icon and the native menu bar, both drawn by Rust.
+   *
+   * Only the strings with no home elsewhere are here — the tray's four
+   * navigation entries come from `nav`, its engine words from `system`, and the
+   * menu bar's three links from `about.links`, because those are the same
+   * concepts and a second copy is a second thing to keep in step.
+   *
+   * The counted ones carry `{count}` / `{running}` / `{total}` rather than
+   * being assembled in Rust, so a language that orders them differently needs
+   * no code.
+   */
+  tray: {
+    checking: 'Checking Docker…',
+    show: 'Open StackVo',
+    quit: 'Quit',
+    engineDown: 'Docker is not running',
+    engineUp: 'Docker running',
+    noWorkspace: 'No StackVo directory selected',
+    noProjects: 'No projects',
+    containers: 'Containers: {count}',
+    more: '+{count} more…',
+    runningSummary: '{running}/{total} projects running',
+    menuAbout: 'About StackVo',
   },
 
   quickActions: {
@@ -137,6 +164,15 @@ export default {
     gateway: 'Gateway',
     portMappings: 'Port mappings',
     internal: 'internal only',
+    connection: 'Connection string',
+    connectionSubtitle:
+      'A service has two addresses. The container name only resolves inside the Docker network — a client on this machine has to use the published port.',
+    fromHost: 'From this machine',
+    fromHostHint: 'Compass, TablePlus, psql',
+    fromContainer: 'From another container',
+    fromContainerHint: "your project's own application",
+    notPublished:
+      'The container is running but publishes no port to the host, so nothing on this machine can reach it.',
     credentials: 'Credentials',
     noCredentials: 'This service declares no credentials in .env.',
     reveal: 'Reveal the value',
@@ -540,6 +576,10 @@ export default {
   },
 
   release: {
+    load: 'Load a bundle',
+    loadExplain:
+      'Read a .tar written by Save back into this machine’s Docker. This is the receiving end of an air-gapped hand-off, so it needs no project and no plan.',
+    loaded: 'Docker adopted:',
     title: 'Production image',
     explain:
       'A deployable image built from the one this project already runs — same PHP version, same extensions, same web server. Not a copy of it: the development image has no application code (the source is mounted from your disk) and carries Xdebug.',
@@ -940,6 +980,40 @@ export default {
       nodejsHint:
         'For asset builds inside the PHP container — separate from a Node project runtime.',
     },
+    secrets: {
+      title: 'Where credentials are kept',
+      description:
+        'Database passwords, tokens and server ids can live in this machine’s keystore instead of in .env.',
+      whatItDoes:
+        'Moving a credential stores it in Keychain, Credential Manager or the Secret Service, and leaves a reference in .env. The value is no longer in the file that gets backed up, synced and pasted into support threads.',
+      stillGenerated:
+        'It is still written into generated/docker-compose.dynamic.yml, which is where Compose reads it from. This takes the password out of .env; it does not take it off the disk.',
+      cliCannotRead:
+        'The stackvo.sh command-line tool cannot read these. If you use it on this workspace, leave the credentials in .env.',
+      noKeystore: 'This machine has no keystore this app can reach, so nothing can be moved.',
+      unresolvable:
+        'These credentials point at the keystore and it did not answer. Generating files is blocked until they resolve — unlock your keychain, or restore the value.',
+      none: 'This workspace has no credentials set.',
+      inKeystore: 'In the keystore',
+      inEnvFile: 'In .env, in plain text',
+      move: 'Move',
+      restore: 'Restore',
+    },
+    policy: {
+      title: 'This machine is managed',
+      body: 'A policy file on this machine sets {count} setting(s). Values it locks cannot be changed here.',
+      source: 'Policy file:',
+      registry: 'Images are pulled through:',
+      notASecurityBoundary:
+        'A policy file tells this app what your organisation intends. It is not a security boundary — it can be redirected with STACKVO_POLICY_FILE.',
+      brokenTitle: 'The policy file did not fully apply',
+      brokenBody:
+        'Nothing was applied from the parts below, and the rest of the app is running as if unmanaged. Whoever deployed this file probably believes it is in force.',
+      managed: 'Managed',
+      managedHint: 'This value comes from a policy file on this machine.',
+      locked: 'Locked',
+      lockedHint: 'A policy file sets this value and does not allow it to be changed here.',
+    },
     shape: {
       title: 'Domain and network',
       sectionDesc: 'Where projects are addressed and how they are served.',
@@ -1111,6 +1185,15 @@ export default {
     cancel: 'Cancel',
   },
 
+  terminal: {
+    title: 'Terminal',
+    explain:
+      'A shell inside this project’s container, in the window. The system terminal is still one click away in the header — this is for a quick look without leaving the page.',
+    needsRunning: 'Start the project first — a shell runs inside its container.',
+    start: 'Open a shell',
+    stop: 'Close',
+    exited: 'The shell exited ({code}).',
+  },
   workers: {
     title: 'Workers',
     explain:
@@ -1417,6 +1500,13 @@ export default {
       'Sizes are a number with an optional K, M or G — 256M, 1G, 512. Times are whole seconds. -1 means unlimited.',
     serverDirectivesUnsupported:
       'Only nginx, caddy and frankenphp have a generated config to add directives to.',
+    unlockTheKeystore:
+      'Unlock your keychain and try again — the password for this setting is stored there.',
+    onlyCredentialsMove: 'Only passwords, tokens and server ids can be kept in the keystore.',
+    keystoreEntryIsGone:
+      'The entry was removed from the keystore. Set the value again to restore the service.',
+    settingIsManaged:
+      'This value comes from a policy file on this machine. Ask whoever administers it.',
     presetIsExportedJson: 'A preset is the JSON that Settings → Presets exports.',
     presetWrongFile: 'Pointing the importer at another JSON file is the usual cause.',
     presetTooNew: 'Update StackVo Desktop, or ask for a preset exported by an older version.',
@@ -1455,6 +1545,10 @@ export default {
     GENERATE_FAILED: 'Generation failed.',
     BUILD_FAILED: 'The build failed.',
     PERMISSION_DENIED: 'Permission was not granted.',
+    // Deliberately worded so it does not read as something to retry. The
+    // headline above PERMISSION_DENIED invites another attempt with a password;
+    // this one never can be, and saying so is the whole difference.
+    FORBIDDEN: 'A policy on this machine does not allow this.',
     CONFLICT: 'That operation is already running.',
     UNKNOWN: 'Something went wrong.',
   },

@@ -19,6 +19,8 @@ import ServicesPane from '@/components/settings/ServicesPane.vue';
 import PreferencesPane from '@/components/settings/PreferencesPane.vue';
 import { usePreferences } from '@/composables/usePreferences';
 import DiagnosticsPane from '@/components/settings/DiagnosticsPane.vue';
+import PolicyNotice from '@/components/settings/PolicyNotice.vue';
+import SecretsPane from '@/components/settings/SecretsPane.vue';
 import PageLayout from '@/components/PageLayout.vue';
 import SettingsSection from '@/components/SettingsSection.vue';
 import SettingsGroup from '@/components/SettingsGroup.vue';
@@ -173,6 +175,16 @@ const SECTIONS = [
     icon: 'mdi-tune-vertical',
     label: 'settings.defaults.title',
     desc: 'settings.defaults.desc',
+  },
+  // Beside the certificate rather than under 'stack': both answer "what does
+  // this workspace hold that somebody else must not have", and a credential is
+  // not a setting of the stack in the way a port or a version is.
+  {
+    key: 'secrets',
+    group: 'workspace',
+    icon: 'mdi-key-chain-variant',
+    label: 'settings.secrets.title',
+    desc: 'settings.secrets.description',
   },
   {
     key: 'doctor',
@@ -405,6 +417,11 @@ onMounted(async () => {
              invisible for the four that are not open. -->
         <ErrorAlert :error="envError" type="error" class="mb-4" />
 
+        <!-- Above the sections rather than inside one: a managed machine is a
+             fact about every pane on this page, and a policy that failed to
+             parse is a fact somebody has to see wherever they happen to be. -->
+        <PolicyNotice />
+
         <SettingsSection
           :icon="section.icon"
           :title="t(section.label)"
@@ -455,6 +472,10 @@ onMounted(async () => {
 
           <template v-if="tab === 'doctor'">
             <DiagnosticsPane />
+          </template>
+
+          <template v-if="tab === 'secrets'">
+            <SecretsPane />
           </template>
 
           <template v-if="tab === 'certificates'">

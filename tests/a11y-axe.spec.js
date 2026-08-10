@@ -437,7 +437,7 @@ describe('axe over the extracted project panes', () => {
     [
       'WorkersPane',
       {
-        workerOptions: ['queue', 'schedule'],
+        workerOptions: ['queue', 'scheduler'],
         workerStatus: [{ project: 'shop', kind: 'queue', restarts: 3 }],
       },
     ],

@@ -9,9 +9,24 @@ use crate::error::{Error, Result};
 use std::collections::BTreeMap;
 use std::path::Path;
 
+/// What a secret looks like once it has crossed the IPC boundary.
+///
+/// One constant rather than a literal at each site, because it is compared as
+/// well as written: the front end tells a masked value from a real one by
+/// matching this exact string, and a stray sixth bullet in one of four places
+/// would be a value the UI treats as somebody's password. `env_reveal` is the
+/// one deliberate way the real thing is asked for.
+pub const MASK: &str = "••••••••";
+
 #[derive(Debug, Clone, Default)]
 pub struct Env {
     vars: BTreeMap<String, String>,
+    /// Keys whose `.env` value pointed at the keystore and got no answer.
+    ///
+    /// Carried rather than logged because the one caller that must not proceed
+    /// — the generator — is not the one that loads the file. See
+    /// [`Self::unresolved_secrets`].
+    unresolved: Vec<String>,
 }
 
 /// Values this app knows rather than values the user chose.
@@ -249,7 +264,38 @@ impl Env {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(e) => return Err(Error::io(format!("reading {}", path.display()), e)),
         };
-        Ok(Self::parse(&text))
+        let mut env = Self::parse(&text);
+        env.apply_policy(crate::policy::current());
+        // After the policy, so an administrator can push a reference too, and
+        // only in `load`: `parse` stays a pure function of its argument, which
+        // is what lets a hundred tests build an `Env` from a string without a
+        // keychain prompt.
+        env.unresolved = crate::secrets::resolve(&mut env.vars);
+        Ok(env)
+    }
+
+    /// Keys that name a keystore entry the keystore would not produce.
+    ///
+    /// Empty on the overwhelming majority of machines, because it is empty
+    /// unless somebody has moved a password. When it is not empty the value is
+    /// **missing**, not blank — see [`crate::secrets::resolve`] for why that
+    /// distinction is load-bearing — and `render_generated` refuses rather than
+    /// writing a compose file with a hole in it.
+    pub fn unresolved_secrets(&self) -> &[String] {
+        &self.unresolved
+    }
+
+    /// Let an administrator's policy have the last word.
+    ///
+    /// Precedence is embedded default < `.env` < policy, and the order is the
+    /// decision: a setting pushed to a fleet that a stale `.env` silently
+    /// overrides is not a policy, it is a suggestion. Applied in [`Self::load`]
+    /// only — [`Self::parse`] stays pure so every test that builds an `Env`
+    /// from a string keeps getting exactly the string it wrote.
+    pub fn apply_policy(&mut self, policy: &crate::policy::Policy) {
+        for (key, value) in policy.settings() {
+            self.vars.insert(key.clone(), value.clone());
+        }
     }
 
     pub fn parse(text: &str) -> Self {
@@ -291,7 +337,10 @@ impl Env {
         }
 
         vars.extend(from_file);
-        Self { vars }
+        Self {
+            vars,
+            unresolved: Vec::new(),
+        }
     }
 
     pub fn get(&self, key: &str) -> Option<&str> {
@@ -378,7 +427,7 @@ impl Env {
 
                 let secret = Self::is_secret(key);
                 let shown = if secret {
-                    "••••••••".to_string()
+                    MASK.to_string()
                 } else {
                     value.clone()
                 };
@@ -402,7 +451,7 @@ impl Env {
             .iter()
             .map(|(k, v)| {
                 let value = if Self::is_secret(k) && !v.is_empty() {
-                    "••••••••".to_string()
+                    MASK.to_string()
                 } else {
                     v.clone()
                 };
@@ -415,6 +464,39 @@ impl Env {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Embedded default < `.env` < policy, and the third layer is the one this
+    /// checks. Reversed, an administrator's setting would be silently undone by
+    /// whatever a workspace's `.env` happened to say — which is not a policy,
+    /// it is a suggestion.
+    #[test]
+    fn a_policy_wins_over_both_the_file_and_the_embedded_default() {
+        let mut env = Env::parse("DEFAULT_TLD_SUFFIX=mine.loc\n");
+        assert_eq!(env.get("DEFAULT_TLD_SUFFIX"), Some("mine.loc"));
+        // Untouched by the file, so still the embedded value.
+        assert_eq!(env.get("SERVER_GZIP"), Some("off"));
+
+        env.apply_policy(&crate::policy::Policy::parse(
+            r#"{
+                "schemaVersion": 1,
+                "settings": { "DEFAULT_TLD_SUFFIX": "corp.test", "SERVER_GZIP": "on" }
+            }"#,
+            std::path::Path::new("/etc/stackvo/policy.json"),
+        ));
+
+        assert_eq!(env.get("DEFAULT_TLD_SUFFIX"), Some("corp.test"));
+        assert_eq!(env.get("SERVER_GZIP"), Some("on"));
+    }
+
+    /// `parse` stays pure — a hundred tests build an `Env` from a string and
+    /// have to get exactly the string they wrote, whatever machine they run on.
+    #[test]
+    fn an_unmanaged_policy_changes_nothing() {
+        let mut env = Env::parse("DEFAULT_TLD_SUFFIX=mine.loc\n");
+        let before = env.raw().clone();
+        env.apply_policy(&crate::policy::Policy::none());
+        assert_eq!(env.raw(), &before);
+    }
 
     const SAMPLE: &str = r#"
 # comment line

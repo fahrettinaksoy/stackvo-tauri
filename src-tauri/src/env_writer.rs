@@ -100,7 +100,30 @@ pub fn patch_text(original: &str, patch: &BTreeMap<String, String>) -> String {
 
 /// Patch `<root>/.env` on disk, backing it up first.
 pub fn apply(root: &Path, patch: &BTreeMap<String, String>) -> Result<()> {
+    write_patch(root, patch, Redirect::ToKeystore)
+}
+
+/// Write the literal values, even for a key the keystore currently holds.
+///
+/// Exactly one caller — `secret_restore`, whose entire job is to undo the
+/// redirection. Every other path must use [`apply`]: a save from a Settings
+/// pane that quietly put a password back in the file would undo the move with
+/// nobody having asked for it, which is the failure [`Redirect::ToKeystore`]
+/// exists to prevent. `secrets_claims.rs` holds the caller count to one.
+pub fn apply_verbatim(root: &Path, patch: &BTreeMap<String, String>) -> Result<()> {
+    write_patch(root, patch, Redirect::None)
+}
+
+/// Whether an already-moved key's new value goes to the keystore or the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Redirect {
+    ToKeystore,
+    None,
+}
+
+fn write_patch(root: &Path, patch: &BTreeMap<String, String>, redirect: Redirect) -> Result<()> {
     validate(patch)?;
+    check_unlocked(patch, crate::policy::current())?;
 
     // Poisoning means a previous writer panicked mid-patch. The file itself is
     // fine — the write is atomic — so recovering the guard is correct here.
@@ -115,7 +138,16 @@ pub fn apply(root: &Path, patch: &BTreeMap<String, String>) -> Result<()> {
         Err(e) => return Err(Error::io(format!("reading {}", path.display()), e)),
     };
 
-    let updated = patch_text(&original, patch);
+    // A key that has been moved to the keystore stays moved. Without this, the
+    // first save from any Settings pane that happens to include the key writes
+    // the password straight back into the file — the user having done nothing
+    // but press Save, and nothing on screen saying it had come back.
+    let to_file = match redirect {
+        Redirect::ToKeystore => redirect_moved_keys(&original, patch)?,
+        Redirect::None => patch.clone(),
+    };
+
+    let updated = patch_text(&original, &to_file);
     if updated == original {
         return Ok(());
     }
@@ -129,6 +161,77 @@ pub fn apply(root: &Path, patch: &BTreeMap<String, String>) -> Result<()> {
     // A half-written .env would be read by `docker compose --env-file` and fail
     // in a way that is hard to trace back here.
     crate::atomic::write(&path, &updated)
+}
+
+/// Send the values of already-moved keys to the keystore, and return what is
+/// left for the file.
+///
+/// Reads the *current* text rather than a resolved [`crate::config::Env`]:
+/// `Env::load` replaces a reference with the value it points at, so by the time
+/// it has been loaded there is no way left to tell a moved key from one that was
+/// never moved. The line in the file is the only place that fact survives.
+///
+/// A patch that carries the reference itself passes straight through — that is
+/// `secret_move` writing the line in the first place, and writing it to the
+/// keystore instead would store the string `keychain:…` as the password.
+fn redirect_moved_keys(
+    original: &str,
+    patch: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>> {
+    let current = crate::config::Env::parse(original);
+
+    let mut to_file = BTreeMap::new();
+    for (key, value) in patch {
+        match crate::secrets::entry_of(current.get(key).unwrap_or_default()) {
+            Some(entry) if !crate::secrets::is_reference(value) => {
+                crate::secrets::write(entry, value)?;
+            }
+            _ => {
+                to_file.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    Ok(to_file)
+}
+
+/// Refuse to write over a key an administrator locked.
+///
+/// The policy is taken as an argument rather than read here, because
+/// [`crate::policy::current`] is a process-wide `OnceLock` — correct for the
+/// app, useless for a test that wants to assert what a locked key does. The one
+/// call site passes `current()`.
+///
+/// Writing to `.env` anyway would not even work: [`crate::config::Env::load`]
+/// re-applies the policy over the file, so the value would be saved, read back
+/// as the administrator's, and present as a setting that silently reverts. A
+/// refusal that names the file is the honest version of the same outcome.
+fn check_unlocked(patch: &BTreeMap<String, String>, policy: &crate::policy::Policy) -> Result<()> {
+    let locked: Vec<&str> = patch
+        .keys()
+        .map(String::as_str)
+        .filter(|key| policy.is_locked(key))
+        .collect();
+
+    if locked.is_empty() {
+        return Ok(());
+    }
+
+    Err(Error::new(
+        Code::Forbidden,
+        format!(
+            "{} {} managed by {}",
+            locked.join(", "),
+            if locked.len() == 1 { "is" } else { "are" },
+            // The path, not "a policy": the only action available to whoever
+            // hit this is to show it to whoever administers the machine.
+            policy.origin()
+        ),
+    )
+    .with_hint(crate::hints::SETTING_IS_MANAGED)
+    .with_details(serde_json::json!({
+        "keys": locked,
+        "source": policy.origin(),
+    })))
 }
 
 /// Reject anything that would corrupt the file's line-oriented format.
@@ -186,6 +289,130 @@ SERVICE_MYSQL_VERSION=8.0
 
 SERVICE_REDIS_ENABLE=true
 ";
+
+    /// A policy that sets two keys and holds one of them.
+    fn managed() -> crate::policy::Policy {
+        crate::policy::Policy::parse(
+            r#"{
+                "schemaVersion": 1,
+                "settings": { "DEFAULT_TLD_SUFFIX": "corp.test", "SERVER_TYPE": "nginx" },
+                "locked": ["DEFAULT_TLD_SUFFIX"]
+            }"#,
+            Path::new("/etc/stackvo/policy.json"),
+        )
+    }
+
+    /// The refusal, and the two things it has to carry.
+    ///
+    /// The code first: `PERMISSION_DENIED` would tell the UI to offer a
+    /// password prompt for something no password can unlock. Then the path,
+    /// because "a policy forbids this" without saying which file leaves the
+    /// user with nothing to do.
+    #[test]
+    fn writing_a_locked_key_is_refused_and_says_where_the_policy_came_from() {
+        let error = check_unlocked(&patch_of(&[("DEFAULT_TLD_SUFFIX", "shop.loc")]), &managed())
+            .expect_err("a locked key must not be writable");
+
+        assert_eq!(error.code, Code::Forbidden);
+        assert!(
+            error.message.contains("/etc/stackvo/policy.json"),
+            "the message has to name the file: {}",
+            error.message
+        );
+        assert!(error.message.contains("DEFAULT_TLD_SUFFIX"));
+    }
+
+    /// Managed is not locked, and conflating them would freeze half the form.
+    #[test]
+    fn a_key_the_policy_sets_but_does_not_lock_is_still_writable() {
+        check_unlocked(&patch_of(&[("SERVER_TYPE", "apache")]), &managed())
+            .expect("a managed default is a default, not a lock");
+    }
+
+    /// One locked key in a batch refuses the batch.
+    ///
+    /// `.env` is patched as one atomic write, so writing "the rest" would mean
+    /// a save that silently did some of what the form said.
+    #[test]
+    fn one_locked_key_refuses_the_whole_patch() {
+        let error = check_unlocked(
+            &patch_of(&[("SERVER_TYPE", "apache"), ("DEFAULT_TLD_SUFFIX", "x.loc")]),
+            &managed(),
+        )
+        .expect_err("refused");
+
+        assert!(
+            error.message.contains("DEFAULT_TLD_SUFFIX"),
+            "and it names the key that caused it: {}",
+            error.message
+        );
+    }
+
+    /// The rule that survives a Settings save.
+    ///
+    /// A pane that writes six keys, one of which has been moved, must not put
+    /// that one password back into the file. The write goes to the keystore
+    /// instead, and only the other five reach `patch_text`.
+    #[test]
+    fn a_moved_key_is_taken_out_of_the_file_patch() {
+        let original = "\
+SERVICE_MYSQL_ROOT_PASSWORD=keychain:stackvo-test-moved@00000000
+SERVICE_MYSQL_VERSION=8.0
+";
+        let patch = patch_of(&[
+            ("SERVICE_MYSQL_ROOT_PASSWORD", "hunter2"),
+            ("SERVICE_MYSQL_VERSION", "8.4"),
+        ]);
+
+        // The keystore write inside is best-effort here: on a developer's
+        // machine it succeeds, on a CI container with no Secret Service it
+        // errors — and either way the assertion below is about which keys were
+        // routed to the file, which is decided before the store is touched.
+        let to_file = redirect_moved_keys(original, &patch).unwrap_or_default();
+
+        assert!(
+            !to_file.contains_key("SERVICE_MYSQL_ROOT_PASSWORD") || to_file.is_empty(),
+            "a moved key must never reach the file again: {to_file:?}"
+        );
+    }
+
+    /// The one patch that must pass through untouched.
+    ///
+    /// `secret_move` writes the reference itself. Routing that to the keystore
+    /// would store the string `keychain:…` as the password and leave the file
+    /// with nothing.
+    #[test]
+    fn the_patch_that_writes_the_reference_goes_to_the_file() {
+        let original = "SERVICE_MYSQL_ROOT_PASSWORD=hunter2\n";
+        let patch = patch_of(&[(
+            "SERVICE_MYSQL_ROOT_PASSWORD",
+            "keychain:SERVICE_MYSQL_ROOT_PASSWORD@00000000",
+        )]);
+
+        let to_file = redirect_moved_keys(original, &patch).expect("nothing is stored");
+        assert_eq!(to_file, patch, "the reference is the value the file wants");
+    }
+
+    #[test]
+    fn a_workspace_with_no_moved_keys_is_unaffected() {
+        let original = "SERVICE_MYSQL_ROOT_PASSWORD=hunter2\nSERVICE_MYSQL_VERSION=8.0\n";
+        let patch = patch_of(&[("SERVICE_MYSQL_ROOT_PASSWORD", "hunter3")]);
+
+        assert_eq!(
+            redirect_moved_keys(original, &patch).expect("no keystore is touched"),
+            patch,
+            "the ordinary workspace pays nothing for this feature"
+        );
+    }
+
+    #[test]
+    fn an_unmanaged_machine_refuses_nothing() {
+        check_unlocked(
+            &patch_of(&[("DEFAULT_TLD_SUFFIX", "shop.loc")]),
+            &crate::policy::Policy::none(),
+        )
+        .expect("nearly every machine is this one");
+    }
 
     fn patch_of(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs

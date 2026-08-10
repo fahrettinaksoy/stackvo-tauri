@@ -43,13 +43,13 @@ yanlış bir sayı build'i kırıyor.
 
 | | Sayı | Nasıl sayıldı |
 |---|---|---|
-| Toplam IPC komutu | **149** | `contracts/ipc.json` → `commands` (146 Rust + 3 `frontend-plugin`) |
-| Bunlardan `#[tauri::command]` olarak yazılmış | **145** | `commands.rs`, `#[cfg(test)]` dışı |
-| Frontend kaynak dosyası | **95** | `src/**/*.{js,vue}`, spec dosyaları hariç |
+| Toplam IPC komutu | **155** | `contracts/ipc.json` → `commands` (152 Rust + 3 `frontend-plugin`) |
+| Bunlardan `#[tauri::command]` olarak yazılmış | **151** | `commands.rs`, `#[cfg(test)]` dışı |
+| Frontend kaynak dosyası | **101** | `src/**/*.{js,vue}`, spec dosyaları hariç |
 | Bunlardan `@tauri-apps` kullanan | **15** | aynı küme içinde metin taraması |
 | **Veri katmanının geçtiği fonksiyon** | **1** (`src/lib/ipc.js` → `call()`) | `invoke(` `ipc.js` dışında **0** yerde geçiyor |
-| `ipc.js` sarmalayıcısı | **142** | `api` nesnesinin üye sayısı |
-| Rust kaynağı | **55 modül, 37.914 satır** | `src-tauri/src/*.rs` |
+| `ipc.js` sarmalayıcısı | **148** | `api` nesnesinin üye sayısı |
+| Rust kaynağı | **61 modül, 41.902 satır** | `src-tauri/src/*.rs` |
 
 Aşağıdaki dört satır **elle sınıflandırma** ve gate'e dahil değil — çünkü
 sınıflandırma "komutun gövdesindeki doğrudan çağrı" ile yapılıyor ve bir
@@ -280,7 +280,7 @@ yanlış çıktı. Aynı riskin Windows ve Linux'ta da olduğunu varsaymak doğr
 
 Bir soru olarak geldiği için ayrıca cevaplıyorum: **web arayüzünün arkasındaki
 API Rust olur.** Node.js ya da başka bir dilde ikinci bir uygulama yazmak, bu
-projede 37.914 satırlık çekirdeği baştan yazmak demektir — Docker istemcisi,
+projede 39.472 satırlık çekirdeği baştan yazmak demektir — Docker istemcisi,
 compose üreteci, şablon motoru, sertifika yönetimi, hosts ayrıştırıcısı, PTY,
 doctor, migrate. Ve ardından iki uygulamanın sonsuza kadar aynı şeyi söylemesini
 sağlamak.
@@ -307,7 +307,7 @@ değil, tekrarlanabilir bir olgu.
 
 ```
 src-tauri/
-├── src/lib.rs          37.914 satır — hiç değişmez
+├── src/lib.rs          39.472 satır — hiç değişmez
 ├── src/main.rs         Tauri ikilisi (bugünkü)
 └── src/bin/serve.rs    YENİ — HTTP ikilisi, host üzerinde
 
@@ -325,7 +325,7 @@ async fn projects(State(ctx): State<Ctx>) -> Json<Vec<Project>> {
 }
 ```
 
-Gövdeler zaten var — Tauri komutlarının altındaki saf fonksiyonlar. 145
+Gövdeler zaten var — Tauri komutlarının altındaki saf fonksiyonlar. 146
 komutun 112'si `State<'_, AppState>` alıyor; bunlar ince sarmalayıcılar ve
 altlarındaki mantık örneklerin çağırdığı fonksiyonlarda.
 
@@ -350,7 +350,7 @@ Yönlendirme mekanik. Asıl iş üç yerde.
 | Adım | Büyüklük | Not |
 |---|---|---|
 | `call()` gövdesini taşıyıcıya göre ayır | ~20 satır, 1 dosya | `invoke` frontend'de yalnızca burada geçiyor |
-| 149 komut için HTTP yönlendirici | mekanik | `contracts/ipc.json` argüman ve dönüşleri zaten tarif ediyor |
+| 150 komut için HTTP yönlendirici | mekanik | `contracts/ipc.json` argüman ve dönüşleri zaten tarif ediyor |
 | **Akışlar** (log, stats, events) | orta | Tauri olayından SSE/WebSocket'e; taşıyıcı değişikliği ama yeniden yazım |
 | **Kimlik doğrulama** | küçük ama **atlanamaz** | §5d |
 | Yetenek katmanı (4 komut için arayüz gizleme) | küçük | 12 dosyaya dokunur |
@@ -409,7 +409,7 @@ kaydediyor.
 | Native kabuk (terminal, editör, seçici) | ✅ sunucu GUI oturumundaysa host'ta açılır |
 | Tepsi, native menü, otomatik başlatma/güncelleme | ❌ tarayıcı sekmesinin kapsamı dışında |
 
-Bugünkü **149** komutun **145'i** web'de çalışır. Geriye kalan dördü, adlarıyla:
+Bugünkü **150** komutun **146’sı** web'de çalışır. Geriye kalan dördü, adlarıyla:
 `tray_relabel`, `window_close_action`, `updater_status`, `updates_check` — tepsi,
 pencere kapatma davranışı ve otomatik güncelleme. Hepsi *masaüstü penceresinin
 kendisine* ait şeyler; web arayüzünün eksiği değil, kapsamı dışı.

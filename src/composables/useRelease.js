@@ -77,5 +77,32 @@ export function useRelease(name) {
     }
   }
 
-  return { plan, tag, result, busy, error, load, build, save };
+  /**
+   * Read a bundle back in. The other end of `save`.
+   *
+   * The names come back from Docker rather than being derived from the file:
+   * the caller picked a `.tar` off a disk and its name means nothing, and one
+   * archive can carry several images. Reporting what actually landed is the
+   * only way the user learns whether the bundle held what they were told.
+   *
+   * No project name and no plan — a bundle is loaded on the machine that
+   * received it, which is exactly the machine that may have neither.
+   */
+  async function loadBundle(choosePath) {
+    const path = await choosePath();
+    if (!path) return null;
+
+    busy.value = 'loadBundle';
+    error.value = null;
+    try {
+      return await api.releaseLoad(path);
+    } catch (e) {
+      error.value = e;
+      return null;
+    } finally {
+      busy.value = '';
+    }
+  }
+
+  return { plan, tag, result, busy, error, load, build, save, loadBundle };
 }
