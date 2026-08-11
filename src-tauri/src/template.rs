@@ -113,10 +113,39 @@ fn pass_braces(line: &str, env: &BTreeMap<String, String>) -> String {
                 continue;
             }
         }
-        out.push(bytes[i] as char);
-        i += 1;
+        i += copy_one_char(line, i, &mut out);
     }
     out
+}
+
+/// Copy the character starting at byte `i`, and say how many bytes it took.
+///
+/// This existed as `out.push(bytes[i] as char)` in both passes, and that is a
+/// **Latin-1 decode**: `u8 as char` reads one byte as a code point, so the
+/// em-dash `E2 80 94` became U+00E2 U+0080 U+0094 and `String::push` re-encoded
+/// each as two bytes. Twice, because a line goes through both passes — the
+/// three bytes came out as six and then as eight.
+///
+/// It stayed invisible for as long as every template was ASCII. The comment
+/// block in the Mongo template is the first that is not, and the way it
+/// surfaced is worth recording: the golden fixture *matched*, because both
+/// sides of the comparison were the mangled output. A byte-for-byte test does
+/// not notice a corruption that is upstream of it.
+///
+/// Values were never affected — those arrive through `push_str` — so this is
+/// literal template text: comments today, and anything anyone writes into a
+/// template tomorrow.
+///
+/// `i` stays on a character boundary because this is the only thing that
+/// advances it outside a placeholder, which is what makes `line[i..]` safe.
+fn copy_one_char(line: &str, i: usize, out: &mut String) -> usize {
+    match line[i..].chars().next() {
+        Some(ch) => {
+            out.push(ch);
+            ch.len_utf8()
+        }
+        None => 1,
+    }
 }
 
 /// `{{ NAME }}` or `{{ NAME | default('x') }}` starting at `i`, and where it
@@ -216,8 +245,7 @@ fn pass_dollars(line: &str, env: &BTreeMap<String, String>) -> String {
                 }
             }
         }
-        out.push(bytes[i] as char);
-        i += 1;
+        i += copy_one_char(line, i, &mut out);
     }
     out
 }
@@ -591,6 +619,47 @@ mod tests {
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect()
+    }
+
+    /// A template that is not ASCII survives both passes unchanged.
+    ///
+    /// `out.push(bytes[i] as char)` decoded each byte as Latin-1 and re-encoded
+    /// it, so an em-dash grew from three bytes to six in one pass and to eight
+    /// across both. Nothing caught it for as long as every template was ASCII,
+    /// and the golden fixture could not: it froze the mangled bytes, so the
+    /// comparison agreed with itself.
+    ///
+    /// Asserted on the bytes rather than on equality of `&str`, because a
+    /// mangled string still prints as something and a reviewer reading a diff
+    /// of `—` against `â€"` learns less than a reviewer reading a length.
+    #[test]
+    fn a_template_that_is_not_ascii_renders_unchanged() {
+        for text in [
+            "# hangs — host tools (Compass, TablePlus)",
+            "# 中文 · Türkçe ıİşĞ · emoji 🎉",
+            "MYSQL_DATABASE: \"kütüphane\"",
+        ] {
+            let rendered = render(text, &env());
+            assert_eq!(
+                rendered.as_bytes(),
+                text.as_bytes(),
+                "render changed non-ASCII text: {} bytes in, {} out",
+                text.len(),
+                rendered.len()
+            );
+        }
+    }
+
+    /// And it still substitutes when the placeholder sits next to one.
+    #[test]
+    fn a_placeholder_beside_non_ascii_still_resolves() {
+        assert_eq!(
+            render(
+                "image: \"mysql:{{ SERVICE_MYSQL_VERSION }}\" # sürüm — sabit",
+                &env()
+            ),
+            "image: \"mysql:8.0\" # sürüm — sabit"
+        );
     }
 
     #[test]

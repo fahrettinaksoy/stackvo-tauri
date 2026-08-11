@@ -41,6 +41,7 @@ export default {
     dashboard: 'Dashboard',
     projects: 'Projects',
     services: 'Services',
+    market: 'Market',
     logs: 'Logs',
     dumps: 'Dumps',
     mail: 'Mail',
@@ -146,6 +147,45 @@ export default {
     addToHosts: 'Add this line to your hosts file:',
   },
 
+  marketView: {
+    title: 'Market',
+    subtitle: 'Where services come from, and which versions this machine has',
+    catalogue: 'Catalogue',
+    chooseSource: 'Choose a source',
+    noCatalogue: 'No catalogue yet',
+    noCatalogueBody:
+      'StackVo ships no services inside itself. Point it at a source — an offline bundle, or a checkout of the service packages repository — and the catalogue is read from there.',
+    sourceLine: '{location} · {packages} package(s) published, {installed} version(s) installed',
+    unsigned: 'not signature-checked',
+    available: 'Available',
+    showOlder: 'Show end-of-life versions',
+    multiVersion: 'Runs several versions',
+    versionCount: '{n} version(s)',
+    hiddenCount: '{n} hidden',
+    recommended: 'Recommended',
+    support: {
+      supported: 'Supported',
+      deprecated: 'Deprecated',
+      eol: 'End of life',
+    },
+    install: 'Install',
+    uninstall: 'Uninstall',
+    addInstance: 'Add instance',
+    inUse: 'An instance is using this version',
+    instances: 'Instances',
+    noInstances: 'Nothing installed yet',
+    noInstancesBody:
+      'Install a package above, then add an instance of it. Two versions of one service can run side by side, each with its own data and its own port.',
+    colInstance: 'Instance',
+    colContainer: 'Container',
+    colPorts: 'Ports',
+    colEnabled: 'On',
+    restart: 'Restart',
+    primary: 'Primary',
+    packageMissing: 'Package missing',
+    makePrimary: 'Make primary',
+    removeInstance: 'Remove',
+  },
   servicesView: {
     disableTitle: 'Disable {name}?',
     disableBody: 'Nothing of this service is left behind. These are deleted:',
@@ -1637,6 +1677,21 @@ export default {
       'The file is resolved by `docker compose config`, so it has to be valid Compose — including any variables it interpolates.',
     useGenerateRun: 'Use generate_run; `verify` mode still reports drift against what is on disk.',
     mcpNeedsAllowWrites: 'Restart it with --allow-writes to enable the writing tools.',
+    portRangeExhausted:
+      'Free a port near the one this service wants, or give the instance an explicit port in its settings.',
+    packagePathsStayInside: 'A package may only name files under its own directory.',
+    packageContentChanged:
+      'Reinstall the package; its files are not the ones the manifest was written for.',
+    packageNotInstalled:
+      'Install the package for this version, or remove the instance that needs it.',
+    packageRefusedByPolicy:
+      'This package asks for something StackVo does not let a package have. Report it to whoever published it.',
+    packageNotInRegistry: 'Refresh the catalogue, or pick a version it lists.',
+    registryWentBackwards:
+      'The catalogue this source serves is older than the one already here. Check the source before using it.',
+    removeTheInstanceFirst: 'An instance is still using this package. Remove it, then uninstall.',
+    serviceIsSingleInstance:
+      'This service runs one version at a time. Remove the instance you have first.',
   },
 
   errors: {

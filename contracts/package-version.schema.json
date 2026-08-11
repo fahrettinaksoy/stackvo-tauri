@@ -1,0 +1,514 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stackvo.dev/contracts/v1/package-version.schema.json",
+  "title": "Service package version manifest (manifest.json) — contract v1",
+  "description": "One version of one service, as data. Lives at packages/<category>/<service>/versions/<version>/manifest.json in stackvo/stackvo-service-packages. This file is what replaces the six compile-time tables the app used to carry (template.rs DYNAMIC_SERVICES, config.rs EMBEDDED, commands.rs RENDERED, connect.rs SPECS, migrate.rs, env.schema.json serviceDependencies) — see docs/servis-market-mimarisi.md §3.2. Everything the app needs to install, render, connect to and remove one service instance is here, and nothing else is.",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "service",
+    "version",
+    "image",
+    "instancing",
+    "compose",
+    "support"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "stackvo.dev/package/v1",
+      "description": "The manifest contract this file speaks. The app declares a supported range and refuses anything outside it — a package written for v2 must not be half-read by a v1 client."
+    },
+    "service": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "maxLength": 40,
+      "description": "Service id, lowercase. Must equal the containing <service> directory name. Becomes part of every derived name: instance slug, container name, volume name, compose key, compose profile."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*$",
+      "maxLength": 40,
+      "not": {
+        "enum": [
+          "latest",
+          "stable",
+          "edge",
+          "main",
+          "master"
+        ]
+      },
+      "description": "CONCRETE version. Must equal the containing <version> directory name. A moving tag is forbidden here (ADR 0014): a manifest whose image can change under it has no fixed digest, so it cannot take a place in the hash chain that makes an installed package verifiable. 'latest' is expressed at registry level as the `recommended` flag, and migration resolves it to a concrete version before writing instances.json."
+    },
+    "image": {
+      "type": "object",
+      "required": [
+        "repository",
+        "tag"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "registry": {
+          "type": "string",
+          "default": "docker.io",
+          "description": "Registry host. Present because not everything is on the Hub — Elasticsearch and Kibana come from docker.elastic.co, which has its own token handshake. Checked against policy.market.allowedRegistries before a pull is proposed."
+        },
+        "repository": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*$",
+          "description": "Repository path without the registry host and without the tag. Official images are bare ('mysql'); the Hub resolves them under library/."
+        },
+        "tag": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*$",
+          "description": "The FULL tag, not the version. These differ more often than they look: RabbitMQ 4.3 is pulled as `4.3-management` because the plain tag exists for series the management one does not, and verifying the bare name would pass while the pull failed (examples/service_tags.rs found this)."
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "Optional but strongly preferred. With it, the image is pinned and 'the same version' means the same bytes. Without it, the tag can move under the user. tools/probe-tags.mjs resolves and records these."
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]*$"
+      },
+      "uniqueItems": true,
+      "default": [],
+      "description": "What this service can be USED as, independent of its id — 'sql', 'cache', 'search', 'smtp', 'object-store'. This is what a settings entry of type instanceRef matches against, so phpMyAdmin can say 'point me at something that speaks sql' rather than naming mysql and being wrong when the user runs mariadb."
+    },
+    "instancing": {
+      "type": "object",
+      "required": [
+        "multiple"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "multiple": {
+          "type": "boolean",
+          "description": "May more than one version of this service run at once? False for anything bound to a single subdomain (the admin UIs) or a single host resource — a second instance would collide on a name no allocator owns. The app must not guess this: a wrong guess is either a refused install or two containers fighting over one domain."
+        },
+        "identity": {
+          "enum": [
+            "version"
+          ],
+          "default": "version",
+          "description": "What distinguishes two instances of the same service. Only 'version' in v1 — named instances ('mysql-shop', 'mysql-crm') are a v2 question and the field exists so that answering it is not a schema break."
+        }
+      }
+    },
+    "ports": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "container",
+          "preferred"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$",
+            "description": "Stable handle used by the compose template as {{ port.<name> }} and by instances.json. Names, not positions, because a port added in the middle must not renumber the rest."
+          },
+          "container": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "description": "The port inside the container. Fixed by the image; no allocation touches it."
+          },
+          "preferred": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "description": "The host port to try first. A single-instance user gets exactly the number they have today; ports.rs only moves on when it is taken. Replaces both of the old key families (HOST_PORT_<ID> and SERVICE_<ID>_HOST_PORT) — 31 template variables in two spellings, 17 of which had no default anywhere and so could not be changed from the UI at all."
+          },
+          "protocol": {
+            "enum": [
+              "tcp",
+              "udp"
+            ],
+            "default": "tcp"
+          },
+          "legacyKey": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]*$",
+            "description": "The .env key this port was read from before packages existed, for migration only. Present because the mapping is not derivable in reverse: `HOST_PORT_MAILPIT_SMTP` and `SERVICE_MINIO_CONSOLE_HOST_PORT` both reduce to a handle, and reconstructing the key from the handle would have to guess which of the two families a service used — which is exactly the guess C-09 records the cost of. A migration that guesses wrong does not fail; it silently reallocates a port the user's tooling already has written down."
+          },
+          "primary": {
+            "type": "boolean",
+            "default": false,
+            "description": "The port a connection string is built from. At most one per manifest."
+          }
+        }
+      }
+    },
+    "volumes": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "container"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$",
+            "description": "Handle, not the Docker volume name. The real name is derived per instance (stackvo-<instance>-<name>), which is the whole point: 18 templates hardcode a single volume name today, so two versions of one service would share a data directory and the newer one would upgrade the older one's datadir irreversibly."
+          },
+          "container": {
+            "type": "string",
+            "description": "Mount point inside the container."
+          },
+          "purgeable": {
+            "type": "boolean",
+            "default": true,
+            "description": "May `market_uninstall --purgeData` delete this? ADR 0012 moved data deletion out of disable and into uninstall; this field is what the deletion reads, instead of the regex over template text that discard_service uses today."
+          }
+        }
+      }
+    },
+    "files": {
+      "type": "array",
+      "default": [],
+      "description": "Config files rendered beside the compose fragment and bind-mounted in. Replaces commands.rs's RENDERED/COPIED tables — which, measured today, name a percona/my.cnf that does not exist in the tree and silently renders nothing.",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "template",
+          "target",
+          "sha256"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]*$",
+            "description": "Handle used by the compose template as {{ file.<name> }}."
+          },
+          "template": {
+            "type": "string",
+            "pattern": "^files/[A-Za-z0-9._-]+$",
+            "description": "Path inside the package, always under files/. No traversal, no absolute paths — the unpacker rejects anything else before it writes a byte."
+          },
+          "target": {
+            "type": "string",
+            "pattern": "^/",
+            "description": "Absolute path inside the container."
+          },
+          "mode": {
+            "type": "string",
+            "pattern": "^0[0-7]{3}$",
+            "default": "0444",
+            "description": "Octal mode the rendered file is written with. Read-only by default: it is generated output, and a user who edits it in place loses the edit on the next render (ADR 0002)."
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "Of the template as shipped, so a client can tell the file it downloaded from a file somebody changed."
+          }
+        }
+      }
+    },
+    "settings": {
+      "type": "array",
+      "default": [],
+      "description": "What a user may configure, and the ONLY things a compose template may interpolate. This is a security boundary, not a convenience list: the render context is built from this array, so a downloaded template cannot reach the rest of the user's .env and write it into an environment: line.",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "type"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]*$",
+            "description": "Bare key, without the SERVICE_<ID>_ prefix the old .env family carried. Used as {{ settings.<KEY> }}."
+          },
+          "type": {
+            "enum": [
+              "string",
+              "secret",
+              "int",
+              "bool",
+              "enum",
+              "instanceRef"
+            ],
+            "description": "'secret' routes the value to the OS keystore (ADR 0010) and masks it with config::MASK everywhere it crosses IPC. 'instanceRef' names another instance rather than a literal, which is how an admin UI points at a database without hardcoding a container name."
+          },
+          "default": {
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ],
+            "description": "For type=secret this is a first-boot default (e.g. 'root'), written into the keystore at install and expected to be changed. A real credential here is a CI failure — CONFLICTS.md C-18 is the previous round of that mistake."
+          },
+          "required": {
+            "type": "boolean",
+            "default": false,
+            "description": "Refuse to install until this has a value. For the setting a service genuinely cannot start without, not for the one with a sensible default."
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For type=enum. An offer, not a constraint, on the same terms as the version combobox."
+          },
+          "capability": {
+            "type": "string",
+            "description": "For type=instanceRef: which capability the referenced instance must have. 'primary' as a default value means 'whichever instance currently holds the legacy alias'."
+          },
+          "label": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Locale → human label. Absent means the app falls back to the key."
+          }
+        }
+      }
+    },
+    "connection": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "default": null,
+      "description": "How to build a connection string for this service, or null for one you open in a browser instead (the admin UIs). Replaces connect.rs's compiled SPECS table. Both addresses come from here — the host one (127.0.0.1 + allocated port) and the container one (instance alias + container port) — because a service has two and picking either as 'the' connection string is where the confusion started.",
+      "required": [
+        "scheme",
+        "port"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "scheme": {
+          "type": "string",
+          "description": "URI scheme, or one of the non-URI forms: 'host-port' for drivers that take a contact point (Cassandra), 'smtp' for mail catchers."
+        },
+        "port": {
+          "type": "string",
+          "description": "Which entry of ports[] the string is built from, by name."
+        },
+        "userSetting": {
+          "type": "string",
+          "description": "settings[] key holding the username."
+        },
+        "defaultUser": {
+          "type": "string",
+          "description": "The account the image itself creates, used when userSetting is unset or empty."
+        },
+        "passwordSetting": {
+          "type": "string",
+          "description": "settings[] key holding the password. Its value never reaches the manifest — the keystore holds it and the string is assembled at read time."
+        },
+        "databaseSetting": {
+          "type": "string",
+          "description": "settings[] key naming the database the string points at."
+        },
+        "defaultDatabase": {
+          "type": "string",
+          "description": "The database the image creates on first boot whether or not anyone configured it."
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Query parameters the string needs to actually work — Mongo's authSource=admin is the one that fails silently without it."
+        }
+      }
+    },
+    "url": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "default": null,
+      "description": "Web-facing services only: the Traefik subdomain. Null for anything you reach with a client rather than a browser. Note this is the field that forces instancing.multiple=false today — two instances would want one name, and per-instance subdomains are a separate, smaller job.",
+      "required": [
+        "subdomain",
+        "port"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "subdomain": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+          "description": "The label in front of DEFAULT_TLD_SUFFIX — 'phpmyadmin' becomes phpmyadmin.stackvo.loc."
+        },
+        "port": {
+          "type": "string",
+          "description": "ports[] entry the router forwards to, by name."
+        }
+      }
+    },
+    "health": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "default": null,
+      "additionalProperties": false,
+      "required": [
+        "test"
+      ],
+      "properties": {
+        "test": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "description": "Compose's healthcheck test, verbatim. Written as a list because the string form is run through a shell."
+        },
+        "interval": {
+          "type": "string",
+          "default": "10s",
+          "description": "How often to ask, as a Compose duration ('10s')."
+        },
+        "timeout": {
+          "type": "string",
+          "description": "How long one check may take before it counts as a failure."
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 12,
+          "description": "Consecutive failures before the container is called unhealthy."
+        },
+        "startPeriod": {
+          "type": "string",
+          "description": "Grace period during which a failure does not count — a database that takes a minute to initialise is not unhealthy, it is starting."
+        }
+      }
+    },
+    "dependsOn": {
+      "type": "array",
+      "default": [],
+      "description": "What this service needs to be useful. Replaces env.schema.json's serviceDependencies block, which its own note admits is 3 entries out of 20 and references a service that does not exist (C-16). A package declaring its own dependency is the only version of this that cannot go stale.",
+      "items": {
+        "type": "object",
+        "required": [
+          "capability",
+          "required"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "capability": {
+            "type": "string",
+            "description": "Matched against other packages' capabilities[], not against a service id — 'sql' rather than 'mysql', so mariadb satisfies it too."
+          },
+          "service": {
+            "type": "string",
+            "description": "Optional narrowing when only one specific service will do (Kafbat genuinely needs Kafka, not any queue)."
+          },
+          "required": {
+            "type": "boolean",
+            "description": "True when the service cannot function without it, false when it merely works better. Required is what blocks an install; optional is what suggests one."
+          }
+        }
+      }
+    },
+    "companions": {
+      "type": "array",
+      "default": [],
+      "description": "Extra containers this service cannot run without, which are NOT independently installable — Kafka's Zookeeper is the only one in the current catalog. They are named per instance like the main container, so two Kafka instances get two Zookeepers rather than fighting over one.",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "image",
+          "compose"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$",
+            "description": "Handle for the companion, and the suffix of its derived container name — a Kafka instance's Zookeeper is stackvo-<instance>-zookeeper."
+          },
+          "image": {
+            "$ref": "#/properties/image"
+          },
+          "compose": {
+            "$ref": "#/properties/compose"
+          },
+          "ports": {
+            "$ref": "#/properties/ports"
+          },
+          "volumes": {
+            "$ref": "#/properties/volumes"
+          }
+        }
+      }
+    },
+    "compose": {
+      "type": "object",
+      "required": [
+        "file",
+        "sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+\\.tpl$",
+          "description": "The compose fragment, at the package root. ONE service, no top-level services:/volumes: keys — which is what removes template.rs's 80-line awk imitation, whose whole job was re-indenting standalone compose files back into fragments."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "Of the fragment as shipped. Checked on every read, not only at install: the point of writing a hash down is to catch the change nobody announced."
+        }
+      }
+    },
+    "support": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "additionalProperties": false,
+      "description": "ADR 0014. 'Supported' must be a measurement, not an opinion: tools/eol.mjs checks this block against endoflife.date and a divergence fails the PR. Note that an eol version is still PUBLISHED — a version that exists in somebody's .env today must have a package or their migration stops. Publishing and promoting are different things, and this field is the difference.",
+      "properties": {
+        "status": {
+          "enum": [
+            "supported",
+            "deprecated",
+            "eol"
+          ]
+        },
+        "eolDate": {
+          "type": "string",
+          "format": "date",
+          "description": "When upstream support ends or ended, ISO date. Compared against endoflife.date by tools/eol.mjs rather than trusted."
+        },
+        "source": {
+          "type": "string",
+          "format": "uri",
+          "description": "Where the status was measured from, so the next reader can repeat the measurement instead of believing it."
+        }
+      }
+    },
+    "notes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Locale → a sentence shown next to the version in the picker. For the thing that will otherwise be discovered from a stack trace: MySQL 5.7→8.0's authentication plugin change, Elasticsearch 7→8's security-on-by-default."
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "apiVersion": "stackvo.dev/package/v1",
+  "service": "phpmyadmin",
+  "category": "admin-uis",
+  "name": { "en": "phpMyAdmin" },
+  "maintainer": "stackvo",
+  "recommendedVersion": "5.2",
+  "legacyEnvPrefix": "SERVICE_PHPMYADMIN_"
+}

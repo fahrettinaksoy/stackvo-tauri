@@ -121,6 +121,7 @@ const NAV = [
   { key: 'dashboard', to: '/', icon: 'mdi-view-dashboard-outline', label: 'nav.dashboard' },
   { key: 'projects', to: '/projects', icon: 'mdi-folder-multiple-outline', label: 'nav.projects' },
   { key: 'services', to: '/services', icon: 'mdi-server-outline', label: 'nav.services' },
+  { key: 'market', to: '/market', icon: 'mdi-storefront-outline', label: 'nav.market' },
   {
     key: 'logs',
     to: '/logs',

@@ -16,6 +16,10 @@ against the eight real projects on disk.
 | `env.schema.json`     | The 159 keys in `.env` — types, defaults, consumers, dead keys, the service catalog, and the completed dependency graph       |
 | `php-extensions.json` | The 696-line Bash extension matrix as data: install method, apt packages, PECL versions per PHP release, compatibility floors |
 | `ipc.json`            | The Tauri command + event surface, mapped 1:1 from the Express routes and Socket.io events                                    |
+| `package.schema.json` | A service package's identity — `packages/<category>/<service>/package.json` in `stackvo-service-packages`                     |
+| `package-version.schema.json` | One version of one service: image, ports, volumes, files, settings, connection, hashes. Replaces six compile-time tables |
+| `registry.schema.json` | The signed index the app fetches before it can show a catalog                                                                |
+| `compose-policy.json` | What a package's compose fragment may declare — an allowlist, read by the packages repo's CI and by the app after it renders  |
 | `CONFLICTS.md`        | 18 conflicts found while writing the above, each with the decision v1 implements                                              |
 
 ## Running the checks
@@ -25,7 +29,15 @@ node tools/validate-contracts.mjs --root ../stackvo
 node tools/validate-contracts.mjs --root ../stackvo --json   # machine-readable
 ```
 
-Exits non-zero on any error. Four suites: manifests, extension catalog, services, env keys.
+Exits non-zero on any error. Seven suites: manifests, extension catalog, services, env keys, IPC
+surface, reachability, package contracts.
+
+The last one checks **this** repo rather than a checkout — the packages themselves live in
+`stackvo/stackvo-service-packages`, which runs its manifests against these same three schema files.
+What is checked here is the schemas: headers, a `required` name that is not among the properties, a
+leaf nobody described, and the two files agreeing about which categories exist. That
+`package-version.schema.json` and `pkg::Manifest` describe the same object is checked in
+`src-tauri/tests/package_contract.rs`, because it needs the Rust type.
 
 Current status against this machine's checkout: **4 errors, 28 warnings** — all four errors are
 pre-existing StackVo bugs (C-06 ×3, C-09), not contract violations by the desktop app.

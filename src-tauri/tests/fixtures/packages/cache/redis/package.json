@@ -1,0 +1,9 @@
+{
+  "apiVersion": "stackvo.dev/package/v1",
+  "service": "redis",
+  "category": "cache",
+  "name": { "en": "Redis" },
+  "maintainer": "stackvo",
+  "recommendedVersion": "7.0",
+  "legacyEnvPrefix": "SERVICE_REDIS_"
+}

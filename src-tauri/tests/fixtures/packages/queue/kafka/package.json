@@ -1,0 +1,9 @@
+{
+  "apiVersion": "stackvo.dev/package/v1",
+  "service": "kafka",
+  "category": "queue",
+  "name": { "en": "Apache Kafka" },
+  "maintainer": "stackvo",
+  "recommendedVersion": "7.5.0",
+  "legacyEnvPrefix": "SERVICE_KAFKA_"
+}

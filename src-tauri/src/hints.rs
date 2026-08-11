@@ -223,6 +223,27 @@ hints! {
         "Use generate_run; `verify` mode still reports drift against what is on disk.";
     MCP_NEEDS_ALLOW_WRITES = "mcpNeedsAllowWrites",
         "Restart it with --allow-writes to enable the writing tools.";
+    PORT_RANGE_EXHAUSTED = "portRangeExhausted",
+        "Free a port near the one this service wants, or give the instance an explicit \
+         port in its settings.";
+    PACKAGE_PATHS_STAY_INSIDE = "packagePathsStayInside",
+        "A package may only name files under its own directory.";
+    PACKAGE_CONTENT_CHANGED = "packageContentChanged",
+        "Reinstall the package; its files are not the ones the manifest was written for.";
+    PACKAGE_NOT_INSTALLED = "packageNotInstalled",
+        "Install the package for this version, or remove the instance that needs it.";
+    PACKAGE_REFUSED_BY_POLICY = "packageRefusedByPolicy",
+        "This package asks for something StackVo does not let a package have. Report it to \
+         whoever published it.";
+    PACKAGE_NOT_IN_REGISTRY = "packageNotInRegistry",
+        "Refresh the catalogue, or pick a version it lists.";
+    REGISTRY_WENT_BACKWARDS = "registryWentBackwards",
+        "The catalogue this source serves is older than the one already here. Check the \
+         source before using it.";
+    REMOVE_THE_INSTANCE_FIRST = "removeTheInstanceFirst",
+        "An instance is still using this package. Remove it, then uninstall.";
+    SERVICE_IS_SINGLE_INSTANCE = "serviceIsSingleInstance",
+        "This service runs one version at a time. Remove the instance you have first.";
 }
 
 #[cfg(test)]

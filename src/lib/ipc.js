@@ -143,6 +143,25 @@ export const api = {
   serviceSettings: (name) => call('service_settings', { name }),
   serviceApplySettings: (name, patch) => call('service_apply_settings', { name, patch }),
   serviceEnable: (name) => call('service_enable', { name }),
+
+  // The market and the instance table. Neither touches Docker: enabling an
+  // instance needs the generate path to render from the table, and that swap is
+  // a later phase — a button that wrote a row nothing renders would be worse
+  // than no button.
+  marketStatus: () => call('market_status'),
+  marketRefresh: (location) => call('market_refresh', { location }),
+  marketCatalog: () => call('market_catalog'),
+  marketInstall: (service, version) => call('market_install', { service, version }),
+  marketUninstall: (service, version) => call('market_uninstall', { service, version }),
+  instanceList: () => call('instance_list'),
+  instanceCreate: (service, version) => call('instance_create', { service, version }),
+  instanceRemove: (id) => call('instance_remove', { id }),
+  instancePromote: (id) => call('instance_promote', { id }),
+  instanceEnable: (id) => call('instance_enable', { id }),
+  instanceDisable: (id) => call('instance_disable', { id }),
+  instanceStart: (id) => call('instance_start', { id }),
+  instanceStop: (id) => call('instance_stop', { id }),
+  instanceRestart: (id) => call('instance_restart', { id }),
   serviceDisable: (name) => call('service_disable', { name }),
 
   containerInspect: (name) => call('container_inspect', { name }),

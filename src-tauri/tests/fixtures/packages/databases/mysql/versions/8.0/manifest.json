@@ -1,0 +1,36 @@
+{
+  "apiVersion": "stackvo.dev/package/v1",
+  "service": "mysql",
+  "version": "8.0",
+  "image": {
+    "repository": "mysql",
+    "tag": "8.0"
+  },
+  "capabilities": ["sql", "mysql-protocol"],
+  "instancing": { "multiple": true, "identity": "version" },
+  "ports": [
+    { "name": "main", "container": 3306, "preferred": 3306, "protocol": "tcp", "legacyKey": "HOST_PORT_MYSQL", "primary": true }
+  ],
+  "volumes": [
+    { "name": "data", "container": "/var/lib/mysql", "purgeable": true }
+  ],
+  "files": [
+    { "name": "mysql_cnf", "template": "files/my.cnf.tpl", "target": "/etc/mysql/conf.d/stackvo.cnf", "mode": "0444", "sha256": "abaa771cbd3892a14294001bea011c05920f236ee4f5ca95a2097c6515d48bac" }
+  ],
+  "settings": [
+    { "key": "ROOT_PASSWORD", "type": "secret", "default": "root" },
+    { "key": "DATABASE", "type": "string", "default": "stackvo" }
+  ],
+  "connection": {
+    "scheme": "mysql",
+    "port": "main",
+    "defaultUser": "root",
+    "passwordSetting": "ROOT_PASSWORD",
+    "databaseSetting": "DATABASE",
+    "defaultDatabase": "stackvo"
+  },
+  "url": null,
+  "dependsOn": [],
+  "compose": { "file": "compose.yml.tpl", "sha256": "8012ddfce6145da5b6d5512cfee2312fa5e10cbdd43c9db37e015c390bf3d8ad" },
+  "support": {"eolDate":"2026-04-30","source":"https://endoflife.date/api/mysql.json","status":"eol"}
+}

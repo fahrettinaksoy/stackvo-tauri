@@ -108,7 +108,8 @@
     "mongodb": {
       "install": "pecl",
       "packages": ["libssl-dev", "libcurl4-openssl-dev"],
-      "peclVersions": { "8.0": "1.19.4", "8.1": "1.19.4", "8.2": "1.19.4", "8.3": "1.20.1", "8.4": "1.20.1", "8.5": "1.20.1", "9.0": "1.20.1", "default": "latest" }
+      "peclVersions": { "8.0": "1.19.4", "8.1": "2.3.3", "8.2": "2.3.3", "8.3": "2.3.3", "8.4": "2.3.3", "8.5": "2.3.3", "9.0": "1.20.1", "default": "latest" },
+      "note": "2.3.3 requires PHP >= 8.1 (package.xml <min>8.1.0</min>), so 8.0 stays on the 1.19.x line. The 2.x driver is a BC break: Manager::executeBulkWrite() takes an options array, not a WriteConcern."
     },
     "monolog": {
       "install": "composer",

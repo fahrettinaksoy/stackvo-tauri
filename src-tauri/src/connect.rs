@@ -295,6 +295,77 @@ fn spec_for(service: &str) -> Option<&'static Spec> {
     SPECS.iter().find(|spec| spec.service == service)
 }
 
+/// The scheme this kind writes, as the package contract spells it.
+///
+/// `uri` above builds the whole string and is the only thing that should; this
+/// answers the narrower question a *manifest* asks — "what does a client call
+/// this protocol" — for the two consumers that need the name without the
+/// string. The three kinds that produce no URI at all say so with a name of
+/// their own rather than an empty string, because a manifest field that is
+/// sometimes blank is a field every reader has to guess about.
+pub fn scheme_of(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Mysql => "mysql",
+        Kind::Postgres => "postgresql",
+        Kind::Mongo => "mongodb",
+        Kind::Redis => "redis",
+        Kind::Amqp => "amqp",
+        Kind::Http => "http",
+        Kind::Smtp => "smtp",
+        Kind::Memcached | Kind::HostPort => "host-port",
+    }
+}
+
+/// One service's connection shape, readable from outside this module.
+///
+/// [`SPECS`] stays private — it is a table with a lifetime and a `Kind`, and
+/// widening it would invite a second caller to reimplement `uri`. This is the
+/// data half only, and it exists for one reason: `examples/build_packages.rs`
+/// writes these values into service package manifests, and a generator that
+/// *restated* them would be a second copy of decisions that took measurement to
+/// get right. That Mongo authenticates against `admin`, that Redis has no
+/// password key because the shipped `redis.conf` leaves `requirepass`
+/// commented out, that MinIO's address is the S3 API and not the console —
+/// each of those is a comment above a row up there, and each would be silently
+/// dropped by a hand-written second table.
+#[derive(Debug, Clone, Copy)]
+pub struct Shape {
+    pub service: &'static str,
+    pub scheme: &'static str,
+    pub container_port: u16,
+    /// Both spellings, in the order they are honoured. The package format
+    /// replaces this pair with one allocated port, so a converter needs to see
+    /// what it is replacing.
+    pub port_keys: &'static [&'static str],
+    pub user_key: Option<&'static str>,
+    pub default_user: Option<&'static str>,
+    pub password_key: Option<&'static str>,
+    pub database_key: Option<&'static str>,
+    pub default_database: Option<&'static str>,
+}
+
+/// Every service that has a connection string, in table order.
+///
+/// Services absent from this list are not omissions — an admin UI is opened in
+/// a browser and its address is a domain, so `connection` in its manifest is
+/// `null` rather than a string nobody can use.
+pub fn shapes() -> Vec<Shape> {
+    SPECS
+        .iter()
+        .map(|spec| Shape {
+            service: spec.service,
+            scheme: scheme_of(spec.kind),
+            container_port: spec.container_port,
+            port_keys: spec.port_keys,
+            user_key: spec.user_key,
+            default_user: spec.default_user,
+            password_key: spec.password_key,
+            database_key: spec.database_key,
+            default_database: spec.default_database,
+        })
+        .collect()
+}
+
 /// One address, and the string built from it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -646,6 +717,57 @@ mod tests {
         assert!(spec_for("mongo-express").is_none());
         assert!(spec_for("phpmyadmin").is_none());
         assert!(spec_for("traefik").is_none());
+    }
+
+    /// The public view is the private table, not a copy of it.
+    ///
+    /// `shapes()` exists so the package generator can read these rows instead
+    /// of restating them. A field that stopped being copied across — or a row
+    /// that stopped appearing — would not fail anything else: the generator
+    /// would write a manifest that is merely *wrong*, and the first sign would
+    /// be a connection string that does not connect, in a package, on somebody
+    /// else's machine.
+    #[test]
+    fn the_public_shapes_carry_every_row_and_every_field() {
+        let shapes = shapes();
+        assert_eq!(shapes.len(), SPECS.len());
+
+        for (shape, spec) in shapes.iter().zip(SPECS.iter()) {
+            assert_eq!(shape.service, spec.service);
+            assert_eq!(shape.container_port, spec.container_port);
+            assert_eq!(shape.port_keys, spec.port_keys);
+            assert_eq!(shape.user_key, spec.user_key);
+            assert_eq!(shape.default_user, spec.default_user);
+            assert_eq!(shape.password_key, spec.password_key);
+            assert_eq!(shape.database_key, spec.database_key);
+            assert_eq!(shape.default_database, spec.default_database);
+            assert_eq!(shape.scheme, scheme_of(spec.kind));
+        }
+    }
+
+    /// Every kind names a scheme, and the three that produce no URI say so with
+    /// a name rather than a blank.
+    #[test]
+    fn the_scheme_names_match_the_strings_uri_builds() {
+        for spec in SPECS {
+            let scheme = scheme_of(spec.kind);
+            assert!(!scheme.is_empty(), "{} has no scheme name", spec.service);
+
+            let built = uri(spec.kind, "h", 1, None, None, None);
+            if scheme == "host-port" {
+                assert!(
+                    !built.contains("://"),
+                    "{} claims host-port but builds a URI: {built}",
+                    spec.service
+                );
+            } else {
+                assert!(
+                    built.starts_with(&format!("{scheme}://")),
+                    "{} claims scheme {scheme} but builds {built}",
+                    spec.service
+                );
+            }
+        }
     }
 
     /// Every row names the port its own template publishes. A wrong number here

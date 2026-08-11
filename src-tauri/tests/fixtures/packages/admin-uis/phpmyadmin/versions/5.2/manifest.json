@@ -1,0 +1,31 @@
+{
+  "apiVersion": "stackvo.dev/package/v1",
+  "service": "phpmyadmin",
+  "version": "5.2",
+  "image": {
+    "repository": "phpmyadmin",
+    "tag": "5.2"
+  },
+  "capabilities": ["admin-ui"],
+  "instancing": { "multiple": false, "identity": "version" },
+  "ports": [
+    { "name": "main", "container": 80, "preferred": 8081, "protocol": "tcp", "legacyKey": "SERVICE_PHPMYADMIN_HOST_PORT", "primary": false }
+  ],
+  "volumes": [
+  ],
+  "files": [
+  ],
+  "settings": [
+    { "key": "ARBITRARY", "type": "string", "default": "1" },
+    { "key": "HOST", "type": "string", "default": "stackvo-mysql" },
+    { "key": "PORT", "type": "string", "default": "3306" },
+    { "key": "UPLOAD_LIMIT", "type": "string", "default": "300M" }
+  ],
+  "connection": null,
+  "url": { "subdomain": "phpmyadmin", "port": "main" },
+  "dependsOn": [
+    { "capability": "mysql-protocol", "required": false }
+  ],
+  "compose": { "file": "compose.yml.tpl", "sha256": "cd1d41373cc132bbeb3c12be12a076b044c68144baa35338877196ad2dfce41c" },
+  "support": {"status":"supported"}
+}
