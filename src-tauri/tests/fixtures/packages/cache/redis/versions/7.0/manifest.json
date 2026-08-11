@@ -1,0 +1,31 @@
+{
+  "apiVersion": "stackvo.dev/package/v1",
+  "service": "redis",
+  "version": "7.0",
+  "image": {
+    "repository": "redis",
+    "tag": "7.0"
+  },
+  "capabilities": ["cache", "redis-protocol"],
+  "instancing": { "multiple": true, "identity": "version" },
+  "ports": [
+    { "name": "main", "container": 6379, "preferred": 6379, "protocol": "tcp", "legacyKey": "HOST_PORT_REDIS", "primary": true }
+  ],
+  "volumes": [
+    { "name": "data", "container": "/data", "purgeable": true }
+  ],
+  "files": [
+    { "name": "redis_conf", "template": "files/redis.conf.tpl", "target": "/etc/redis/redis.conf", "mode": "0444", "sha256": "d3cd6d73c40c83254162324470f347fd1dc7f8ec7dc2d7fb8433c80dfc7a1d9c" }
+  ],
+  "settings": [
+    { "key": "REDIS_PASSWORD", "type": "secret" }
+  ],
+  "connection": {
+    "scheme": "redis",
+    "port": "main"
+  },
+  "url": null,
+  "dependsOn": [],
+  "compose": { "file": "compose.yml.tpl", "sha256": "7b915cd5c309220b852f543b90bea232f5993331821440aab3ef89fa7c609a77" },
+  "support": {"eolDate":"2024-07-29","source":"https://endoflife.date/api/redis.json","status":"eol"}
+}

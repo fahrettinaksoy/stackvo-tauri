@@ -47,7 +47,7 @@ pub struct Env {
 /// only the default: a fresh workspace no longer ships seven lines restating
 /// what the app would have done anyway, and a `.env` line now means somebody
 /// decided something rather than that a file was copied.
-pub const EMBEDDED: [(&str, &str); 160] = [
+pub const EMBEDDED: [(&str, &str); 185] = [
     // HOST_UID and HOST_GID are deliberately absent. `template::variables`
     // fills them from getuid()/getgid() when nothing else has, and it does that
     // only for keys that are missing — embedding them pinned one machine's ids
@@ -136,26 +136,68 @@ pub const EMBEDDED: [(&str, &str); 160] = [
     ("SERVICE_ADMINER_ENABLE", "false"),
     ("SERVICE_ADMINER_HOST_PORT", "8082"),
     ("SERVICE_ADMINER_VERSION", "latest"),
+    // The `_VERSIONS` beside each `_VERSION` is the list the settings sheet
+    // offers, on the same terms as `SUPPORTED_LANGUAGES_PHP_VERSIONS`: a
+    // catalog that travels with the binary, overridable from `.env`, newest
+    // first, with the shipped default always among its entries.
+    //
+    // It is an offer, not a constraint. The field stays free text underneath,
+    // because the list is a handful of series and a registry has thousands of
+    // tags — somebody pinning `8.0.28` or a digest is doing something ordinary,
+    // and a closed dropdown would make it impossible instead of merely unlisted.
+    //
+    // What each list contains is a judgement rather than "the newest N tags".
+    // The newest N is wrong for a local development stack in a specific
+    // direction: the reason to run MySQL here is often a project that needs
+    // 5.7, and a list that stops at 9.4 answers a question nobody asked. So
+    // each one carries the current series, the maintained ones behind it, and
+    // the legacy series still worth reaching for.
+    //
+    // Every tag was checked against the registry the template pulls from —
+    // including RabbitMQ's, whose image is `{{ VERSION }}-management`, and
+    // Elasticsearch's, which comes from docker.elastic.co and not the Hub.
+    // `examples/service_tags.rs` is how to check them again.
+    ("SERVICE_ADMINER_VERSIONS", "latest,5.5.1,5.4.2,4.8.1"),
     ("SERVICE_BLACKFIRE_ENABLE", "false"),
     ("SERVICE_BLACKFIRE_VERSION", "2"),
+    ("SERVICE_BLACKFIRE_VERSIONS", "2,2026.8.0,2.30.3"),
     ("SERVICE_CASSANDRA_ENABLE", "false"),
     ("SERVICE_CASSANDRA_VERSION", "latest"),
+    ("SERVICE_CASSANDRA_VERSIONS", "latest,5.0,4.1,4.0,3.11"),
     ("SERVICE_ELASTICSEARCH_ENABLE", "false"),
     ("SERVICE_ELASTICSEARCH_VERSION", "8.11.3"),
+    // Kibana's list is deliberately the same one. They are a matched pair —
+    // Kibana refuses to start against an Elasticsearch of a different minor —
+    // and offering two lists that can drift is offering a broken combination.
+    ("SERVICE_ELASTICSEARCH_VERSIONS", "9.4.4,9.3.8,8.19.19,8.11.3,7.17.28"),
     ("SERVICE_GRAFANA_ADMIN_USER", "admin"),
     ("SERVICE_GRAFANA_ENABLE", "false"),
     ("SERVICE_GRAFANA_VERSION", "latest"),
+    // 10.4.19 rather than 10.4: Grafana stopped publishing the bare minor tag
+    // for that series, and an offer of `10.4` is an offer of a 404.
+    ("SERVICE_GRAFANA_VERSIONS", "latest,13.1,12.4,11.6,10.4.19"),
     ("SERVICE_KAFBAT_ENABLE", "false"),
     ("SERVICE_KAFBAT_HOST_PORT", "8080"),
     ("SERVICE_KAFBAT_VERSION", "latest"),
+    // Kafbat's registry is mostly seven-digit build numbers. Those are real
+    // tags and useless to choose between, so the list is the released ones.
+    ("SERVICE_KAFBAT_VERSIONS", "latest,v1.5.0,v1.4.2,v1.3.0"),
     ("SERVICE_KAFKA_ENABLE", "false"),
     ("SERVICE_KAFKA_VERSION", "7.5.0"),
+    // Confluent Platform numbering, not Apache Kafka's — the image is
+    // `confluentinc/cp-kafka`, where 7.5.0 is Kafka 3.5.
+    ("SERVICE_KAFKA_VERSIONS", "8.3.1,7.9.9,7.5.0,6.2.15"),
     ("SERVICE_KIBANA_ENABLE", "false"),
     ("SERVICE_KIBANA_VERSION", "8.11.3"),
+    ("SERVICE_KIBANA_VERSIONS", "9.4.4,9.3.8,8.19.19,8.11.3,7.17.28"),
     ("SERVICE_MAILHOG_ENABLE", "false"),
     ("SERVICE_MAILHOG_VERSION", "latest"),
+    // Three tags exist in total. MailHog has been unmaintained since 2020 and
+    // the short list is the honest signal — mailpit beside it is the successor.
+    ("SERVICE_MAILHOG_VERSIONS", "latest,v1.0.1,v1.0.0"),
     ("SERVICE_MAILPIT_ENABLE", "false"),
     ("SERVICE_MAILPIT_VERSION", "latest"),
+    ("SERVICE_MAILPIT_VERSIONS", "latest,v1.30,v1.29,v1.28"),
     ("SERVICE_MARIADB_DATABASE", "stackvo"),
     // Every service ships switched off, this one included.
     //
@@ -175,60 +217,109 @@ pub const EMBEDDED: [(&str, &str); 160] = [
     ("SERVICE_REDIS_ENABLE", "false"),
     ("SERVICE_MARIADB_ENABLE", "false"),
     ("SERVICE_MARIADB_VERSION", "10.6"),
+    // The LTS lines, not the newest four. MariaDB releases a short-term series
+    // roughly quarterly, so a newest-first list would be 12.3, 12.2, 12.1, 12.0
+    // — four names for the same year and nothing a legacy project can use.
+    ("SERVICE_MARIADB_VERSIONS", "12.3,11.8,11.4,10.11,10.6,10.5"),
     ("SERVICE_MEILISEARCH_ENABLE", "false"),
     ("SERVICE_MEILISEARCH_HOST_PORT", "7700"),
     ("SERVICE_MEILISEARCH_VERSION", "v1.11"),
+    ("SERVICE_MEILISEARCH_VERSIONS", "latest,v1.53,v1.52,v1.11"),
     ("SERVICE_MEMCACHED_ENABLE", "false"),
     ("SERVICE_MEMCACHED_VERSION", "1.6"),
+    ("SERVICE_MEMCACHED_VERSIONS", "1.6,1.5,1.4"),
     // Two published ports, and both are named: the S3 API is what an SDK
     // connects to and the console is what a browser opens. One key for "the
     // MinIO port" would silently be the wrong one half the time.
     ("SERVICE_MINIO_CONSOLE_HOST_PORT", "9001"),
     ("SERVICE_MINIO_ENABLE", "false"),
     ("SERVICE_MINIO_HOST_PORT", "9000"),
-    ("SERVICE_MINIO_VERSION", "latest"),
+    ("SERVICE_MINIO_VERSION", "RELEASE.2025-09-07T16-13-09Z"),
+    // Four dates, and the note that stood here argued the opposite: MinIO
+    // publishes `RELEASE.2025-…Z` and nothing that reads as a version, so
+    // listing a handful would freeze four dates into the binary while the
+    // field is free text anyway.
+    //
+    // That was the right trade while the tag was only a default. ADR 0014 ends
+    // it: a moving tag has no fixed digest and so cannot be a service package
+    // version, and `latest` was the whole of this list — MinIO was the one
+    // service in the catalog with nothing to package at all. It also meant the
+    // version picker offered exactly one entry, which is a picker that answers
+    // no question.
+    //
+    // Measured against Docker Hub on 11 August 2026 rather than remembered:
+    // all four tags resolve, and there is no 2026 release.
+    (
+        "SERVICE_MINIO_VERSIONS",
+        "RELEASE.2025-09-07T16-13-09Z,RELEASE.2025-07-23T15-54-02Z,\
+         RELEASE.2025-06-13T11-33-47Z,RELEASE.2025-04-22T22-12-26Z",
+    ),
     ("SERVICE_MONGO_ENABLE", "false"),
     ("SERVICE_MONGO_EXPRESS_ADMIN_USERNAME", "root"),
     ("SERVICE_MONGO_EXPRESS_BASICAUTH_USERNAME", "admin"),
     ("SERVICE_MONGO_EXPRESS_ENABLE", "false"),
     ("SERVICE_MONGO_EXPRESS_HOST_PORT", "8083"),
     ("SERVICE_MONGO_EXPRESS_MONGODB_PORT", "27017"),
+    ("SERVICE_MONGO_EXPRESS_VERSIONS", "latest,1.0.2,1.0,0.54"),
     ("SERVICE_MONGO_EXPRESS_VERSION", "latest"),
     ("SERVICE_MONGO_INITDB_ROOT_USERNAME", "root"),
-    ("SERVICE_MONGO_VERSION", "5.0"),
+    ("SERVICE_MONGO_VERSION", "8.0"),
+    // 8.0 leads rather than 8.3 because 8.0 is the LTS major; 8.2 and 8.3 are
+    // rapid releases MongoDB does not recommend running in production. Both are
+    // offered anyway — this is a development stack, and trying the next one is
+    // a legitimate reason to be here.
+    ("SERVICE_MONGO_VERSIONS", "8.0,8.3,8.2,7.0,6.0,5.0"),
     ("SERVICE_MYSQL_DATABASE", "stackvo"),
     ("SERVICE_MYSQL_VERSION", "8.0"),
+    // 5.7 earns its place: it is end-of-life and it is what a large number of
+    // existing projects were written against, which is the exact case a local
+    // stack exists to serve.
+    ("SERVICE_MYSQL_VERSIONS", "9.7,9.4,8.4,8.0,5.7"),
     ("SERVICE_PGADMIN_DEFAULT_EMAIL", "admin@stackvo.loc"),
     ("SERVICE_PGADMIN_ENABLE", "false"),
     ("SERVICE_PGADMIN_HOST_PORT", "5050"),
     ("SERVICE_PGADMIN_VERSION", "latest"),
+    ("SERVICE_PGADMIN_VERSIONS", "latest,9.17,9.16,8.14"),
     ("SERVICE_PHPCACHEADMIN_ADMIN_USER", "admin"),
     ("SERVICE_PHPCACHEADMIN_ENABLE", "false"),
     ("SERVICE_PHPCACHEADMIN_HOST_PORT", "8084"),
     ("SERVICE_PHPCACHEADMIN_MEMCACHED_PORT", "11211"),
     ("SERVICE_PHPCACHEADMIN_REDIS_PORT", "6379"),
     ("SERVICE_PHPCACHEADMIN_VERSION", "latest"),
+    ("SERVICE_PHPCACHEADMIN_VERSIONS", "latest,2.6.0,2.5.2"),
     ("SERVICE_PHPMYADMIN_ENABLE", "false"),
     ("SERVICE_PHPMYADMIN_HOST_PORT", "8081"),
     ("SERVICE_PHPMYADMIN_PORT", "3306"),
     ("SERVICE_PHPMYADMIN_VERSION", "latest"),
+    ("SERVICE_PHPMYADMIN_VERSIONS", "latest,5.2,5.1,5.0"),
     ("SERVICE_POSTGRES_DB", "stackvo"),
     ("SERVICE_POSTGRES_ENABLE", "false"),
     ("SERVICE_POSTGRES_USER", "stackvo"),
     ("SERVICE_POSTGRES_VERSION", "14"),
+    // Bare majors, because that is Postgres's unit of compatibility and the
+    // form its tags take. Back to 12 so a project that has not migrated its
+    // dump format has somewhere to land.
+    ("SERVICE_POSTGRES_VERSIONS", "18,17,16,15,14,13,12"),
     ("SERVICE_RABBITMQ_DEFAULT_USER", "admin"),
     ("SERVICE_RABBITMQ_ENABLE", "false"),
     ("SERVICE_RABBITMQ_VERSION", "3"),
+    // Checked as `<tag>-management`, which is what the template writes. The
+    // plain tags exist for series the management ones do not, so verifying the
+    // bare name would have passed while the pull failed.
+    ("SERVICE_RABBITMQ_VERSIONS", "4.3,4.2,4,3.13,3"),
     ("SERVICE_REDIS_VERSION", "7.0"),
+    ("SERVICE_REDIS_VERSIONS", "8.10,8.2,7.4,7.2,7.0,6.2"),
     ("SERVICE_TYPESENSE_ENABLE", "false"),
     ("SERVICE_TYPESENSE_HOST_PORT", "8108"),
     ("SERVICE_TYPESENSE_VERSION", "27.1"),
+    ("SERVICE_TYPESENSE_VERSIONS", "30.2,29.1,28.0,27.1"),
     ("SERVICE_VALKEY_ENABLE", "false"),
     // Not 6379. Valkey speaks Redis's protocol, so the case for having it is
     // usually "move this project off Redis" — which means both running at once,
     // and a shared port makes whichever starts second fail to bind.
     ("SERVICE_VALKEY_HOST_PORT", "6381"),
     ("SERVICE_VALKEY_VERSION", "8"),
+    ("SERVICE_VALKEY_VERSIONS", "9.1,9.0,8.1,8,7.2"),
     // Ports and starting credentials, so a workspace ships no `.env` content at
     // all. These are placeholders every install shares, not secrets: they are
     // in this file, which is public, and were in the committed `.env.example`
@@ -429,6 +520,29 @@ impl Env {
         self.get(&format!("{}VERSION", Self::service_prefix(service_id)))
     }
 
+    /// The image tags the settings sheet offers for a service, newest first.
+    ///
+    /// Empty is a legitimate answer and means "no list" rather than "no
+    /// versions": the sheet falls back to a plain text field, which is what
+    /// every service had before this existed. That matters for the `.env`
+    /// override — somebody who writes `SERVICE_MONGO_VERSIONS=` has asked for
+    /// the field back, not for an empty dropdown.
+    ///
+    /// The current value is folded in when the list does not already carry it,
+    /// because a value absent from its own options is a control that opens
+    /// showing nothing selected. That happens on any workspace pinning a tag
+    /// off the list, which is exactly the case the free-text field exists for.
+    pub fn service_versions(&self, service_id: &str) -> Vec<String> {
+        let mut versions = self.list(&format!("{}VERSIONS", Self::service_prefix(service_id)));
+        if let Some(current) = self.service_version(service_id) {
+            if !current.is_empty() && !versions.is_empty() && !versions.iter().any(|v| v == current)
+            {
+                versions.insert(0, current.to_string());
+            }
+        }
+        versions
+    }
+
     pub fn service_url(&self, service_id: &str) -> Option<&str> {
         self.get(&format!("{}URL", Self::service_prefix(service_id)))
     }
@@ -455,7 +569,11 @@ impl Env {
             .iter()
             .filter_map(|(key, value)| {
                 let field = key.strip_prefix(&prefix)?;
-                if matches!(field, "ENABLE" | "VERSION" | "URL") || value.is_empty() {
+                // VERSIONS joins the excluded three for the same reason VERSION
+                // is there: it is not something you connect with. It is the
+                // catalog behind the version control, and a comma-joined list
+                // of image tags in a credentials block is noise.
+                if matches!(field, "ENABLE" | "VERSION" | "VERSIONS" | "URL") || value.is_empty() {
                     return None;
                 }
 
@@ -731,7 +849,7 @@ SERVICE_REDIS_ENABLE=TRUE
 
         for (service, _) in crate::contracts::env_schema().service_catalog() {
             let prefix = Env::service_prefix(&service);
-            for suffix in ["ENABLE", "VERSION"] {
+            for suffix in ["ENABLE", "VERSION", "VERSIONS"] {
                 let key = format!("{prefix}{suffix}");
                 assert!(
                     embedded.contains(key.as_str()),
@@ -739,5 +857,73 @@ SERVICE_REDIS_ENABLE=TRUE
                 );
             }
         }
+    }
+
+    /// The version a service ships on is one the version picker offers.
+    ///
+    /// Without this the two halves drift the moment either is edited alone: a
+    /// bumped default that nobody added to the list opens a combobox on a value
+    /// its own menu does not contain, and a trimmed list quietly orphans the
+    /// value every fresh workspace starts with. `service_versions` papers over
+    /// exactly that at runtime by folding the current value in — which is right
+    /// for a user's own pinned tag and wrong as a way for the shipped pair to
+    /// disagree, so the invariant is asserted on `EMBEDDED` rather than on what
+    /// the reader returns.
+    #[test]
+    fn every_shipped_version_is_offered_by_its_own_catalog() {
+        let embedded: BTreeMap<&str, &str> = EMBEDDED.iter().copied().collect();
+
+        for (service, _) in crate::contracts::env_schema().service_catalog() {
+            let prefix = Env::service_prefix(&service);
+            let version = embedded[format!("{prefix}VERSION").as_str()];
+            let versions = embedded[format!("{prefix}VERSIONS").as_str()];
+
+            let offered: Vec<&str> = versions.split(',').map(str::trim).collect();
+            assert!(
+                offered.contains(&version),
+                "{service} ships {version} but offers {versions}"
+            );
+            assert!(
+                offered.iter().all(|v| !v.is_empty()),
+                "{service} has a blank entry in {versions} — an empty image tag"
+            );
+        }
+    }
+
+    /// A pinned tag that is not on the list still shows as the current value.
+    #[test]
+    fn an_unlisted_version_is_folded_into_the_options() {
+        let env = Env::parse("SERVICE_MONGO_VERSION=8.0.28\n");
+        let versions = env.service_versions("mongo");
+
+        assert_eq!(versions.first().map(String::as_str), Some("8.0.28"));
+        assert!(versions.contains(&"8.0".to_string()), "{versions:?}");
+        // Folded in once, not appended to a list that already had it.
+        let listed = Env::parse("SERVICE_MONGO_VERSION=7.0\n").service_versions("mongo");
+        assert_eq!(listed.iter().filter(|v| *v == "7.0").count(), 1);
+        assert_eq!(listed.first().map(String::as_str), Some("8.0"));
+    }
+
+    /// Emptying the list is how a workspace asks for the plain text field back,
+    /// so it must not be answered with a one-entry list built from the current
+    /// value — that would make the setting impossible to turn off.
+    #[test]
+    fn an_emptied_catalog_offers_nothing_rather_than_the_current_value() {
+        let env = Env::parse("SERVICE_MONGO_VERSION=8.0\nSERVICE_MONGO_VERSIONS=\n");
+        assert!(env.service_versions("mongo").is_empty());
+    }
+
+    /// The catalog is not a credential, and must not surface as one.
+    #[test]
+    fn the_version_catalog_stays_out_of_the_credentials_block() {
+        let env = Env::parse("SERVICE_MONGO_ENABLE=true\n");
+        let fields: Vec<String> = env
+            .service_credentials("mongo")
+            .into_iter()
+            .map(|(key, _, _)| key)
+            .collect();
+
+        assert!(!fields.iter().any(|f| f == "VERSIONS"), "{fields:?}");
+        assert!(!fields.iter().any(|f| f == "VERSION"), "{fields:?}");
     }
 }

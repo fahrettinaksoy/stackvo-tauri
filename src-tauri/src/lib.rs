@@ -6,6 +6,7 @@ pub mod atomic;
 pub mod audit;
 pub mod certs;
 pub mod commands;
+pub mod compose_policy;
 pub mod config;
 pub mod connect;
 pub mod contracts;
@@ -24,21 +25,26 @@ pub mod error;
 pub mod events;
 pub mod generator;
 pub mod git;
+pub mod handover;
 pub mod hints;
 pub mod hosts;
 pub mod imports;
 pub mod inflight;
+pub mod instances;
 pub mod licences;
 pub mod locale;
 pub mod logging;
 pub mod mail;
 pub mod manifest;
+pub mod market;
 pub mod mcp;
 pub mod menu;
 pub mod migrate;
 pub mod paths;
 pub mod phpini;
+pub mod pkg;
 pub mod policy;
+pub mod ports;
 pub mod preflight;
 pub mod preset;
 pub mod profile;
@@ -46,6 +52,7 @@ pub mod progress;
 pub mod pty;
 pub mod quickcmd;
 pub mod release;
+pub mod render;
 pub mod runner;
 pub mod scaffold;
 pub mod secrets;
@@ -389,6 +396,20 @@ pub fn run() {
             commands::service_apply_settings,
             commands::service_enable,
             commands::service_disable,
+            commands::market_status,
+            commands::market_refresh,
+            commands::market_catalog,
+            commands::market_install,
+            commands::market_uninstall,
+            commands::instance_list,
+            commands::instance_create,
+            commands::instance_remove,
+            commands::instance_promote,
+            commands::instance_enable,
+            commands::instance_disable,
+            commands::instance_start,
+            commands::instance_stop,
+            commands::instance_restart,
             commands::container_inspect,
             commands::container_stats,
             commands::container_logs_open,

@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stackvo.dev/contracts/v1/registry.schema.json",
+  "title": "Service package registry index (registry.json) — contract v1",
+  "description": "The index the app fetches before it can show a catalog. GENERATED from the packages/ tree by tools/build-registry.mjs and signed; never hand-edited, and CI fails if a commit's registry.json differs from a fresh build of the tree beside it. It is the second link in the chain of trust: a pinned ed25519 key verifies this file, this file carries a sha256 for every version manifest, and each manifest carries a sha256 for every file it ships. See docs/servis-market-mimarisi.md §4.2.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "sequence",
+    "generatedAt",
+    "packages"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Monotonic. A client REFUSES an index whose sequence is lower than the one it already cached, which is what stops a replay from serving somebody a version that was withdrawn for a reason. Bumped by build-registry.mjs on every publish, never reused."
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When this index was built, RFC 3339. Distinct from `sequence`, which orders indexes; this only tells a human how old the answer is."
+    },
+    "expires": {
+      "type": "string",
+      "format": "date-time",
+      "description": "After this the client warns but keeps working. Deliberately not fatal: on an air-gapped install a stale-but-correct index is worth more than no index, and ADR 0011 leaves those installs with nothing else."
+    },
+    "baseUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "Where package paths resolve against, when it is not the URL this file was fetched from. Lets an enterprise mirror serve an index that points at itself without rewriting every entry."
+    },
+    "packages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "service",
+          "category",
+          "name",
+          "versions"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "service": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$",
+            "description": "Service id, matching the package directory and the manifest."
+          },
+          "category": {
+            "enum": [
+              "databases",
+              "cache",
+              "queue",
+              "search",
+              "storage",
+              "monitoring",
+              "devtools",
+              "admin-uis"
+            ]
+          },
+          "name": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Locale → display name, lifted from package.json so a market card needs no second fetch."
+          },
+          "summary": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Locale → one line for the market card."
+          },
+          "keywords": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Search terms. 'mysql' should be findable by typing 'database'."
+          },
+          "icon": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "sha256"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Relative to the package directory."
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$",
+                "description": "An icon is content that reaches a renderer, and content from the network gets verified like everything else."
+              }
+            }
+          },
+          "instancing": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "multiple": {
+                "type": "boolean",
+                "description": "Whether two versions of this service may run at once. Lifted from the manifests; CI checks every version of a service agrees."
+              }
+            },
+            "description": "Lifted from the version manifests so the market card can say 'you can run two of these' without downloading anything. CI checks every version of a service agrees."
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true,
+            "description": "What this service can be used as, for matching another package's dependsOn without downloading either."
+          },
+          "legacyEnvPrefix": {
+            "type": "string",
+            "description": "The SERVICE_<ID>_ prefix this service used before packages existed, carried for migration."
+          },
+          "versions": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "version",
+                "path",
+                "manifestSha256",
+                "support"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "version": {
+                  "type": "string",
+                  "description": "The concrete version, matching its directory name."
+                },
+                "path": {
+                  "type": "string",
+                  "pattern": "^packages/[a-z-]+/[a-z0-9-]+/versions/[A-Za-z0-9._+-]+$",
+                  "description": "Relative to baseUrl, or to the index's own location. Anchored so a crafted index cannot walk out of the package tree."
+                },
+                "manifestSha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$",
+                  "description": "Of manifest.json. The client verifies this BEFORE parsing the manifest, and everything else it trusts flows from that one comparison."
+                },
+                "sizeBytes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Total size of the package directory, so a client can show progress before it starts."
+                },
+                "recommended": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Two jobs, and the second is ADR 0014's: it is the default selection in the picker, AND it is what 'latest' resolves to. Exactly one version per service carries it. When migration meets SERVICE_<ID>_VERSION=latest — which 11 of today's 25 defaults are — it resolves to this and writes the CONCRETE version into instances.json, so a re-pull can no longer move a user's version underneath them."
+                },
+                "support": {
+                  "enum": [
+                    "supported",
+                    "deprecated",
+                    "eol"
+                  ],
+                  "description": "Drives ordering and visibility, not availability. An 'eol' version is listed and installable but hidden behind 'show older versions', because it may be the version already written in somebody's .env and withdrawing it would strand them."
+                },
+                "eolDate": {
+                  "type": "string",
+                  "format": "date",
+                  "description": "Lifted from the manifest's support block, so the picker can grey a version out without fetching it."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

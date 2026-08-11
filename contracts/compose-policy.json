@@ -1,0 +1,103 @@
+{
+  "$schema": "https://stackvo.dev/contracts/v1/compose-policy.meta.json",
+  "$id": "https://stackvo.dev/contracts/v1/compose-policy.json",
+  "contractVersion": "1.0.0",
+  "title": "What a service package's compose fragment may declare — contract v1",
+  "description": "An allowlist, checked twice: by tools/compose-check.mjs in stackvo-service-packages before a package is published, and by compose_policy.rs in the app after a fragment is rendered and before it is assembled. Both read THIS file so the two cannot drift. See docs/servis-market-mimarisi.md §4.4.",
+  "why": [
+    "Until service packages existed, StackVo only ever handed Docker files that were compiled into its own binary. A package is data somebody else wrote, and a compose service is not a passive description — the right four words in it are root on the host.",
+    "An allowlist rather than a blocklist, because the list of things worth forbidding is only ever known in retrospect. A key nobody has considered is refused, and adding it is a review.",
+    "Checked AFTER rendering, not before. What a template puts inside {{ settings.X }} is only visible once X has a value, and X is a field a user can type into."
+  ],
+  "allowed": {
+    "image": "The image to run. Its registry is checked separately against policy.market.allowedRegistries.",
+    "container_name": "Derived per instance by the app; a fragment writes {{ instance.container }} and nothing else.",
+    "restart": "Restart policy.",
+    "environment": "Environment variables. Values come from the manifest's settings, which is the whole render context a fragment gets.",
+    "command": "The process to run.",
+    "entrypoint": "Same.",
+    "ports": "Published ports. The host half is allocated by the app, so a fragment writes {{ port.<name> }}.",
+    "expose": "Ports visible only on the Docker network.",
+    "volumes": "Named volumes and generated config files only — see rules.volumes below.",
+    "networks": "The workspace network and the instance's aliases.",
+    "depends_on": "Ordering against a companion or another instance.",
+    "healthcheck": "How the engine decides the container is up.",
+    "labels": "Traefik routing. Router and service names are per instance.",
+    "ulimits": "Resource limits — Elasticsearch needs memlock.",
+    "user": "The uid the process runs as.",
+    "cap_add": "Linux capabilities, from a short list; see rules.cap_add. Listed here rather than under `refused` because a key that carries a rule is a key that may appear — the rule is what narrows it. Written the other way round first, and the effect was that the exception the rule described could never be reached: SYS_ADMIN and several others are root by another name; see rules.cap_add for the exception.",
+    "working_dir": "Working directory inside the container.",
+    "tmpfs": "In-memory filesystems.",
+    "stop_grace_period": "How long a stop waits before it kills.",
+    "stop_signal": "Which signal a stop sends.",
+    "shm_size": "Shared memory size — Postgres and Chrome-based images need it raised.",
+    "deploy": "Resource reservations and limits only; see rules.deploy.",
+    "logging": "Log driver and options.",
+    "extra_hosts": "Extra /etc/hosts entries inside the container.",
+    "sysctls": "Kernel parameters, from a narrow list; see rules.sysctls.",
+    "init": "Run an init process as PID 1.",
+    "hostname": "The container's own hostname.",
+    "read_only": "A read-only root filesystem, which is a hardening measure and never a risk."
+  },
+  "refused": {
+    "privileged": "Container escape, in one word.",
+    "network_mode": "`host` removes network isolation entirely, and no other value is worth the exception.",
+    "pid": "`host` puts the container in the host's process namespace.",
+    "ipc": "`host` shares the host's IPC namespace.",
+    "userns_mode": "`host` undoes user-namespace remapping.",
+    "cgroup_parent": "Places the container in a cgroup the app does not own.",
+    "devices": "Direct access to a host device.",
+    "device_cgroup_rules": "The same, by another route.",
+    "security_opt": "`apparmor:unconfined` and `seccomp:unconfined` switch off the kernel's own defences.",
+    "build": "A local build context is arbitrary compilation and arbitrary downloading, decided by the package.",
+    "extends": "Reaches into a file this validator has not seen.",
+    "env_file": "Reads a file this validator has not seen, into an environment it has approved.",
+    "volumes_from": "Inherits another container's mounts, including ones this policy refused.",
+    "pid_mode": "As `pid`.",
+    "runtime": "Selects an alternative container runtime.",
+    "platform": "Silently pulls an image for another architecture.",
+    "credential_spec": "Windows credential delegation.",
+    "external_links": "Links to containers outside this stack."
+  },
+  "rules": {
+    "volumes": {
+      "namedVolume": "A volume handle the manifest declares, written {{ volume.<name> }}. The app derives the real name per instance.",
+      "generatedFile": "A config file the manifest declares, written {{ file.<name> }}. The app renders it under <root>/generated/configs/<instance>/ and mounts it read-only.",
+      "instanceLogs": "{{ instance.logs }} — the instance's own log directory under <root>/logs/services/.",
+      "refused": "Anything else. A literal host path is a bind mount the package chose, and `/var/run/docker.sock` is root on the host with an extra step."
+    },
+    "cap_add": {
+      "allowed": [
+        "CHOWN",
+        "SETUID",
+        "SETGID",
+        "DAC_OVERRIDE",
+        "NET_BIND_SERVICE",
+        "IPC_LOCK"
+      ],
+      "why": "IPC_LOCK is Elasticsearch's memlock and the rest are what an image needs to drop privileges to its own user. SYS_ADMIN, SYS_PTRACE, NET_ADMIN and NET_RAW are deliberately not here."
+    },
+    "sysctls": {
+      "allowed": [
+        "vm.max_map_count",
+        "net.core.somaxconn",
+        "net.ipv4.tcp_keepalive_time"
+      ],
+      "why": "vm.max_map_count is Elasticsearch's, and it is the one everybody hits. The others are ordinary tuning. Anything else is a kernel parameter a package should not be choosing on somebody's laptop."
+    },
+    "deploy": {
+      "allowed": [
+        "resources"
+      ],
+      "why": "Limits and reservations are useful and harmless. `placement`, `mode` and `replicas` are Swarm, which this app does not run, and a fragment that sets them is a fragment written for somewhere else."
+    },
+    "labels": {
+      "requiredPrefix": "traefik.",
+      "why": "The only labels a package has any business writing are routing ones. A label is metadata other tooling reads, and a package should not be able to tag a container as something it is not."
+    },
+    "image": {
+      "mustInterpolate": "{{ image }}",
+      "why": "The reference is assembled by the app from the manifest's registry, repository, tag and digest — which is where the registry allowlist and the digest pin are applied. A fragment writing a literal image would bypass both."
+    }
+  }
+}

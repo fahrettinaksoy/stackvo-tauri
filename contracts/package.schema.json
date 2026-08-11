@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stackvo.dev/contracts/v1/package.schema.json",
+  "title": "Service package identity (package.json) — contract v1",
+  "description": "The service-level half of a package, at packages/<category>/<service>/package.json. It holds what is true of the service across every version — its name, its category, its icon — so that a version manifest does not repeat it once per version and cannot disagree with itself across five copies. Everything version-specific is in package-version.schema.json.",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "service",
+    "category",
+    "name"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "stackvo.dev/package/v1"
+    },
+    "service": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "maxLength": 40,
+      "description": "Service id. Must equal the containing directory name, and must be unique across the whole registry — it is the first half of every instance slug."
+    },
+    "category": {
+      "enum": [
+        "databases",
+        "cache",
+        "queue",
+        "search",
+        "storage",
+        "monitoring",
+        "devtools",
+        "admin-uis"
+      ],
+      "description": "Must equal the containing <category> directory name. The eight are env.schema.json's existing groups, kept rather than reinvented so the migration has nothing to translate — the only change is adminUis becoming admin-uis, because a directory name should not be camelCase."
+    },
+    "name": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Locale → display name. 'en' is required as the fallback for locales the package does not carry."
+    },
+    "recommendedVersion": {
+      "type": "string",
+      "description": "Which of this service's versions the picker selects by default, and — ADR 0014 — what `latest` resolves to. Lives here rather than on each version because it is a statement about the service: putting it on the versions would let two of them claim it, and nothing would say which was right. build-registry.mjs copies it onto the matching version entry as `recommended`."
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Locale → one line, shown on the market card. Not a description of the software — a sentence about why you would install it here."
+    },
+    "icon": {
+      "type": "string",
+      "pattern": "^icon\\.(svg|png)$",
+      "description": "Beside package.json. Hashed like every other file: an icon is content that reaches a renderer, and content that reaches a renderer from the network is content that gets verified."
+    },
+    "homepage": {
+      "type": "string",
+      "format": "uri",
+      "description": "Where the packaged software documents itself. Shown on the market card; never fetched by the app."
+    },
+    "maintainer": {
+      "type": "string",
+      "description": "Who is answerable for this package. 'stackvo' for the official set; third-party sources are a v2 question (ADR 0013 keeps the source pluggable, docs §4.6 keeps the door shut for now)."
+    },
+    "license": {
+      "type": "string",
+      "description": "SPDX id of the packaged SOFTWARE, not of the manifest. Feeds the NOTICE generation the repo already does."
+    },
+    "keywords": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true,
+      "description": "Search terms. 'mysql' should be findable by typing 'database' and by typing 'mariadb'."
+    },
+    "legacyEnvPrefix": {
+      "type": "string",
+      "pattern": "^SERVICE_[A-Z0-9_]+_$",
+      "description": "The SERVICE_<ID>_ prefix this service used before packages existed, for migration only. Present because the mapping is not always mechanical: mongo-express uppercases to MONGO_EXPRESS, and a reader that derives it instead of reading it will one day derive it differently in two places — which is exactly how C-09 happened (profile `mongo_express` vs compose profile `mongo-express`)."
+    }
+  }
+}

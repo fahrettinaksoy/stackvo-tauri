@@ -362,6 +362,18 @@ pub struct ServiceSetting {
     /// True when the value is what the binary ships, so the sheet can say so
     /// rather than presenting a default as somebody's decision.
     pub is_default: bool,
+    /// The values worth offering for this key, newest first, or empty when
+    /// there is no sensible list — which is every key but `VERSION` today.
+    ///
+    /// Deliberately a property of the row rather than a second command. The
+    /// sheet renders whatever `service_settings` returns, in order, without
+    /// knowing what any of it means; a key that grows a list of options should
+    /// not also require the front end to learn that this particular key has
+    /// one. Anything enumerable later — a storage engine, a log level — fills
+    /// this in and the sheet needs no change.
+    ///
+    /// Non-empty does not mean closed. See `Env::service_versions`.
+    pub options: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -714,11 +726,15 @@ async fn lifecycle(
     // name and a compose service name, and one rule applied at every entry
     // point is easier to keep true than five rules applied at some of them.
     // Service ids come from the catalog and are checked against it elsewhere.
-    if kind == "project" {
+    if kind == "project" || kind == "instance" {
+        // An instance id is not in the service catalog and never will be — it
+        // is `mysql-8-0`, derived from a pair. The shape check is the same one
+        // a project name gets, and the id itself has already been looked up in
+        // the instance table by the caller.
         if !workspace::is_safe_name(id) {
             return Err(Error::new(
                 Code::InvalidInput,
-                format!("\"{id}\" is not a valid project name"),
+                format!("\"{id}\" is not a valid {kind} name"),
             ));
         }
     } else {
@@ -726,6 +742,10 @@ async fn lifecycle(
     }
 
     let subject = |ev: &str| format!("{kind}:{ev}");
+    // An instance rides in the `service` field rather than getting one of its
+    // own: the front end keys these on the id string, and a fourth shape of
+    // event would be a fourth thing every listener has to know about for no
+    // information it does not already have.
     let make = |id: &str| {
         if kind == "project" {
             SubjectEvent::project(id)
@@ -1182,12 +1202,18 @@ pub fn service_settings(state: State<'_, AppState>, name: String) -> Result<Vec<
     let defaults: std::collections::BTreeMap<&str, &str> =
         crate::config::EMBEDDED.iter().copied().collect();
 
+    let versions = env.service_versions(&name);
+
     Ok(env
         .raw()
         .iter()
         .filter_map(|(env_key, value)| {
             let key = env_key.strip_prefix(&prefix)?;
-            if key == "ENABLE" {
+            // VERSIONS is the catalog `VERSION` is chosen from, so it reaches
+            // the sheet as that row's options and not as a row of its own.
+            // Two controls for one decision is how they come to disagree —
+            // the same reason ENABLE is not here.
+            if matches!(key, "ENABLE" | "VERSIONS") {
                 return None;
             }
             let secret = Env::is_secret(env_key);
@@ -1201,6 +1227,11 @@ pub fn service_settings(state: State<'_, AppState>, name: String) -> Result<Vec<
                 },
                 secret,
                 is_default: defaults.get(env_key.as_str()) == Some(&value.as_str()),
+                options: if key == "VERSION" {
+                    versions.clone()
+                } else {
+                    Vec::new()
+                },
             })
         })
         .collect())
@@ -6587,6 +6618,102 @@ pub struct GenFile {
 /// manifest is reported alongside the projects that rendered fine.
 pub type Rendered = (Vec<GenFile>, Vec<(String, String)>);
 
+/// The services half, rendered from `.env` and the compiled-in templates.
+///
+/// Lifted out of `render_generated` unchanged when the instance table became a
+/// second source. Kept whole rather than merged with the new path: they share
+/// an output and nothing else, and a single function with a branch through the
+/// middle of it would be a function nobody could read either half of.
+fn env_service_files(
+    root: &std::path::Path,
+    vars: &std::collections::BTreeMap<String, String>,
+) -> Vec<GenFile> {
+    let mut files = Vec::new();
+    {
+        // (template, output) — the exact mapping in config.sh. The first five
+        // are rendered; the last two are copied verbatim by Bash.
+        const RENDERED: [(&str, &str); 6] = [
+            ("redis/redis.conf.tpl", "redis.conf"),
+            ("mysql/my.cnf.tpl", "mysql.cnf"),
+            ("mongo/mongo.conf.tpl", "mongo.conf"),
+            ("postgres/postgres.conf.tpl", "postgres.conf"),
+            ("elasticsearch/elasticsearch.yml.tpl", "elasticsearch.yml"),
+            // Valkey's compose template bind-mounts this file. A service whose
+            // config is not rendered starts against whatever the image ships
+            // and quietly ignores every setting the workspace holds — which is
+            // the failure this list exists to prevent, one entry per template.
+            ("valkey/valkey.conf.tpl", "valkey.conf"),
+        ];
+        const COPIED: [(&str, &str); 2] = [
+            ("mariadb/my.cnf", "mariadb.cnf"),
+            ("percona/my.cnf", "percona.cnf"),
+        ];
+
+        for (template, output) in RENDERED {
+            // The workspace's copy wins, the compiled-in one is the fallback:
+            // shipping templates must not take away the ability to edit them.
+            let Some(text) = crate::skeleton::read_template(
+                root,
+                &format!("core/templates/services/{template}"),
+            ) else {
+                continue;
+            };
+            files.push(GenFile {
+                label: format!("configs/{output}"),
+                path: root.join("generated/configs").join(output),
+                scope: "services",
+                content: crate::template::render(&text, vars),
+            });
+        }
+        for (source, output) in COPIED {
+            let Some(text) =
+                crate::skeleton::read_template(root, &format!("core/templates/services/{source}"))
+            else {
+                continue;
+            };
+            files.push(GenFile {
+                label: format!("configs/{output}"),
+                path: root.join("generated/configs").join(output),
+                scope: "services",
+                content: text,
+            });
+        }
+    }
+
+    // ---- the dynamic compose ----
+    files.push(GenFile {
+        label: "docker-compose.dynamic.yml".into(),
+        path: root.join("generated/docker-compose.dynamic.yml"),
+        scope: "services",
+        content: crate::template::render_dynamic_compose(root, vars),
+    });
+
+    files
+}
+
+/// Where the services half of a render comes from.
+///
+/// Faz 6 of `docs/servis-market-mimarisi.md`, and the whole of the switch is
+/// this one decision. The rule is deliberately blunt:
+///
+/// * **No `instances.json`** — the old path, unchanged, byte for byte. That is
+///   every workspace in existence today, and none of them notice this release.
+/// * **An `instances.json`** — the new path. Somebody migrated on purpose, and
+///   after that the table is the truth about which services this workspace
+///   runs.
+///
+/// There is no falling back. A table that exists and cannot render is an error
+/// with a name in it; quietly rendering from `.env` instead would produce a
+/// stack built from state the user has already replaced — which is precisely
+/// the drift the instance table exists to end, arriving through the door marked
+/// "safety".
+fn service_source(root: &std::path::Path) -> Result<Option<crate::instances::Table>> {
+    if !crate::instances::path(root).exists() {
+        return Ok(None);
+    }
+    crate::instances::Table::load(root).map(Some)
+}
+
 pub fn render_generated(root: &std::path::Path) -> Result<Rendered> {
     use crate::generator;
 
@@ -6732,65 +6859,58 @@ pub fn render_generated(root: &std::path::Path) -> Result<Rendered> {
         });
     }
 
-    // ---- service configs ----
-    {
-        // (template, output) — the exact mapping in config.sh. The first five
-        // are rendered; the last two are copied verbatim by Bash.
-        const RENDERED: [(&str, &str); 6] = [
-            ("redis/redis.conf.tpl", "redis.conf"),
-            ("mysql/my.cnf.tpl", "mysql.cnf"),
-            ("mongo/mongo.conf.tpl", "mongo.conf"),
-            ("postgres/postgres.conf.tpl", "postgres.conf"),
-            ("elasticsearch/elasticsearch.yml.tpl", "elasticsearch.yml"),
-            // Valkey's compose template bind-mounts this file. A service whose
-            // config is not rendered starts against whatever the image ships
-            // and quietly ignores every setting the workspace holds — which is
-            // the failure this list exists to prevent, one entry per template.
-            ("valkey/valkey.conf.tpl", "valkey.conf"),
-        ];
-        const COPIED: [(&str, &str); 2] = [
-            ("mariadb/my.cnf", "mariadb.cnf"),
-            ("percona/my.cnf", "percona.cnf"),
-        ];
-
-        for (template, output) in RENDERED {
-            // The workspace's copy wins, the compiled-in one is the fallback:
-            // shipping templates must not take away the ability to edit them.
-            let Some(text) = crate::skeleton::read_template(
-                root,
-                &format!("core/templates/services/{template}"),
-            ) else {
-                continue;
-            };
-            files.push(GenFile {
-                label: format!("configs/{output}"),
-                path: root.join("generated/configs").join(output),
-                scope: "services",
-                content: crate::template::render(&text, &vars),
-            });
+    // ---- services: configs and the dynamic compose ----
+    //
+    // Two sources, one output. See `service_source` for why there is no
+    // fallback between them.
+    match service_source(root)? {
+        None => {
+            files.extend(env_service_files(root, &vars));
         }
-        for (source, output) in COPIED {
-            let Some(text) =
-                crate::skeleton::read_template(root, &format!("core/templates/services/{source}"))
-            else {
-                continue;
+        Some(table) => {
+            let tree = crate::pkg::Tree::open(&crate::market::dir(root))?;
+            let network = vars
+                .get("DOCKER_DEFAULT_NETWORK")
+                .cloned()
+                .unwrap_or_else(|| "stackvo-net".into());
+            let tld = vars
+                .get("DEFAULT_TLD_SUFFIX")
+                .cloned()
+                .unwrap_or_else(|| "stackvo.loc".into());
+
+            // The keystore, read through the same helper `.env` values go
+            // through — one answer to "what is this secret", not two.
+            let secrets = |reference: &str| {
+                crate::secrets::entry_of(reference)
+                    .and_then(|entry| crate::secrets::read(entry).ok().flatten())
             };
+
+            let rendered =
+                crate::render::dynamic_compose(root, &table, &tree, &network, &tld, &secrets)?;
+
+            for config in rendered.configs {
+                files.push(GenFile {
+                    label: format!(
+                        "configs/{}",
+                        config
+                            .path
+                            .strip_prefix(root.join("generated/configs"))
+                            .unwrap_or(&config.path)
+                            .display()
+                    ),
+                    path: config.path,
+                    scope: "services",
+                    content: config.contents,
+                });
+            }
             files.push(GenFile {
-                label: format!("configs/{output}"),
-                path: root.join("generated/configs").join(output),
+                label: "docker-compose.dynamic.yml".into(),
+                path: root.join("generated/docker-compose.dynamic.yml"),
                 scope: "services",
-                content: text,
+                content: rendered.compose,
             });
         }
     }
-
-    // ---- the dynamic compose ----
-    files.push(GenFile {
-        label: "docker-compose.dynamic.yml".into(),
-        path: root.join("generated/docker-compose.dynamic.yml"),
-        scope: "services",
-        content: crate::template::render_dynamic_compose(root, &vars),
-    });
 
     // ---- traefik ----
     let catalog = env_schema().service_catalog();
@@ -7170,6 +7290,558 @@ mod lock_tests {
             offenders.join("\n")
         );
     }
+}
+
+// ================================================================ the market
+
+use std::collections::BTreeMap;
+//
+// Faz 3 and Faz 4 of `docs/servis-market-mimarisi.md`, the half that touches
+// neither Docker nor `.env`. Everything here reads or writes two things: the
+// package cache under `<root>/market`, and the instance table at
+// `<root>/services/instances.json`.
+//
+// The commands that *do* touch Docker — enabling an instance, starting it —
+// are deliberately absent. They need the generate path to render from the
+// instance table, and that swap is Faz 6. Shipping them now would mean a
+// button that writes a row nothing renders.
+
+/// Has this machine got a catalogue, where from, and how old is it?
+///
+/// Every field can be absent, and the absence is the useful part: ADR 0011
+/// leaves a fresh install with nothing at all, and "no catalogue yet" is a
+/// different sentence from "the catalogue is empty".
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketStatus {
+    /// False before the first refresh. The market page shows a gate rather than
+    /// an empty list.
+    pub fetched: bool,
+    pub sequence: Option<u64>,
+    pub generated_at: Option<String>,
+    pub expires: Option<String>,
+    /// `local`, or absent when nothing has been fetched.
+    pub source_kind: Option<String>,
+    pub source_location: Option<String>,
+    pub packages: usize,
+    pub installed: usize,
+    /// Whether signatures are being checked. Always false today, and named so
+    /// the UI can say so rather than implying otherwise — see `market::Trust`.
+    pub signed: bool,
+}
+
+/// One row of the market list: what is published, and what is here.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketPackage {
+    pub service: String,
+    pub category: String,
+    pub name: BTreeMap<String, String>,
+    pub summary: BTreeMap<String, String>,
+    pub capabilities: Vec<String>,
+    /// Whether two versions may run at once, so a card can say so before
+    /// anything is downloaded.
+    pub multiple: bool,
+    pub versions: Vec<MarketVersion>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketVersion {
+    pub version: String,
+    /// What `latest` resolves to (ADR 0014).
+    pub recommended: bool,
+    /// `supported`, `deprecated` or `eol`. An `eol` version is listed and
+    /// installable; the picker hides it behind "show older versions" rather
+    /// than withdrawing it, because somebody's workspace may name it.
+    pub support: String,
+    pub eol_date: Option<String>,
+    pub size_bytes: Option<u64>,
+    /// Whether the package is already on this machine.
+    pub installed: bool,
+    /// Whether an instance is using it, so the UI can refuse an uninstall
+    /// before the filesystem does.
+    pub in_use: bool,
+}
+
+/// One installed instance, as the front end needs it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceRow {
+    pub id: String,
+    pub service: String,
+    pub version: String,
+    pub enabled: bool,
+    /// Holds the pre-package name, so a project's `DB_HOST=stackvo-mysql`
+    /// reaches it.
+    pub primary: bool,
+    pub container: String,
+    pub aliases: Vec<String>,
+    pub ports: BTreeMap<String, u16>,
+    /// Absent when the package this instance names is not installed — which is
+    /// a state a user has to be able to see, not an error that hides the row.
+    pub package_present: bool,
+}
+
+fn market_root(state: &State<'_, AppState>) -> Result<std::path::PathBuf> {
+    state.root()
+}
+
+#[tauri::command]
+pub fn market_status(state: State<'_, AppState>) -> Result<MarketStatus> {
+    let root = market_root(&state)?;
+    let registry = crate::market::cached(&root)?;
+    let source = crate::market::remembered(&root)?;
+    let tree = crate::pkg::Tree::open(&crate::market::dir(&root))?;
+    let installed = crate::pkg::Catalogue::services(&tree)
+        .iter()
+        .map(|s| crate::pkg::Catalogue::versions(&tree, s).len())
+        .sum();
+
+    Ok(MarketStatus {
+        fetched: registry.is_some(),
+        sequence: registry.as_ref().map(|r| r.sequence),
+        generated_at: registry.as_ref().map(|r| r.generated_at.clone()),
+        expires: registry.as_ref().and_then(|r| r.expires.clone()),
+        source_kind: source.as_ref().map(|s| s.kind.clone()),
+        source_location: source.as_ref().map(|s| s.location.clone()),
+        packages: registry.as_ref().map(|r| r.packages.len()).unwrap_or(0),
+        installed,
+        // `market::Trust::Signed` refuses rather than downgrades, so nothing
+        // can report true here until there is a key to verify against.
+        signed: false,
+    })
+}
+
+/// Read a catalogue from a directory and cache it.
+///
+/// The only source this build has. `location` is a path the user chose — an
+/// offline bundle, or a checkout of the packages repository — so it is treated
+/// as input rather than as configuration: the source is remembered, not
+/// obeyed, and `market::LocalSource` still refuses a path that walks out of it.
+#[tauri::command]
+pub async fn market_refresh(state: State<'_, AppState>, location: String) -> Result<MarketStatus> {
+    let root = state.root()?;
+    let reference = crate::market::SourceRef {
+        kind: "local".into(),
+        location,
+    };
+    let source = crate::market::open(&reference)?;
+    let previous = crate::market::cached(&root)?;
+
+    crate::market::refresh(
+        &root,
+        source.as_ref(),
+        crate::market::Trust::Unsigned,
+        previous.as_ref(),
+    )?;
+    crate::market::remember(&root, &reference)?;
+    market_status(state)
+}
+
+#[tauri::command]
+pub fn market_catalog(state: State<'_, AppState>) -> Result<Vec<MarketPackage>> {
+    let root = state.root()?;
+    let Some(registry) = crate::market::cached(&root)? else {
+        return Ok(Vec::new());
+    };
+    let tree = crate::pkg::Tree::open(&crate::market::dir(&root))?;
+    let table = crate::instances::Table::load(&root)?;
+
+    Ok(registry
+        .packages
+        .iter()
+        .map(|package| MarketPackage {
+            service: package.service.clone(),
+            category: package.category.clone(),
+            name: package.name.clone(),
+            summary: package.summary.clone(),
+            capabilities: package.capabilities.clone(),
+            multiple: package.instancing.map(|i| i.multiple).unwrap_or(false),
+            versions: package
+                .versions
+                .iter()
+                .map(|row| MarketVersion {
+                    version: row.version.clone(),
+                    recommended: row.recommended,
+                    support: row.support.clone(),
+                    eol_date: row.eol_date.clone(),
+                    size_bytes: row.size_bytes,
+                    installed: tree.dir(&package.service, &row.version).is_some(),
+                    in_use: table
+                        .instances
+                        .iter()
+                        .any(|i| i.service == package.service && i.version == row.version),
+                })
+                .collect(),
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn market_install(
+    state: State<'_, AppState>,
+    service: String,
+    version: String,
+) -> Result<MarketStatus> {
+    let root = state.root()?;
+    let Some(registry) = crate::market::cached(&root)? else {
+        return Err(
+            Error::new(Code::NotFound, "no catalogue has been fetched yet")
+                .with_hint(crate::hints::PACKAGE_NOT_IN_REGISTRY),
+        );
+    };
+    let Some(reference) = crate::market::remembered(&root)? else {
+        return Err(Error::new(
+            Code::NotFound,
+            "no source is remembered — refresh the catalogue first",
+        ));
+    };
+    let source = crate::market::open(&reference)?;
+    crate::market::install(&root, source.as_ref(), &registry, &service, &version)?;
+    market_status(state)
+}
+
+/// Remove a package. Refuses while an instance still names it.
+///
+/// The filesystem would allow it and `pkg::Tree` would then refuse to render
+/// that instance — a service that is configured and cannot start, with the
+/// reason two screens away. Saying no here is the same refusal, at the moment
+/// somebody can act on it.
+#[tauri::command]
+pub async fn market_uninstall(
+    state: State<'_, AppState>,
+    service: String,
+    version: String,
+) -> Result<MarketStatus> {
+    let root = state.root()?;
+    let table = crate::instances::Table::load(&root)?;
+    if let Some(instance) = table
+        .instances
+        .iter()
+        .find(|i| i.service == service && i.version == version)
+    {
+        return Err(Error::new(
+            Code::Conflict,
+            format!(
+                "{} is using this package. Remove the instance first",
+                instance.id
+            ),
+        )
+        .with_hint(crate::hints::REMOVE_THE_INSTANCE_FIRST));
+    }
+
+    let category = crate::market::cached(&root)?
+        .and_then(|r| r.package(&service).map(|p| p.category.clone()))
+        .ok_or_else(|| Error::not_found(format!("package {service}")))?;
+    crate::market::uninstall(&root, &category, &service, &version)?;
+    market_status(state)
+}
+
+// ---------------------------------------------------------------- instances
+
+#[tauri::command]
+pub fn instance_list(state: State<'_, AppState>) -> Result<Vec<InstanceRow>> {
+    let root = state.root()?;
+    let table = crate::instances::Table::load(&root)?;
+    let tree = crate::pkg::Tree::open(&crate::market::dir(&root))?;
+
+    Ok(table
+        .instances
+        .iter()
+        .map(|instance| InstanceRow {
+            id: instance.id.clone(),
+            service: instance.service.clone(),
+            version: instance.version.clone(),
+            enabled: instance.enabled,
+            primary: instance.primary,
+            container: instance.container(),
+            aliases: instance.aliases(),
+            ports: instance.ports.clone(),
+            package_present: tree.dir(&instance.service, &instance.version).is_some(),
+        })
+        .collect())
+}
+
+/// Create an instance of an installed package.
+///
+/// Ports are allocated here and written down, not recomputed per render: a
+/// connection string that changes because an unrelated service was installed is
+/// a string somebody had already pasted somewhere.
+#[tauri::command]
+pub async fn instance_create(
+    state: State<'_, AppState>,
+    service: String,
+    version: String,
+) -> Result<String> {
+    let root = state.root()?;
+    let tree = crate::pkg::Tree::open(&crate::market::dir(&root))?;
+    let manifest = tree.load(&service, &version)?;
+
+    let mut table = crate::instances::Table::load(&root)?;
+    let existing = table.of_service(&service).count();
+    if existing > 0 && !manifest.instancing.multiple {
+        return Err(Error::new(
+            Code::Conflict,
+            format!("{service} declares that only one version may run at a time"),
+        )
+        .with_hint(crate::hints::SERVICE_IS_SINGLE_INSTANCE));
+    }
+
+    let id = crate::instances::slug(&service, &version)?;
+    let reserved = table.reserved_ports();
+    let mut claims = crate::ports::Claims::default();
+    let mut ports = BTreeMap::new();
+    for port in &manifest.ports {
+        ports.insert(
+            port.name.clone(),
+            crate::ports::allocate(
+                port.preferred,
+                &reserved,
+                &mut claims,
+                &crate::ports::is_free,
+            )?,
+        );
+    }
+
+    let mut settings = BTreeMap::new();
+    let mut secret_refs = BTreeMap::new();
+    for setting in &manifest.settings {
+        if setting.is_secret() {
+            // `secrets::reference_for`, not a formatted string: it appends a
+            // digest of the workspace path so two checkouts on one machine do
+            // not share a keychain entry.
+            secret_refs.insert(
+                setting.key.clone(),
+                crate::secrets::reference_for(&format!("{id}/{}", setting.key), &root),
+            );
+        } else if let Some(value) = setting.default_text() {
+            settings.insert(setting.key.clone(), value);
+        }
+    }
+
+    table.insert(crate::instances::Instance {
+        id: id.clone(),
+        service,
+        version,
+        package: crate::instances::PackageRef {
+            source: "local".into(),
+            sha256: crate::pkg::sha256_hex(
+                serde_json::to_string(&manifest)
+                    .unwrap_or_default()
+                    .as_bytes(),
+            ),
+            installed_at: crate::snapshot::now_rfc3339(),
+        },
+        // Off until somebody asks for it: creating an instance is not the same
+        // decision as starting one, and the second belongs to a command that
+        // can also bring the container up.
+        enabled: false,
+        // The first instance of a service takes the pre-package name, because
+        // in a workspace with one version that name has to reach something.
+        primary: existing == 0,
+        ports,
+        volumes: BTreeMap::new(),
+        settings,
+        secret_refs,
+    })?;
+    table.save(&root)?;
+    Ok(id)
+}
+
+/// Forget an instance. Its volumes are not touched (ADR 0012).
+#[tauri::command]
+pub async fn instance_remove(state: State<'_, AppState>, id: String) -> Result<()> {
+    let root = state.root()?;
+    let mut table = crate::instances::Table::load(&root)?;
+    let removed = table.remove(&id)?;
+
+    // A service left with instances and no primary is one whose pre-package
+    // name resolves to nothing, and every project pointing at it breaks. The
+    // oldest survivor takes it, which is the one most likely to be the adopted
+    // one.
+    if removed.primary {
+        let next = table
+            .of_service(&removed.service)
+            .map(|i| i.id.clone())
+            .next();
+        if let Some(next) = next {
+            table.promote(&next)?;
+        }
+    }
+    table.save(&root)
+}
+
+/// Look an instance up, or say which one is missing.
+fn instance_of(root: &std::path::Path, id: &str) -> Result<crate::instances::Instance> {
+    crate::instances::Table::load(root)?
+        .get(id)
+        .cloned()
+        .ok_or_else(|| Error::not_found(format!("instance {id}")))
+}
+
+#[tauri::command]
+pub async fn instance_start(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<()> {
+    let _busy = state.inflight.acquire(format!("instance:{id}"))?;
+    instance_of(&state.root()?, &id)?;
+    lifecycle(&events::sink(&app), "instance", &id, events::START).await
+}
+
+#[tauri::command]
+pub async fn instance_stop(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<()> {
+    let _busy = state.inflight.acquire(format!("instance:{id}"))?;
+    instance_of(&state.root()?, &id)?;
+    lifecycle(&events::sink(&app), "instance", &id, events::STOP).await
+}
+
+#[tauri::command]
+pub async fn instance_restart(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<()> {
+    let _busy = state.inflight.acquire(format!("instance:{id}"))?;
+    instance_of(&state.root()?, &id)?;
+    lifecycle(&events::sink(&app), "instance", &id, events::RESTART).await
+}
+
+/// Switch an instance on: write it down, regenerate, bring its profile up.
+///
+/// The order is the same one `service_enable` uses and for the same reason —
+/// the compose file has to describe the container before compose is asked to
+/// start it.
+#[tauri::command]
+pub async fn instance_enable(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<String> {
+    let _busy = state.inflight.acquire(format!("instance:{id}"))?;
+    let root = state.root()?;
+    let instance = instance_of(&root, &id)?;
+    let operation_id = events::next_operation_id("enable");
+
+    events::emit(&app, "instance:enabling", SubjectEvent::service(&id));
+
+    let outcome = async {
+        let mut table = crate::instances::Table::load(&root)?;
+        if let Some(row) = table.instances.iter_mut().find(|i| i.id == id) {
+            row.enabled = true;
+        }
+        table.save(&root)?;
+
+        generate(&app, &root, &operation_id, "projects_and_services").await?;
+
+        let mut args = runner::compose_base_args(&root);
+        args.extend(runner::profile_args("custom", std::slice::from_ref(&id))?);
+        args.extend(["up".into(), "-d".into(), "--no-build".into()]);
+
+        runner::run_operation(
+            &events::sink(&app),
+            runner::Operation {
+                operation_id: &operation_id,
+                subject: &id,
+                progress_event: "instance:progress",
+                finished_event: "instance:enabled",
+                program: "docker",
+                args: &args,
+                cwd: &root,
+                env: &[],
+            },
+        )
+        .await
+    }
+    .await;
+
+    if let Err(e) = &outcome {
+        events::emit(
+            &app,
+            "instance:error",
+            SubjectEvent::service(&id).error(e.message.clone()),
+        );
+    }
+    // The name has to resolve while the service is on and stop resolving when
+    // it is not. Keyed on the SERVICE rather than the instance because a
+    // service with a domain declares `instancing.multiple: false` — there is
+    // exactly one instance of it, and per-instance subdomains are a separate,
+    // smaller job.
+    if outcome.is_ok() {
+        if let Err(e) = sync_service_host(&root, &instance.service, true).await {
+            tracing::warn!(instance = %id, error = %e.message, "hosts entry not updated");
+        }
+    }
+
+    outcome.map(|_| operation_id)
+}
+
+/// Switch an instance off. **Nothing is deleted** (ADR 0012).
+///
+/// `service_disable` removes the container, the image and the named volumes,
+/// and in a single-version world that was right: "off" should be a state rather
+/// than a label. It stops being right per version. Somebody switching MySQL 8.0
+/// off to try 9.4 wants 8.0's rows when they switch back, and a disable that
+/// took the datadir with it would be the most expensive way to learn that.
+///
+/// Deleting now lives behind `instance_remove` and `market_uninstall`, where
+/// the word on the button matches what happens.
+#[tauri::command]
+pub async fn instance_disable(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<String> {
+    let _busy = state.inflight.acquire(format!("instance:{id}"))?;
+    let root = state.root()?;
+    let instance = instance_of(&root, &id)?;
+    let operation_id = events::next_operation_id("disable");
+
+    events::emit(&app, "instance:disabling", SubjectEvent::service(&id));
+
+    let outcome = async {
+        // The hosts entry first, and it is allowed to fail the whole thing: it
+        // needs a password, and a cancelled prompt must leave everything intact
+        // rather than half-undone.
+        sync_service_host(&root, &instance.service, false).await?;
+
+        // Stop and remove the container — but only the container. The next
+        // regenerate writes it out of the compose file, so leaving it running
+        // would make it nobody's responsibility while it still held its name.
+        let _ = engine::stop_container(&id).await;
+        let _ = engine::remove_container(&id).await;
+
+        let mut table = crate::instances::Table::load(&root)?;
+        if let Some(row) = table.instances.iter_mut().find(|i| i.id == id) {
+            row.enabled = false;
+        }
+        table.save(&root)?;
+
+        generate(&app, &root, &operation_id, "projects_and_services").await
+    }
+    .await;
+
+    match &outcome {
+        Ok(()) => events::emit(
+            &app,
+            "instance:disabled",
+            SubjectEvent::service(&id).running(false),
+        ),
+        Err(e) => events::emit(
+            &app,
+            "instance:error",
+            SubjectEvent::service(&id).error(e.message.clone()),
+        ),
+    }
+
+    outcome.map(|_| operation_id)
+}
+
+/// Move the pre-package name to another instance of the same service.
+#[tauri::command]
+pub async fn instance_promote(state: State<'_, AppState>, id: String) -> Result<()> {
+    let root = state.root()?;
+    let mut table = crate::instances::Table::load(&root)?;
+    table.promote(&id)?;
+    table.save(&root)
 }
 
 #[cfg(test)]

@@ -11,6 +11,7 @@
  *   E. ipc.json against the Rust command registry and the JS wrapper — the
  *      three have to agree or a command is either unreachable or undocumented
  *   F. reachability: JS wrappers no view calls, and declared events nothing emits
+ *   G. the three service-package schemas: headers, required-vs-declared, category agreement
  *
  * Zero dependencies — it implements the specific rules rather than pulling in a schema engine,
  * so it runs in CI and in a fresh clone with nothing installed.
@@ -767,6 +768,115 @@ if (existsSync(jsApiPath)) {
   }
 }
 
+// ================================================================ SUITE G — package contracts
+
+/**
+ * The three schemas the service package format is written in.
+ *
+ * This suite checks THIS repo, not a StackVo checkout — the packages live in
+ * `stackvo/stackvo-service-packages` and that repository runs its manifests
+ * against these same files. What is checked here is the schemas themselves,
+ * because a schema with a `required` field it does not declare, or a property
+ * nobody described, is one that passes every validator and teaches nobody
+ * anything.
+ *
+ * The heavier check — that `pkg::Manifest` in Rust and
+ * `package-version.schema.json` describe the same object — lives in
+ * `src-tauri/tests/package_contract.rs`, because it needs the Rust type.
+ */
+{
+  const SCHEMAS = [
+    'package.schema.json',
+    'package-version.schema.json',
+    'registry.schema.json',
+  ];
+
+  for (const name of SCHEMAS) {
+    const file = join(CONTRACTS, name);
+    if (!existsSync(file)) {
+      err('G', name, 'SCHEMA_MISSING', 'contracts/README.md lists it and it is not there');
+      continue;
+    }
+
+    let schema;
+    try {
+      schema = readJson(file);
+    } catch (e) {
+      err('G', name, 'SCHEMA_UNREADABLE', String(e.message ?? e));
+      continue;
+    }
+
+    for (const key of ['$schema', '$id', 'title', 'description']) {
+      if (!schema[key]) {
+        err('G', name, 'SCHEMA_HEADER', `has no "${key}"`);
+      }
+    }
+
+    // Walk every object node, wherever it is nested.
+    const visit = (node, path) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) {
+        node.forEach((v, i) => visit(v, `${path}[${i}]`));
+        return;
+      }
+      if (node.properties && typeof node.properties === 'object') {
+        // A required name that is not a property is a rule no document can
+        // satisfy and no validator will explain.
+        for (const req of node.required ?? []) {
+          if (!(req in node.properties)) {
+            err(
+              'G',
+              name,
+              'REQUIRED_NOT_DECLARED',
+              `${path}: "${req}" is required and is not among the properties`
+            );
+          }
+        }
+        for (const [key, value] of Object.entries(node.properties)) {
+          // `$ref` borrows a description along with everything else, and a
+          // const or an enum is its own explanation.
+          const described =
+            value?.description || value?.$ref || value?.const || value?.enum;
+          // A node whose children are described needs no description of its
+          // own: `ports` means what its `name`, `container` and `preferred`
+          // mean. Warning on containers too produced 39 lines nobody would
+          // read, which is how a suite gets ignored.
+          const isContainer =
+            !!value?.properties || !!value?.items?.properties || !!value?.items?.$ref;
+          if (!described && !isContainer) {
+            warn('G', name, 'PROPERTY_UNDESCRIBED', `${path}.${key} has no description`);
+          }
+          visit(value, `${path}.${key}`);
+        }
+      }
+      for (const key of ['items', 'additionalProperties', '$defs', 'anyOf', 'oneOf']) {
+        if (node[key] && typeof node[key] === 'object') visit(node[key], `${path}.${key}`);
+      }
+    };
+    visit(schema, name);
+  }
+
+  // The two files that must agree about which categories exist. A package
+  // directory named for a category the registry cannot express is a package
+  // nothing will index.
+  try {
+    const pkg = readJson(join(CONTRACTS, 'package.schema.json'));
+    const reg = readJson(join(CONTRACTS, 'registry.schema.json'));
+    const a = pkg.properties?.category?.enum ?? [];
+    const b = reg.properties?.packages?.items?.properties?.category?.enum ?? [];
+    if (JSON.stringify(a) !== JSON.stringify(b)) {
+      err(
+        'G',
+        'categories',
+        'CATEGORY_DRIFT',
+        `package.schema.json offers [${a}] and registry.schema.json offers [${b}]`
+      );
+    }
+  } catch {
+    // Already reported above as unreadable.
+  }
+}
+
 // ================================================================ output
 
 const errors = findings.filter((f) => f.level === 'error');
@@ -788,6 +898,7 @@ if (asJson) {
     D: 'env keys',
     E: 'IPC surface',
     F: 'reachability',
+    G: 'package contracts',
   };
   console.log(`\nstackvo contract check — v1`);
   console.log(`  root      ${STACKVO_ROOT}${HAVE_WORKSPACE ? '' : '  (not there)'}`);

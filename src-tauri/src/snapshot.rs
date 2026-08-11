@@ -195,7 +195,12 @@ pub fn stamp(now: SystemTime) -> String {
     )
 }
 
-fn rfc3339(time: SystemTime) -> String {
+/// A timestamp two modules now write into files that are read back.
+///
+/// Public because `commands::instance_create` stamps an install with one, and a
+/// second implementation is how two timestamps in one workspace end up in two
+/// formats — which nobody notices until something tries to sort them.
+pub fn rfc3339(time: SystemTime) -> String {
     let secs = time
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -208,6 +213,11 @@ fn rfc3339(time: SystemTime) -> String {
         (time_of_day % 3600) / 60,
         time_of_day % 60,
     )
+}
+
+/// Now, in the same format.
+pub fn now_rfc3339() -> String {
+    rfc3339(SystemTime::now())
 }
 
 // ------------------------------------------------------------------- I/O

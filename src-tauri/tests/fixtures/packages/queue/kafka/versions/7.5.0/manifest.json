@@ -1,0 +1,30 @@
+{
+  "apiVersion": "stackvo.dev/package/v1",
+  "service": "kafka",
+  "version": "7.5.0",
+  "image": {
+    "repository": "confluentinc/cp-kafka",
+    "tag": "7.5.0"
+  },
+  "capabilities": ["queue", "kafka-protocol"],
+  "instancing": { "multiple": true, "identity": "version" },
+  "ports": [
+    { "name": "main", "container": 9092, "preferred": 9092, "protocol": "tcp", "legacyKey": "SERVICE_KAFKA_HOST_PORT", "primary": false },
+    { "name": "external", "container": 29092, "preferred": 29092, "protocol": "tcp", "legacyKey": "SERVICE_KAFKA_EXTERNAL_HOST_PORT", "primary": false }
+  ],
+  "volumes": [
+    { "name": "data", "container": "/var/lib/kafka/data", "purgeable": true }
+  ],
+  "files": [
+  ],
+  "settings": [
+  ],
+  "connection": null,
+  "url": null,
+  "dependsOn": [],
+  "companions": [
+    { "name": "zookeeper", "image": { "repository": "confluentinc/cp-zookeeper", "tag": "latest" }, "ports": [{ "name": "main", "container": 2181, "preferred": 2181 }], "volumes": [], "compose": { "file": "companion.zookeeper.yml.tpl", "sha256": "5d91dae7b058228365651a33266b3e0251cc37dbfb6ec6cb18661252e110e3cc" } }
+  ],
+  "compose": { "file": "compose.yml.tpl", "sha256": "8f9cb1ac19898d4e0aa5e99a035a9170d7110e9256da727d42c4d44ebf6c327f" },
+  "support": {"status":"supported"}
+}

@@ -55,6 +55,10 @@ const routes = [
     props: true,
   },
   { path: '/services', name: 'Services', component: view(() => import('@/views/Services.vue')) },
+  // Where services come from, as opposed to what is running. Beside Services
+  // because the two are read together and a user moving between them is asking
+  // one question: what have I got, and what could I have.
+  { path: '/market', name: 'Market', component: view(() => import('@/views/Market.vue')) },
   // Belongs to no project, which is the point: it is where you look before you
   // know which project to open.
   { path: '/logs', name: 'Logs', component: view(() => import('@/views/Logs.vue')) },

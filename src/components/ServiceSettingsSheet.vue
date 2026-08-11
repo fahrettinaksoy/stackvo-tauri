@@ -1,6 +1,10 @@
 <script setup>
 import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+// Named rather than left to the template's auto-import: `<component :is>` takes
+// a value, and `VCombobox` as a bare identifier in a template resolves to
+// nothing the plugin has been asked to provide.
+import { VCombobox, VTextField } from 'vuetify/components';
 import { api, asList } from '@/lib/ipc';
 import { humaniseField } from '@/lib/manifest';
 import ErrorAlert from '@/components/ErrorAlert.vue';
@@ -162,16 +166,24 @@ watch(
            was the only thing separating them, and twelve outlined boxes with
            four pixels between them read as one control. -->
       <div class="d-flex flex-column ga-6">
-        <v-text-field
+        <!-- A combobox where the row carries options, a text field otherwise —
+             one loop, because the row says which it is. A combobox rather than
+             a select on purpose: the list is a handful of series and the
+             registry has thousands of tags, so pinning `8.0.28` has to stay
+             possible. A select would have made an unlisted tag unreachable
+             from the app that is supposed to be the way to set it. -->
+        <component
+          :is="row.options?.length ? VCombobox : VTextField"
           v-for="row in settings"
           :key="row.envKey"
           :model-value="valueOf(row)"
+          :items="row.options?.length ? row.options : undefined"
           :label="fieldLabel(row.key)"
           :readonly="isHidden(row)"
           density="comfortable"
           variant="outlined"
           hide-details
-          @update:model-value="(v) => edit(row, v)"
+          @update:model-value="(v) => edit(row, v ?? '')"
         >
           <!-- The `.env` key used to sit under every field as a permanent
                second line, which doubled the height of the form to repeat
@@ -208,7 +220,7 @@ watch(
               @click="toggleReveal(row)"
             />
           </template>
-        </v-text-field>
+        </component>
       </div>
     </template>
 

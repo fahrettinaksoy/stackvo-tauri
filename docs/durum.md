@@ -1,6 +1,9 @@
 # StackVo — durum, kararlar ve kalan işler
 
-**Son ölçüm: 11 Ağustos 2026.** `docs/` altındaki tek doküman budur.
+**Son ölçüm: 11 Ağustos 2026.** `docs/` altındaki iki dokümandan biri budur;
+diğeri [`servis-market-mimarisi.md`](servis-market-mimarisi.md), C-1, C-2 ve
+D-2'nin nasıl kapanacağını anlatan bir tasarım raporu ve tarif ettiği iş
+bitince silinecek.
 
 ## Bu dosya ne
 
@@ -178,6 +181,57 @@ sitenin ikinci adı ve manifestte tek `domain` var — fazladan adlar E-2'nin
 `aliases`'ına ait. Sembolik bağ izlenmiyor: `/` gösteren biri, bir sitenin
 kopyasını diskin kopyasına çevirir.
 
+### S — servis paketleri ve market
+
+Servisler binary'den çıkıp `stackvo/stackvo-service-packages`'a taşındı, ve bir
+servisin birden çok sürümü aynı anda çalışabilir hâle geldi. Tasarımın tamamı
+[`servis-market-mimarisi.md`](servis-market-mimarisi.md)'de; burada yalnız
+**neyin bittiği ve neyin bitmediği** duruyor.
+
+**Doğrulandı, akıl yürütülmedi.** `examples/side_by_side.rs` bu makinede iki
+mysqld başlattı: **8.0.46 ve 9.4.0**, ayrı volume, ayrı port (3316/3326 — 3306'yı
+makinenin kendi MySQL'i tutuyordu), ve `stackvo-mysql` ağ içinde çözülüyor.
+
+| # | Madde | Durum | Nasıl bakıldı |
+| --- | --- | :-: | --- |
+| S-1 | Paket formatı: üç şema + compose politikası | ✅ | `contracts/package*.json`, `registry.schema.json`, `compose-policy.json`; `tests/package_contract.rs` şema ile `pkg::Manifest`'i karşılaştırıyor |
+| S-2 | 25 servis, 101 sürüm paket olarak | ✅ | `stackvo-service-packages/packages/`; `examples/build_packages.rs` üretti, her manifest `pkg::parse`'dan geçti |
+| S-3 | Paket deposunun kendi CI'ı | ✅ | altı araç, iki iş; 105 fragment `docker compose config` + politika kapısından geçiyor |
+| S-4 | Örnek modeli (`instances.json`) | ✅ | `instances.rs` + `ports.rs`; çakışan port/volume/alias reddediliyor |
+| S-5 | `.env` → `instances.json` göçü | ✅ | `handover.rs`; `tests/handover_equivalence.rs` image/port/volume/environment'ı alan alan tutuyor |
+| S-6 | Render hattının takası | ✅ | tablo yoksa eski yol **bayt bayt**, varsa yeni yol, geri düşme yok |
+| S-7 | Çoklu sürüm gerçekten çalışıyor | ✅ | `examples/side_by_side.rs`, yukarıdaki ölçüm |
+| S-8 | Compose politikası istemcide de | ✅ | `compose_policy.rs`; beş saldırının beşi reddediliyor |
+| S-9 | Market + örnek arayüzü | ✅ | 14 IPC komutu, `Market.vue`, `useMarket.js` |
+| S-10 | Market: yerel kaynak | ✅ | `market.rs`; hash zinciri, sequence geri gitme reddi, atomik kurulum |
+| S-11 | **Paketlerde healthcheck** | ⬜ | 101 paketin **101'inde** `health` boş — `depends_on: service_healthy` hiçbir servis için bir şey ifade etmiyor |
+| S-12 | Market: ağ kaynağı (HTTPS) | ⬜ | `Source` trait'i var, `LocalSource` tek uygulama |
+| S-13 | İmza doğrulaması | ⛔ | anahtar yok; `Trust::Signed` **reddediyor**. §5 madde 4 açık karar |
+| S-14 | Hava boşluklu paket (`offlineBundle`) | ⬜ | `policy.market.*` anahtarlarının hiçbiri okunmuyor |
+| S-15 | Ağ kapısı (hiç katalog çekmemiş makine) | 🟡 | Market sayfası "henüz katalog yok" diyor; ilk açılış kapısı yok |
+| S-16 | Gömülü şablonların silinmesi | 🟡 | takas indi, `skeleton/core/templates/services/` **duruyor** — tablosuz çalışma alanları hâlâ onu kullanıyor |
+| S-17 | Göçün `.env` yedeği ve arayüzü | ⬜ | `handover::apply` yedek yazmıyor, göçü tetikleyen bir ekran yok |
+| S-18 | Örnek başına alt alan adı | ⬜ | alan adı olan 12 servis `instancing.multiple: false` — bu yüzden tek örnek |
+
+**Yolda bulunan üç hata**, üçü de yalnız çalıştırınca görünen türden:
+
+`template.rs` **ASCII olmayan her karakteri çift kodluyordu** (`u8 as char` bir
+Latin-1 çözümü). Golden fixture bunu yakalayamazdı — karşılaştırmanın iki
+tarafı da bozuk çıktıydı, yani dosya kendisiyle uyuşuyordu.
+
+`postgres.conf` ve `elasticsearch.yml` her generate'te yazılıp **hiçbir şablon
+tarafından mount edilmiyordu**; içlerindeki her ayar ölüydü. Paketlerde
+düzeltildi ve çalışan konteynerlerde doğrulandı (postgres `max_connections=200`,
+ES `thread_pool.write.queue_size=1000` — ikisi de yalnız o dosyalarda var).
+
+**MySQL 9.x hiç açılmıyordu** — `contracts/CONFLICTS.md` **C-21**. Sürüm
+seçicisi 9.7 ve 9.4 sunuyor, tek bir `my.cnf` her sürüme mount ediliyor, ve iki
+direktifi MySQL 9 kaldırmış. Bir sürüm bir dizin kuralının var olma sebebi.
+
+**Ölçüm de bir hata buldu:** `tools/eol.mjs` 101 sürümün **20'sinin**
+`supported` dediği hâlde end-of-life olduğunu gösterdi — üçü uygulamanın kendi
+önerdiği sürüm (mysql@8.0, mariadb@10.6, redis@7.0).
+
 ---
 
 ## 2. Rekabet boşlukları — kalan
@@ -214,8 +268,8 @@ ve bir ilerleme yazıcısı. §5'teki karar isteniyor.
 
 | # | Madde | Durum | Nasıl bakıldı |
 | --- | --- | :-: | --- |
-| C-1 | Kullanıcının kendi servis şablonu | 🔒 | `skeleton.rs`'in workspace-öncelikli okuması mekanizmanın yarısını veriyor; yüzey yok |
-| C-2 | Kullanıcının kendi compose servisi | 🔒 | `custom.yml` / overlay sıfır isabet |
+| C-1 | Kullanıcının kendi servis şablonu | 🟡 | Paket formatı ve `pkg::Tree` mekanizmanın tamamını veriyor (S-1, S-2); **kullanıcının kendi kaynağını göstermesi** var, kendi paketini yazması için bir yüzey yok |
+| C-2 | Kullanıcının kendi compose servisi | 🟡 | Bir paketin compose fragment'i artık kullanıcının yazabileceği bir şey ve `compose_policy` ne diyebileceğini söylüyor; üçüncü taraf kaynak politikası yok (S-14) |
 
 DDEV'in kayıt defteri (`addons.ddev.com`), 36 resmî ve 100+ topluluk eklentisi
 var. Container tabanlı bir araç için kullanıcının kendi compose dosyasını
@@ -228,7 +282,7 @@ reddetmek, container tabanlı olmayı alternatifinden *daha kötü* yapan tek ş
 | D-1 | Nesne depolama, arama | ✅ | — |
 | D-1 | Solr, ClickHouse | ⬜ | şablon dizini yok |
 | D-1 | Ollama, Qdrant, pgvector | 🔒 | §5'te **ertelendi** olarak kayıtlı, kapsam dışı değil |
-| D-2 | Aynı servisten birden çok örnek | ⬜ | `env.schema.json`'da `instance` kavramı yok |
+| D-2 | Aynı servisten birden çok örnek | ✅ | `instances.json`; bu makinede 8.0.46 ve 9.4.0 yan yana çalıştırıldı (S-7) |
 
 ### E — Ağ: hosts dosyasına bağlı
 
@@ -606,6 +660,93 @@ tabloyu kastediyor.
   macOS ve Windows'ta bir yeni crate, Linux'ta on dört, kilitte yirmi dokuz.
   `generated/`'dan da çıkarmak bir v2 değişikliği ve burada yarım bırakılmadı.
 
+### 0011 — Uygulama hiçbir servis tanımı taşımaz
+
+- **Status:** accepted
+- **Decision:** `skeleton/core/templates/services/` binary'den tamamen çıkıyor
+  ve yerine gömülü bir katalog anlık görüntüsü **konmuyor**. Ağı olmayan bir
+  makinede ilk açılışta market boş görünür ve "ağ gerekli" der. Ara çözüm —
+  imzalı bir `registry.json`'ı gömmek — reddedildi: gömülü her bayt bir sonraki
+  sürüme kadar bayatlar, ve "gömülü olan yalnızca liste" ayrımı altı ay sonra
+  kimsenin hatırlamayacağı bir ayrımdır. Tek kural olarak "servis tanımı
+  binary'de yoktur" savunulabilir; "neredeyse yoktur" savunulamaz.
+- **Consequences:** İlk açılış bir ağ kapısı kazanıyor — `RequirementsGate` ve
+  `BootstrapGate` deseninin üçüncüsü. Hava boşluklu kurulumun **tek** cevabı
+  `market.offlineBundle` politikası oluyor, dolayısıyla o artık isteğe bağlı bir
+  kurumsal ekstra değil, birinci sınıf bir kurulum yolu. Bir kez çekilmiş
+  registry önbellekte kalır; yalnızca hiç çekmemiş bir makine engellenir. CI ve
+  paketleme testleri ağa bağlanamaz, bu yüzden depoda pinlenmiş bir test
+  registry'si zorunlu hâle geliyor.
+
+### 0012 — Kapatmak veri silmez; silen fiil kaldırmaktır
+
+- **Status:** accepted
+- **Decision:** `service_disable`'ın bugünkü davranışı — container'ı silmek,
+  image'ı silmek, adlandırılmış volume'leri silmek — `market_uninstall`'a
+  taşınıyor. Üç fiil oluyor: `instance_disable` container'ı durdurup siler ve
+  **veriye dokunmaz**; `instance_remove` örneği tablodan çıkarır ve veriyi
+  sorar; `market_uninstall` paketi, image'ı ve — `purgeData` ile — veriyi
+  siler. Gerekçe tek örnekli dünyada geçerliydi ve orada kalıyor: bir servis
+  kapalıysa gerçekten kapalı olmalı. Ama bir *sürümü* geçici olarak kapatmak,
+  o sürümün veritabanını silmek olamaz — mysql 8.0'ı 9.4'ü denemek için
+  kapatan biri 8.0'ın verisini geri istiyor.
+- **Consequences:** Davranış değişikliği ve sürüm notunda açıkça yazılması
+  gerekiyor — bugünkü "kapat"ı temizlik olarak kullanan biri artık disk
+  dolduracak. `discard_service`'in volume listesini şablondan okuyan mantığı
+  korunuyor ama paket manifestinin `volumes[].purgeable` alanına dayanıyor,
+  regex'e değil. Kapalı bir örneğin portu rezerve kalmaya devam ediyor.
+
+### 0013 — Paketler statik HTTPS ile taşınır
+
+- **Status:** accepted
+- **Decision:** Dağıtım biçimi imzalı bir `registry.json` ve HTTPS üzerinden
+  çekilen düz dosyalar. OCI artefaktı (ORAS) reddedilmedi, **ertelendi**:
+  kurumsal ayna ve kimlik doğrulamayı Docker'dan devralma avantajları gerçek,
+  ama yeni bir istemci bağımlılığı ve ikinci bir imza ekosistemi demek. Kaynak
+  bir `PackageSource` trait'inin arkasında duruyor, böylece ikinci taşıma
+  biçimi bir yeniden yazım değil bir uygulama olur.
+- **Consequences:** Altyapı herhangi bir CDN, GitHub Pages dahil. Kurumsal ayna
+  `market.registryUrl` ile bir dosya sunucusuna işaret ediyor, registry
+  aynasına değil. `reqwest` zaten bağımlılık; yeni crate yok. Docker Hub
+  oran sınırları paket indirmeyi etkilemiyor — yalnız image çekmeyi, ki o
+  zaten bugünkü durum.
+
+### 0014 — Depo desteklenen sürümleri taşır, `latest` bir dizin değildir
+
+- **Status:** accepted
+- **Decision:** Paket deposu 109 sürümün tamamıyla başlamıyor. Yayımlanan
+  küme iki kümenin birleşimi: (a) upstream'de hâlâ bakım gören seriler,
+  (b) bugün bir kullanıcının `.env`'inde yazılı olabilecek her sürüm — göç
+  bunu gerektiriyor. Kalanlar `support.status: "eol"` ile işaretlenip
+  yayımlanabilir ama listede öne çıkmaz. Ve `latest` bir sürüm dizini
+  **olamaz**: sabitlenmiş bir digest'i, dolayısıyla bir hash zinciri yoktur.
+  Registry düzeyinde bir takma ad oluyor — `recommended` alanı — ve göç
+  `SERVICE_<ID>_VERSION=latest`'i o anki somut sürüme çözüp `instances.json`'a
+  **somut olarak** yazıyor.
+- **Consequences:** Bugünkü 25 varsayılanın **11'i** `latest`; göç bu 11'i
+  somutlaştırmak zorunda ve bu, kullanıcının kurulumunu bugün olduğundan daha
+  belirlenebilir yapıyor. "Desteklenen" bir görüş değil ölçüm olmalı:
+  `tools/eol.mjs` her manifestin `support` alanını endoflife.date'e karşı
+  doğruluyor ve sapma PR'ı kırıyor. Bir kez yayımlanmış sürüm registry'den
+  **silinemez** — yalnız işaretlenebilir; silinirse o sürümü kurmuş bir
+  `instances.json` ortada kalır.
+
+### 0015 — Registry ayrı bir anahtarla imzalanır
+
+- **Status:** accepted
+- **Decision:** İçerik imzası, Tauri güncelleyicisinin binary imzasından ayrı
+  bir ed25519 anahtar çifti kullanıyor. §5'in 4. maddesiyle aynı turda
+  çözülüyor ama aynı anahtarla değil: biri binary'yi imzalar, diğeri
+  kullanıcının makinesinde Docker'a verilecek tanımları. Saklama yeri, erişim
+  ve rotasyon prosedürü **ortak**; anahtarlar ayrı.
+- **Consequences:** İki anahtar, iki sızma yüzeyi ama tek bir sızmanın etkisi
+  yarıya iniyor: güncelleyici anahtarı sızarsa sahte binary, içerik anahtarı
+  sızarsa sahte paket — ikisi birden değil. Rotasyon baştan tasarlanmak
+  zorunda: `known_keys.json` birden çok anahtar taşıyor ve yeni anahtar
+  eskisiyle imzalanmış bir kayıtla tanıtılıyor. Rotasyon planı olmayan bir
+  pinleme, sızma anında tek çözümü "herkes uygulamayı güncellesin" olan bir
+  pinlemedir.
+
 ---
 
 ## 7. Ölçüm
@@ -615,13 +756,13 @@ Mekanik olarak sayılabilenler koda karşı tutuluyor:
 
 | | Sayı | Nasıl sayıldı |
 |---|---|---|
-| Toplam IPC komutu | **168** | `contracts/ipc.json` → `commands` (165 Rust + 3 `frontend-plugin`) |
-| Bunlardan `#[tauri::command]` olarak yazılmış | **164** | `commands.rs`, `#[cfg(test)]` dışı |
-| Frontend kaynak dosyası | **103** | `src/**/*.{js,vue}`, spec dosyaları hariç |
-| Bunlardan `@tauri-apps` kullanan | **16** | aynı küme içinde metin taraması |
+| Toplam IPC komutu | **182** | `contracts/ipc.json` → `commands` (179 Rust + 3 `frontend-plugin`) |
+| Bunlardan `#[tauri::command]` olarak yazılmış | **178** | `commands.rs`, `#[cfg(test)]` dışı |
+| Frontend kaynak dosyası | **105** | `src/**/*.{js,vue}`, spec dosyaları hariç |
+| Bunlardan `@tauri-apps` kullanan | **17** | aynı küme içinde metin taraması |
 | **Veri katmanının geçtiği fonksiyon** | **1** (`src/lib/ipc.js` → `call()`) | `invoke(` `ipc.js` dışında **0** yerde geçiyor |
-| `ipc.js` sarmalayıcısı | **161** | `api` nesnesinin üye sayısı |
-| Rust kaynağı | **64 modül, 45.464 satır** | `src-tauri/src/*.rs` |
+| `ipc.js` sarmalayıcısı | **175** | `api` nesnesinin üye sayısı |
+| Rust kaynağı | **71 modül, 51.621 satır** | `src-tauri/src/*.rs` |
 
 Elle sınıflandırma, kapıya dahil değil — yöntemi yazılı ki bir sonraki okuyucu
 yeniden üretebilsin:

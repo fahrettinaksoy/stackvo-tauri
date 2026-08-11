@@ -1,0 +1,9 @@
+{
+  "apiVersion": "stackvo.dev/package/v1",
+  "service": "mysql",
+  "category": "databases",
+  "name": { "en": "MySQL" },
+  "maintainer": "stackvo",
+  "recommendedVersion": "8.0",
+  "legacyEnvPrefix": "SERVICE_MYSQL_"
+}

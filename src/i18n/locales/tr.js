@@ -42,6 +42,7 @@ export default {
     dashboard: 'Panel',
     projects: 'Projeler',
     services: 'Servisler',
+    market: 'Market',
     logs: 'Loglar',
     dumps: 'Dump’lar',
     mail: 'Mail',
@@ -142,6 +143,45 @@ export default {
     addToHosts: 'hosts dosyasına ekleyin:',
   },
 
+  marketView: {
+    title: 'Market',
+    subtitle: 'Servisler nereden geliyor, ve bu makinede hangi sürümler var',
+    catalogue: 'Katalog',
+    chooseSource: 'Bir kaynak seçin',
+    noCatalogue: 'Henüz katalog yok',
+    noCatalogueBody:
+      'StackVo içinde hiçbir servis taşımıyor. Bir kaynak gösterin — çevrimdışı bir paket ya da servis paketleri deposunun bir kopyası — katalog oradan okunur.',
+    sourceLine: '{location} · {packages} paket yayında, {installed} sürüm kurulu',
+    unsigned: 'imza doğrulanmıyor',
+    available: 'Yayında olanlar',
+    showOlder: 'Desteği bitmiş sürümleri göster',
+    multiVersion: 'Birden çok sürüm çalıştırır',
+    versionCount: '{n} sürüm',
+    hiddenCount: '{n} gizli',
+    recommended: 'Önerilen',
+    support: {
+      supported: 'Destekli',
+      deprecated: 'Kullanımdan kalkıyor',
+      eol: 'Desteği bitti',
+    },
+    install: 'Kur',
+    uninstall: 'Kaldır',
+    addInstance: 'Örnek ekle',
+    inUse: 'Bu sürümü bir örnek kullanıyor',
+    instances: 'Örnekler',
+    noInstances: 'Henüz kurulu bir şey yok',
+    noInstancesBody:
+      'Yukarıdan bir paket kurun, sonra ondan bir örnek ekleyin. Bir servisin iki sürümü yan yana çalışabilir; her biri kendi verisi ve kendi portuyla.',
+    colInstance: 'Örnek',
+    colContainer: 'Konteyner',
+    colPorts: 'Portlar',
+    colEnabled: 'Açık',
+    restart: 'Yeniden başlat',
+    primary: 'Birincil',
+    packageMissing: 'Paket yok',
+    makePrimary: 'Birincil yap',
+    removeInstance: 'Kaldır',
+  },
   servicesView: {
     disableTitle: '{name} devre dışı bırakılsın mı?',
     disableBody: 'Bu servisten geriye hiçbir şey kalmaz. Şunlar silinir:',
@@ -1640,6 +1680,19 @@ export default {
       'generate_run kullanın; `verify` modu diskteki duruma göre sapmayı yine de raporlar.',
     mcpNeedsAllowWrites:
       'Yazma araçlarını etkinleştirmek için --allow-writes ile yeniden başlatın.',
+    portRangeExhausted:
+      'Bu servisin istediği portun yakınında bir port boşaltın, ya da örneğe ayarlarından açıkça bir port verin.',
+    packagePathsStayInside: 'Bir paket yalnızca kendi dizinindeki dosyaları adlandırabilir.',
+    packageContentChanged: 'Paketi yeniden kurun; dosyaları, manifestin yazıldığı dosyalar değil.',
+    packageNotInstalled: 'Bu sürümün paketini kurun, ya da ona ihtiyaç duyan örneği kaldırın.',
+    packageRefusedByPolicy:
+      "Bu paket, StackVo'nun bir pakete vermediği bir şey istiyor. Yayınlayan kişiye bildirin.",
+    packageNotInRegistry: 'Katalogu yenileyin, ya da listelediği bir sürüm seçin.',
+    registryWentBackwards:
+      'Bu kaynağın sunduğu katalog, burada olandan daha eski. Kullanmadan önce kaynağı kontrol edin.',
+    removeTheInstanceFirst: 'Bu paketi hâlâ bir örnek kullanıyor. Önce onu kaldırın, sonra paketi.',
+    serviceIsSingleInstance:
+      'Bu servis aynı anda tek sürüm çalıştırır. Önce elinizdeki örneği kaldırın.',
   },
 
   errors: {
