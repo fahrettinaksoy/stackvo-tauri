@@ -30,9 +30,16 @@
 //!
 //! So [`Trust`] is the shape of that link, `Trust::Unsigned` is the only value
 //! it can take today, and [`refresh`] **refuses** when a caller asks for a
-//! signed index. A machine using a local source is unaffected; a machine
-//! pointed at a network source will be, and that is the correct order — the
-//! network source is Faz 5.
+//! signed index.
+//!
+//! Faz 5 has since landed [`HttpSource`], and that changes who this costs. A
+//! directory the user picked is trusted on the strength of where it came from,
+//! and that is honest. A URL is not: over HTTPS the transport is now the *whole*
+//! of what stands between an index and whoever is on the path, which is why
+//! `HttpSource` refuses `http://` outright rather than leaving it to the
+//! server. An organisation that will not take that trade sets
+//! `policy.market.requireSignature`, and gets a refusal instead of a
+//! downgrade — the one policy key that can only tighten.
 //!
 //! ## Install is atomic or it did not happen
 //!
@@ -200,10 +207,15 @@ impl Registry {
 
 /// Where bytes come from.
 ///
-/// A trait because the answer changes in Faz 5 and nothing above it should
-/// notice: a directory today, HTTPS then, and an offline bundle for a machine
-/// with no network at all — which ADR 0011 leaves as the **only** way such a
-/// machine gets a catalogue.
+/// A trait, and three answers behind it: a directory ([`LocalSource`]), HTTPS
+/// ([`HttpSource`]), and an offline bundle — which is a directory, and is why
+/// air-gapped installation needed no third implementation. ADR 0011 leaves that
+/// bundle as the **only** way a machine with no network gets a catalogue.
+///
+/// Synchronous on purpose. [`crate::pkg`] and [`crate::render`] read this trait
+/// and neither has any business knowing what an async runtime is; the cost is
+/// pushed to the one implementation that needs one, and to its callers — see
+/// [`HttpSource`].
 pub trait Source {
     /// A name for messages: a path, a URL.
     fn describe(&self) -> String;
@@ -244,6 +256,287 @@ impl Source for LocalSource {
     }
 }
 
+/// The most any single file from a source may be.
+///
+/// T-8 in `docs/servis-market-mimarisi.md` §4.1. A manifest is a few kilobytes
+/// and the index is a few hundred; a body that keeps arriving is a disk that
+/// keeps filling, and the check has to be on the bytes read rather than on
+/// `Content-Length`, which the sender chooses.
+const MOST_BYTES: u64 = 8 * 1024 * 1024;
+
+/// A catalogue served over HTTPS. Faz 5.
+///
+/// ## `https` only, and it is checked here
+///
+/// Not left to the server, and not a matter of what somebody types. The chain
+/// in §4.2 starts at a signature that does not exist yet (ADR 0015), so
+/// transport is the only thing standing between an index and whoever is on the
+/// path — and `http://` would remove even that. A URL that does not start
+/// `https://` is refused before a request is made.
+///
+/// ## The system proxy is used, and that is the opposite of `mail.rs`
+///
+/// `mail.rs` builds its client with `no_proxy()` because it only ever talks to
+/// 127.0.0.1 and a company proxy has no business in that. This is the exact
+/// inverse: a managed machine reaches the outside world *through* the proxy,
+/// and that is the machine `market.registryUrl` exists for. The `system-proxy`
+/// feature is process-wide; here it is wanted.
+///
+/// ## ETag, so the second refresh is cheap and honest
+///
+/// The index is the file that is fetched again and again and changes rarely. A
+/// `304` is not a failure and not an empty answer — it means the cached copy is
+/// current, and the caller keeps it. Recorded next to the cache rather than in
+/// it, because a validator is about a transfer and the index is about a
+/// catalogue.
+#[derive(Debug)]
+pub struct HttpSource {
+    base: String,
+    etags: PathBuf,
+}
+
+/// The URL somebody pastes, turned into the URL files are actually served from.
+///
+/// `https://github.com/stackvo/stackvo-service-packages` is the address of a
+/// *page*. Joining `registry.json` onto it asks GitHub for a file in its web UI
+/// and gets an HTML 404 — a correct refusal to a question nobody meant to ask,
+/// and it is the first thing anybody pastes, because it is the address in the
+/// browser bar and the one written in the docs.
+///
+/// So a repository URL is translated to the raw base rather than refused:
+///
+/// ```text
+///   github.com/<owner>/<repo>                → raw.githubusercontent.com/<owner>/<repo>/HEAD
+///   github.com/<owner>/<repo>/tree/<ref>     → raw.githubusercontent.com/<owner>/<repo>/<ref>
+/// ```
+///
+/// **`HEAD`, not `main`.** GitHub's raw host resolves `HEAD` to whatever the
+/// repository's own default branch is, so this is a lookup rather than a guess —
+/// and guessing was the alternative: `main` then `master` on a 404, which gets
+/// the common cases and silently mis-reports the third one as "not found" when
+/// the truth is "wrong branch". A `/tree/<ref>` in the pasted URL is an explicit
+/// choice and is honoured.
+///
+/// Nothing else is rewritten. A CDN, a Pages site, a corporate file server —
+/// ADR 0013's "any static host" — is taken exactly as given, because there is no
+/// pattern to recognise and inventing one would be this function guessing at
+/// somebody's infrastructure.
+pub fn resolve_location(location: &str) -> String {
+    let trimmed = location.trim().trim_end_matches('/');
+    // `www.` is stripped first so the host appears once. Two literals for one
+    // host is two things to keep in step, and `privacy_claims.rs` reads them as
+    // two places this app can reach.
+    let without_scheme = trimmed.strip_prefix("https://").unwrap_or(trimmed);
+    let host_and_path = without_scheme.strip_prefix("www.").unwrap_or(without_scheme);
+    let Some(path) = host_and_path.strip_prefix("github.com/") else {
+        return trimmed.to_string();
+    };
+    if !trimmed.starts_with("https://") {
+        return trimmed.to_string();
+    }
+
+    // `.git` is on the clone URL, which is the other thing a person copies.
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let mut parts = path.split('/');
+    let (Some(owner), Some(repo)) = (parts.next(), parts.next()) else {
+        return trimmed.to_string();
+    };
+    if owner.is_empty() || repo.is_empty() {
+        return trimmed.to_string();
+    }
+
+    let reference = match (parts.next(), parts.next()) {
+        (Some("tree" | "blob"), Some(git_ref)) if !git_ref.is_empty() => git_ref,
+        _ => "HEAD",
+    };
+    format!("https://raw.githubusercontent.com/{owner}/{repo}/{reference}")
+}
+
+impl HttpSource {
+    /// `base` is the directory the registry lives in, trailing slash optional.
+    pub fn new(root: &Path, base: &str) -> Result<Self> {
+        let base = resolve_location(base);
+        if !base.starts_with("https://") {
+            return Err(Error::new(
+                Code::InvalidInput,
+                format!(
+                    "{base:?} is not an https:// address. Nothing verifies a signature yet \
+                     (ADR 0015), so the transport is the whole of what stands between this \
+                     catalogue and whoever is on the path"
+                ),
+            )
+            .with_hint(crate::hints::REGISTRY_MUST_BE_HTTPS));
+        }
+        Ok(Self {
+            base,
+            etags: dir(root).join("etags.json"),
+        })
+    }
+
+    fn cached_etag(&self, relative: &str) -> Option<String> {
+        let text = std::fs::read_to_string(&self.etags).ok()?;
+        let map: std::collections::BTreeMap<String, String> = serde_json::from_str(&text).ok()?;
+        map.get(relative).cloned()
+    }
+
+    fn remember_etag(&self, relative: &str, etag: &str) {
+        let mut map: std::collections::BTreeMap<String, String> =
+            std::fs::read_to_string(&self.etags)
+                .ok()
+                .and_then(|t| serde_json::from_str(&t).ok())
+                .unwrap_or_default();
+        map.insert(relative.to_string(), etag.to_string());
+        if let Some(parent) = self.etags.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        // Best effort on purpose. A validator that could not be written means
+        // the next refresh transfers a file it did not have to; failing the
+        // refresh over it would trade a wasted request for a broken feature.
+        if let Ok(text) = serde_json::to_string_pretty(&map) {
+            let _ = crate::atomic::write(&self.etags, &format!("{text}\n"));
+        }
+    }
+
+    /// Where a `304` sends the caller: to the copy already on disk.
+    fn from_cache(&self, root_relative: &str) -> Option<Vec<u8>> {
+        let path = self.etags.parent()?.join(root_relative);
+        std::fs::read(path).ok()
+    }
+}
+
+/// One HTTPS GET, run on the caller's thread.
+///
+/// `Source::fetch` is synchronous because everything above it is, and making
+/// the trait async would push a runtime into `pkg` and `render`, neither of
+/// which has any business knowing where bytes came from. The command layer runs
+/// the whole refresh inside `spawn_blocking`, so this is a blocking thread and
+/// `Handle::block_on` is allowed on it — calling it from a runtime thread would
+/// panic, which is a real constraint on callers and is why it is stated here.
+fn get(url: &str, etag: Option<&str>) -> Result<Option<(Vec<u8>, Option<String>)>> {
+    use futures_util::StreamExt as _;
+
+    let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+        Error::new(
+            Code::NetworkError,
+            "the network source needs a Tokio runtime and was called outside one",
+        )
+    })?;
+
+    let url = url.to_string();
+    let etag = etag.map(str::to_string);
+    handle.block_on(async move {
+        let client = reqwest::Client::builder()
+            .user_agent(concat!("stackvo/", env!("CARGO_PKG_VERSION")))
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(|e| Error::new(Code::NetworkError, format!("building an HTTP client: {e}")))?;
+
+        let mut request = client.get(&url);
+        if let Some(etag) = &etag {
+            request = request.header(reqwest::header::IF_NONE_MATCH, etag);
+        }
+
+        let response = request.send().await.map_err(|e| {
+            Error::new(
+                Code::NetworkError,
+                // The URL, always. "the catalogue could not be reached" sends
+                // somebody to support; the address they can paste into a
+                // browser is the whole of what they can act on.
+                format!("{url} could not be reached: {e}"),
+            )
+            .with_hint(crate::hints::REGISTRY_UNREACHABLE)
+        })?;
+
+        if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            // 404 gets its own sentence. It is the answer a *working* server
+            // gives to an address that is one level off — the repository's web
+            // page rather than the directory its files are served from — and
+            // "could not be reached" sends somebody to look at their network
+            // for a problem that is in the address bar.
+            let hint = if response.status() == reqwest::StatusCode::NOT_FOUND {
+                crate::hints::REGISTRY_ADDRESS_IS_A_DIRECTORY
+            } else {
+                crate::hints::REGISTRY_UNREACHABLE
+            };
+            return Err(
+                Error::new(Code::NetworkError, format!("{url} answered {}", response.status()))
+                    .with_hint(hint),
+            );
+        }
+
+        let tag = response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+
+        // Streamed and counted rather than `bytes()`. `Content-Length` is
+        // something the sender writes; this is the number of bytes that
+        // actually arrived, and it is the only one a limit can be about.
+        let mut body = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| {
+                Error::new(Code::NetworkError, format!("{url} stopped sending: {e}"))
+            })?;
+            if body.len() as u64 + chunk.len() as u64 > MOST_BYTES {
+                return Err(Error::new(
+                    Code::Forbidden,
+                    format!("{url} is larger than {MOST_BYTES} bytes and was abandoned"),
+                )
+                .with_hint(crate::hints::PACKAGE_REFUSED_BY_POLICY));
+            }
+            body.extend_from_slice(&chunk);
+        }
+
+        Ok(Some((body, tag)))
+    })
+}
+
+impl Source for HttpSource {
+    fn describe(&self) -> String {
+        self.base.clone()
+    }
+
+    fn fetch(&self, relative: &str) -> Result<Vec<u8>> {
+        // The same rule a directory source lives under. A path is joined onto
+        // a URL here rather than concatenated blindly: `..` in an index would
+        // otherwise walk the *server's* tree, and an index is data.
+        checked_relative(relative)?;
+        let url = format!("{}/{relative}", self.base);
+
+        match get(&url, self.cached_etag(relative).as_deref())? {
+            Some((body, tag)) => {
+                if let Some(tag) = tag {
+                    self.remember_etag(relative, &tag);
+                }
+                Ok(body)
+            }
+            // 304. The server agrees with what is here, so what is here is the
+            // answer — and if it is somehow gone, the validator was wrong and
+            // asking again without it is the recovery.
+            None => match self.from_cache(relative) {
+                Some(body) => Ok(body),
+                None => {
+                    let (body, tag) = get(&url, None)?.ok_or_else(|| {
+                        Error::new(
+                            Code::NetworkError,
+                            format!("{url} answered 304 to a request with no validator"),
+                        )
+                    })?;
+                    if let Some(tag) = tag {
+                        self.remember_etag(relative, &tag);
+                    }
+                    Ok(body)
+                }
+            },
+        }
+    }
+}
+
 fn checked_relative(path: &str) -> Result<()> {
     let bad = |why: &str| {
         Err(Error::new(Code::InvalidInput, format!("{path:?} {why}"))
@@ -278,8 +571,10 @@ pub enum Trust {
     /// Accept an index on the strength of where it came from.
     ///
     /// Honest for a local directory the user chose, and for the offline bundle
-    /// they were handed. Not honest for a network source, which is why Faz 5
-    /// cannot ship before the other variant exists.
+    /// they were handed. Weaker for a network source, where it means the
+    /// catalogue is trusted on the strength of TLS and the address — which is
+    /// why `HttpSource` will not accept `http://`, and why
+    /// `policy.market.requireSignature` exists for anybody who needs more.
     Unsigned,
     /// Require a signature from a pinned key. **Not implemented**, and
     /// [`refresh`] says so rather than quietly downgrading — a security check
@@ -297,8 +592,8 @@ pub enum Trust {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceRef {
-    /// `local` today. The field exists so Faz 5's `https` is a value rather
-    /// than a schema change.
+    /// `local` or `https`. A field rather than an enum because it is written to
+    /// disk and read back by a build that may be older than the value.
     pub kind: String,
     pub location: String,
 }
@@ -333,16 +628,26 @@ pub fn remembered(root: &Path) -> Result<Option<SourceRef>> {
 }
 
 /// Turn a remembered reference back into something that can fetch.
-pub fn open(reference: &SourceRef) -> Result<Box<dyn Source>> {
+pub fn open(root: &Path, reference: &SourceRef) -> Result<Box<dyn Source>> {
     match reference.kind.as_str() {
         "local" => Ok(Box::new(LocalSource::new(&reference.location))),
+        "https" => Ok(Box::new(HttpSource::new(root, &reference.location)?)),
         other => Err(Error::new(
             Code::Unsupported,
-            format!(
-                "{other:?} is not a source this build can read. Only `local` exists today: \
-                 the network source is Faz 5 and waits on the key ceremony ADR 0015 names"
-            ),
+            format!("{other:?} is not a source this build can read"),
         )),
+    }
+}
+
+/// Which kind a location is, without asking the caller to say.
+///
+/// A user pastes a URL or picks a directory; making them also choose a radio
+/// button would be asking them to restate something the string already says.
+pub fn kind_of(location: &str) -> &'static str {
+    if location.trim().starts_with("https://") || location.trim().starts_with("http://") {
+        "https"
+    } else {
+        "local"
     }
 }
 
@@ -454,11 +759,26 @@ pub fn install(
     registry: &Registry,
     service: &str,
     version: &str,
+    market: &crate::policy::Market,
 ) -> Result<Installed> {
     let row = registry.version(service, version).ok_or_else(|| {
         Error::not_found(format!("{service}@{version} in the index"))
             .with_hint(crate::hints::PACKAGE_NOT_IN_REGISTRY)
     })?;
+
+    // The organisation's list, before anything is fetched. Passed in rather
+    // than read from the global: this is the function that puts somebody else's
+    // bytes on the disk, and a check it could be called without is a check.
+    if !market.allows_package(service) {
+        return Err(Error::new(
+            Code::Forbidden,
+            format!(
+                "{service} is not on this machine's list of allowed packages ({})",
+                crate::policy::current().origin()
+            ),
+        )
+        .with_hint(crate::hints::PACKAGE_REFUSED_BY_POLICY));
+    }
 
     // ---- the manifest, as bytes first -----------------------------------
     let manifest_bytes = source.fetch(&format!("{}/manifest.json", row.path))?;
@@ -491,6 +811,24 @@ pub fn install(
                 manifest.service, manifest.version
             ),
         ));
+    }
+
+    // The image the manifest asks for, against the registries the organisation
+    // allows — checked here rather than at run time because a package whose
+    // image will be refused is a package that should never have been installed.
+    // Only readable after the manifest has been parsed, which is why it is not
+    // beside the package check above.
+    let reference = manifest.image.reference();
+    if !market.allows_registry(&reference) {
+        return Err(Error::new(
+            Code::Forbidden,
+            format!(
+                "{service}@{version} runs {reference}, which is not from a registry this \
+                 machine allows ({})",
+                crate::policy::current().origin()
+            ),
+        )
+        .with_hint(crate::hints::PACKAGE_REFUSED_BY_POLICY));
     }
 
     // ---- into a scratch directory beside the destination -----------------
@@ -645,6 +983,11 @@ mod tests {
     use super::*;
     use crate::pkg::Catalogue;
 
+    /// A machine nobody administers, which is what almost every one of them is.
+    fn unmanaged() -> crate::policy::Market {
+        crate::policy::Market::default()
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let dir =
             std::env::temp_dir().join(format!("stackvo-market-{name}-{}", std::process::id()));
@@ -760,7 +1103,7 @@ mod tests {
         let source = LocalSource::new(publish(&root, 1));
         let registry = refresh(&root, &source, Trust::Unsigned, None).unwrap();
 
-        let done = install(&root, &source, &registry, "mysql", "8.0").unwrap();
+        let done = install(&root, &source, &registry, "mysql", "8.0", &unmanaged()).unwrap();
         assert_eq!(done.files, 3, "manifest, fragment, config");
 
         let tree = pkg::Tree::open(&dir(&root)).unwrap();
@@ -786,7 +1129,7 @@ mod tests {
         );
         std::fs::write(&path, text).unwrap();
 
-        let err = install(&root, &source, &registry, "mysql", "8.0").unwrap_err();
+        let err = install(&root, &source, &registry, "mysql", "8.0", &unmanaged()).unwrap_err();
         assert!(err.message.contains("hashes to"), "{}", err.message);
         assert!(
             !packages_dir(&root)
@@ -811,7 +1154,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(install(&root, &source, &registry, "mysql", "8.0").is_err());
+        assert!(install(&root, &source, &registry, "mysql", "8.0", &unmanaged()).is_err());
         assert!(!packages_dir(&root)
             .join("databases/mysql/versions/8.0")
             .exists());
@@ -866,7 +1209,7 @@ mod tests {
         let root = scratch("uninstall");
         let source = LocalSource::new(publish(&root, 1));
         let registry = refresh(&root, &source, Trust::Unsigned, None).unwrap();
-        install(&root, &source, &registry, "mysql", "8.0").unwrap();
+        install(&root, &source, &registry, "mysql", "8.0", &unmanaged()).unwrap();
 
         uninstall(&root, "databases", "mysql", "8.0").unwrap();
         assert!(pkg::Tree::open(&dir(&root)).unwrap().services().is_empty());
@@ -883,6 +1226,205 @@ mod tests {
                 .unwrap_err()
                 .code,
             Code::NotFound
+        );
+    }
+
+    /// The organisation's list is checked before a single byte is fetched. A
+    /// package that will be refused should not be downloaded first — and the
+    /// error names where the list came from, because the only action the person
+    /// at the keyboard can take is to show that path to whoever wrote it.
+    #[test]
+    fn a_package_outside_the_allow_list_is_refused_before_it_is_fetched() {
+        let root = scratch("policy-package");
+        let source = LocalSource::new(publish(&root, 1));
+        let registry = refresh(&root, &source, Trust::Unsigned, None).unwrap();
+
+        let market = crate::policy::Market {
+            allowed_packages: ["postgres".to_string()].into_iter().collect(),
+            ..Default::default()
+        };
+        let err = install(&root, &source, &registry, "mysql", "8.0", &market).unwrap_err();
+
+        assert_eq!(err.code, Code::Forbidden);
+        assert!(err.message.contains("mysql"), "{}", err.message);
+        assert!(
+            !packages_dir(&root).join("databases/mysql/versions/8.0").exists(),
+            "a refused package left files behind"
+        );
+    }
+
+    /// And the registry list is checked after the manifest is parsed, because
+    /// that is the first moment the image reference exists.
+    #[test]
+    fn an_image_from_an_unlisted_registry_is_refused() {
+        let root = scratch("policy-registry");
+        let source = LocalSource::new(publish(&root, 1));
+        let registry = refresh(&root, &source, Trust::Unsigned, None).unwrap();
+
+        let market = crate::policy::Market {
+            allowed_registries: ["registry.corp.example".to_string()].into_iter().collect(),
+            ..Default::default()
+        };
+        let err = install(&root, &source, &registry, "mysql", "8.0", &market).unwrap_err();
+
+        assert_eq!(err.code, Code::Forbidden);
+        assert!(
+            !packages_dir(&root).join("databases/mysql/versions/8.0").exists(),
+            "a refused package left files behind"
+        );
+    }
+
+    // ------------------------------------------------------ the network source
+
+    /// `http://` is refused where a person can still do something about it,
+    /// not at the moment a request would have gone out. Nothing verifies a
+    /// signature yet (ADR 0015), so the transport is the whole of what stands
+    /// between an index and whoever is on the path.
+    #[test]
+    fn a_plain_http_catalogue_is_refused_before_anything_is_requested() {
+        let root = scratch("http-refused");
+        let err = HttpSource::new(&root, "http://packages.example/stackvo").unwrap_err();
+        assert_eq!(err.code, Code::InvalidInput);
+        assert_eq!(err.hint_key.as_deref(), Some("registryMustBeHttps"));
+
+        assert!(HttpSource::new(&root, "https://packages.example/stackvo").is_ok());
+    }
+
+    /// A trailing slash is a thing people paste, and two of them in a URL is a
+    /// 404 from a server that is working perfectly.
+    #[test]
+    fn a_trailing_slash_does_not_become_a_double_one() {
+        let root = scratch("http-slash");
+        let source = HttpSource::new(&root, "https://packages.example/stackvo/").unwrap();
+        assert_eq!(source.describe(), "https://packages.example/stackvo");
+    }
+
+    /// The same rule a directory source lives under, for the same reason: an
+    /// index is data, and a path in it must not walk the *server's* tree either.
+    #[test]
+    fn a_network_source_refuses_a_path_that_walks_out() {
+        let root = scratch("http-traversal");
+        let source = HttpSource::new(&root, "https://packages.example/stackvo").unwrap();
+        let err = source.fetch("../../etc/passwd").unwrap_err();
+        assert_eq!(err.code, Code::InvalidInput);
+    }
+
+    /// Which kind a location is comes from the string, not from a radio button
+    /// the user would have to agree with what they just typed.
+    #[test]
+    fn a_location_says_what_kind_it_is() {
+        assert_eq!(kind_of("https://packages.stackvo.dev"), "https");
+        assert_eq!(kind_of("  https://packages.stackvo.dev "), "https");
+        assert_eq!(kind_of("/opt/stackvo/packages"), "local");
+        assert_eq!(kind_of("C:\\packages"), "local");
+    }
+
+    /// A validator is remembered per file and survives a reopen — the whole
+    /// point of it is the *second* refresh.
+    #[test]
+    fn an_etag_is_remembered_per_file() {
+        let root = scratch("http-etag");
+        let source = HttpSource::new(&root, "https://packages.example/stackvo").unwrap();
+        assert_eq!(source.cached_etag("registry.json"), None);
+
+        source.remember_etag("registry.json", "\"abc\"");
+        source.remember_etag("packages/databases/mysql/versions/8.0/manifest.json", "\"def\"");
+
+        let reopened = HttpSource::new(&root, "https://packages.example/stackvo").unwrap();
+        assert_eq!(reopened.cached_etag("registry.json").as_deref(), Some("\"abc\""));
+        assert_eq!(
+            reopened
+                .cached_etag("packages/databases/mysql/versions/8.0/manifest.json")
+                .as_deref(),
+            Some("\"def\"")
+        );
+        assert_eq!(reopened.cached_etag("nothing.json"), None);
+    }
+
+    /// Blocking on a runtime handle from a runtime thread panics, so the
+    /// command layer runs the whole refresh in `spawn_blocking`. Called from
+    /// nowhere at all it has no handle to block on, and it says so instead of
+    /// unwrapping — this test is the one that would have caught it.
+    #[test]
+    fn a_network_fetch_outside_a_runtime_reports_rather_than_panics() {
+        let root = scratch("http-noruntime");
+        let source = HttpSource::new(&root, "https://packages.invalid/stackvo").unwrap();
+        let err = source.fetch("registry.json").unwrap_err();
+        assert_eq!(err.code, Code::NetworkError);
+    }
+
+    // ------------------------------------------ the address people paste
+
+    /// The repository's web page is the address in the browser bar and the one
+    /// in the docs, so it is the one that gets pasted — and joining
+    /// `registry.json` onto it asks GitHub for a file in its web UI.
+    #[test]
+    fn a_github_repository_url_becomes_the_raw_base() {
+        assert_eq!(
+            resolve_location("https://github.com/stackvo/stackvo-service-packages"),
+            "https://raw.githubusercontent.com/stackvo/stackvo-service-packages/HEAD"
+        );
+        // The three other shapes of the same copy: a trailing slash, the clone
+        // URL, and the `www` host.
+        assert_eq!(
+            resolve_location("https://github.com/stackvo/stackvo-service-packages/"),
+            "https://raw.githubusercontent.com/stackvo/stackvo-service-packages/HEAD"
+        );
+        assert_eq!(
+            resolve_location("https://github.com/stackvo/stackvo-service-packages.git"),
+            "https://raw.githubusercontent.com/stackvo/stackvo-service-packages/HEAD"
+        );
+        assert_eq!(
+            resolve_location("https://www.github.com/stackvo/stackvo-service-packages"),
+            "https://raw.githubusercontent.com/stackvo/stackvo-service-packages/HEAD"
+        );
+    }
+
+    /// `HEAD` is a lookup, not a guess — GitHub's raw host resolves it to the
+    /// repository's own default branch. A branch named in the URL is an
+    /// explicit choice and wins.
+    #[test]
+    fn a_branch_in_the_url_is_honoured_and_otherwise_head_decides() {
+        assert_eq!(
+            resolve_location("https://github.com/stackvo/stackvo-service-packages/tree/next"),
+            "https://raw.githubusercontent.com/stackvo/stackvo-service-packages/next"
+        );
+        assert_eq!(
+            resolve_location("https://github.com/o/r/blob/v2"),
+            "https://raw.githubusercontent.com/o/r/v2"
+        );
+        assert!(resolve_location("https://github.com/o/r").ends_with("/HEAD"));
+    }
+
+    /// Everything else is taken as given. ADR 0013 says any static host, and a
+    /// second pattern here would be this function guessing at somebody's
+    /// infrastructure.
+    #[test]
+    fn every_other_address_is_left_alone() {
+        for address in [
+            "https://packages.stackvo.dev",
+            "https://stackvo.github.io/stackvo-service-packages",
+            "https://files.corp.example/mirrors/stackvo",
+            "/opt/stackvo/packages",
+        ] {
+            assert_eq!(resolve_location(address), address);
+        }
+        // A trailing slash still goes, because it is joined onto.
+        assert_eq!(resolve_location("https://packages.stackvo.dev/"), "https://packages.stackvo.dev");
+        // Not a repository: no owner, or no name.
+        assert_eq!(resolve_location("https://github.com/stackvo"), "https://github.com/stackvo");
+    }
+
+    /// And the translation is what the source actually uses, not advice printed
+    /// beside it.
+    #[test]
+    fn the_source_fetches_from_the_translated_base() {
+        let root = scratch("http-github");
+        let source =
+            HttpSource::new(&root, "https://github.com/stackvo/stackvo-service-packages").unwrap();
+        assert_eq!(
+            source.describe(),
+            "https://raw.githubusercontent.com/stackvo/stackvo-service-packages/HEAD"
         );
     }
 }

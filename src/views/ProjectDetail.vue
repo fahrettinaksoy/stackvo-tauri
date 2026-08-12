@@ -580,19 +580,38 @@ onUnmounted(() => {
         <v-icon>mdi-play</v-icon>
         <v-tooltip activator="parent" location="bottom">{{ t('actions.start') }}</v-tooltip>
       </v-btn>
+      <!-- Always here, not only while the project is unbuilt.
+           It was the `v-else` of stop/start, so it vanished the moment there
+           was an image — and that is the moment it starts mattering, because
+           the Dockerfile is what changes when the PHP version, an extension or
+           a tool does. The only way to rebuild was to stop the project first,
+           which is a step nothing on screen asked for.
+
+           One command, three acts: regenerate, build the image, recreate the
+           container. Restart shares none of them, and the badge on the Projects
+           table used to do only the first. -->
+      <!-- `icon` as a flag with the glyph as a child, not `icon="mdi-…"`.
+           The prop form is only read when the default slot is empty, and this
+           button has to carry a tooltip in that slot — so the prop form drew a
+           button with nothing in it. Every other control in this bar is written
+           this way for the same reason. -->
       <v-btn
-        v-else
-        icon="mdi-hammer-wrench"
+        icon
         variant="tonal"
         size="small"
         elevation="0"
         color="info"
         class="mr-2"
-        :aria-label="t('actions.build')"
+        :aria-label="project.built ? t('actions.rebuild') : t('actions.build')"
         :disabled="!app.engineUp || !project.manifestValid"
         :loading="ops.isBusy(name)"
         @click="act((n) => api.projectBuild(n))"
-      />
+      >
+        <v-icon>mdi-hammer-wrench</v-icon>
+        <v-tooltip activator="parent" location="bottom">
+          {{ project.built ? t('detail.rebuildHint') : t('actions.build') }}
+        </v-tooltip>
+      </v-btn>
       <v-btn
         v-if="running"
         icon

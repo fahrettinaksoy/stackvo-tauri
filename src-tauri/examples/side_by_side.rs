@@ -30,7 +30,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use stackvo_desktop_lib::{instances, market, pkg, ports, render};
+use stackvo_desktop_lib::{instances, market, pkg, policy, ports, render};
 
 const SERVICE: &str = "mysql";
 const VERSIONS: [&str; 2] = ["8.0", "9.4"];
@@ -104,7 +104,14 @@ fn attempt(root: &Path, packages: &Path) -> Result<(), String> {
     println!("  catalogue  sequence {}", registry.sequence);
 
     for version in VERSIONS {
-        let done = market::install(root, &source, &registry, SERVICE, version)
+        let done = market::install(
+            root,
+            &source,
+            &registry,
+            SERVICE,
+            version,
+            policy::current().market(),
+        )
             .map_err(|e| format!("installing {SERVICE}@{version}: {}", e.message))?;
         println!("  installed  {SERVICE}@{version}  ({} files)", done.files);
     }

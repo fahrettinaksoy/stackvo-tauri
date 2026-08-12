@@ -373,7 +373,7 @@
             "type": "string"
           },
           "minItems": 1,
-          "description": "Compose's healthcheck test, verbatim. Written as a list because the string form is run through a shell."
+          "description": "Compose's healthcheck test, verbatim. Written as a list because the string form is run through a shell. The first element is a keyword — CMD runs the rest as an argument vector, CMD-SHELL runs one string through /bin/sh, NONE disables a healthcheck the image itself shipped. The app writes this block into the rendered service; a compose fragment declaring its own `healthcheck:` is refused by contracts/compose-policy.json."
         },
         "interval": {
           "type": "string",
@@ -452,6 +452,9 @@
           },
           "volumes": {
             "$ref": "#/properties/volumes"
+          },
+          "health": {
+            "$ref": "#/properties/health"
           }
         }
       }

@@ -134,6 +134,10 @@ export default {
     colConfiguration: 'Yapılandırma',
     colStopStart: 'Durdur/Başlat',
     colRestart: 'Yeniden Başlat',
+    colRebuild: 'Yeniden Derle',
+    rebuild: 'Yeniden derle',
+    rebuildHint:
+      'Dockerfile’ı stackvo.json’dan yeniden üretir, imajı derler ve konteyneri yeniden yaratır. Yeniden başlatmak bunların hiçbirini yapmaz.',
     colTerminal: 'Terminal',
     colOpen: 'Tarayıcıda aç',
     colDetail: 'Detay',
@@ -143,11 +147,34 @@ export default {
     addToHosts: 'hosts dosyasına ekleyin:',
   },
 
+  catalogueSettings: {
+    title: 'Servis kataloğu',
+    desc: 'Servis paketlerinin nereden çekildiği, ve o adresin çalışıp çalışmadığı',
+    current: '{location} · {packages} paket yayımlanmış, bu makinede {installed} sürüm kurulu',
+    none: 'Bu makinede henüz katalog yok. StackVo hiçbir servisi kendi içinde taşımıyor, yani biri çekilene kadar hiçbir şey kullanılabilir değil.',
+    policyBundle: 'Bir yönetici kaynağı {path} paketine sabitlemiş. Aşağıdaki adres yok sayılıyor.',
+    policyMirror: 'Bir yönetici kaynağı {url} adresine sabitlemiş. Aşağıdaki adres yok sayılıyor.',
+    signatureRequired:
+      'Bu makine imzalı katalog istiyor ve henüz yayımlanmış bir imzalama anahtarı yok; çekme, imzasıza düşmek yerine reddediliyor.',
+    address: 'Katalog adresi',
+    addressHint:
+      'Bir https:// adresi ya da bir klasör. GitHub depo adresi, dosyaların gerçekte sunulduğu yere çevrilir.',
+    test: 'Test et',
+    pickFolder: 'Klasör seç',
+    use: 'Çek ve kullan',
+    ok: 'Erişilebilir — {packages} paket, {versions} sürüm, indeks {sequence}.',
+    backwards:
+      'Bu indeks {sequence}, burada olan {current}. Çekmek reddedilirdi: geriye giden bir indeks, geri çekilmiş bir sürümün geri gelme yoludur.',
+    failed: 'Orada bir katalog okunamadı',
+    resolved: '{url} adresinden çekildi',
+  },
   marketView: {
     title: 'Market',
     subtitle: 'Servisler nereden geliyor, ve bu makinede hangi sürümler var',
     catalogue: 'Katalog',
     chooseSource: 'Bir kaynak seçin',
+    sourceTitle: 'Katalog nereden geliyor',
+    sourceInSettings: 'Ayarlar → Servis kataloğu bu adresi tutuyor ve çekmeden test edebiliyor.',
     noCatalogue: 'Henüz katalog yok',
     noCatalogueBody:
       'StackVo içinde hiçbir servis taşımıyor. Bir kaynak gösterin — çevrimdışı bir paket ya da servis paketleri deposunun bir kopyası — katalog oradan okunur.',
@@ -157,7 +184,10 @@ export default {
     showOlder: 'Desteği bitmiş sürümleri göster',
     multiVersion: 'Birden çok sürüm çalıştırır',
     versionCount: '{n} sürüm',
-    hiddenCount: '{n} gizli',
+    hiddenCount: '{n} desteği bitmiş',
+    serviceCount: '{n} servis',
+    eolWhy:
+      'Desteği bitmiş sürümler çalışmaya devam eder — üretici yama vermeyi bırakmıştır, bu bozuk olmakla aynı şey değildir. Katalogdan değil, aşağıdaki listelerden tutulurlar: .env’inde o sürüm yazan bir çalışma alanının göç edebilmesi gerekiyor, ve bir sürümü düşürebilen bir indeks, birinin çalışan servisinin kaynağını kaybettiği indekstir.',
     recommended: 'Önerilen',
     support: {
       supported: 'Destekli',
@@ -168,7 +198,7 @@ export default {
     uninstall: 'Kaldır',
     addInstance: 'Örnek ekle',
     inUse: 'Bu sürümü bir örnek kullanıyor',
-    instances: 'Örnekler',
+    instances: 'Servis örnekleri',
     noInstances: 'Henüz kurulu bir şey yok',
     noInstancesBody:
       'Yukarıdan bir paket kurun, sonra ondan bir örnek ekleyin. Bir servisin iki sürümü yan yana çalışabilir; her biri kendi verisi ve kendi portuyla.',
@@ -181,6 +211,30 @@ export default {
     packageMissing: 'Paket yok',
     makePrimary: 'Birincil yap',
     removeInstance: 'Kaldır',
+    handoverTitle: 'Bu çalışma alanı servislerini hâlâ .env içinde tutuyor',
+    handoverBody:
+      "{n} servis örnek tablosuna taşınacak. Volume'ler yeniden adlandırılmaz, sahiplenilir — veri olduğu yerde kalır; portlar korunur; ve eski container adı ağ takma adı olarak yaşamaya devam eder, yani stackvo-mysql'e bakan bir proje çalışmaya devam eder.",
+    handoverBlocked: 'Göç ya tamamı ya hiçbiri, ve şu an çalışamaz. Hiçbir şey değiştirilmedi:',
+    handoverRevert: 'Geri alınabilir — .env önce yedeklenir ve anahtarları korunur.',
+    handoverRevertHow:
+      ".env, hiçbir şey yazılmadan önce .env.pre-market.bak'a kopyalanır ve servis anahtarları silinmez, işaretlenir. Geri dönmek için services/instances.json dosyasını silin.",
+    handoverApply: 'Taşı',
+    handoverMissing:
+      'Göç, .env’in adlandırdığı her sürüm için bir pakete ihtiyaç duyuyor ve {n} tanesi henüz bu makinede değil:',
+    handoverInstallAll: 'Kur',
+    handoverNotInCatalogue:
+      '{subject} bu makinenin okuduğu katalogda da yok. Kaynağı kontrol edin, ya da .env’i katalogda olan bir sürüme çevirin.',
+    handoverNote: {
+      resolvedMovingTag: '{subject}: hareketli etiket somut bir sürüme sabitleniyor ({detail})',
+      portMoved: "{subject}: .env'deki port bu makinede dolu ({detail})",
+      adoptedVolume: "{subject}: mevcut volume'ünü koruyor — {detail}",
+      settingHasNoHome: '{subject}: {detail} ayarının pakette karşılığı yok',
+      unknownService: "{subject} .env'de açık ve katalog onu hiç tanımıyor",
+      versionNotInstalled:
+        '{subject} için bu makinede paket yok, ve yakın bir sürüme göç ettirilmeyecek — o, kimsenin istemediği bir yükseltmeyi bir veritabanının üzerinde yapmak olurdu. Kurulu olan: {detail}',
+      nothingToInstall: '{subject} açık ama katalogda somut bir sürümü yok',
+      noFreePort: '{subject}: {detail} için boş port bulunamadı',
+    },
   },
   servicesView: {
     disableTitle: '{name} devre dışı bırakılsın mı?',
@@ -252,7 +306,7 @@ export default {
     composition: 'Dağılım',
     usedShort: 'kullanımda',
     cpuActivity: 'İşlemci Aktivitesi',
-    noHistory: 'Henüz geçmiş yok — örnekler dakikada bir alınıyor.',
+    noHistory: 'Henüz geçmiş yok — ölçümler dakikada bir alınıyor.',
     noSample: 'ölçüm yok',
     less: 'Az',
     more: 'Çok',
@@ -343,6 +397,8 @@ export default {
     invalidManifest: 'Geçersiz stackvo.json',
     problems: 'sorun',
     manifestChanged: 'stackvo.json değişti — yeniden üretilmeli.',
+    manifestChangedBuilt:
+      'stackvo.json değişti. Konteyner hâlâ derlendiği imajı çalıştırıyor — yeniden üretmek, imajı derlemek ve konteyneri yeniden yaratmak için tıklayın.',
     openFolder: 'Klasörü aç',
   },
 
@@ -356,6 +412,26 @@ export default {
     failedToast: '{operation} başarısız — çıktı konsolda',
   },
 
+  catalogueGate: {
+    title: 'Bu makinede henüz servis kataloğu yok',
+    body: 'StackVo hiçbir servisi kendi içinde taşımıyor — ne şablon, ne de listenin bir kopyası. Yani bu boş bir katalog değil: burada henüz hiç yok, ve bir servis kurulabilmesi için bir yerden gelmesi gerekiyor.',
+    signatureRequired:
+      'Bu makine imzalı katalog istiyor ve henüz yayımlanmış bir imzalama anahtarı yok. Çekme, imzasıza düşmek yerine reddediliyor — sessizce hiçbir şey yapmayan bir kontrol, hiç olmayandan kötüdür.',
+    policyBundle: 'Bir yönetici kaynağı {path} paketine sabitlemiş. İki düğme de onu kullanıyor.',
+    policyMirror: 'Bir yönetici kaynağı {url} adresine sabitlemiş. İki düğme de onu kullanıyor.',
+    online: 'İnternetten çek',
+    onlineBody:
+      'HTTPS üzerinden indirilip önbelleğe alınır. Bir kez geldikten sonra kalır ve uygulama çevrimdışı çalışır.',
+    address: 'Katalog adresi',
+    fetch: 'Katalogu çek',
+    offline: 'Bu makinede internet yok',
+    offlineBody:
+      'Bir hava boşluğu paketini ya da servis paketleri deposunun bir kopyasını gösterin. Bu, hava boşluklu kurulumun yedek yolu değil, cevabın kendisi.',
+    choose: 'Klasör seç',
+    skip: 'Servissiz devam et',
+    skipHint:
+      'Projeler, ters vekil ve sertifikalar katalog olmadan da çalışır. Market sayfası bu iki seçeneği istediğiniz zaman yeniden sunar.',
+  },
   bootstrap: {
     title: 'Yığın hazırlanıyor',
     subtitle:
@@ -1232,6 +1308,7 @@ export default {
     stop: 'Konteyneri durdur',
     restart: 'Konteyneri yeniden başlat',
     build: 'Projeyi derle',
+    rebuild: 'Projeyi yeniden derle',
     generate: 'Yapılandırmayı üret',
     up: 'Yığını ayağa kaldır',
     down: 'Yığını durdur',
@@ -1558,6 +1635,8 @@ export default {
     notBuilt: 'Konteyner henüz derlenmedi; log akışı için önce derleyin.',
     openInEditor: 'Editörde aç',
     externalTerminal: 'Harici terminalde aç',
+    rebuildHint:
+      'Yeniden derle: Dockerfile stackvo.json’dan yeniden üretilir, imaj derlenir ve konteyner yeniden yaratılır. Yeniden başlatmak bunların hiçbirini yapmaz — aynı imajdan aynı konteyneri verir.',
     manifest: 'Manifest',
     manifestHint: 'stackvo.json — kaydedince anahtar sırası sözleşmeye göre düzeltilir.',
     save: 'Kaydet',
@@ -1690,12 +1769,19 @@ export default {
     packageNotInRegistry: 'Katalogu yenileyin, ya da listelediği bir sürüm seçin.',
     registryWentBackwards:
       'Bu kaynağın sunduğu katalog, burada olandan daha eski. Kullanmadan önce kaynağı kontrol edin.',
+    registryUnreachable:
+      'Katalog çekilemedi. Adresi ve bu makinenin oraya erişip erişmediğini kontrol edin — sistem ayarlarındaki proxy kullanılıyor.',
+    registryAddressIsADirectory:
+      'Adres, registry.json’ı barındıran dizin olmalı — onun üstündeki sayfa değil. GitHub depo adresi otomatik çevrilir; diğer her adres verildiği gibi kullanılır.',
+    registryMustBeHttps:
+      'Katalog adresi https:// ile başlamak zorunda. Henüz hiçbir şey imza doğrulamıyor, yani korumanın tamamı taşıma katmanı.',
     removeTheInstanceFirst: 'Bu paketi hâlâ bir örnek kullanıyor. Önce onu kaldırın, sonra paketi.',
     serviceIsSingleInstance:
       'Bu servis aynı anda tek sürüm çalıştırır. Önce elinizdeki örneği kaldırın.',
   },
 
   errors: {
+    NETWORK_ERROR: 'Ulaşılması gereken bir sunucu cevap vermedi.',
     ENGINE_UNREACHABLE: 'Docker motoruna ulaşılamıyor.',
     NO_WORKSPACE: 'StackVo dizini seçilmedi.',
     IO_ERROR: 'Dosya işlemi başarısız oldu.',

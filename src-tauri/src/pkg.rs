@@ -226,6 +226,12 @@ pub struct Companion {
     pub ports: Vec<Port>,
     #[serde(default)]
     pub volumes: Vec<Volume>,
+    /// A companion needs its own, and Kafka is the reason: the broker's fragment
+    /// waits on `zookeeper` with `condition: service_healthy`, and a companion
+    /// that never declares a healthcheck turns that wait into "the process
+    /// started", which is what it already meant before any of this.
+    #[serde(default)]
+    pub health: Option<Health>,
     pub compose: Blob,
 }
 
@@ -427,15 +433,7 @@ impl Manifest {
             }
         }
 
-        if let Some(health) = &self.health {
-            if health.test.is_empty() {
-                return bad(
-                    "declares a healthcheck with no test, which reports healthy \
-                            the instant the container starts"
-                        .into(),
-                );
-            }
-        }
+        check_health("this service", self.health.as_ref(), &who)?;
 
         if !matches!(
             self.support.status.as_str(),
@@ -449,10 +447,57 @@ impl Manifest {
                 return bad(format!("companion {:?} is not a DNS label", companion.name));
             }
             checked_relative(&companion.compose.file, &who)?;
+            check_health(
+                &format!("companion {:?}", companion.name),
+                companion.health.as_ref(),
+                &who,
+            )?;
         }
 
         Ok(())
     }
+}
+
+/// Everything a healthcheck has to be before the renderer will write it.
+///
+/// Compose's list form takes a keyword first — `CMD` runs the argument vector,
+/// `CMD-SHELL` runs one string through `/bin/sh`, `NONE` switches off whatever
+/// healthcheck the image itself shipped. A list that starts with anything else
+/// is not a shorter spelling of `CMD`; Compose reads the first element as the
+/// program and the keyword-less form is how a test ends up running a file
+/// called `mysqladmin ping`.
+///
+/// `CMD-SHELL` stays permitted because several of these genuinely need a pipe or
+/// a variable, and refusing it would have pushed those packages into declaring
+/// nothing — which is the state this whole item exists to leave.
+fn check_health(whose: &str, health: Option<&Health>, who: &str) -> Result<()> {
+    let Some(health) = health else {
+        return Ok(());
+    };
+    let bad = |m: String| {
+        Err(
+            Error::new(Code::InvalidManifest, format!("{who}: {whose} {m}"))
+                .with_hint(crate::hints::PACKAGE_CONTENT_CHANGED),
+        )
+    };
+    let Some(keyword) = health.test.first() else {
+        return bad(
+            "declares a healthcheck with no test, which reports healthy the instant the \
+             container starts — and that is worse than declaring none, because \
+             `condition: service_healthy` then waits for nothing and says it waited"
+                .into(),
+        );
+    };
+    if !matches!(keyword.as_str(), "CMD" | "CMD-SHELL" | "NONE") {
+        return bad(format!(
+            "starts its healthcheck test with {keyword:?}. Compose reads the first element as \
+             a keyword — one of CMD, CMD-SHELL or NONE — not as the program"
+        ));
+    }
+    if keyword != "NONE" && health.test.len() < 2 {
+        return bad(format!("says {keyword} and gives it nothing to run"));
+    }
+    Ok(())
 }
 
 /// A DNS label: what a container name and a subdomain both have to be.

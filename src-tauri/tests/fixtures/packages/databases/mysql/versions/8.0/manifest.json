@@ -31,6 +31,7 @@
   },
   "url": null,
   "dependsOn": [],
+  "health": { "test": ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"], "interval": "10s", "retries": 12, "startPeriod": "30s" },
   "compose": { "file": "compose.yml.tpl", "sha256": "8012ddfce6145da5b6d5512cfee2312fa5e10cbdd43c9db37e015c390bf3d8ad" },
   "support": {"eolDate":"2026-04-30","source":"https://endoflife.date/api/mysql.json","status":"eol"}
 }

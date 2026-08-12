@@ -17,6 +17,7 @@ import { toasts } from '@/lib/toast';
 import ErrorAlert from '@/components/ErrorAlert.vue';
 import RequirementsGate from '@/components/RequirementsGate.vue';
 import BootstrapGate from '@/components/BootstrapGate.vue';
+import CatalogueGate from '@/components/CatalogueGate.vue';
 import NewProjectDrawer from '@/components/NewProjectDrawer.vue';
 import CloseDialog from '@/components/CloseDialog.vue';
 
@@ -51,6 +52,29 @@ const { t, locale } = useI18n();
 const gated = computed(() => !app.booting && !!app.preflight && !app.preflight.ready);
 
 /**
+ * The catalogue, which this app ships none of (ADR 0011).
+ *
+ * Between the requirements and the bootstrap on purpose. Bootstrap writes the
+ * compose files and brings the stack up; on a machine with no catalogue there
+ * are no services to write, so it would come up with a proxy and nothing behind
+ * it — and the first thing the user would see is a dashboard that works and is
+ * empty, with no sentence anywhere saying why.
+ *
+ * `catalogueDone` is a session flag for the same reason `bootstrapDone` is: the
+ * screen can be skipped, and reading the workspace again would bounce straight
+ * back to it.
+ */
+const catalogueDone = ref(false);
+const needsCatalogue = computed(
+  () =>
+    !gated.value &&
+    !app.booting &&
+    !!app.workspace &&
+    app.workspace.catalogueFetched === false &&
+    !catalogueDone.value
+);
+
+/**
  * Whether the stack still has to be assembled before the app is worth showing.
  *
  * `bootstrapDone` is a session flag rather than a second read of the workspace:
@@ -61,6 +85,7 @@ const bootstrapDone = ref(false);
 const needsBootstrap = computed(
   () =>
     !gated.value &&
+    !needsCatalogue.value &&
     !app.booting &&
     !!app.workspace &&
     !app.workspace.bootstrapped &&
@@ -74,7 +99,7 @@ const needsBootstrap = computed(
  * the rails list projects nobody can open, so every control in them would be
  * disabled or misleading.
  */
-const chromeHidden = computed(() => gated.value || needsBootstrap.value);
+const chromeHidden = computed(() => gated.value || needsCatalogue.value || needsBootstrap.value);
 
 /**
  * Which of the two left drawers is expanded, if either.
@@ -727,6 +752,17 @@ onUnmounted(() => {
            launch the compose files have never been written and nothing is
            running, so the dashboard would open behind a proxy that is not
            there. This does that once, in front of the person waiting. -->
+      <!-- Nothing is embedded (ADR 0011), so a machine that has never fetched
+           has no catalogue rather than an empty one — and "no internet" and
+           "no catalogue here yet" get different sentences, because only the
+           second one has an offline bundle as its answer. Skippable: without
+           services this is still a proxy, a CA and a project runner. -->
+      <CatalogueGate
+        v-else-if="needsCatalogue"
+        @done="catalogueDone = true"
+        @skip="catalogueDone = true"
+      />
+
       <BootstrapGate v-else-if="needsBootstrap" @done="bootstrapDone = true" />
 
       <router-view v-else />

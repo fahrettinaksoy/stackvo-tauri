@@ -36,7 +36,7 @@ services:
           until mongosh --quiet -u "{{ SERVICE_MONGO_INITDB_ROOT_USERNAME | default('root') }}" -p "{{ SERVICE_MONGO_INITDB_ROOT_PASSWORD | default('root') }}" --authenticationDatabase admin --eval "db.adminCommand({ping:1})" >/dev/null 2>&1; do sleep 1; done
           mongosh --quiet -u "{{ SERVICE_MONGO_INITDB_ROOT_USERNAME | default('root') }}" -p "{{ SERVICE_MONGO_INITDB_ROOT_PASSWORD | default('root') }}" --authenticationDatabase admin --eval "try { rs.status() } catch (e) { rs.initiate({_id: \"{{ SERVICE_MONGO_REPLSET | default('rs0') }}\", members: [{_id: 0, host: \"stackvo-mongo:27017\"}]}) }" >/dev/null 2>&1
         ) &
-        exec docker-entrypoint.sh mongod --auth --bind_ip_all --replSet {{ SERVICE_MONGO_REPLSET | default('rs0') }} --keyFile /data/db/.keyfile
+        exec docker-entrypoint.sh mongod --config /etc/mongo/mongo.conf --auth --bind_ip_all --replSet {{ SERVICE_MONGO_REPLSET | default('rs0') }} --keyFile /data/db/.keyfile
 
     environment:
       MONGO_INITDB_ROOT_USERNAME: "{{ SERVICE_MONGO_INITDB_ROOT_USERNAME | default('root') }}"
@@ -46,7 +46,7 @@ services:
     volumes:
       - stackvo-mongo-data:/data/db
       - ${HOST_STACKVO_ROOT}/generated/configs/mongo.conf:/etc/mongo/mongo.conf:ro
-      - ${HOST_STACKVO_ROOT}/logs/services/mongo:/var/log/mongodb
+      # Log volume mount removed - logs go to stdout/stderr (GEMINI.md compliance)
 
     ports:
       - "{{ HOST_PORT_MONGO | default('27017') }}:27017"

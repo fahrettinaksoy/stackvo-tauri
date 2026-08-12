@@ -28,6 +28,13 @@ pub enum Code {
     /// looks like a StackVo checkout. Desktop-specific: the web UI could not
     /// hit this because it was mounted inside the repo it managed.
     NoWorkspace,
+    /// A host this app had to reach did not answer, or answered badly.
+    ///
+    /// Deliberately not `ENGINE_UNREACHABLE`, which means Docker specifically
+    /// and whose whole point is that the UI offers to start it. Nothing can be
+    /// started to fix this one — the action is a proxy, a URL or a network —
+    /// so a UI that offered the same button would be offering the wrong thing.
+    NetworkError,
     /// An administrator's policy says no — see [`crate::policy`].
     ///
     /// Deliberately not `PERMISSION_DENIED`, which in this app means the OS
@@ -43,6 +50,7 @@ impl Code {
             Code::EngineUnreachable => "ENGINE_UNREACHABLE",
             Code::NotFound => "NOT_FOUND",
             Code::AlreadyExists => "ALREADY_EXISTS",
+            Code::NetworkError => "NETWORK_ERROR",
             Code::InvalidInput => "INVALID_INPUT",
             Code::InvalidManifest => "INVALID_MANIFEST",
             Code::Unsupported => "UNSUPPORTED",

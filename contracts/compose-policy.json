@@ -21,7 +21,6 @@
     "volumes": "Named volumes and generated config files only — see rules.volumes below.",
     "networks": "The workspace network and the instance's aliases.",
     "depends_on": "Ordering against a companion or another instance.",
-    "healthcheck": "How the engine decides the container is up.",
     "labels": "Traefik routing. Router and service names are per instance.",
     "ulimits": "Resource limits — Elasticsearch needs memlock.",
     "user": "The uid the process runs as.",
@@ -57,7 +56,8 @@
     "runtime": "Selects an alternative container runtime.",
     "platform": "Silently pulls an image for another architecture.",
     "credential_spec": "Windows credential delegation.",
-    "external_links": "Links to containers outside this stack."
+    "external_links": "Links to containers outside this stack.",
+    "healthcheck": "Written by the app from the manifest's `health` block, the way `image` and `profiles` are — so a fragment declaring one is a second author for the field `depends_on: condition: service_healthy` reads. Two of them in one service is a duplicate YAML key; one of them wins and nothing says which. The manifest form is also constrained where the fragment form is not: the schema requires a list, and Compose runs the string form through a shell."
   },
   "rules": {
     "volumes": {

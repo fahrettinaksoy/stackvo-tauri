@@ -73,6 +73,17 @@ pub struct Workspace {
     /// Skipping past a failure deliberately does not write it. The offer should
     /// come back next launch — that is the point of the offer.
     pub bootstrapped: bool,
+    /// Has a catalogue ever been fetched onto this machine?
+    ///
+    /// ADR 0011: nothing is embedded, so `false` means there are no service
+    /// definitions here at all — not an empty catalogue, none. The first-run
+    /// gate is keyed on it, and it is on the workspace rather than left to the
+    /// Market page because the answer decides which *screen* opens.
+    ///
+    /// A read of the cached index, not a marker somebody writes. A marker would
+    /// be a second answer to a question the file on disk already answers, and
+    /// it would keep saying yes after that file was deleted.
+    pub catalogue_fetched: bool,
     pub source: Source,
     pub stackvo_version: Option<String>,
     pub env_file: Option<String>,
@@ -84,6 +95,7 @@ impl Workspace {
             root: None,
             valid: false,
             bootstrapped: false,
+            catalogue_fetched: false,
             source: Source::None,
             stackvo_version: None,
             projects_dir: None,
@@ -213,6 +225,7 @@ fn describe(root: PathBuf, source: Source) -> Workspace {
         env_file: env_file.exists().then(|| env_file.display().to_string()),
         valid: projects.is_some(),
         bootstrapped: bootstrap_marker(&root).is_file(),
+        catalogue_fetched: crate::market::registry_path(&root).is_file(),
         projects_dir: projects.map(|p| p.display().to_string()),
         source,
         root: Some(root.display().to_string()),

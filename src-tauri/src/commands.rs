@@ -404,9 +404,171 @@ pub async fn services_list(state: State<'_, AppState>) -> Result<Vec<Service>> {
     list_services(&root).await
 }
 
+/// The Services page's rows, built from the instance table.
+///
+/// `None` when this workspace has not migrated, which is the caller's signal to
+/// use `.env`.
+///
+/// The row's `id` is the **instance** id — `mysql-8-0`, not `mysql` — because
+/// everything downstream keys off it: the detail sheet asks for logs by
+/// container, `container_inspect` wants a name, and two versions of one service
+/// are two rows that must not collapse into one. `category` comes from the
+/// package's own identity, so the page groups the way the Market page does.
+fn instance_services(
+    root: &std::path::Path,
+    env: &Env,
+    containers: &std::collections::HashMap<String, ContainerInfo>,
+) -> Option<Vec<Service>> {
+    if !crate::instances::path(root).exists() {
+        return None;
+    }
+    let table = crate::instances::Table::load(root).ok()?;
+    let tree = crate::pkg::Tree::open(&crate::market::dir(root)).ok()?;
+    let tld = env.get("DEFAULT_TLD_SUFFIX").unwrap_or("stackvo.loc");
+
+    let mut out: Vec<Service> = table
+        .instances
+        .iter()
+        .map(|instance| {
+            let manifest = tree.load(&instance.service, &instance.version).ok();
+            let container = containers.get(&instance.id);
+
+            // A dependency is stated by capability in a manifest, and answered
+            // by whichever instance provides it — which is the whole point of
+            // stating it that way: phpMyAdmin is satisfied by MariaDB.
+            let required: Vec<String> = manifest
+                .as_ref()
+                .map(|m| {
+                    m.depends_on
+                        .iter()
+                        .filter(|d| d.required)
+                        .filter_map(|d| provider_instance(&table, &tree, d))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let optional: Vec<String> = manifest
+                .as_ref()
+                .map(|m| {
+                    m.depends_on
+                        .iter()
+                        .filter(|d| !d.required)
+                        .filter_map(|d| provider_instance(&table, &tree, d))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            Service {
+                container_name: instance.container(),
+                enabled: instance.enabled,
+                running: container.is_some_and(|c| c.running),
+                built: container.is_some(),
+                version: Some(instance.version.clone()),
+                url: manifest
+                    .as_ref()
+                    .and_then(|m| m.url.as_ref())
+                    .map(|u| instance.domain(&u.subdomain, tld)),
+                // The published number, which is the one somebody pastes into a
+                // client. The manifest's `primary` port names which that is.
+                host_port: manifest
+                    .as_ref()
+                    .and_then(|m| m.ports.iter().find(|p| p.primary).or(m.ports.first()))
+                    .and_then(|p| instance.ports.get(&p.name).copied()),
+                // Settings, never secrets: the value of a `secret` setting lives
+                // in the keystore and `instances.json` holds a reference (ADR
+                // 0010). Reporting the reference as a credential would put a
+                // keystore path on a screen that masks passwords.
+                credentials: manifest
+                    .as_ref()
+                    .map(|m| {
+                        m.settings
+                            .iter()
+                            .map(|setting| {
+                                let secret = setting.kind == "secret";
+                                Credential {
+                                    env_key: format!(
+                                        "{}{}",
+                                        Env::service_prefix(&instance.service),
+                                        setting.key
+                                    ),
+                                    key: setting.key.clone(),
+                                    value: if secret {
+                                        crate::config::MASK.to_string()
+                                    } else {
+                                        instance
+                                            .settings
+                                            .get(&setting.key)
+                                            .cloned()
+                                            .or_else(|| setting.default_text())
+                                            .unwrap_or_default()
+                                    },
+                                    secret,
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                ports: container.map(|c| c.ports.clone()).unwrap_or_default(),
+                unmet_dependencies: required
+                    .iter()
+                    .filter(|id| !containers.get(*id).is_some_and(|c| c.running))
+                    .cloned()
+                    .collect(),
+                required,
+                optional,
+                category: tree
+                    .identity(&instance.service)
+                    .map(|i| i.category.clone())
+                    .unwrap_or_else(|| "services".into()),
+                id: instance.id.clone(),
+            }
+        })
+        .collect();
+
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    Some(out)
+}
+
+/// Which installed instance answers a declared capability.
+fn provider_instance(
+    table: &crate::instances::Table,
+    tree: &crate::pkg::Tree,
+    dependency: &crate::pkg::Dependency,
+) -> Option<String> {
+    table
+        .instances
+        .iter()
+        .find(|other| {
+            if let Some(named) = &dependency.service {
+                if &other.service != named {
+                    return false;
+                }
+            }
+            tree.load(&other.service, &other.version)
+                .map(|m| m.capabilities.iter().any(|c| c == &dependency.capability))
+                .unwrap_or(false)
+        })
+        .map(|other| other.id.clone())
+}
+
 pub async fn list_services(root: &std::path::Path) -> Result<Vec<Service>> {
     let env = Env::load(root)?;
     let containers = engine::stackvo_containers().await.unwrap_or_default();
+
+    // A migrated workspace's services are instances, and this function did not
+    // know that. It walked the compiled-in catalogue and built every container
+    // name as `stackvo-<id>` — so after a handover the Services page listed
+    // twenty-five services, reported all of them stopped (the containers are
+    // `stackvo-mysql-8-0` now), and the detail sheet with its connection
+    // string, its dumps and its **logs** was reachable for none of them.
+    //
+    // Same rule as `service_source` and `service_domains`: the table when there
+    // is one, `.env` when there is not. Not a union — a page built from both
+    // would list a service twice under two names, and one of them would be a
+    // container that has not existed since the migration.
+    if let Some(services) = instance_services(root, &env, &containers) {
+        return Ok(services);
+    }
+
     let schema = env_schema();
 
     let is_running = |id: &str| {
@@ -2091,7 +2253,59 @@ async fn service_domains(root: &std::path::Path) -> Vec<String> {
         .collect();
     let (_, managed) = crate::hosts::mapped_domains();
 
-    service_domains_from(&env, &running, &managed)
+    // A migrated workspace's services are in the table, not in `.env`, and this
+    // function only ever read `.env`. So on such a machine phpMyAdmin got a
+    // Traefik router and a certificate SAN and **no hosts line** — the browser
+    // never resolved the name, and everything downstream looked correct.
+    //
+    // Same rule as `service_source`: the table when there is one, `.env` when
+    // there is not. No union of the two — a name that came from state the user
+    // has already replaced is the drift the table exists to end.
+    match instance_domains(root, &env, &running, &managed) {
+        Some(domains) => domains,
+        None => service_domains_from(&env, &running, &managed),
+    }
+}
+
+/// The domains a migrated workspace answers on, or `None` when it has not
+/// migrated.
+///
+/// The subdomain comes from the package manifest and the *name* from
+/// [`crate::instances::Instance::domain`], so a second instance of phpMyAdmin is
+/// `phpmyadmin-5-2` rather than a second claim on `phpmyadmin` — the thing that
+/// kept twelve packages single-instance.
+fn instance_domains(
+    root: &std::path::Path,
+    env: &Env,
+    running: &std::collections::HashSet<String>,
+    managed: &std::collections::HashSet<String>,
+) -> Option<Vec<String>> {
+    if !crate::instances::path(root).exists() {
+        return None;
+    }
+    let table = crate::instances::Table::load(root).ok()?;
+    let tree = crate::pkg::Tree::open(&crate::market::dir(root)).ok()?;
+    let tld = env.get("DEFAULT_TLD_SUFFIX").unwrap_or("stackvo.loc");
+
+    Some(
+        table
+            .instances
+            .iter()
+            .filter(|instance| instance.enabled)
+            .filter_map(|instance| {
+                let manifest = tree.load(&instance.service, &instance.version).ok()?;
+                let url = manifest.url.as_ref()?;
+                Some((instance.id.clone(), instance.domain(&url.subdomain, tld)))
+            })
+            // The same two reasons a name is wanted as on the `.env` path: the
+            // container is up, or the hosts file already carries the line and
+            // taking it away would break a tab somebody has open.
+            .filter(|(id, domain)| {
+                running.contains(id) || managed.contains(&domain.to_ascii_lowercase())
+            })
+            .map(|(_, domain)| domain)
+            .collect(),
+    )
 }
 
 /// The decision itself, with both ambient reads passed in.
@@ -6078,6 +6292,25 @@ pub fn policy_status() -> serde_json::Value {
         "managed": policy.settings().keys().collect::<Vec<_>>(),
         "locked": policy.locked().iter().collect::<Vec<_>>(),
         "registryPrefix": policy.registry_prefix(),
+        // The market block, as an administrator set it. Reported in full rather
+        // than as a single "constrained" flag: the whole reason the Settings
+        // pane shows this is so a person who has just been refused an install
+        // can read *which* rule refused it, and a boolean would send them to
+        // support instead.
+        "market": {
+            "constrained": policy.constrains_market(),
+            "registryUrl": policy.market().registry_url,
+            "offlineBundle": policy.market().offline_bundle
+                .as_ref().map(|p| p.display().to_string()),
+            "requireSignature": policy.market().require_signature,
+            "allowedPackages": policy.market().allowed_packages.iter().collect::<Vec<_>>(),
+            "allowedRegistries": policy.market().allowed_registries.iter().collect::<Vec<_>>(),
+            "autoUpdate": policy.market().auto_update,
+            // The count, not the keys. A public key is not a secret and this is
+            // still a status call; the number is what answers "did my key
+            // arrive", which is the question an administrator has.
+            "additionalKeys": policy.market().additional_keys.len(),
+        },
         "error": policy.error(),
     })
 }
@@ -7328,6 +7561,17 @@ pub struct MarketStatus {
     /// Whether signatures are being checked. Always false today, and named so
     /// the UI can say so rather than implying otherwise — see `market::Trust`.
     pub signed: bool,
+    /// Whether `policy.market.requireSignature` is set. Reported separately
+    /// from `signed` because the pair is the whole story: required and not
+    /// happening is a refusal a user needs explained, and it is the state a
+    /// managed machine is in until ADR 0015's key exists.
+    pub signature_required: bool,
+    /// The bundle an administrator pointed this machine at, if any. Shown so
+    /// the source line does not look like a path the user chose.
+    pub offline_bundle: Option<String>,
+    /// Whether a policy says anything at all about the market, so the page can
+    /// explain a refusal before it happens rather than after.
+    pub constrained: bool,
 }
 
 /// One row of the market list: what is published, and what is here.
@@ -7408,8 +7652,18 @@ pub fn market_status(state: State<'_, AppState>) -> Result<MarketStatus> {
         packages: registry.as_ref().map(|r| r.packages.len()).unwrap_or(0),
         installed,
         // `market::Trust::Signed` refuses rather than downgrades, so nothing
-        // can report true here until there is a key to verify against.
+        // can report true here until there is a key to verify against. A
+        // machine whose policy sets `requireSignature` therefore cannot
+        // refresh at all, and saying so is the point: the alternative is a
+        // page that looks the same on a machine where the check is off.
         signed: false,
+        signature_required: crate::policy::current().market().require_signature,
+        offline_bundle: crate::policy::current()
+            .market()
+            .offline_bundle
+            .as_ref()
+            .map(|p| p.display().to_string()),
+        constrained: crate::policy::current().constrains_market(),
     })
 }
 
@@ -7422,20 +7676,51 @@ pub fn market_status(state: State<'_, AppState>) -> Result<MarketStatus> {
 #[tauri::command]
 pub async fn market_refresh(state: State<'_, AppState>, location: String) -> Result<MarketStatus> {
     let root = state.root()?;
+    let market = crate::policy::current().market();
+
+    // An administrator's bundle wins over the path the user picked, and that is
+    // the whole of what `market.offlineBundle` does. ADR 0011 leaves nothing
+    // embedded, so on an air-gapped machine this is not an enterprise extra —
+    // it is the only way a catalogue ever arrives.
+    // The bundle first, then the mirror, then what the user typed. An offline
+    // bundle beats a `registryUrl` because a machine given one is a machine
+    // that was not expected to reach anything.
+    let location = market
+        .offline_bundle
+        .as_ref()
+        .map(|bundle| bundle.display().to_string())
+        .or_else(|| market.registry_url.clone())
+        .unwrap_or(location);
+
     let reference = crate::market::SourceRef {
-        kind: "local".into(),
+        kind: crate::market::kind_of(&location).to_string(),
         location,
     };
-    let source = crate::market::open(&reference)?;
     let previous = crate::market::cached(&root)?;
 
-    crate::market::refresh(
-        &root,
-        source.as_ref(),
-        crate::market::Trust::Unsigned,
-        previous.as_ref(),
-    )?;
-    crate::market::remember(&root, &reference)?;
+    // The one policy key that is a lock rather than a note (ADR 0009): it can
+    // only turn verification *on*. `Trust::Signed` refuses today rather than
+    // downgrading, so a machine that sets this gets an honest failure instead
+    // of an unsigned index under a name that promises otherwise.
+    let trust = if market.require_signature {
+        crate::market::Trust::Signed
+    } else {
+        crate::market::Trust::Unsigned
+    };
+
+    // Off the runtime thread, and this is a requirement rather than a courtesy.
+    // `Source::fetch` is synchronous — the trait is read by `pkg` and `render`,
+    // neither of which should learn what a runtime is — so `HttpSource` blocks
+    // on the current handle, and doing that on a runtime thread panics.
+    let moved = root.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<()> {
+        let source = crate::market::open(&moved, &reference)?;
+        crate::market::refresh(&moved, source.as_ref(), trust, previous.as_ref())?;
+        crate::market::remember(&moved, &reference)
+    })
+    .await
+    .map_err(|e| Error::new(Code::IoError, format!("the refresh could not be run: {e}")))??;
+
     market_status(state)
 }
 
@@ -7497,8 +7782,24 @@ pub async fn market_install(
             "no source is remembered — refresh the catalogue first",
         ));
     };
-    let source = crate::market::open(&reference)?;
-    crate::market::install(&root, source.as_ref(), &registry, &service, &version)?;
+    // Blocking, for the same reason the refresh is: a network source blocks on
+    // the runtime handle and cannot do that from a runtime thread.
+    let moved = root.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<()> {
+        let source = crate::market::open(&moved, &reference)?;
+        crate::market::install(
+            &moved,
+            source.as_ref(),
+            &registry,
+            &service,
+            &version,
+            crate::policy::current().market(),
+        )
+        .map(|_| ())
+    })
+    .await
+    .map_err(|e| Error::new(Code::IoError, format!("the install could not be run: {e}")))??;
+
     market_status(state)
 }
 
@@ -7536,6 +7837,365 @@ pub async fn market_uninstall(
         .ok_or_else(|| Error::not_found(format!("package {service}")))?;
     crate::market::uninstall(&root, &category, &service, &version)?;
     market_status(state)
+}
+
+/// What a candidate source turned out to be.
+///
+/// Every field is what a person needs to decide whether to use it, and the
+/// unhappy ones are values rather than an error: "this address answers and its
+/// index is older than yours" is a thing to know *before* pressing the button
+/// that would be refused.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceProbe {
+    /// Exactly what was asked for, so the field and the answer cannot drift.
+    pub location: String,
+    /// Where the bytes were actually fetched from. Differs whenever a GitHub
+    /// repository URL was translated, and showing it is the difference between
+    /// "it works" and "it works, and here is why what you typed was not it".
+    pub resolved: String,
+    pub kind: String,
+    pub reachable: bool,
+    pub packages: usize,
+    pub versions: usize,
+    pub sequence: Option<u64>,
+    pub generated_at: Option<String>,
+    pub expires: Option<String>,
+    /// The cached index's sequence, when there is one. With `sequence` this is
+    /// the whole of whether a refresh would be refused.
+    pub current_sequence: Option<u64>,
+    /// True when this index is older than the one already here, which
+    /// `market::refresh` refuses — T-6, replay.
+    pub goes_backwards: bool,
+    /// Why not, when `reachable` is false. Already translated by the front end
+    /// through the error's own hint key.
+    pub error: Option<String>,
+    pub hint_key: Option<String>,
+}
+
+/// Try a source and report, without writing anything.
+///
+/// A separate command rather than a flag on `market_refresh`, because the two
+/// differ in the one way that matters: this one **caches nothing and remembers
+/// nothing**. A "test" that left the index behind would make the test and the
+/// act the same button with different words on it.
+///
+/// It is also the only honest way to answer "is my address right", which was
+/// otherwise a question you could only ask by doing the thing.
+#[tauri::command]
+pub async fn market_probe(state: State<'_, AppState>, location: String) -> Result<SourceProbe> {
+    let root = state.root()?;
+    let resolved = crate::market::resolve_location(&location);
+    let kind = crate::market::kind_of(&location).to_string();
+    let current = crate::market::cached(&root)?.map(|r| r.sequence);
+
+    let reference = crate::market::SourceRef {
+        kind: kind.clone(),
+        location: location.clone(),
+    };
+
+    // Into a scratch directory, so a probe cannot touch the real cache even by
+    // accident: `refresh` writes the index it accepted, and the version of this
+    // that passed the workspace root replaced a good catalogue with a probe of
+    // a bad one.
+    let scratch = std::env::temp_dir().join(format!("stackvo-probe-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+
+    let outcome = {
+        let scratch = scratch.clone();
+        tauri::async_runtime::spawn_blocking(move || -> Result<crate::market::Registry> {
+            let source = crate::market::open(&scratch, &reference)?;
+            // `Trust::Unsigned` and `previous: None` on purpose. Trust is the
+            // refresh's decision, and passing the cached index here would make
+            // a backwards index an error instead of the fact this reports.
+            crate::market::refresh(&scratch, source.as_ref(), crate::market::Trust::Unsigned, None)
+        })
+        .await
+        .map_err(|e| Error::new(Code::IoError, format!("the probe could not be run: {e}")))?
+    };
+    let _ = std::fs::remove_dir_all(&scratch);
+
+    Ok(match outcome {
+        Ok(registry) => SourceProbe {
+            location,
+            resolved,
+            kind,
+            reachable: true,
+            packages: registry.packages.len(),
+            versions: registry.packages.iter().map(|p| p.versions.len()).sum(),
+            goes_backwards: current.is_some_and(|have| registry.sequence < have),
+            sequence: Some(registry.sequence),
+            generated_at: Some(registry.generated_at.clone()),
+            expires: registry.expires.clone(),
+            current_sequence: current,
+            error: None,
+            hint_key: None,
+        },
+        Err(e) => SourceProbe {
+            location,
+            resolved,
+            kind,
+            reachable: false,
+            packages: 0,
+            versions: 0,
+            sequence: None,
+            generated_at: None,
+            expires: None,
+            current_sequence: current,
+            goes_backwards: false,
+            error: Some(e.message.clone()),
+            hint_key: e.hint_key.map(str::to_string),
+        },
+    })
+}
+
+// ---------------------------------------------------------------- handover
+
+/// What the migration would do, or why it cannot.
+///
+/// The plan is computed and shown before anything is written, because the one
+/// workspace this touches is one somebody is already using — `handover.rs` is
+/// built as plan-then-apply for that reason, and a UI that only offered the
+/// apply half would have thrown the reason away.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandoverPreview {
+    /// `.env` has service state and no table exists yet.
+    pub pending: bool,
+    /// Already migrated: the table is there.
+    pub migrated: bool,
+    /// What the instances would be, in the order they would be written.
+    pub instances: Vec<HandoverInstance>,
+    /// Human-readable, already translated by the front end through `hint_key`
+    /// where one applies — these carry the moving-tag resolutions and the
+    /// adopted volumes, which are the two things a user should see *before*
+    /// agreeing rather than in a log afterwards.
+    pub notes: Vec<HandoverNote>,
+    pub blockers: Vec<HandoverNote>,
+    /// Whether `.env.pre-market.bak` is already on disk.
+    pub backup: bool,
+    /// Packages the handover needs before it can run. Empty on a workspace
+    /// whose versions are all installed, which is what the happy path is.
+    pub missing: Vec<MissingPackage>,
+}
+
+/// A package the handover needs and this machine does not have.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissingPackage {
+    pub service: String,
+    pub version: String,
+    /// Whether the cached index offers it, which decides whether the UI can
+    /// offer a button or only an explanation.
+    pub installable: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandoverInstance {
+    pub id: String,
+    pub service: String,
+    pub version: String,
+    pub ports: BTreeMap<String, u16>,
+    pub volumes: BTreeMap<String, String>,
+}
+
+/// One line of the preview: a machine-readable `kind` and the subject it is
+/// about, so the front end translates rather than parses.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandoverNote {
+    pub kind: String,
+    pub subject: String,
+    pub detail: String,
+}
+
+fn preview_of(root: &std::path::Path) -> Result<HandoverPreview> {
+    let migrated = crate::instances::path(root).exists();
+    let env = crate::config::Env::load(root)?;
+    let tree = crate::pkg::Tree::open(&crate::market::dir(root))?;
+    let pending = crate::handover::is_pending(root, &env, &tree);
+
+    // A workspace that has already migrated has nothing to plan, and planning
+    // it anyway is not merely wasted work — it is **wrong output**. The plan
+    // reads `.env`, whose service keys are deliberately left behind as a record
+    // (marked, never deleted), so it happily produces blockers about versions
+    // this workspace stopped using the moment the table was written. The panel
+    // upstream shows on `blockers.length > 0`, so a migrated machine was told
+    // it "still keeps its services in .env" — while the Services page was
+    // reading the table and the containers were running from it.
+    //
+    // `handover_apply` already refuses in this state. This is the same refusal
+    // moved to where it is read rather than where it is acted on.
+    if migrated {
+        return Ok(HandoverPreview {
+            pending: false,
+            migrated: true,
+            instances: Vec::new(),
+            notes: Vec::new(),
+            blockers: Vec::new(),
+            backup: crate::handover::backup_path(root).exists(),
+            missing: Vec::new(),
+        });
+    }
+
+    // The timestamp the plan stamps on each package reference. Real, because it
+    // is recorded as when this workspace adopted the package.
+    let now = crate::snapshot::now_rfc3339();
+    let plan = crate::handover::plan(root, &env, &tree, &crate::ports::is_free, &now);
+
+    let notes = plan
+        .notes
+        .iter()
+        .map(|note| match note {
+            crate::handover::Note::ResolvedMovingTag { service, from, to } => HandoverNote {
+                kind: "resolvedMovingTag".into(),
+                subject: service.clone(),
+                detail: format!("{from} → {to}"),
+            },
+            crate::handover::Note::PortMoved {
+                instance,
+                port,
+                from,
+                to,
+            } => HandoverNote {
+                kind: "portMoved".into(),
+                subject: instance.clone(),
+                detail: format!("{port}: {from} → {to}"),
+            },
+            crate::handover::Note::AdoptedVolume { instance, volume } => HandoverNote {
+                kind: "adoptedVolume".into(),
+                subject: instance.clone(),
+                detail: volume.clone(),
+            },
+            crate::handover::Note::SettingHasNoHome { service, key } => HandoverNote {
+                kind: "settingHasNoHome".into(),
+                subject: service.clone(),
+                detail: key.clone(),
+            },
+        })
+        .collect();
+
+    let blockers = plan
+        .blockers
+        .iter()
+        .map(|blocker| match blocker {
+            crate::handover::Blocker::UnknownService { service } => HandoverNote {
+                kind: "unknownService".into(),
+                subject: service.clone(),
+                detail: String::new(),
+            },
+            crate::handover::Blocker::VersionNotInstalled {
+                service,
+                version,
+                available,
+            } => HandoverNote {
+                kind: "versionNotInstalled".into(),
+                subject: format!("{service}@{version}"),
+                detail: available.join(", "),
+            },
+            crate::handover::Blocker::NothingToInstall { service } => HandoverNote {
+                kind: "nothingToInstall".into(),
+                subject: service.clone(),
+                detail: String::new(),
+            },
+            crate::handover::Blocker::NoFreePort { instance, port } => HandoverNote {
+                kind: "noFreePort".into(),
+                subject: instance.clone(),
+                detail: port.clone(),
+            },
+        })
+        .collect();
+
+    // What would unblock this, as data rather than as a sentence to read.
+    //
+    // The blocker above is the truthful statement of the problem; this is the
+    // route out of it. Every version `.env` names has to be installed before
+    // the table can point at it, and on a workspace that has never opened the
+    // Market that is *every* version — so a preview that only refused was a
+    // dead end with the answer one page away and unnamed.
+    //
+    // `installable` is the difference between "press this" and something else
+    // entirely: the registry either publishes that version or it does not, and
+    // ADR 0014 makes the second case a mistake somebody made rather than a
+    // withdrawal.
+    let registry = crate::market::cached(root)?;
+    let missing: Vec<MissingPackage> = plan
+        .blockers
+        .iter()
+        .filter_map(|blocker| match blocker {
+            crate::handover::Blocker::VersionNotInstalled {
+                service, version, ..
+            } => Some((service.clone(), version.clone())),
+            _ => None,
+        })
+        .map(|(service, version)| MissingPackage {
+            installable: registry
+                .as_ref()
+                .is_some_and(|r| r.version(&service, &version).is_some()),
+            service,
+            version,
+        })
+        .collect();
+
+    Ok(HandoverPreview {
+        missing,
+        pending,
+        migrated,
+        instances: plan
+            .instances
+            .iter()
+            .map(|i| HandoverInstance {
+                id: i.id.clone(),
+                service: i.service.clone(),
+                version: i.version.clone(),
+                ports: i.ports.clone(),
+                volumes: i.volumes.clone(),
+            })
+            .collect(),
+        notes,
+        blockers,
+        backup: crate::handover::backup_path(root).exists(),
+    })
+}
+
+#[tauri::command]
+pub fn handover_preview(state: State<'_, AppState>) -> Result<HandoverPreview> {
+    preview_of(&state.root()?)
+}
+
+/// Write the table, after backing `.env` up.
+///
+/// Recomputes the plan rather than taking one from the front end. A plan is a
+/// decision about ports and volumes made against the machine as it was when it
+/// was computed, and the machine moves — accepting one over IPC would let a
+/// stale preview claim a port something else has since taken.
+#[tauri::command]
+pub async fn handover_apply(state: State<'_, AppState>) -> Result<HandoverPreview> {
+    let root = state.root()?;
+
+    if crate::instances::path(&root).exists() {
+        return Err(Error::new(
+            Code::Conflict,
+            "this workspace has already been handed over. A second run would adopt the same \
+             volumes into a table that already claims them",
+        ));
+    }
+
+    let env = crate::config::Env::load(&root)?;
+    let tree = crate::pkg::Tree::open(&crate::market::dir(&root))?;
+    let now = crate::snapshot::now_rfc3339();
+    let plan = crate::handover::plan(&root, &env, &tree, &crate::ports::is_free, &now);
+
+    let count = plan.instances.len();
+    crate::handover::apply(&root, &plan)?;
+    crate::audit::record(
+        "handover_apply",
+        format!("{count} instance(s) carried over from .env"),
+        crate::audit::Outcome::Ok,
+    );
+
+    preview_of(&root)
 }
 
 // ---------------------------------------------------------------- instances
