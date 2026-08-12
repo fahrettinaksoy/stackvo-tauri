@@ -28,6 +28,8 @@ const api = vi.hoisted(() => ({
   marketInstall: vi.fn(),
   marketUninstall: vi.fn(),
   instanceList: vi.fn(),
+  handoverPreview: vi.fn(),
+  handoverApply: vi.fn(),
   instanceCreate: vi.fn(),
   instanceRemove: vi.fn(),
   instancePromote: vi.fn(),
@@ -95,6 +97,33 @@ const CATALOG = [
   },
 ];
 
+/**
+ * A second category, so the tab strip is more than one tab.
+ *
+ * The catalogue fixture had exactly one, which meant every assertion about
+ * grouping passed on a page that never had to choose between groups — and a
+ * tab strip with one tab is indistinguishable from no tab strip at all.
+ */
+const REDIS = {
+  service: 'redis',
+  category: 'cache',
+  name: { en: 'Redis' },
+  summary: {},
+  capabilities: ['cache'],
+  multiple: true,
+  versions: [
+    {
+      version: '7.0',
+      recommended: true,
+      support: 'supported',
+      eolDate: null,
+      sizeBytes: 1024,
+      installed: false,
+      inUse: false,
+    },
+  ],
+};
+
 const INSTANCES = [
   {
     id: 'mysql-8-0',
@@ -118,6 +147,17 @@ beforeEach(() => {
   api.marketStatus.mockResolvedValue(STATUS);
   api.marketCatalog.mockResolvedValue(CATALOG);
   api.instanceList.mockResolvedValue(INSTANCES);
+  // A workspace that has already migrated, which is what these fixtures
+  // describe. Without it the composable's load() threw on an absent stub and
+  // the page rendered its error line — passing tests, over a broken page.
+  api.handoverPreview.mockResolvedValue({
+    pending: false,
+    migrated: true,
+    instances: [],
+    notes: [],
+    blockers: [],
+    backup: true,
+  });
 });
 
 describe('the market page', () => {
@@ -141,8 +181,21 @@ describe('the market page', () => {
     await flushPromises();
 
     expect(page.text()).toContain('MySQL');
-    expect(page.text()).toContain('databases');
     expect(api.marketCatalog).toHaveBeenCalled();
+  });
+
+  /// Grouped by category, and by the category's *name* rather than its
+  /// directory slug. A flat list of twenty-five services with the category as a
+  /// chip made the category something to read on every row instead of something
+  /// to navigate by.
+  it('groups the catalogue under its category, by name', async () => {
+    const page = mountPage();
+    await flushPromises();
+
+    // en.js's `serviceSettings.categories.databases`, which Settings already
+    // uses — not the `databases` directory name the package carries.
+    expect(page.text()).toContain('Databases');
+    expect(page.text()).toContain('1 service(s)');
   });
 
   /// Hidden by default, listed behind a switch, never removed — somebody's
@@ -152,11 +205,191 @@ describe('the market page', () => {
     await flushPromises();
 
     expect(page.text()).not.toContain('5.7');
-    expect(page.text()).toContain('1 hidden');
+    // "end-of-life", not "hidden". The count is a fact about the version's
+    // upstream, and "hidden" reads as something the app is withholding.
+    expect(page.text()).toContain('1 end-of-life');
+    // And the page says why one is published at all, next to the switch.
+    expect(page.text()).toContain('upstream has stopped patching them');
 
     page.vm.market.showOlder.value = true;
     await flushPromises();
     expect(page.text()).toContain('5.7');
+  });
+
+  /// One tab per category, and only the open one on screen.
+  ///
+  /// The categories were stacked headings, which on twenty-five services made
+  /// the catalogue one long scroll whatever you were looking for. The order is
+  /// the repository's own — a stack is a database and a cache before it is an
+  /// admin UI — so `databases` is what the page opens on.
+  it('offers a tab per category and opens on the first', async () => {
+    api.marketCatalog.mockResolvedValue([...CATALOG, REDIS]);
+
+    const page = mountPage();
+    await flushPromises();
+
+    const tabs = page.findAll('.v-tab');
+    expect(tabs).toHaveLength(2);
+    // Translated names, and the fixed order rather than alphabetical — which
+    // would have opened the page on `cache`.
+    expect(tabs[0].text()).toContain('Databases');
+    expect(tabs[1].text()).toContain('Cache');
+
+    expect(page.vm.category).toBe('databases');
+  });
+
+  /// Down the side, not across the top.
+  ///
+  /// Horizontal was the first attempt and does not fit: eight category names in
+  /// a column that is half the page either scroll behind arrows — hiding the
+  /// thing the tabs were added to make visible — or wrap to three rows.
+  it('runs the category rail vertically', async () => {
+    api.marketCatalog.mockResolvedValue([...CATALOG, REDIS]);
+
+    const page = mountPage();
+    await flushPromises();
+
+    expect(page.find('.v-tabs--vertical').exists()).toBe(true);
+    // And no arrow affordance, which is what a horizontal strip needs and what
+    // hides categories behind a scroll.
+    expect(page.find('.v-slide-group__prev').exists()).toBe(false);
+  });
+
+  /// Switching tabs shows the other category's services.
+  it('shows the category that is selected', async () => {
+    api.marketCatalog.mockResolvedValue([...CATALOG, REDIS]);
+
+    const page = mountPage();
+    await flushPromises();
+
+    const windows = page.findAll('.v-window-item');
+    expect(windows).toHaveLength(2);
+
+    page.vm.category = 'cache';
+    await flushPromises();
+
+    const active = page.find('.v-tab--selected');
+    expect(active.text()).toContain('Cache');
+    // `eager`, so both categories are in the document — a page a browser cannot
+    // find text in is one you have to already know your way around.
+    expect(page.text()).toContain('Redis');
+    expect(page.text()).toContain('MySQL');
+  });
+
+  /// A selection that no longer exists leaves the strip with nothing active and
+  /// the window blank. The groups are rebuilt on every refresh and on every
+  /// change of source, so this is not a hypothetical.
+  it('moves the selection when the category it named is gone', async () => {
+    api.marketCatalog.mockResolvedValue([...CATALOG, REDIS]);
+
+    const page = mountPage();
+    await flushPromises();
+
+    page.vm.category = 'cache';
+    await flushPromises();
+    expect(page.vm.category).toBe('cache');
+
+    api.marketCatalog.mockResolvedValue(CATALOG);
+    await page.vm.market.load();
+    await flushPromises();
+
+    expect(page.vm.category).toBe('databases');
+  });
+
+  /// The handover panel says the problem once.
+  ///
+  /// It said it twice: a paragraph explaining that the version would not be
+  /// migrated to a nearby one, and under it a list of what to install — the
+  /// same fact in two registers, stacked. When a button can answer the whole
+  /// thing, the button is the sentence.
+  it('states a missing package once, with the button that fixes it', async () => {
+    api.handoverPreview.mockResolvedValue({
+      pending: false,
+      migrated: false,
+      instances: [],
+      notes: [],
+      blockers: [{ kind: 'versionNotInstalled', subject: 'mariadb@10.6', detail: '10.11' }],
+      backup: false,
+      missing: [{ service: 'mariadb', version: '10.6', installable: true }],
+    });
+
+    const page = mountPage();
+    await flushPromises();
+
+    const text = page.text();
+    expect(text).toContain('mariadb@10.6');
+    // The long refusal is gone; only the actionable line is left.
+    expect(text).not.toContain('would be an upgrade nobody asked for');
+    // And the mechanics of the undo are not on a screen where nothing can be
+    // undone yet — the migration has not run and cannot.
+    expect(text).not.toContain('.env.pre-market.bak');
+  });
+
+  /// A blocker no button can answer keeps its explanation.
+  it('keeps the explanation when the catalogue cannot supply the package', async () => {
+    api.handoverPreview.mockResolvedValue({
+      pending: false,
+      migrated: false,
+      instances: [],
+      notes: [],
+      blockers: [{ kind: 'versionNotInstalled', subject: 'mariadb@10.6', detail: '10.11' }],
+      backup: false,
+      missing: [{ service: 'mariadb', version: '10.6', installable: false }],
+    });
+
+    const page = mountPage();
+    await flushPromises();
+
+    const text = page.text();
+    expect(text).toContain('would be an upgrade nobody asked for');
+    expect(text).toContain('not in the catalogue this machine has read');
+  });
+
+  /// A workspace that has already migrated is told nothing.
+  ///
+  /// The panel keyed on "are there blockers", and the plan behind it reads
+  /// `.env` — whose service keys are deliberately left behind as a record,
+  /// marked rather than deleted. So a machine that migrated, whose Services
+  /// page was reading the table and whose containers were running from it, was
+  /// told it "still keeps its services in .env".
+  it('says nothing about the handover once the workspace has migrated', async () => {
+    api.handoverPreview.mockResolvedValue({
+      pending: false,
+      migrated: true,
+      instances: [],
+      notes: [],
+      // What the old preview produced from the leftover `.env` record.
+      blockers: [{ kind: 'versionNotInstalled', subject: 'mariadb@10.6', detail: '10.11' }],
+      backup: true,
+      missing: [{ service: 'mariadb', version: '10.6', installable: true }],
+    });
+
+    const page = mountPage();
+    await flushPromises();
+
+    expect(page.text()).not.toContain('still keeps its services in .env');
+    expect(page.text()).not.toContain('mariadb@10.6');
+  });
+
+  /// The catalogue and this machine, beside each other.
+  ///
+  /// They were stacked, so on a real catalogue the instance table was a scroll
+  /// away below twenty-five services — and an empty one read as if the page had
+  /// simply ended. The assertion is on the structure rather than on pixels
+  /// because jsdom does no layout; what it can hold is that both panes are
+  /// siblings of one container rather than one following the other.
+  it('puts the catalogue and the instances in two columns', async () => {
+    const page = mountPage();
+    await flushPromises();
+
+    const columns = page.find('.market-columns');
+    expect(columns.exists()).toBe(true);
+    expect(columns.findAll('.market-col')).toHaveLength(2);
+
+    const [catalogue, instances] = columns.findAll('.market-col');
+    expect(catalogue.text()).toContain('MySQL');
+    expect(instances.text()).toContain('mysql-8-0');
+    expect(catalogue.text()).not.toContain('mysql-8-0');
   });
 
   /// An installed version is shown whatever its support status, or a user could

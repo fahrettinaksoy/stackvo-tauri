@@ -90,6 +90,8 @@ pub struct Policy {
     locked: BTreeSet<String>,
     /// Prepended to image references that do not already name a registry.
     registry_prefix: Option<String>,
+    /// What an administrator says about where packages come from.
+    market: Market,
     /// Where this came from, for an error message that can be acted on. `None`
     /// when no policy file was found, which is the ordinary case.
     source: Option<PathBuf>,
@@ -98,10 +100,102 @@ pub struct Policy {
     error: Option<String>,
 }
 
+/// The `market` block: where packages come from and which of them may be run.
+///
+/// `docs/servis-market-mimarisi.md` §9. Every field is optional and the default
+/// for all of them is "no opinion", which is what an unmanaged machine has.
+///
+/// ## One of these is a lock and the rest are not
+///
+/// ADR 0009's sentence holds for this block as it holds for the rest of the
+/// file: **it is not a security boundary.** A user who can write the policy can
+/// widen it, and `STACKVO_POLICY_FILE` points it anywhere.
+///
+/// [`Market::require_signature`] is the exception, and the asymmetry is
+/// deliberate rather than accidental: verification lives in the app's own code,
+/// and this field can only turn it **on**. There is no value of it that turns a
+/// check off. That is the difference between a lock and a note, and it is worth
+/// stating because the inverse — a policy key that could disable a check —
+/// would mean the check was never one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Market {
+    /// A file server the organisation runs. Faz 5 reads it; today it is
+    /// recorded and reported so an admin can deploy the file before the
+    /// version that uses it, which is the order these things actually ship in.
+    pub registry_url: Option<String>,
+    /// A directory or bundle to install from with no network at all.
+    ///
+    /// ADR 0011 makes this the **only** way an air-gapped machine gets a
+    /// catalogue, because nothing is embedded. Not an enterprise extra.
+    pub offline_bundle: Option<PathBuf>,
+    /// Refuse an unsigned index. Off by default only because no key is pinned
+    /// yet (ADR 0015); a machine that sets it gets a refusal rather than a
+    /// downgrade, which is `market::Trust::Signed`'s existing behaviour.
+    pub require_signature: bool,
+    /// Services that may be installed. Empty means no opinion — **not** "none".
+    pub allowed_packages: BTreeSet<String>,
+    /// Registries an image may come from. Empty means no opinion.
+    pub allowed_registries: BTreeSet<String>,
+    /// Whether the app may replace an installed package on its own.
+    pub auto_update: Option<bool>,
+    /// Extra ed25519 public keys, for an organisation signing its own mirror.
+    pub additional_keys: Vec<String>,
+}
+
+impl Market {
+    /// Is this service one the organisation allows?
+    ///
+    /// An empty list is silence, not a refusal. Reading it the other way would
+    /// mean any administrator who wrote a `market` block for one unrelated
+    /// reason had accidentally forbidden every package.
+    pub fn allows_package(&self, service: &str) -> bool {
+        self.allowed_packages.is_empty() || self.allowed_packages.contains(service)
+    }
+
+    /// Is this image reference from a registry the organisation allows?
+    ///
+    /// The reference is matched on its host part, and a reference with no host
+    /// is Docker Hub — which is the case that has to be got right, because
+    /// `mysql:8.0` naming no registry is what most of the catalogue says.
+    pub fn allows_registry(&self, reference: &str) -> bool {
+        if self.allowed_registries.is_empty() {
+            return true;
+        }
+        // A reference with no `/` at all has no host part — every colon in it
+        // belongs to the tag. `mysql:8.0` is Docker Hub, and reading its `:8.0`
+        // as a port would have let a bare image through a list that names one
+        // registry, which is the opposite of what the list is for. Only past a
+        // slash is a head with a dot, a port or the name `localhost` a registry.
+        let host = match reference.split_once('/') {
+            Some((head, _))
+                if head.contains('.') || head.contains(':') || head == "localhost" =>
+            {
+                head
+            }
+            _ => "docker.io",
+        };
+        self.allowed_registries.contains(host)
+    }
+
+    fn is_set(&self) -> bool {
+        self.registry_url.is_some()
+            || self.offline_bundle.is_some()
+            || self.require_signature
+            || !self.allowed_packages.is_empty()
+            || !self.allowed_registries.is_empty()
+            || self.auto_update.is_some()
+            || !self.additional_keys.is_empty()
+    }
+}
+
 impl Policy {
     /// No administrator has said anything. The ordinary case.
     pub fn none() -> Self {
         Self::default()
+    }
+
+    pub fn market(&self) -> &Market {
+        &self.market
     }
 
     /// Is there anything here at all?
@@ -260,14 +354,98 @@ impl Policy {
             }
         }
 
+        let market = parse_market(object.get("market"), &mut complaints);
+
         Self {
             settings,
             locked,
             registry_prefix,
+            market,
             source,
             error: (!complaints.is_empty()).then(|| complaints.join("; ")),
         }
     }
+
+    /// Does the policy say anything about the market at all?
+    pub fn constrains_market(&self) -> bool {
+        self.market.is_set()
+    }
+}
+
+/// The `market` block, field by field.
+///
+/// Every unreadable field is a complaint and a fallback to "no opinion" rather
+/// than a refusal of the whole file — the module comment's rule, applied here:
+/// a typo pushed to a fleet cannot be a fleet that will not start. The
+/// complaints are what stop that from being silent.
+fn parse_market(given: Option<&serde_json::Value>, complaints: &mut Vec<String>) -> Market {
+    let mut market = Market::default();
+    let Some(given) = given else {
+        return market;
+    };
+    let Some(object) = given.as_object() else {
+        complaints.push("market is not an object and was ignored".to_string());
+        return market;
+    };
+
+    let text = |value: &serde_json::Value, key: &str, complaints: &mut Vec<String>| {
+        match value.as_str().map(str::trim) {
+            Some("") | None => {
+                complaints.push(format!("market.{key} is not a non-empty string and was ignored"));
+                None
+            }
+            Some(found) => Some(found.to_string()),
+        }
+    };
+
+    let list = |value: &serde_json::Value, key: &str, complaints: &mut Vec<String>| {
+        let Some(array) = value.as_array() else {
+            complaints.push(format!("market.{key} is not an array and was ignored"));
+            return BTreeSet::new();
+        };
+        let mut out = BTreeSet::new();
+        for entry in array {
+            match entry.as_str().map(str::trim) {
+                Some("") | None => {
+                    complaints.push(format!("market.{key} contains a non-string entry"))
+                }
+                Some(found) => {
+                    out.insert(found.to_string());
+                }
+            }
+        }
+        out
+    };
+
+    for (key, value) in object {
+        match key.as_str() {
+            "registryUrl" => market.registry_url = text(value, key, complaints),
+            "offlineBundle" => {
+                market.offline_bundle = text(value, key, complaints).map(PathBuf::from)
+            }
+            "requireSignature" => match value.as_bool() {
+                Some(on) => market.require_signature = on,
+                None => complaints
+                    .push("market.requireSignature is not a boolean and was ignored".to_string()),
+            },
+            "autoUpdate" => match value.as_bool() {
+                Some(on) => market.auto_update = Some(on),
+                None => complaints
+                    .push("market.autoUpdate is not a boolean and was ignored".to_string()),
+            },
+            "allowedPackages" => market.allowed_packages = list(value, key, complaints),
+            "allowedRegistries" => market.allowed_registries = list(value, key, complaints),
+            "additionalKeys" => {
+                market.additional_keys = list(value, key, complaints).into_iter().collect()
+            }
+            // Named rather than dropped. An administrator who typed
+            // `allowedPackage` deployed a file that does nothing, and finding
+            // that out from the app beats finding it out from a user.
+            other => complaints.push(format!("market.{other} is not a key this build knows")),
+        }
+    }
+
+    market
 }
 
 /// The file this build will look at, override included.
@@ -773,5 +951,113 @@ mod tests {
         assert!(!rewrites("configs/mysql.cnf"));
         assert!(!rewrites("shop/.dockerignore"));
         assert!(!rewrites("shop/nginx.conf"));
+    }
+
+    // ------------------------------------------------------------- market
+
+    fn market_of(json: &str) -> Policy {
+        Policy::parse(json, Path::new("/policy.json"))
+    }
+
+    /// The default is silence, and silence is not refusal. An administrator who
+    /// wrote a `market` block for one unrelated reason has not thereby
+    /// forbidden every package on the machine.
+    #[test]
+    fn an_empty_market_block_forbids_nothing() {
+        let policy = market_of(r#"{"schemaVersion": 1, "market": {}}"#);
+        assert!(policy.market().allows_package("mysql"));
+        assert!(policy.market().allows_registry("mysql:8.0"));
+        assert!(!policy.constrains_market());
+        assert_eq!(policy.error(), None);
+    }
+
+    #[test]
+    fn an_allow_list_admits_what_it_names_and_nothing_else() {
+        let policy = market_of(
+            r#"{"schemaVersion": 1, "market": {"allowedPackages": ["mysql", "redis"]}}"#,
+        );
+        assert!(policy.market().allows_package("mysql"));
+        assert!(!policy.market().allows_package("cassandra"));
+        assert!(policy.constrains_market());
+    }
+
+    /// A reference with no host is Docker Hub, and it is the case that has to be
+    /// right: most of the catalogue writes `mysql:8.0` and names no registry at
+    /// all. Reading that as "no registry, so allowed" would make the list
+    /// enforce nothing.
+    #[test]
+    fn a_bare_image_reference_counts_as_docker_hub() {
+        let policy = market_of(
+            r#"{"schemaVersion": 1, "market": {"allowedRegistries": ["registry.corp.example"]}}"#,
+        );
+        assert!(!policy.market().allows_registry("mysql:8.0"));
+        assert!(!policy.market().allows_registry("valkey/valkey:8"));
+        assert!(policy
+            .market()
+            .allows_registry("registry.corp.example/mysql:8.0"));
+        assert!(!policy
+            .market()
+            .allows_registry("docker.elastic.co/elasticsearch/elasticsearch:8.11.3"));
+    }
+
+    #[test]
+    fn docker_hub_can_be_named_explicitly() {
+        let policy =
+            market_of(r#"{"schemaVersion": 1, "market": {"allowedRegistries": ["docker.io"]}}"#);
+        assert!(policy.market().allows_registry("mysql:8.0"));
+        assert!(!policy
+            .market()
+            .allows_registry("docker.elastic.co/elasticsearch/elasticsearch:8.11.3"));
+    }
+
+    /// The one key in the block that can only tighten. There is no value of it
+    /// that turns verification off — a policy key that could would mean the
+    /// check was never a check (ADR 0009).
+    #[test]
+    fn require_signature_is_off_until_it_is_asked_for() {
+        assert!(!market_of(r#"{"schemaVersion": 1}"#).market().require_signature);
+        assert!(
+            market_of(r#"{"schemaVersion": 1, "market": {"requireSignature": true}}"#)
+                .market()
+                .require_signature
+        );
+    }
+
+    /// A typo cannot make the app unstartable, and it cannot be silent either.
+    /// A key nobody knows is a file that does nothing, and the administrator
+    /// who deployed it believes it is in force.
+    #[test]
+    fn an_unknown_market_key_is_named_rather_than_dropped() {
+        let policy =
+            market_of(r#"{"schemaVersion": 1, "market": {"allowedPackage": ["mysql"]}}"#);
+        let error = policy.error().unwrap_or_default();
+        assert!(error.contains("allowedPackage"), "{error}");
+        assert!(policy.market().allows_package("cassandra"));
+    }
+
+    #[test]
+    fn a_market_field_of_the_wrong_type_is_reported_and_ignored() {
+        let policy = market_of(
+            r#"{"schemaVersion": 1, "market": {"requireSignature": "yes", "allowedPackages": "mysql"}}"#,
+        );
+        let error = policy.error().unwrap_or_default();
+        assert!(error.contains("requireSignature"), "{error}");
+        assert!(error.contains("allowedPackages"), "{error}");
+        assert!(!policy.market().require_signature);
+        assert!(policy.market().allows_package("anything"));
+    }
+
+    /// ADR 0011: with nothing embedded, this is the whole of how a machine with
+    /// no network gets a catalogue.
+    #[test]
+    fn an_offline_bundle_is_a_path() {
+        let policy = market_of(
+            r#"{"schemaVersion": 1, "market": {"offlineBundle": "/opt/stackvo/packages"}}"#,
+        );
+        assert_eq!(
+            policy.market().offline_bundle.as_deref(),
+            Some(Path::new("/opt/stackvo/packages"))
+        );
+        assert!(policy.constrains_market());
     }
 }

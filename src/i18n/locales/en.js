@@ -138,6 +138,10 @@ export default {
     colConfiguration: 'Configuration',
     colStopStart: 'Stop/Start',
     colRestart: 'Restart',
+    colRebuild: 'Rebuild',
+    rebuild: 'Rebuild',
+    rebuildHint:
+      'Regenerate the Dockerfile from stackvo.json, build the image, and recreate the container. Restart does none of these.',
     colTerminal: 'Terminal',
     colOpen: 'Open in the browser',
     colDetail: 'Detail',
@@ -147,11 +151,37 @@ export default {
     addToHosts: 'Add this line to your hosts file:',
   },
 
+  catalogueSettings: {
+    title: 'Service catalogue',
+    desc: 'Where service packages are fetched from, and whether that address works',
+    current:
+      '{location} · {packages} package(s) published, {installed} version(s) installed on this machine',
+    none: 'No catalogue on this machine yet. StackVo ships no services inside itself, so nothing is available until one is fetched.',
+    policyBundle:
+      'An administrator has set the source to the bundle at {path}. The address below is ignored.',
+    policyMirror: 'An administrator has set the source to {url}. The address below is ignored.',
+    signatureRequired:
+      'This machine requires a signed catalogue and no signing key is published yet, so fetching is refused rather than falling back to an unsigned one.',
+    address: 'Catalogue address',
+    addressHint:
+      'An https:// address or a folder. A GitHub repository URL is translated to where its files are actually served from.',
+    test: 'Test',
+    pickFolder: 'Choose a folder',
+    use: 'Fetch and use',
+    ok: 'Reachable — {packages} package(s), {versions} version(s), index {sequence}.',
+    backwards:
+      'This index is {sequence} and the one already here is {current}. Fetching it would be refused: an index that goes backwards is how a withdrawn version comes back.',
+    failed: 'Could not read a catalogue there',
+    resolved: 'Fetched from {url}',
+  },
   marketView: {
     title: 'Market',
     subtitle: 'Where services come from, and which versions this machine has',
     catalogue: 'Catalogue',
     chooseSource: 'Choose a source',
+    sourceTitle: 'Where the catalogue comes from',
+    sourceInSettings:
+      'Settings → Service catalogue keeps this address and can test it without fetching.',
     noCatalogue: 'No catalogue yet',
     noCatalogueBody:
       'StackVo ships no services inside itself. Point it at a source — an offline bundle, or a checkout of the service packages repository — and the catalogue is read from there.',
@@ -161,7 +191,10 @@ export default {
     showOlder: 'Show end-of-life versions',
     multiVersion: 'Runs several versions',
     versionCount: '{n} version(s)',
-    hiddenCount: '{n} hidden',
+    hiddenCount: '{n} end-of-life',
+    serviceCount: '{n} service(s)',
+    eolWhy:
+      'End-of-life versions still run — upstream has stopped patching them, which is a different thing from broken. They are kept out of the lists below rather than out of the catalogue: a workspace whose .env names one has to be able to migrate, and an index that could drop a version is one where somebody’s running service loses its source.',
     recommended: 'Recommended',
     support: {
       supported: 'Supported',
@@ -185,6 +218,30 @@ export default {
     packageMissing: 'Package missing',
     makePrimary: 'Make primary',
     removeInstance: 'Remove',
+    handoverTitle: 'This workspace still keeps its services in .env',
+    handoverBody:
+      '{n} service(s) would move to the instance table. Volumes are adopted, not renamed, so the data stays where it is; ports are kept; and the old container name survives as a network alias, so a project pointing at stackvo-mysql keeps working.',
+    handoverBlocked: 'The handover is all-or-nothing and cannot run yet. Nothing has been changed:',
+    handoverRevert: 'Reversible — .env is backed up first and its keys are kept.',
+    handoverRevertHow:
+      '.env is copied to .env.pre-market.bak before anything is written, and its service keys are marked rather than removed. To go back, delete services/instances.json.',
+    handoverApply: 'Carry them over',
+    handoverMissing:
+      'The handover needs a package for every version .env names, and {n} of them are not on this machine yet:',
+    handoverInstallAll: 'Install them',
+    handoverNotInCatalogue:
+      '{subject} is not in the catalogue this machine has read either. Check the source, or point .env at a version that is.',
+    handoverNote: {
+      resolvedMovingTag: '{subject}: a moving tag is pinned to a real version ({detail})',
+      portMoved: '{subject}: the port in .env is taken on this machine ({detail})',
+      adoptedVolume: '{subject}: keeps its existing volume {detail}',
+      settingHasNoHome: '{subject}: the setting {detail} has no home in the package',
+      unknownService: '{subject} is enabled in .env and the catalogue has never heard of it',
+      versionNotInstalled:
+        '{subject} has no package on this machine, and it will not be migrated to a nearby version — that would be an upgrade nobody asked for, performed on a database. Installed: {detail}',
+      nothingToInstall: '{subject} is enabled and the catalogue offers no concrete version',
+      noFreePort: '{subject}: no free port could be found for {detail}',
+    },
   },
   servicesView: {
     disableTitle: 'Disable {name}?',
@@ -347,6 +404,8 @@ export default {
     invalidManifest: 'Invalid stackvo.json',
     problems: 'problem',
     manifestChanged: 'stackvo.json changed — regenerate to apply it.',
+    manifestChangedBuilt:
+      'stackvo.json changed. The container still runs the image it was built from — click to regenerate, rebuild and recreate it.',
     openFolder: 'Open folder',
   },
 
@@ -360,6 +419,27 @@ export default {
     failedToast: '{operation} failed — the console has the output',
   },
 
+  catalogueGate: {
+    title: 'No service catalogue on this machine yet',
+    body: 'StackVo ships no services inside itself — not a template, not even a copy of the list. So this is not an empty catalogue: there is none here yet, and one has to come from somewhere before any service can be installed.',
+    signatureRequired:
+      'This machine requires a signed catalogue, and no signing key is published yet. Fetching is refused rather than falling back to an unsigned one — a check that quietly did nothing would be worse than none.',
+    policyBundle:
+      'An administrator has set the source to the bundle at {path}. Both buttons use it.',
+    policyMirror: 'An administrator has set the source to {url}. Both buttons use it.',
+    online: 'Fetch it',
+    onlineBody:
+      'Downloaded over HTTPS and cached. Once it is here it stays, and the app works offline afterwards.',
+    address: 'Catalogue address',
+    fetch: 'Fetch the catalogue',
+    offline: 'No internet on this machine',
+    offlineBody:
+      'Point at an offline bundle or a checkout of the service packages repository. This is the whole answer for an air-gapped install, not a fallback for one.',
+    choose: 'Choose a folder',
+    skip: 'Continue without services',
+    skipHint:
+      'Projects, the reverse proxy and certificates all work without a catalogue. The Market page offers both of these again whenever you want them.',
+  },
   bootstrap: {
     title: 'Setting the stack up',
     subtitle:
@@ -1240,6 +1320,7 @@ export default {
     stop: 'Stop the container',
     restart: 'Restart the container',
     build: 'Build the project',
+    rebuild: 'Rebuild the project',
     generate: 'Regenerate the configuration',
     up: 'Bring the stack up',
     down: 'Stop the stack',
@@ -1569,6 +1650,8 @@ export default {
     notBuilt: 'The container has not been built yet; build it to stream logs.',
     openInEditor: 'Open in editor',
     externalTerminal: 'Open in external terminal',
+    rebuildHint:
+      'Rebuild: regenerate the Dockerfile from stackvo.json, build the image, and recreate the container. Restart does none of these — it gives you the same container from the same image.',
     manifest: 'Manifest',
     manifestHint: 'stackvo.json — saving reorders keys to satisfy the write rules.',
     save: 'Save',
@@ -1689,12 +1772,19 @@ export default {
     packageNotInRegistry: 'Refresh the catalogue, or pick a version it lists.',
     registryWentBackwards:
       'The catalogue this source serves is older than the one already here. Check the source before using it.',
+    registryUnreachable:
+      'The catalogue could not be fetched. Check the address and whether this machine reaches it — a proxy set in the system settings is used.',
+    registryAddressIsADirectory:
+      'The address has to be the directory holding registry.json, not the page above it. A GitHub repository URL is translated automatically; anything else is taken as given.',
+    registryMustBeHttps:
+      'A catalogue address has to start with https://. Nothing verifies a signature yet, so the transport is the whole of the protection.',
     removeTheInstanceFirst: 'An instance is still using this package. Remove it, then uninstall.',
     serviceIsSingleInstance:
       'This service runs one version at a time. Remove the instance you have first.',
   },
 
   errors: {
+    NETWORK_ERROR: 'A host this app had to reach did not answer.',
     ENGINE_UNREACHABLE: 'Cannot reach the Docker engine.',
     NO_WORKSPACE: 'No StackVo directory selected.',
     // The code covers every filesystem failure — reading, writing, removing —

@@ -7,7 +7,7 @@
     "tag": "5.2"
   },
   "capabilities": ["admin-ui"],
-  "instancing": { "multiple": false, "identity": "version" },
+  "instancing": { "multiple": true, "identity": "version" },
   "ports": [
     { "name": "main", "container": 80, "preferred": 8081, "protocol": "tcp", "legacyKey": "SERVICE_PHPMYADMIN_HOST_PORT", "primary": false }
   ],
@@ -26,6 +26,7 @@
   "dependsOn": [
     { "capability": "mysql-protocol", "required": false }
   ],
+  "health": { "test": ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:80/"], "interval": "15s", "retries": 8, "startPeriod": "15s" },
   "compose": { "file": "compose.yml.tpl", "sha256": "cd1d41373cc132bbeb3c12be12a076b044c68144baa35338877196ad2dfce41c" },
   "support": {"status":"supported"}
 }

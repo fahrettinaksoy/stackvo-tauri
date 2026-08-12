@@ -30,6 +30,16 @@ export function useMarket() {
   const packages = ref([]);
   const instances = ref([]);
 
+  /**
+   * What the `.env` → `instances.json` migration would do.
+   *
+   * Loaded alongside the catalogue rather than behind a button, because a
+   * workspace that has not migrated is one whose services are still described
+   * somewhere the market page does not read — and a page that shows an empty
+   * instance table on such a machine is telling the user something untrue.
+   */
+  const handover = ref(null);
+
   const loading = ref(false);
   const error = ref(null);
 
@@ -59,6 +69,51 @@ export function useMarket() {
     }))
   );
 
+  /**
+   * The catalogue, grouped the way the packages repository is laid out.
+   *
+   * A flat list of twenty-five services with the category as a chip made the
+   * category something you *read* rather than something you navigate by, and
+   * the chip is the same width as a word so scanning for "the databases" meant
+   * reading every row. The grouping already exists — it is the directory
+   * structure of `packages/`, and `env.schema.json` used the same names before
+   * that — so this is showing a fact rather than inventing an arrangement.
+   *
+   * The order is fixed rather than alphabetical: a stack is a database and a
+   * cache before it is an admin UI, and sorting by name would open the list on
+   * `admin-uis`, which is the category you pick last.
+   */
+  const ORDER = [
+    'databases',
+    'cache',
+    'queue',
+    'search',
+    'storage',
+    'monitoring',
+    'devtools',
+    'admin-uis',
+  ];
+
+  const grouped = computed(() => {
+    const by = new Map();
+    for (const entry of visible.value) {
+      if (!by.has(entry.category)) by.set(entry.category, []);
+      by.get(entry.category).push(entry);
+    }
+    // Anything the app has no order for still appears, after the ones it does.
+    // A category added to the repository before it is added here is a category
+    // whose services would otherwise vanish from this page.
+    const known = ORDER.filter((c) => by.has(c));
+    const rest = [...by.keys()].filter((c) => !ORDER.includes(c)).sort();
+    return [...known, ...rest].map((category) => ({
+      category,
+      packages: by.get(category),
+      // What the end-of-life switch is holding back, per category, so the
+      // count sits next to the thing it is about.
+      hidden: by.get(category).reduce((n, p) => n + p.hidden, 0),
+    }));
+  });
+
   const instancesOf = computed(() => {
     const by = new Map();
     for (const instance of instances.value) {
@@ -78,6 +133,7 @@ export function useMarket() {
       status.value = await api.marketStatus();
       packages.value = asList(await api.marketCatalog());
       instances.value = asList(await api.instanceList());
+      handover.value = await api.handoverPreview();
     } catch (e) {
       error.value = e;
     } finally {
@@ -142,11 +198,75 @@ export function useMarket() {
   const stop = (id) => run(id, () => api.instanceStop(id));
   const restart = (id) => run(id, () => api.instanceRestart(id));
 
+  /**
+   * Carry `.env`'s services over to the instance table.
+   *
+   * Offered only while `handover.pending` and never while it has blockers: the
+   * migration is all-or-nothing in Rust, and a button that produced the same
+   * refusal every time it was pressed would be a button that lies about being
+   * available.
+   *
+   * `.env` is copied to `.env.pre-market.bak` first and its service keys are
+   * marked rather than deleted, so going back is deleting the table.
+   */
+  const migrate = () => run('handover', () => api.handoverApply());
+
+  /** Something the user should read before agreeing, not after. */
+  const handoverPending = computed(
+    () =>
+      handover.value?.migrated !== true &&
+      handover.value?.pending === true &&
+      handover.value?.blockers.length === 0
+  );
+  /**
+   * Blocked, and only while there is still something to do.
+   *
+   * `migrated` is checked here as well as in Rust because the two answer
+   * different questions: Rust decides what the preview *is*, this decides
+   * whether the page says anything at all. A workspace that migrated months ago
+   * has a `.env` full of the keys it was migrated from — they are marked, never
+   * deleted, so the record survives — and a panel keyed on "are there blockers"
+   * read that record back as an outstanding job.
+   */
+  const handoverBlocked = computed(
+    () => handover.value?.migrated !== true && (handover.value?.blockers ?? []).length > 0
+  );
+
+  /** Packages the handover needs and this machine has not got. */
+  const handoverMissing = computed(() => handover.value?.missing ?? []);
+
+  /**
+   * Install everything the handover is short of, in one act.
+   *
+   * Sequential rather than concurrent: each install writes into the package
+   * tree and the last one to finish decides what `load()` reads, and a
+   * half-installed tree is exactly the state `market::install` goes to trouble
+   * to avoid producing. Slower, and the slower one is the one that is right.
+   *
+   * Stops at the first refusal rather than pressing on. A policy that forbids
+   * one package will forbid the next, and five identical errors in a row is a
+   * worse answer than one.
+   */
+  async function installMissing() {
+    const wanted = handoverMissing.value.filter((m) => m.installable);
+    if (!wanted.length) return;
+    await run('handover', async () => {
+      for (const { service, version } of wanted) {
+        await api.marketInstall(service, version);
+      }
+    });
+  }
+
   return {
     status,
     packages,
     instances,
+    handover,
+    handoverPending,
+    handoverBlocked,
+    handoverMissing,
     visible,
+    grouped,
     instancesOf,
     anyInstalled,
     fetched,
@@ -166,5 +286,7 @@ export function useMarket() {
     start,
     stop,
     restart,
+    migrate,
+    installMissing,
   };
 }

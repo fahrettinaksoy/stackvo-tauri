@@ -85,7 +85,7 @@ fn context(
         crate::paths::to_docker_mount(&instance.logs(root).display().to_string()),
     );
     if let Some(url) = &manifest.url {
-        vars.insert("instance.domain".into(), format!("{}.{tld}", url.subdomain));
+        vars.insert("instance.domain".into(), instance.domain(&url.subdomain, tld));
     }
 
     for port in &manifest.ports {
@@ -122,6 +122,27 @@ fn context(
                     .to_string(),
             ),
         );
+    }
+
+    // A companion's network name, readable from the *main* fragment.
+    //
+    // The old templates put both containers in one file and wrote
+    // `KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181` — which resolved, because
+    // `zookeeper` was the compose service key and Compose gives every key a DNS
+    // name. Per instance the key is `kafka-7-5-0-zookeeper`, so that literal
+    // resolves to nothing and the broker never connects. The name is derived in
+    // exactly one place, and this is a fragment's only way to ask for it.
+    for companion in &manifest.companions {
+        vars.insert(
+            format!("companion.{}.host", companion.name),
+            format!("stackvo-{}-{}", instance.id, companion.name),
+        );
+        for port in &companion.ports {
+            vars.insert(
+                format!("companion.{}.port.{}", companion.name, port.name),
+                port.container.to_string(),
+            );
+        }
     }
 
     for setting in &manifest.settings {
@@ -210,6 +231,71 @@ fn permitted(vars: &BTreeMap<String, String>, image: &str) -> crate::compose_pol
     }
 }
 
+/// A string, as a YAML double-quoted scalar.
+///
+/// Every byte of a healthcheck comes out of a manifest, and a manifest is a file
+/// somebody else wrote. `[.]` versus `\.` in E-2's router rule is the same
+/// lesson from the other side: a value that reaches YAML unescaped is a value
+/// that can stop being a value. The schema constrains the *shape* of `health`
+/// and says nothing about the bytes inside a test argument.
+fn quoted(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// `healthcheck:`, written by the app rather than by the package.
+///
+/// The fragment may not declare one — `contracts/compose-policy.json` refuses
+/// the key — for the same reason it may not declare `image:`: this is the field
+/// `depends_on: condition: service_healthy` reads, and a second author for it is
+/// a second answer to "is this up".
+///
+/// It is emitted **after** [`crate::compose_policy::check`], beside `profiles:`,
+/// because it is not package text and checking the app's own output against a
+/// policy written for downloaded text proves nothing.
+///
+/// The list form is not a style choice. Compose runs the string form through a
+/// shell, so `test: "pg_isready; curl evil"` would be two commands; the schema
+/// requires an array and this writes one.
+fn healthcheck(health: &crate::pkg::Health) -> String {
+    let mut out = String::from("healthcheck:\n");
+    let _ = writeln!(
+        out,
+        "  test: [{}]",
+        health
+            .test
+            .iter()
+            .map(|arg| quoted(arg))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    for (key, value) in [
+        ("interval", health.interval.as_deref()),
+        ("timeout", health.timeout.as_deref()),
+        ("start_period", health.start_period.as_deref()),
+    ] {
+        if let Some(value) = value {
+            let _ = writeln!(out, "  {key}: {}", quoted(value));
+        }
+    }
+    if let Some(retries) = health.retries {
+        let _ = writeln!(out, "  retries: {retries}");
+    }
+    out
+}
+
 /// One service block, at the indentation the assembled file wants.
 fn block(key: &str, profiles: &[String], body: &str) -> String {
     let mut out = String::new();
@@ -287,8 +373,11 @@ pub fn dynamic_compose(
         let vars = context(root, instance, &manifest, network, tld, secrets);
 
         let fragment = shipped(catalogue, instance, &manifest.compose.file, &who)?;
-        let body = substitute(&fragment, &vars, &who)?;
+        let mut body = substitute(&fragment, &vars, &who)?;
         crate::compose_policy::check(&who, &body, &permitted(&vars, &manifest.image.reference()))?;
+        if let Some(health) = &manifest.health {
+            body.push_str(&healthcheck(health));
+        }
         compose.push_str(&block(
             &instance.id,
             &["services".to_string(), instance.id.clone()],
@@ -351,12 +440,15 @@ pub fn dynamic_compose(
             }
 
             let fragment = shipped(catalogue, instance, &companion.compose.file, &who)?;
-            let body = substitute(&fragment, &side, &who)?;
+            let mut body = substitute(&fragment, &side, &who)?;
             crate::compose_policy::check(
                 &who,
                 &body,
                 &permitted(&side, &companion.image.reference()),
             )?;
+            if let Some(health) = &companion.health {
+                body.push_str(&healthcheck(health));
+            }
             compose.push_str(&block(
                 &id,
                 &["services".to_string(), instance.id.clone()],
@@ -428,6 +520,12 @@ mod tests {
 
     /// A package tree on disk, because that is what the renderer reads.
     fn plant(root: &Path, service: &str, version: &str, fragment: &str) {
+        plant_with(root, service, version, fragment, "")
+    }
+
+    /// The same, plus whatever else the manifest should say — `"health": {…},`
+    /// and nothing else needs it yet, so it is a string rather than a builder.
+    fn plant_with(root: &Path, service: &str, version: &str, fragment: &str, extra: &str) {
         let dir = root
             .join("packages/databases")
             .join(service)
@@ -447,6 +545,7 @@ mod tests {
                             "target": "/etc/my.cnf", "sha256": "{}"}}],
                 "settings": [{{"key": "DATABASE", "type": "string", "default": "stackvo"}},
                              {{"key": "ROOT_PASSWORD", "type": "secret", "default": "root"}}],
+                {extra}
                 "compose": {{"file": "compose.yml.tpl", "sha256": "{}"}},
                 "support": {{"status": "supported"}}}}"#,
             pkg::API_VERSION,
@@ -758,5 +857,124 @@ networks:
         .unwrap_err();
         assert_eq!(err.code, Code::NotFound);
         assert!(err.message.contains("mysql@8.0"), "{}", err.message);
+    }
+
+    // ---------------------------------------------------------- healthcheck
+
+    /// S-11. The manifest declares readiness and the compose file carries it —
+    /// the half of that item that lives in this repository. Every package in
+    /// the catalogue shipped with `health` empty, so `--wait` and
+    /// `condition: service_healthy` both meant "the process exists".
+    #[test]
+    fn a_declared_healthcheck_reaches_the_compose_file() {
+        let root = scratch("health");
+        plant_with(
+            &root,
+            "mysql",
+            "8.0",
+            FRAGMENT,
+            r#""health": {"test": ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"],
+                          "interval": "10s", "retries": 12, "startPeriod": "30s"},"#,
+        );
+
+        let out = render(
+            &root,
+            &Table {
+                schema_version: SCHEMA_VERSION,
+                instances: vec![instance("mysql", "8.0", true)],
+            },
+        )
+        .unwrap()
+        .compose;
+
+        assert!(out.contains("    healthcheck:\n"), "{out}");
+        assert!(
+            out.contains(r#"      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]"#),
+            "{out}"
+        );
+        assert!(out.contains("      interval: \"10s\""), "{out}");
+        assert!(out.contains("      start_period: \"30s\""), "{out}");
+        assert!(out.contains("      retries: 12"), "{out}");
+    }
+
+    /// And a package that declares none gets none. The absence has to survive:
+    /// a default healthcheck would be one that passes for a reason nobody
+    /// chose, which is the state this item exists to leave.
+    #[test]
+    fn a_package_with_no_health_gets_no_healthcheck_key() {
+        let root = scratch("nohealth");
+        plant(&root, "mysql", "8.0", FRAGMENT);
+
+        let out = render(
+            &root,
+            &Table {
+                schema_version: SCHEMA_VERSION,
+                instances: vec![instance("mysql", "8.0", true)],
+            },
+        )
+        .unwrap()
+        .compose;
+
+        assert!(!out.contains("healthcheck"), "{out}");
+    }
+
+    /// A manifest is a file somebody else wrote, and the schema constrains the
+    /// shape of `health` rather than the bytes inside a test argument. A quote
+    /// that reached YAML unescaped would close the string and let the rest of
+    /// the argument be read as compose keys.
+    #[test]
+    fn a_quote_in_a_health_argument_cannot_close_the_yaml_string() {
+        let root = scratch("healthquote");
+        plant_with(
+            &root,
+            "mysql",
+            "8.0",
+            FRAGMENT,
+            r#""health": {"test": ["CMD-SHELL", "x\"]\nprivileged: true\n#"]},"#,
+        );
+
+        let out = render(
+            &root,
+            &Table {
+                schema_version: SCHEMA_VERSION,
+                instances: vec![instance("mysql", "8.0", true)],
+            },
+        )
+        .unwrap()
+        .compose;
+
+        // One line, everything escaped inside it, and nothing that reads as a
+        // key of the service.
+        assert!(out.contains(r#"test: ["CMD-SHELL", "x\"]\nprivileged: true\n#"]"#), "{out}");
+        assert!(
+            !out.lines().any(|l| l.trim_start() == "privileged: true"),
+            "{out}"
+        );
+    }
+
+    /// A fragment may not write the key the app now owns. Two `healthcheck:`
+    /// blocks in one service is a duplicate YAML key, and which one wins is
+    /// not something either author can see.
+    #[test]
+    fn a_fragment_declaring_its_own_healthcheck_is_refused() {
+        let root = scratch("healthdup");
+        plant(
+            &root,
+            "mysql",
+            "8.0",
+            &format!("{FRAGMENT}healthcheck:\n  test: [\"CMD\", \"true\"]\n"),
+        );
+
+        let err = render(
+            &root,
+            &Table {
+                schema_version: SCHEMA_VERSION,
+                instances: vec![instance("mysql", "8.0", true)],
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, Code::Forbidden);
+        assert!(err.message.contains("healthcheck"), "{}", err.message);
     }
 }

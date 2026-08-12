@@ -1173,15 +1173,36 @@ görünür.
 Yerel kaynakla çalışan bir makine bundan etkilenmiyor; ağ kaynağına bakan bir
 makine etkilenecek — ve doğru sıra bu, çünkü ağ kaynağı Faz 5.
 
-### Faz 5 — Market, ağ kaynağıyla
+### Faz 5 — Market, ağ kaynağıyla · **tamamlandı**
 
-HTTPS, ETag önbelleği, ilerleme olayları, çevrimdışı davranış, hata
-mesajları. `market_refresh` ve `market_install` gerçek depodan.
+`market::HttpSource`. `market_refresh` ve `market_install` artık bir URL de
+kabul ediyor ve hangisi olduğu dizeden anlaşılıyor — kullanıcıya az önce
+yazdığı şeyi bir radyo düğmesiyle tekrar ettirmek, sorulmayacak bir soru.
 
-**Çıkış:** bir kez katalog çekmiş, sonra ağı kesilmiş bir makinede uygulama
-açılıyor ve kurulu paketler çalışıyor; bayat registry uyarı veriyor,
-kırmıyor; indirme iptal edilebiliyor ve yarım paket bırakmıyor (atomik
-açma).
+**Çıkış — karşılandı, ve dört kararla.**
+
+**`http://` reddediliyor**, sunucuya bırakılmıyor. §4.2'nin zinciri henüz
+var olmayan bir imzada başlıyor (ADR 0015), yani bugün taşıma katmanı
+korumanın *tamamı*; `http://` onu da kaldırırdı.
+
+**Sistem proxy'si kullanılıyor, ve bu `mail.rs`'in tam tersi.** O istemci
+`no_proxy()` ile kuruluyor çünkü yalnız 127.0.0.1'e konuşuyor ve kurumsal bir
+proxy'nin orada işi yok. Burada tersi doğru: kurumsal ayna zaten proxy'nin
+arkasında, ve `market.registryUrl`'in var olma sebebi o makine.
+
+**ETag, ikinci yenilemeyi ucuz ve dürüst yapıyor.** `304` bir hata da boş bir
+cevap da değil — önbellekteki kopyanın güncel olduğu anlamına geliyor ve
+çağıran onu tutuyor. Doğrulayıcı indeksin yanında değil, ayrı tutuluyor: biri
+bir aktarım hakkında, öteki bir katalog hakkında.
+
+**Gövde sınırı alınan bayta göre, `Content-Length`'e göre değil** (T-8). O
+başlığı gönderen yazıyor; sayılan tek şey gerçekten gelen olabilir.
+
+Bir de çağıranlara düşen bir kısıt: `Source::fetch` senkron — `pkg` ve
+`render` bu trait'i okuyor ve ikisinin de bir runtime'ın ne olduğunu bilmesi
+gerekmiyor — o yüzden `HttpSource` mevcut handle üzerinde blokluyor, ve bunu
+bir runtime iş parçacığında yapmak panikler. `market_refresh` ile
+`market_install` bütün işi `spawn_blocking` içinde koşturuyor.
 
 ### Faz 6 — Gömülü şablonların kaldırılması
 
@@ -1200,12 +1221,21 @@ bir durumdan yığın kurmak olurdu — tam da tablonun bitirdiği kayma, "güve
 yazan kapıdan içeri girerek. `tests/handover_equivalence.rs` → `the_switch`
 dört yönü de tutuyor.
 
-**Kalan ön koşul, ADR 0011 ile netleşti: bir ağ kapısı.** Gömülü katalog anlık
-görüntüsü yok, dolayısıyla hiç katalog çekmemiş bir makinede ilk açılış
-`RequirementsGate` / `BootstrapGate` ile aynı yerde duran üçüncü bir kapı
-gösterir. Kapı iki durumu ayırt etmeli — "internet yok" ve "bu makinede
-henüz katalog yok" — çünkü ikincisinin çözümü hava boşluklu paket de
-olabilir.
+**Ön koşul indi: ağ kapısı yazıldı.** `CatalogueGate.vue`, `RequirementsGate`
+ile `BootstrapGate` arasında — bu sıra bir tercih değil: bootstrap compose
+dosyalarını yazıp yığını kaldırıyor, ve katalogsuz bir makinede yazacak servis
+olmadığı için arkasında hiçbir şey olmayan bir proxy'yle açılırdı. Kapı iki
+durumu ayrı cümlelerle söylüyor — "internet yok" ve "bu makinede henüz katalog
+yok" — çünkü yalnız ikincisinin cevabı hava boşluklu paket. **Atlanabilir**, ve
+bu bir taviz değil: katalogsuz StackVo hâlâ bir ters vekil, bir sertifika
+otoritesi ve bir proje koşturucusu, ve geçilemeyen bir ilk açılış ekranı
+insanların uygulamayı kapattığı ekrandır.
+
+**Kalan tek ön koşul bir karar, kod değil.** `.env`'den render eden dalı silmek,
+göç etmemiş her çalışma alanının servislerini durdurmak demek. Göç artık mümkün
+ve geri alınabilir (Faz 2 + `.env.pre-market.bak` + Market sayfasındaki panel);
+eksik olan, göçü **reddeden** kullanıcıya ne olacağı. `docs/durum.md` §5'in
+altıncı maddesi, üç seçeneğin bedeliyle birlikte.
 
 **Çıkış:** `rg 'SERVICE_[A-Z_]+_(ENABLE|VERSION)' src-tauri/src/` yalnız göç
 kodunda isabet veriyor; `skeleton/` altında hiçbir servis şablonu kalmıyor;

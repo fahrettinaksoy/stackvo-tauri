@@ -188,6 +188,11 @@ servisin birden çok sürümü aynı anda çalışabilir hâle geldi. Tasarımı
 [`servis-market-mimarisi.md`](servis-market-mimarisi.md)'de; burada yalnız
 **neyin bittiği ve neyin bitmediği** duruyor.
 
+**Faz 4 ve 5 kapandı, Faz 6 yarım.** Ağ kaynağı, hava boşluğu politikası, ilk
+açılış kapısı, göçün yedeği ve arayüzü, healthcheck'ler ve örnek başına alt alan
+adı indi. Geriye tek büyük madde kaldı: **gömülü şablonların silinmesi (S-16)**,
+ve o bir mühendislik işi olmaktan çok bir karar bekliyor — §4'ün sonunda.
+
 **Doğrulandı, akıl yürütülmedi.** `examples/side_by_side.rs` bu makinede iki
 mysqld başlattı: **8.0.46 ve 9.4.0**, ayrı volume, ayrı port (3316/3326 — 3306'yı
 makinenin kendi MySQL'i tutuyordu), ve `stackvo-mysql` ağ içinde çözülüyor.
@@ -202,16 +207,16 @@ makinenin kendi MySQL'i tutuyordu), ve `stackvo-mysql` ağ içinde çözülüyor
 | S-6 | Render hattının takası | ✅ | tablo yoksa eski yol **bayt bayt**, varsa yeni yol, geri düşme yok |
 | S-7 | Çoklu sürüm gerçekten çalışıyor | ✅ | `examples/side_by_side.rs`, yukarıdaki ölçüm |
 | S-8 | Compose politikası istemcide de | ✅ | `compose_policy.rs`; beş saldırının beşi reddediliyor |
-| S-9 | Market + örnek arayüzü | ✅ | 14 IPC komutu, `Market.vue`, `useMarket.js` |
+| S-9 | Market + örnek arayüzü | ✅ | 16 IPC komutu, `Market.vue`, `useMarket.js` |
 | S-10 | Market: yerel kaynak | ✅ | `market.rs`; hash zinciri, sequence geri gitme reddi, atomik kurulum |
-| S-11 | **Paketlerde healthcheck** | ⬜ | 101 paketin **101'inde** `health` boş — `depends_on: service_healthy` hiçbir servis için bir şey ifade etmiyor |
-| S-12 | Market: ağ kaynağı (HTTPS) | ⬜ | `Source` trait'i var, `LocalSource` tek uygulama |
+| S-11 | **Paketlerde healthcheck** | ✅ | 101 paketin **98'i** bildiriyor, kalan üçü blackfire ve gerekçesi `validate.mjs`'in `HEALTH_EXEMPT` tablosunda; `render.rs` manifestten yazıyor, fragment yazamıyor; `examples/health_probe.rs` **24/24**'ünü gerçek konteynerde yeşil ölçtü |
+| S-12 | Market: ağ kaynağı (HTTPS) | ✅ | `market::HttpSource`; `http://` reddi, ETag, 8 MiB gövde sınırı, sistem proxy'si |
 | S-13 | İmza doğrulaması | ⛔ | anahtar yok; `Trust::Signed` **reddediyor**. §5 madde 4 açık karar |
-| S-14 | Hava boşluklu paket (`offlineBundle`) | ⬜ | `policy.market.*` anahtarlarının hiçbiri okunmuyor |
-| S-15 | Ağ kapısı (hiç katalog çekmemiş makine) | 🟡 | Market sayfası "henüz katalog yok" diyor; ilk açılış kapısı yok |
-| S-16 | Gömülü şablonların silinmesi | 🟡 | takas indi, `skeleton/core/templates/services/` **duruyor** — tablosuz çalışma alanları hâlâ onu kullanıyor |
-| S-17 | Göçün `.env` yedeği ve arayüzü | ⬜ | `handover::apply` yedek yazmıyor, göçü tetikleyen bir ekran yok |
-| S-18 | Örnek başına alt alan adı | ⬜ | alan adı olan 12 servis `instancing.multiple: false` — bu yüzden tek örnek |
+| S-14 | Hava boşluklu paket (`offlineBundle`) | ✅ | `policy::Market`; yedi anahtar okunuyor, kurulum yolunda zorlanıyor, `policy_status` gösteriyor |
+| S-15 | Ağ kapısı (hiç katalog çekmemiş makine) | ✅ | `CatalogueGate.vue`, `workspace.catalogueFetched`; "internet yok" ile "burada katalog yok" ayrı iki cümle, atlanabilir |
+| S-16 | Gömülü şablonların silinmesi | 🟡 | takas indi, `skeleton/core/templates/services/` **duruyor** — tablosuz çalışma alanları hâlâ onu kullanıyor. Kalanı §4'te |
+| S-17 | Göçün `.env` yedeği ve arayüzü | ✅ | `handover::apply` önce `.env.pre-market.bak` yazıyor ve servis satırlarını **tam satır** yorumla işaretliyor; `handover_preview`/`handover_apply` + Market sayfasında panel |
+| S-18 | Örnek başına alt alan adı | ✅ | `Instance::domain`; birincil çıplak adı korur, ötekiler `phpmyadmin-5-2.stackvo.loc`. 24 paket artık `instancing.multiple: true` |
 
 **Yolda bulunan üç hata**, üçü de yalnız çalıştırınca görünen türden:
 
@@ -231,6 +236,41 @@ direktifi MySQL 9 kaldırmış. Bir sürüm bir dizin kuralının var olma sebeb
 **Ölçüm de bir hata buldu:** `tools/eol.mjs` 101 sürümün **20'sinin**
 `supported` dediği hâlde end-of-life olduğunu gösterdi — üçü uygulamanın kendi
 önerdiği sürüm (mysql@8.0, mariadb@10.6, redis@7.0).
+
+#### İkinci tur: healthcheck'i ölçmek üç hata daha buldu
+
+Tablo yazmak ucuzdu; **çalıştırmak** pahalıydı ve bulan oydu.
+`examples/health_probe.rs` her servisi kurup kaldırıyor ve motorun kendi sağlık
+durumunu soruyor. Katalogda bildirilen 24 healthcheck'in 24'ü yeşil — ama ilk
+turda 22'si yeşildi.
+
+**Kafka hiç açılmıyordu, ve hiç açılmamıştı.** Konteyner sonsuz yeniden
+başlıyordu: `cp-kafka` `appuser` olarak koşuyor, Docker var olmayan bir bind
+hedefini root'a ait yaratıyor, ve giriş noktası
+`-Xlog:gc*:file=/var/log/kafka/kafkaServer-gc.log` veriyor. Yazamayan **JVM**
+başlamıyor, broker değil. Aynı mount paket öncesi şablonda da vardı, yani bu bir
+gerileme değil: Kafka hiç çalışmadı ve kimse söylemedi, çünkü kimse *ayakta mı*
+diye sormamıştı. Mount kaldırıldı; imajın kendi `/var/log/kafka`'sı zaten
+`appuser`'ın, ve hiç yazılmamış bir dosyayı kimse kaybetmiyor.
+
+**Broker Zookeeper'ını bulamıyordu.** Eski şablon iki konteyneri tek dosyaya
+koyuyor ve `KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181` yazıyordu — çözülüyordu,
+çünkü `zookeeper` compose servis anahtarıydı ve Compose her anahtara bir DNS adı
+verir. Örnek başına anahtar `kafka-7-5-0-zookeeper`, yani o düz metin hiçbir şeye
+çözülmüyor. Ad tek yerde türetiliyor ve fragment artık
+`{{ companion.zookeeper.host }}` ile onu istiyor.
+
+**Zookeeper'ın `ruok`'u kapalı.** Dört harfli komutlar ZooKeeper 3.5'ten beri
+varsayılan olarak kapalı ve `ZOOKEEPER_4LW_COMMANDS_WHITELIST=srvr,ruok`
+**açmadı** — iki yönlü de bu makinede ölçüldü. Yani zarif olan kontrol, hiçbir
+işe yaramayan bir ortam değişkeninin yanında hiç geçmeyen bir kontrol olacaktı.
+Companion'ın broker için olması gereken şey istemci portunda erişilebilir olmak,
+o yüzden sorulan bu.
+
+Ve **mongo-express** 401 döndürüyordu: basic auth varsayılan açık, kimlik
+bilgileri birer ayar, ve manifestin `health` bloğu ayar okuyamıyor (fragment gibi
+substitute edilmiyor, uygulama yazıyor). Dürüstçe sorulabilen daha zayıf soru
+soruluyor: sunucu dinliyor mu.
 
 ---
 
@@ -492,6 +532,28 @@ Karar gerektirmeyenler arasından, etki ÷ efor ile.
 toplayıcı gerektirdiği için ayrı bir tur. **N (worktree başına ortam)** sahayla
 eşitlemek yerine önüne geçirecek tek madde, ve taban sağlamlaşınca.
 
+### S-16'nın önündeki şey bir karar, kod değil
+
+Gömülü şablonları silmek, `render_generated`'ın `.env` dalını silmek demek — ve
+o dal bugün var olan **her** çalışma alanının çalışma sebebi. Silindiği anda
+göç etmemiş bir kurulum servislerini başlatamaz hâle gelir.
+
+Göç artık mümkün (S-17: yedek, işaretleme, önizleme ve düğme) ve katalog artık
+gelebilir (S-12, S-15). Eksik olan tek şey, göçü **reddeden** bir kullanıcıya ne
+olacağı. Üç cevap var ve üçü farklı ürünler:
+
+1. **Zorunlu göç.** Yeni sürüm açılışta göçü dayatır; reddeden yığınını
+   çalıştıramaz. En temiz kod, en sert davranış.
+2. **Bir sürüm boyunca ikisi.** `.env` dalı kalır ama bir uyarı taşır ve
+   sürüm notu tarihi verir. Kod iki yol taşımaya devam eder — tam olarak
+   Faz 6'nın bitirmek istediği şey.
+3. **Sessiz göç.** Uygulama açılışta kendi göç eder. Yedek var, ama bir
+   kullanıcının servis tanımlarını sormadan değiştirmek §5'in cinsinden bir
+   karar.
+
+Bu, `docs/durum.md` §5'e ait bir soru ve orada altıncı madde olarak duruyor.
+Cevaplanmadan S-16'ya başlamak, üç davranıştan birini sessizce seçmek olur.
+
 ---
 
 ## 5. Karar bekleyenler
@@ -519,6 +581,11 @@ seçmek, bu listenin var olma sebebine aykırı.
    bunun arkasında bekliyor.
 5. **Kapsam eşiği.** Ölçüm var, kapı yok. %61.60'ı mı yoksa daha düşük bir tabanı
    mı kilitleyeceği mühendislik değil, politika kararı.
+6. **Göç etmeyi reddeden çalışma alanı (S-16).** Gömülü şablonlar silindiğinde
+   `.env`'den render eden dal da gider, ve bugün var olan her kurulum o dalda.
+   Göç mümkün ve geri alınabilir; soru, reddedene ne olacağı: zorunlu göç, bir
+   sürüm boyunca iki yol, yoksa açılışta sessiz göç. §4'ün sonunda üçünün de
+   bedeli yazılı. Bu cevaplanmadan S-16 bir tercihi sessizce seçer.
 
 ---
 
@@ -756,13 +823,13 @@ Mekanik olarak sayılabilenler koda karşı tutuluyor:
 
 | | Sayı | Nasıl sayıldı |
 |---|---|---|
-| Toplam IPC komutu | **182** | `contracts/ipc.json` → `commands` (179 Rust + 3 `frontend-plugin`) |
-| Bunlardan `#[tauri::command]` olarak yazılmış | **178** | `commands.rs`, `#[cfg(test)]` dışı |
-| Frontend kaynak dosyası | **105** | `src/**/*.{js,vue}`, spec dosyaları hariç |
-| Bunlardan `@tauri-apps` kullanan | **17** | aynı küme içinde metin taraması |
+| Toplam IPC komutu | **185** | `contracts/ipc.json` → `commands` (182 Rust + 3 `frontend-plugin`) |
+| Bunlardan `#[tauri::command]` olarak yazılmış | **181** | `commands.rs`, `#[cfg(test)]` dışı |
+| Frontend kaynak dosyası | **107** | `src/**/*.{js,vue}`, spec dosyaları hariç |
+| Bunlardan `@tauri-apps` kullanan | **19** | aynı küme içinde metin taraması |
 | **Veri katmanının geçtiği fonksiyon** | **1** (`src/lib/ipc.js` → `call()`) | `invoke(` `ipc.js` dışında **0** yerde geçiyor |
-| `ipc.js` sarmalayıcısı | **175** | `api` nesnesinin üye sayısı |
-| Rust kaynağı | **71 modül, 51.621 satır** | `src-tauri/src/*.rs` |
+| `ipc.js` sarmalayıcısı | **178** | `api` nesnesinin üye sayısı |
+| Rust kaynağı | **71 modül, 53.643 satır** | `src-tauri/src/*.rs` |
 
 Elle sınıflandırma, kapıya dahil değil — yöntemi yazılı ki bir sonraki okuyucu
 yeniden üretebilsin:

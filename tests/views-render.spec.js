@@ -405,6 +405,49 @@ describe('the project page', () => {
     release: () => en.release.excluded,
   };
 
+  /**
+   * Rebuild is reachable on a project that is running, and it is a different
+   * act from restart.
+   *
+   * It used to be the `v-else` of stop/start, so the hammer disappeared the
+   * moment a project had an image — which is the moment it starts mattering,
+   * because changing the PHP version or an extension changes the *Dockerfile*.
+   * The only route left was stop, rebuild, start, and nothing on screen said so.
+   *
+   * The three are genuinely different and the test pins that rather than the
+   * markup: `project_build` regenerates, builds the image and recreates the
+   * container; `project_restart` gives back the same container from the same
+   * image; `generate_run` only rewrites files.
+   */
+  it('offers a rebuild on a running project, and it is not the restart', async () => {
+    seed();
+    const wrapper = await render(ProjectDetail, 'en', { name: 'shop' });
+
+    const labels = wrapper
+      .findAll('button')
+      .map((b) => b.attributes('aria-label'))
+      .filter(Boolean);
+
+    expect(labels, 'PROJECT.running is true, so this is the case that regressed').toContain(
+      en.actions.rebuild
+    );
+    expect(labels).toContain(en.actions.restart);
+    expect(en.actions.rebuild).not.toBe(en.actions.restart);
+
+    // And it draws something. The first version of this button used v-btn's
+    // `icon="mdi-…"` prop with a tooltip in the default slot, which Vuetify
+    // reads as "the slot wins" — a correctly labelled, correctly wired,
+    // completely blank button. Every assertion above passed on it.
+    const rebuild = wrapper
+      .findAll('button')
+      .find((b) => b.attributes('aria-label') === en.actions.rebuild);
+    expect(rebuild.find('.mdi-hammer-wrench').exists(), 'the rebuild button drew no icon').toBe(
+      true
+    );
+
+    wrapper.unmount();
+  });
+
   it('renders every section in the rail', async () => {
     seed();
     const wrapper = await render(ProjectDetail, 'en', { name: 'shop' });

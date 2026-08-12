@@ -26,6 +26,7 @@
   },
   "url": null,
   "dependsOn": [],
+  "health": { "test": ["CMD", "redis-cli", "ping"], "interval": "10s", "retries": 10, "startPeriod": "5s" },
   "compose": { "file": "compose.yml.tpl", "sha256": "7b915cd5c309220b852f543b90bea232f5993331821440aab3ef89fa7c609a77" },
   "support": {"eolDate":"2024-07-29","source":"https://endoflife.date/api/redis.json","status":"eol"}
 }

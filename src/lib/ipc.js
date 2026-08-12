@@ -153,6 +153,17 @@ export const api = {
   marketCatalog: () => call('market_catalog'),
   marketInstall: (service, version) => call('market_install', { service, version }),
   marketUninstall: (service, version) => call('market_uninstall', { service, version }),
+
+  // Try a source and say what it is, writing nothing. A "test" that cached
+  // what it found would be the same act as a refresh with a different word on
+  // the button.
+  marketProbe: (location) => call('market_probe', { location }),
+
+  // The one migration that touches a workspace somebody is already using, so
+  // the preview is a separate call rather than a flag on the apply: what it
+  // would do has to be readable before it is agreed to.
+  handoverPreview: () => call('handover_preview'),
+  handoverApply: () => call('handover_apply'),
   instanceList: () => call('instance_list'),
   instanceCreate: (service, version) => call('instance_create', { service, version }),
   instanceRemove: (id) => call('instance_remove', { id }),

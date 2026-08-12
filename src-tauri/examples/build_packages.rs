@@ -509,6 +509,15 @@ fn transform(
             continue;
         }
 
+        // `healthcheck:` moves to the manifest, where `health_of` writes it and
+        // the schema constrains it. Two of the twenty-five templates carried
+        // one, both in the string-through-a-shell form, and leaving them here
+        // would mean the same field had two authors — which is a duplicate YAML
+        // key once the app started writing its own.
+        if section == "healthcheck" || trimmed.starts_with("healthcheck:") {
+            continue;
+        }
+
         // ---- image ------------------------------------------------------
         if let Some(rest) = trimmed.strip_prefix("image:") {
             let reference = rest.trim().trim_matches('"').trim_matches('\'');
@@ -653,6 +662,31 @@ fn transform(
                 continue;
             }
             if source.starts_with("${HOST_STACKVO_ROOT}/logs/services/") {
+                // Kafka does not get one, and this is not a preference.
+                //
+                // Docker creates a bind target that does not exist as root, and
+                // `cp-kafka` runs as `appuser`. Its entrypoint passes
+                // `-Xlog:gc*:file=/var/log/kafka/kafkaServer-gc.log`, so the
+                // *JVM* fails to start — not the broker, the JVM — and the
+                // container restarts forever:
+                //
+                //   Error opening log file '…/kafkaServer-gc.log': Permission denied
+                //   Error: Could not create the Java Virtual Machine.
+                //
+                // The same mount is in the pre-package template, so this is not
+                // a regression: Kafka has never started, and nothing said so
+                // because nothing asked whether it was up. `health_probe.rs`
+                // asked. Without the mount the image's own `/var/log/kafka` is
+                // there and is `appuser`'s, so the write succeeds — and no user
+                // loses a file, because none was ever written.
+                // Scoped to the broker. Zookeeper shares the image family and
+                // the uid, and it starts with its mount — measured, in the same
+                // run. Dropping it too would be tidier and would be a change
+                // nothing observed, which is the kind this catalogue already
+                // has too many of.
+                if id == "kafka" && is_main {
+                    continue;
+                }
                 let _ = writeln!(out, "  - \"{{{{ {ns}instance.logs }}}}:{target}{mode}\"");
                 continue;
             }
@@ -1174,10 +1208,21 @@ fn display_name(id: &str) -> String {
 /// that is a decision about the product rather than a fact about the template.
 /// The report's §12 states this list and this is the same one.
 fn allows_multiple(id: &str, subdomain: Option<&String>) -> bool {
-    if id == "blackfire" {
-        return false;
-    }
-    subdomain.is_none()
+    let _ = subdomain;
+    // A subdomain used to be the disqualifier, and it is not any more.
+    //
+    // Twelve packages were single-instance because two of them would have asked
+    // Traefik for the same `Host()` rule — and Traefik answers that by picking
+    // one, silently, so the second instance would have looked installed and
+    // never responded. `instances::Instance::domain` now derives the name per
+    // instance (`phpmyadmin-5-2.stackvo.loc` beside `phpmyadmin.stackvo.loc`),
+    // and the router name was already per instance, so the collision is gone
+    // and with it the reason.
+    //
+    // `blackfire` stays single, and for a different reason that has not moved:
+    // it is one probe with one server-side credential pair, and a second copy
+    // profiling the same account is not a second environment.
+    id != "blackfire"
 }
 
 /// The `support` block of a manifest already at this path, if there is one.
@@ -1380,6 +1425,11 @@ fn manifest_json(
         m.push_str("  ],\n");
     }
 
+    // health
+    if let Some(health) = health_json(health_of(&pkg.id)) {
+        let _ = writeln!(m, "  \"health\": {health},");
+    }
+
     // companions
     if !pkg.companions.is_empty() {
         m.push_str("  \"companions\": [\n");
@@ -1417,9 +1467,12 @@ fn manifest_json(
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
+            let health = health_json(companion_health_of(&c.name))
+                .map(|h| format!("\"health\": {h}, "))
+                .unwrap_or_default();
             let _ = writeln!(
                 m,
-                "    {{ \"name\": \"{}\", \"image\": {{ {reg}\"repository\": \"{}\", \"tag\": \"{}\" }}, \"ports\": [{ports}], \"volumes\": [{volumes}], \"compose\": {{ \"file\": \"companion.{}.yml.tpl\", \"sha256\": \"{}\" }} }}{comma}",
+                "    {{ \"name\": \"{}\", \"image\": {{ {reg}\"repository\": \"{}\", \"tag\": \"{}\" }}, \"ports\": [{ports}], \"volumes\": [{volumes}], {health}\"compose\": {{ \"file\": \"companion.{}.yml.tpl\", \"sha256\": \"{}\" }} }}{comma}",
                 c.name,
                 c.image_repository,
                 json_escape(&c.image_tag),
@@ -1481,6 +1534,261 @@ fn dependencies_of(id: &str) -> Vec<(&'static str, Option<&'static str>, bool)> 
         "phpcacheadmin" => vec![("cache", None, false)],
         _ => vec![],
     }
+}
+
+/// What "up" means, per service, as a command that exists inside that image.
+///
+/// Nothing derives this: the templates carried a healthcheck for two services
+/// out of twenty-five, so for the other twenty-three there was nothing to
+/// convert. It is a table for the same reason `capabilities_of` is one.
+///
+/// **Every command here was measured, not chosen.** `command -v` was run inside
+/// each catalogue image on this machine before a line was written, because the
+/// failure mode is silent and expensive: a test naming a binary the image does
+/// not ship never succeeds, and a container that is permanently unhealthy is
+/// strictly worse than one that never claimed to be checkable — `depends_on:
+/// condition: service_healthy` waits for it forever. The measurement is what
+/// `examples/health_probe.rs` re-runs.
+///
+/// Four results from that sweep decided four lines:
+///
+/// - `typesense`, `memcached` — **no** `curl`, `wget` or `nc`. Both have `bash`,
+///   so the check is bash's own `/dev/tcp`, which is a socket and not a program.
+/// - `mailhog`, `mailpit`, `pgadmin`, `kafbat`, `mongo-express` — `wget` but no
+///   `curl`. BusyBox `wget` has no `-f`, so the URL check is `-O /dev/null` and
+///   the exit code.
+/// - `mongo` — `mongosh` is present in **5.0 as well**, so the shell rename is
+///   not the version split it looks like and one line covers six versions.
+/// - `mariadb` — ships `healthcheck.sh`, which knows about `innodb_initialized`.
+///   `mysqladmin ping` is also there and would answer sooner than the server is
+///   actually usable.
+///
+/// A service with no entry declares no healthcheck, and that is a statement:
+/// see `blackfire`, which is a probe with no readiness surface to ask.
+fn health_of(id: &str) -> Option<(Vec<&'static str>, &'static str, u32, Option<&'static str>)> {
+    // (test, interval, retries, startPeriod)
+    let row: (Vec<&'static str>, &'static str, u32, Option<&'static str>) = match id {
+        // `-h 127.0.0.1` is not decoration. Both engines run a temporary,
+        // socket-only server while they build the datadir, and a check that
+        // reaches it over the socket reports healthy through the whole of
+        // first boot — which is the exact window `--wait` exists to cover.
+        "mysql" => (
+            vec!["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"],
+            "10s",
+            12,
+            Some("30s"),
+        ),
+        "mariadb" => (
+            vec!["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"],
+            "10s",
+            12,
+            Some("30s"),
+        ),
+        "postgres" => (
+            vec!["CMD", "pg_isready", "-h", "127.0.0.1"],
+            "10s",
+            12,
+            Some("30s"),
+        ),
+        "mongo" => (
+            vec![
+                "CMD",
+                "mongosh",
+                "--quiet",
+                "--eval",
+                "db.adminCommand('ping')",
+            ],
+            "10s",
+            12,
+            Some("20s"),
+        ),
+        "cassandra" => (
+            vec!["CMD-SHELL", "cqlsh -e 'describe cluster'"],
+            "15s",
+            20,
+            Some("90s"),
+        ),
+        "redis" => (vec!["CMD", "redis-cli", "ping"], "10s", 10, Some("5s")),
+        "valkey" => (vec!["CMD", "valkey-cli", "ping"], "10s", 10, Some("5s")),
+        "memcached" => (
+            vec![
+                "CMD-SHELL",
+                "timeout 2 bash -c '</dev/tcp/127.0.0.1/11211'",
+            ],
+            "10s",
+            10,
+            Some("5s"),
+        ),
+        "rabbitmq" => (
+            vec!["CMD", "rabbitmq-diagnostics", "-q", "ping"],
+            "15s",
+            12,
+            Some("40s"),
+        ),
+        "kafka" => (
+            vec![
+                "CMD-SHELL",
+                "kafka-broker-api-versions --bootstrap-server 127.0.0.1:9092",
+            ],
+            "15s",
+            15,
+            Some("45s"),
+        ),
+        "elasticsearch" => (
+            vec![
+                "CMD-SHELL",
+                "curl -fsS -o /dev/null http://127.0.0.1:9200/_cluster/health",
+            ],
+            "15s",
+            15,
+            Some("45s"),
+        ),
+        "kibana" => (
+            vec![
+                "CMD-SHELL",
+                "curl -fsS -o /dev/null http://127.0.0.1:5601/api/status",
+            ],
+            "15s",
+            20,
+            Some("60s"),
+        ),
+        "meilisearch" => (
+            vec!["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:7700/health"],
+            "10s",
+            10,
+            Some("10s"),
+        ),
+        "typesense" => (
+            vec!["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/8108'"],
+            "10s",
+            10,
+            Some("10s"),
+        ),
+        // MinIO's own answer. `mc ready local` is in the image and reports the
+        // cluster rather than the process, which is the difference that matters
+        // on a first boot that is formatting a disk.
+        "minio" => (vec!["CMD", "mc", "ready", "local"], "10s", 12, Some("10s")),
+        "grafana" => (
+            vec![
+                "CMD-SHELL",
+                "curl -fsS -o /dev/null http://127.0.0.1:3000/api/health",
+            ],
+            "10s",
+            12,
+            Some("20s"),
+        ),
+        "mailhog" => (
+            vec![
+                "CMD-SHELL",
+                "wget -q -O /dev/null http://127.0.0.1:8025/api/v2/messages",
+            ],
+            "10s",
+            10,
+            Some("5s"),
+        ),
+        "mailpit" => (vec!["CMD", "/mailpit", "readyz"], "10s", 10, Some("5s")),
+        "phpmyadmin" => (
+            vec!["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:80/"],
+            "15s",
+            8,
+            Some("15s"),
+        ),
+        "phpcacheadmin" => (
+            vec!["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:80/"],
+            "15s",
+            8,
+            Some("15s"),
+        ),
+        "adminer" => (
+            vec!["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:8080/"],
+            "15s",
+            8,
+            Some("10s"),
+        ),
+        "pgadmin" => (
+            vec![
+                "CMD-SHELL",
+                "wget -q -O /dev/null http://127.0.0.1:80/misc/ping",
+            ],
+            "15s",
+            12,
+            Some("30s"),
+        ),
+        "kafbat" => (
+            vec![
+                "CMD-SHELL",
+                "wget -q -O /dev/null http://127.0.0.1:8080/actuator/health",
+            ],
+            "15s",
+            15,
+            Some("40s"),
+        ),
+        // Not an HTTP check, and the probe is why. mongo-express turns basic
+        // auth on by default, so every unauthenticated request is a 401 and
+        // `wget` exits 1 — measured: it sat unhealthy for the full 420s budget
+        // with `"1: wget: server returned error: HTTP/1.1 401 Unauthorized"`.
+        // The credentials are settings, and a manifest's `health` block cannot
+        // read settings (it is written by the app, not substituted like a
+        // fragment). So the question this asks is the weaker one it can answer
+        // honestly: the server is listening.
+        "mongo-express" => (
+            vec!["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/8081'"],
+            "15s",
+            10,
+            Some("20s"),
+        ),
+        // `blackfire` is deliberately absent: the agent is an outbound probe
+        // with no readiness endpoint, and inventing one would be a check that
+        // passes for a reason unrelated to whether profiling works.
+        _ => return None,
+    };
+    Some(row)
+}
+
+/// The same table, for the one companion in the catalogue.
+fn companion_health_of(name: &str) -> Option<(Vec<&'static str>, &'static str, u32, Option<&'static str>)> {
+    match name {
+        // Not `ruok`, and the probe is why.
+        //
+        // The four-letter words are the obvious check and ZooKeeper 3.5 turned
+        // them off by default; `cp-zookeeper` answers "ruok is not executed
+        // because it is not in the whitelist" and `nc` exits 1 forever. Setting
+        // `ZOOKEEPER_4LW_COMMANDS_WHITELIST=srvr,ruok` did **not** re-enable it
+        // — measured on this machine, both ways — so the fix would have been an
+        // env var that did nothing next to a check that never passed.
+        //
+        // `zookeeper-shell` is in the image and would answer properly, at the
+        // cost of a JVM every ten seconds. What this companion has to be, for
+        // the broker that waits on it, is reachable on its client port — so
+        // that is what is asked. The broker's own check is the one that proves
+        // the pair actually works, and it needs ZooKeeper-backed metadata to
+        // pass.
+        "zookeeper" => Some((
+            vec!["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/2181'"],
+            "10s",
+            12,
+            Some("15s"),
+        )),
+        _ => None,
+    }
+}
+
+/// A `health` block, as JSON, or nothing.
+fn health_json(
+    row: Option<(Vec<&'static str>, &'static str, u32, Option<&'static str>)>,
+) -> Option<String> {
+    let (test, interval, retries, start) = row?;
+    let args = test
+        .iter()
+        .map(|a| format!("\"{}\"", json_escape(a)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let start = start
+        .map(|s| format!(", \"startPeriod\": \"{s}\""))
+        .unwrap_or_default();
+    Some(format!(
+        "{{ \"test\": [{args}], \"interval\": \"{interval}\", \"retries\": {retries}{start} }}"
+    ))
 }
 
 // ---------------------------------------------------------------- main

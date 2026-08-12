@@ -45,6 +45,17 @@ fn workspace(name: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("packages")).unwrap();
     copy_tree(&fixture(), &root.join("packages"));
+
+    // Twice, and the second one is where a real workspace keeps them:
+    // `market::dir(root)/packages`. The tests above hand `pkg::Tree::open(root)`
+    // in themselves, so `<root>/packages` is all they ever needed — but a test
+    // that calls a *command* gets the tree the command builds, and that one
+    // looks under `market/`. Without this the manifest simply came back `None`
+    // and every field derived from it degraded to a default, which is a test
+    // passing on a page that had quietly lost half its data.
+    let market = root.join("market").join("packages");
+    std::fs::create_dir_all(&market).unwrap();
+    copy_tree(&fixture(), &market);
     root
 }
 
@@ -537,4 +548,73 @@ mod the_switch {
         };
         assert!(err.message.contains("mysql@8.0"), "{}", err.message);
     }
+}
+
+/// The Services page survives the handover.
+///
+/// It did not. `list_services` walked the compiled-in catalogue and built every
+/// container name as `stackvo-<id>`, so a migrated workspace got twenty-five
+/// rows, all of them reported stopped — the containers are `stackvo-mysql-8-0`
+/// now — and the detail sheet behind those rows, with the connection string,
+/// the dumps and the **logs**, was reachable for nothing that was actually
+/// running.
+///
+/// Checked against the instance-shaped rows rather than against a screen,
+/// because the failure was in what the command returned.
+#[test]
+fn the_services_page_lists_instances_once_the_table_exists() {
+    let root = workspace("services-after");
+    let env = Env::parse(ENV);
+    let (_, _) = after(&root, &env);
+
+    let rows = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(stackvo_desktop_lib::commands::list_services(&root))
+        .expect("the services list");
+
+    let ids: Vec<&str> = rows.iter().map(|s| s.id.as_str()).collect();
+
+    // Instance ids, not service ids: the detail sheet keys off this, and two
+    // versions of one service are two rows that must not collapse into one.
+    assert!(ids.contains(&"mysql-8-0"), "{ids:?}");
+    assert!(ids.contains(&"redis-7-0"), "{ids:?}");
+    assert!(!ids.contains(&"mysql"), "the pre-package id is still here: {ids:?}");
+
+    // And the compiled-in catalogue is not being listed alongside them. Before
+    // this, every one of the twenty-five was a row.
+    assert_eq!(ids.len(), rows.len());
+    assert!(rows.len() < 10, "the whole compiled catalogue came back: {ids:?}");
+
+    let mysql = rows.iter().find(|s| s.id == "mysql-8-0").unwrap();
+    // The name the detail sheet asks the engine for.
+    assert_eq!(mysql.container_name, "stackvo-mysql-8-0");
+    assert_eq!(mysql.version.as_deref(), Some("8.0"));
+    assert!(mysql.enabled);
+    // A secret setting is masked here as it is everywhere else: the value lives
+    // in the keystore and the table holds a reference (ADR 0010).
+    let root_password = mysql
+        .credentials
+        .iter()
+        .find(|c| c.key == "ROOT_PASSWORD")
+        .expect("the manifest declares it");
+    assert!(root_password.secret);
+    assert_ne!(root_password.value, "hunter2");
+}
+
+/// An unmigrated workspace is untouched — the same rule the renderer follows.
+#[test]
+fn a_workspace_with_no_table_still_lists_the_env_catalogue() {
+    let root = workspace("services-before");
+
+    let rows = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(stackvo_desktop_lib::commands::list_services(&root))
+        .expect("the services list");
+
+    assert!(rows.len() > 20, "the compiled catalogue should still be the source");
+    assert!(rows.iter().any(|s| s.id == "mysql"));
 }

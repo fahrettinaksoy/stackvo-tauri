@@ -16,6 +16,7 @@ import PhpPane from '@/components/settings/PhpPane.vue';
 import LocalisationPane from '@/components/settings/LocalisationPane.vue';
 import ServerLimitsPane from '@/components/settings/ServerLimitsPane.vue';
 import ServicesPane from '@/components/settings/ServicesPane.vue';
+import CataloguePane from '@/components/settings/CataloguePane.vue';
 import PreferencesPane from '@/components/settings/PreferencesPane.vue';
 import { usePreferences } from '@/composables/usePreferences';
 import DiagnosticsPane from '@/components/settings/DiagnosticsPane.vue';
@@ -166,6 +167,17 @@ const SECTIONS = [
     icon: 'mdi-cube-outline',
     label: 'serviceSettings.title',
     desc: 'serviceSettings.sectionDesc',
+  },
+  // Beside the services rather than under 'app': it answers where the things
+  // on that pane come from. It was reachable only from the first-run gate and
+  // from a folder picker on the Market page, so a person with a URL and a
+  // second launch had nowhere to type it.
+  {
+    key: 'catalogue',
+    group: 'stack',
+    icon: 'mdi-storefront-outline',
+    label: 'catalogueSettings.title',
+    desc: 'catalogueSettings.desc',
   },
   // Runtime versions and the PHP build were two panes answering one question:
   // what does a new project start with. Split, the answer for Python lived in
@@ -469,6 +481,10 @@ onMounted(async () => {
 
           <template v-if="tab === 'services'">
             <ServicesPane />
+          </template>
+
+          <template v-if="tab === 'catalogue'">
+            <CataloguePane />
           </template>
 
           <template v-if="tab === 'workspace'">

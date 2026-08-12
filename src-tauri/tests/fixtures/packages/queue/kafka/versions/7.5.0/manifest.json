@@ -22,9 +22,10 @@
   "connection": null,
   "url": null,
   "dependsOn": [],
+  "health": { "test": ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server 127.0.0.1:9092"], "interval": "15s", "retries": 15, "startPeriod": "45s" },
   "companions": [
-    { "name": "zookeeper", "image": { "repository": "confluentinc/cp-zookeeper", "tag": "latest" }, "ports": [{ "name": "main", "container": 2181, "preferred": 2181 }], "volumes": [], "compose": { "file": "companion.zookeeper.yml.tpl", "sha256": "5d91dae7b058228365651a33266b3e0251cc37dbfb6ec6cb18661252e110e3cc" } }
+    { "name": "zookeeper", "image": { "repository": "confluentinc/cp-zookeeper", "tag": "latest" }, "ports": [{ "name": "main", "container": 2181, "preferred": 2181 }], "volumes": [], "health": { "test": ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/2181'"], "interval": "10s", "retries": 12, "startPeriod": "15s" }, "compose": { "file": "companion.zookeeper.yml.tpl", "sha256": "5d91dae7b058228365651a33266b3e0251cc37dbfb6ec6cb18661252e110e3cc" } }
   ],
-  "compose": { "file": "compose.yml.tpl", "sha256": "8f9cb1ac19898d4e0aa5e99a035a9170d7110e9256da727d42c4d44ebf6c327f" },
+  "compose": { "file": "compose.yml.tpl", "sha256": "ba4854e7a80d75e7c87bb573ff6610fcaf204cd6f7f38048ad7e3c9e092ca7ef" },
   "support": {"status":"supported"}
 }

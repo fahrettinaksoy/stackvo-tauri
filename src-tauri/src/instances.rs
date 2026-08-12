@@ -136,6 +136,35 @@ impl Instance {
     pub fn logs(&self, root: &Path) -> PathBuf {
         root.join("logs").join("services").join(&self.id)
     }
+
+    /// The name this instance is reached by in a browser.
+    ///
+    /// The primary keeps the bare one — `phpmyadmin.stackvo.loc` is in
+    /// somebody's bookmarks and their password manager — and every other
+    /// instance gets its version appended: `phpmyadmin-5-2.stackvo.loc`.
+    ///
+    /// This is what stops twelve of the twenty-five packages from being
+    /// single-instance. They were not single-instance because anything about
+    /// them is: they were single-instance because two of them would have asked
+    /// Traefik for the same `Host()` rule, and Traefik does not report that as a
+    /// conflict — it picks one, and the other silently never answers.
+    ///
+    /// The router *name* was already per instance (`{{ instance.slug }}` in the
+    /// fragments), which is why only this needed deriving. One derivation, and
+    /// three places read it: the router rule, the certificate SAN, and the hosts
+    /// file — the same three that E-2's aliases go through.
+    pub fn domain(&self, subdomain: &str, tld: &str) -> String {
+        if self.primary {
+            return format!("{subdomain}.{tld}");
+        }
+        // The version part of the slug, not the version itself: the slug is
+        // already a DNS label and `8.0` is not.
+        let suffix = self
+            .id
+            .strip_prefix(&format!("{}-", self.service))
+            .unwrap_or(&self.id);
+        format!("{subdomain}-{suffix}.{tld}")
+    }
 }
 
 /// `("mysql", "8.0")` → `mysql-8-0`.
@@ -674,5 +703,60 @@ mod tests {
         };
         assert!(table.save(&root).is_err());
         assert!(!path(&root).exists());
+    }
+
+    /// S-18. The primary keeps the bare name — it is in a bookmark and a
+    /// password manager — and every other instance carries its version.
+    #[test]
+    fn only_the_primary_answers_on_the_bare_subdomain() {
+        let primary = instance("phpmyadmin", "5.2", true);
+        let second = instance("phpmyadmin", "5.1", false);
+
+        assert_eq!(
+            primary.domain("phpmyadmin", "stackvo.loc"),
+            "phpmyadmin.stackvo.loc"
+        );
+        assert_eq!(
+            second.domain("phpmyadmin", "stackvo.loc"),
+            "phpmyadmin-5-1.stackvo.loc"
+        );
+    }
+
+    /// Two instances, two names. Traefik does not report two routers claiming
+    /// one `Host()` as a conflict — it picks one and the other never answers —
+    /// so this being different is the whole of what makes the packages
+    /// multi-instance.
+    #[test]
+    fn two_instances_of_one_service_do_not_ask_for_the_same_name() {
+        let a = instance("pgadmin", "9.17", true);
+        let b = instance("pgadmin", "9.16", false);
+        let c = instance("pgadmin", "8.14", false);
+
+        let names = [
+            a.domain("pgadmin", "stackvo.loc"),
+            b.domain("pgadmin", "stackvo.loc"),
+            c.domain("pgadmin", "stackvo.loc"),
+        ];
+        let unique: std::collections::BTreeSet<&String> = names.iter().collect();
+        assert_eq!(unique.len(), names.len(), "{names:?}");
+    }
+
+    /// The derived name is a hostname, so it has to be a run of DNS labels —
+    /// the version part comes from the slug rather than from the version,
+    /// because `8.0` is not one.
+    #[test]
+    fn a_derived_domain_is_made_of_dns_labels() {
+        let second = instance("mongo-express", "1.0.2", false);
+        let domain = second.domain("mongo-express", "stackvo.loc");
+        assert_eq!(domain, "mongo-express-1-0-2.stackvo.loc");
+        for label in domain.split('.') {
+            assert!(
+                !label.is_empty()
+                    && label
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+                "{label:?} in {domain:?}"
+            );
+        }
     }
 }

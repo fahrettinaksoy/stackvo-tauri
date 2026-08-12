@@ -240,6 +240,15 @@ hints! {
     REGISTRY_WENT_BACKWARDS = "registryWentBackwards",
         "The catalogue this source serves is older than the one already here. Check the \
          source before using it.";
+    REGISTRY_UNREACHABLE = "registryUnreachable",
+        "The catalogue could not be fetched. Check the address and whether this machine \
+         reaches it — a proxy set in the system settings is used.";
+    REGISTRY_ADDRESS_IS_A_DIRECTORY = "registryAddressIsADirectory",
+        "The address has to be the directory holding registry.json, not the page above it. \
+         A GitHub repository URL is translated automatically; anything else is taken as given.";
+    REGISTRY_MUST_BE_HTTPS = "registryMustBeHttps",
+        "A catalogue address has to start with https://. Nothing verifies a signature yet, \
+         so the transport is the whole of the protection.";
     REMOVE_THE_INSTANCE_FIRST = "removeTheInstanceFirst",
         "An instance is still using this package. Remove it, then uninstall.";
     SERVICE_IS_SINGLE_INSTANCE = "serviceIsSingleInstance",

@@ -132,6 +132,13 @@ const headers = computed(() => [
     width: 100,
   },
   {
+    title: t('projectsView.colRebuild'),
+    key: 'rebuild',
+    sortable: false,
+    align: 'center',
+    width: 100,
+  },
+  {
     title: t('projectsView.colTerminal'),
     key: 'terminal',
     sortable: false,
@@ -229,6 +236,24 @@ async function regenerate(project) {
   } finally {
     ops.markBusy(project.name, false);
   }
+}
+
+/**
+ * The stale-manifest badge does whichever half is actually outstanding.
+ *
+ * It used to regenerate, always, and that was the weaker of the two acts: a
+ * project with an image already built keeps running the old one, so the files
+ * on disk agree with `stackvo.json`, the badge goes out, and the container is
+ * still the thing it was. The badge said "changed — regenerate to apply it",
+ * and regenerating did not apply it.
+ *
+ * So: built means rebuild — regenerate, build the image, recreate the container
+ * — and unbuilt means regenerate, because there is nothing to rebuild yet and
+ * pulling a base image is not what a badge click should start.
+ */
+function applyChange(project) {
+  if (!project.built) return regenerate(project);
+  return act(project, (n) => api.projectBuild(n));
 }
 
 /**
@@ -855,11 +880,15 @@ onUnmounted(() => teardown?.());
 
             <v-tooltip v-if="item.generatedStale" location="top">
               <template #activator="{ props }">
-                <v-icon v-bind="props" color="info" size="small" @click.stop="regenerate(item)"
+                <v-icon v-bind="props" color="info" size="small" @click.stop="applyChange(item)"
                   >mdi-sync-alert</v-icon
                 >
               </template>
-              <span class="text-caption">{{ t('projects.manifestChanged') }}</span>
+              <span class="text-caption">
+                {{
+                  item.built ? t('projects.manifestChangedBuilt') : t('projects.manifestChanged')
+                }}
+              </span>
             </v-tooltip>
           </div>
           <span v-else class="text-grey">—</span>
@@ -933,6 +962,36 @@ onUnmounted(() => teardown?.());
             @click="act(item, api.projectRestart)"
           >
             <v-icon>mdi-restart</v-icon>
+          </v-btn>
+        </template>
+
+        <!-- Rebuild: the whole chain, for a project that already has an image.
+             The control column's hammer only appears while `!built`, so once a
+             project had been built there was no way to rebuild it from here at
+             all — and that is exactly when it is needed, because changing the
+             PHP version or an extension changes the *Dockerfile*.
+
+             Not the same act as the stale-manifest icon beside the domain.
+             That one regenerates files and stops; this regenerates, rebuilds
+             the image and recreates the container. Restart is a third thing
+             again — same container, same image, so a rebuilt configuration
+             never reaches it. -->
+        <template #item.rebuild="{ item }">
+          <v-btn
+            v-if="item.built"
+            block
+            size="small"
+            color="info"
+            variant="tonal"
+            :aria-label="t('projectsView.rebuild')"
+            :loading="ops.isBusy(item.name)"
+            :disabled="!app.engineUp || !item.manifestValid"
+            @click="act(item, (n) => api.projectBuild(n))"
+          >
+            <v-icon>mdi-hammer-wrench</v-icon>
+            <v-tooltip activator="parent" location="top">
+              {{ t('projectsView.rebuildHint') }}
+            </v-tooltip>
           </v-btn>
         </template>
 

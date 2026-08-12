@@ -79,8 +79,18 @@ pub enum Note {
 pub enum Blocker {
     /// `.env` enables a service the catalogue has never heard of.
     UnknownService { service: String },
-    /// The exact version in `.env` is not published.
-    VersionNotPublished {
+    /// The exact version in `.env` has no package on this machine.
+    ///
+    /// **Not "unpublished".** The catalogue this reads is the local package
+    /// tree, so the honest sentence is "not installed here" — and the two ask
+    /// for different things: one is a click in the Market, the other is a
+    /// version that was never in the index. Saying the second when the first is
+    /// true sends somebody to look for a withdrawal that never happened, and
+    /// ADR 0014 makes withdrawals impossible anyway.
+    ///
+    /// `available` is what *is* installed, which is the list somebody needs to
+    /// see next to the one they asked for.
+    VersionNotInstalled {
         service: String,
         version: String,
         available: Vec<String>,
@@ -179,7 +189,7 @@ pub fn plan(
         };
 
         if !available.contains(&version) {
-            plan.blockers.push(Blocker::VersionNotPublished {
+            plan.blockers.push(Blocker::VersionNotInstalled {
                 service,
                 version,
                 available,
@@ -193,7 +203,7 @@ pub fn plan(
         };
 
         let Ok(id) = crate::instances::slug(&service, &version) else {
-            plan.blockers.push(Blocker::VersionNotPublished {
+            plan.blockers.push(Blocker::VersionNotInstalled {
                 service,
                 version,
                 available,
@@ -334,12 +344,41 @@ pub fn plan(
     plan
 }
 
+/// Where `.env` is copied before the handover writes anything.
+pub fn backup_path(root: &std::path::Path) -> std::path::PathBuf {
+    root.join(".env.pre-market.bak")
+}
+
+/// The line written above the migrated block in `.env`.
+///
+/// A whole-line comment, and that is the only form it can take. `Env::parse`
+/// takes everything after the first `=` as the value with no quoting and no
+/// comment stripping (`contracts/env.schema.json` → `parsing`, deliberately
+/// naive because a Bash loader and a Node parser read the same file). An
+/// inline `SERVICE_MYSQL_ENABLE=true  # migrated` would therefore be the value
+/// `true  # migrated`, and the revert this note describes would no longer work.
+const MIGRATED_MARK: &str =
+    "# Migrated to services/instances.json — these keys are read for migration only and are \
+     no longer written. To go back, delete services/instances.json.";
+
 /// Write the plan out, refusing an inapplicable one.
 ///
 /// The table's own `check` runs inside `save`, so a plan that would produce two
 /// primaries or a shared volume never reaches disk even if this module built it
 /// by mistake. Two gates on the same property, deliberately: this one knows why
 /// and that one knows what.
+///
+/// ## The order is the safety
+///
+/// The backup is written **first**, before the table and before `.env` is
+/// touched. `docs/servis-market-mimarisi.md` §7 asks for a revert path, and a
+/// revert whose only artefact is written after the risky step is a revert that
+/// exists in the cases where nothing went wrong.
+///
+/// An existing backup is not overwritten. A second run means the first one
+/// already happened; replacing `.env.pre-market.bak` with a post-migration
+/// `.env` would turn the one file that remembers the previous state into a
+/// second copy of the current one.
 pub fn apply(root: &std::path::Path, plan: &Plan) -> crate::error::Result<Table> {
     use crate::error::{Code, Error};
 
@@ -353,12 +392,58 @@ pub fn apply(root: &std::path::Path, plan: &Plan) -> crate::error::Result<Table>
         ));
     }
 
+    let env_path = root.join(".env");
+    let before = std::fs::read_to_string(&env_path).ok();
+
+    if let Some(text) = &before {
+        let backup = backup_path(root);
+        if !backup.exists() {
+            crate::atomic::write(&backup, text)?;
+        }
+    }
+
     let table = Table {
         schema_version: crate::instances::SCHEMA_VERSION,
         instances: plan.instances.clone(),
     };
     table.save(root)?;
+
+    // `.env`'s service lines are marked, not removed (§7, step 3). Removing
+    // them would make the revert — delete the table, get the old workspace
+    // back — a restore from backup instead of a deletion, and the two differ
+    // by everything the user changed in between.
+    //
+    // After the table exists, so a failure to annotate leaves a migrated
+    // workspace with an unannotated `.env` rather than the reverse. One of
+    // those is cosmetic.
+    if let Some(text) = before {
+        if let Some(marked) = mark_migrated(&text) {
+            crate::atomic::write(&env_path, &marked)?;
+        }
+    }
+
     Ok(table)
+}
+
+/// Put [`MIGRATED_MARK`] above the first legacy service key, or `None` when
+/// there is nothing to mark or it is already there.
+fn mark_migrated(text: &str) -> Option<String> {
+    if text.contains(MIGRATED_MARK) {
+        return None;
+    }
+    let is_legacy = |line: &str| {
+        let key = line.trim().split('=').next().unwrap_or("").trim();
+        (key.starts_with("SERVICE_") || key.starts_with("HOST_PORT_")) && line.contains('=')
+    };
+    let at = text.lines().position(is_legacy)?;
+
+    let mut out: Vec<&str> = text.lines().collect();
+    out.insert(at, MIGRATED_MARK);
+    let mut joined = out.join("\n");
+    if text.ends_with('\n') {
+        joined.push('\n');
+    }
+    Some(joined)
 }
 
 #[cfg(test)]
@@ -596,7 +681,7 @@ mod tests {
         assert!(plan.instances.is_empty());
         assert!(!plan.is_applicable());
         match &plan.blockers[0] {
-            Blocker::VersionNotPublished {
+            Blocker::VersionNotInstalled {
                 service, version, ..
             } => {
                 assert_eq!((service.as_str(), version.as_str()), ("mysql", "5.5"));
@@ -736,5 +821,97 @@ mod tests {
 
         assert!(apply(&root, &plan).is_err());
         assert!(!crate::instances::path(&root).exists());
+    }
+
+    // ---- the backup, and what `.env` looks like afterwards ----------------
+
+    const REAL_ENV: &str = "\
+# StackVo
+DEFAULT_TLD_SUFFIX=stackvo.loc
+SERVICE_MYSQL_ENABLE=true
+SERVICE_MYSQL_VERSION=8.0
+SERVICE_MYSQL_ROOT_PASSWORD=hunter2
+";
+
+    /// Written before the table and before `.env` is touched. A revert whose
+    /// only artefact appears *after* the risky step exists in exactly the cases
+    /// where nothing went wrong.
+    #[test]
+    fn the_env_is_backed_up_before_anything_is_written() {
+        let root = scratch("backup");
+        std::fs::write(root.join(".env"), REAL_ENV).unwrap();
+
+        let env = Env::parse(REAL_ENV);
+        let plan = plan(&root, &env, &catalogue(), &free, NOW);
+        apply(&root, &plan).unwrap();
+
+        assert_eq!(std::fs::read_to_string(backup_path(&root)).unwrap(), REAL_ENV);
+    }
+
+    /// A second run does not replace it. The first migration already happened,
+    /// so overwriting would turn the one file that remembers the previous state
+    /// into a second copy of the current one.
+    #[test]
+    fn an_existing_backup_is_not_overwritten() {
+        let root = scratch("backup-twice");
+        std::fs::write(root.join(".env"), REAL_ENV).unwrap();
+        std::fs::write(backup_path(&root), "# from the first run\n").unwrap();
+
+        let env = Env::parse(REAL_ENV);
+        let plan = plan(&root, &env, &catalogue(), &free, NOW);
+        apply(&root, &plan).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(backup_path(&root)).unwrap(),
+            "# from the first run\n"
+        );
+    }
+
+    /// Marked, not removed — and marked on a line of its own.
+    ///
+    /// `Env::parse` takes everything after the first `=` as the value, with no
+    /// quoting and no comment stripping (`contracts/env.schema.json` →
+    /// `parsing`). An inline note would therefore make the value
+    /// `true # migrated`, and the revert this very note describes would stop
+    /// working. This test is that rule.
+    #[test]
+    fn the_service_keys_are_marked_and_still_parse_to_what_they_did() {
+        let root = scratch("marked");
+        std::fs::write(root.join(".env"), REAL_ENV).unwrap();
+
+        let env = Env::parse(REAL_ENV);
+        let plan = plan(&root, &env, &catalogue(), &free, NOW);
+        apply(&root, &plan).unwrap();
+
+        let after = std::fs::read_to_string(root.join(".env")).unwrap();
+        assert!(after.contains("instances.json"), "{after}");
+        assert!(after.contains("SERVICE_MYSQL_ENABLE=true"), "{after}");
+
+        let reparsed = Env::parse(&after);
+        assert_eq!(reparsed.get("SERVICE_MYSQL_VERSION"), Some("8.0"));
+        assert!(reparsed.service_enabled("mysql"));
+        assert_eq!(reparsed.get("DEFAULT_TLD_SUFFIX"), Some("stackvo.loc"));
+    }
+
+    /// And marking is not cumulative: applying twice would otherwise stack a
+    /// comment per run at the top of somebody's file.
+    #[test]
+    fn the_mark_is_written_once() {
+        let marked = mark_migrated(REAL_ENV).unwrap();
+        assert!(mark_migrated(&marked).is_none());
+    }
+
+    /// A blocked plan writes no backup either. Nothing happened, so nothing
+    /// should be left behind claiming something did.
+    #[test]
+    fn a_blocked_plan_leaves_no_backup() {
+        let root = scratch("blocked-backup");
+        std::fs::write(root.join(".env"), "SERVICE_MYSQL_ENABLE=true\nSERVICE_MYSQL_VERSION=5.5\n")
+            .unwrap();
+        let env = Env::parse("SERVICE_MYSQL_ENABLE=true\nSERVICE_MYSQL_VERSION=5.5\n");
+        let plan = plan(&root, &env, &catalogue(), &free, NOW);
+
+        assert!(apply(&root, &plan).is_err());
+        assert!(!backup_path(&root).exists());
     }
 }
