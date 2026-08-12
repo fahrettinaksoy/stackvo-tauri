@@ -36,11 +36,5 @@ export async function notify(title, body) {
 
 /** Only notify for outcomes worth interrupting someone about. */
 export function shouldNotify(eventName) {
-  return [
-    'build:success',
-    'build:error',
-    'compose:done',
-    'service:error',
-    'project:error',
-  ].includes(eventName);
+  return ['build:success', 'build:error', 'compose:done', 'project:error'].includes(eventName);
 }

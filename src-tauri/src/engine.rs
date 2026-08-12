@@ -280,7 +280,36 @@ pub struct ContainerInfo {
     pub state: String,
     pub running: bool,
     pub status: Option<String>,
+    /// `healthy`, `unhealthy`, `starting`, or `None` for a container whose
+    /// image declares no healthcheck. Read out of [`Self::status`] — see
+    /// [`health_from_status`] for why that is the only place it can come from
+    /// here.
+    pub health: Option<String>,
     pub ports: Vec<Port>,
+}
+
+/// The health verdict inside a container-list status line.
+///
+/// The list endpoint has no health field. Docker puts the answer in the status
+/// string instead — `Up 2 hours (healthy)` — and the alternative is inspecting
+/// every container to render one page, which is nineteen round trips to draw a
+/// list of twenty.
+///
+/// The vocabulary is normalised to what [`inspect`] returns, so a caller
+/// comparing the two is comparing the same three words: Docker writes the
+/// starting case as `(health: starting)` and the other two as a bare adjective.
+pub fn health_from_status(status: &str) -> Option<String> {
+    let inside = status.rsplit_once('(')?.1.strip_suffix(')')?.trim();
+    match inside {
+        "healthy" => Some("healthy".into()),
+        "unhealthy" => Some("unhealthy".into()),
+        // Anything else in parentheses is not about health: a stopped
+        // container reads `Exited (137) 5 minutes ago`, and reporting `137`
+        // as a health status would put an exit code in a green chip.
+        _ => inside
+            .strip_prefix("health:")
+            .map(|rest| rest.trim().to_string()),
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -358,6 +387,7 @@ pub async fn stackvo_containers() -> Result<std::collections::HashMap<String, Co
                 name,
                 image: c.image,
                 state,
+                health: c.status.as_deref().and_then(health_from_status),
                 status: c.status,
                 ports,
             },
@@ -1411,6 +1441,35 @@ mod tests {
         ));
         // `<none>` images carry no tag at all.
         assert!(!is_project_image("stackvo-lara", "stackvo-lara"));
+    }
+
+    /// The list endpoint reports health only inside its status line, so this
+    /// is the whole of what the services page can know without inspecting
+    /// twenty containers to draw twenty rows.
+    #[test]
+    fn health_is_read_out_of_the_status_line() {
+        assert_eq!(
+            health_from_status("Up 2 hours (healthy)").as_deref(),
+            Some("healthy")
+        );
+        assert_eq!(
+            health_from_status("Up 3 seconds (health: starting)").as_deref(),
+            Some("starting")
+        );
+        assert_eq!(
+            health_from_status("Up 10 minutes (unhealthy)").as_deref(),
+            Some("unhealthy")
+        );
+
+        // No healthcheck at all — the majority of containers, and the reason
+        // the field is an Option rather than a string with a fourth word in it.
+        assert_eq!(health_from_status("Up 4 days"), None);
+
+        // The parenthesis that is not a health verdict. Without this the
+        // services page would paint `137` into a status chip and the one
+        // number that says *why* it stopped would read as a health state.
+        assert_eq!(health_from_status("Exited (137) 5 minutes ago"), None);
+        assert_eq!(health_from_status("Created"), None);
     }
 
     #[test]

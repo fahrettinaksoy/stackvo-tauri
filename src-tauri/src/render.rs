@@ -85,7 +85,10 @@ fn context(
         crate::paths::to_docker_mount(&instance.logs(root).display().to_string()),
     );
     if let Some(url) = &manifest.url {
-        vars.insert("instance.domain".into(), instance.domain(&url.subdomain, tld));
+        vars.insert(
+            "instance.domain".into(),
+            instance.domain(&url.subdomain, tld),
+        );
     }
 
     for port in &manifest.ports {
@@ -945,7 +948,10 @@ networks:
 
         // One line, everything escaped inside it, and nothing that reads as a
         // key of the service.
-        assert!(out.contains(r#"test: ["CMD-SHELL", "x\"]\nprivileged: true\n#"]"#), "{out}");
+        assert!(
+            out.contains(r#"test: ["CMD-SHELL", "x\"]\nprivileged: true\n#"]"#),
+            "{out}"
+        );
         assert!(
             !out.lines().any(|l| l.trim_start() == "privileged: true"),
             "{out}"

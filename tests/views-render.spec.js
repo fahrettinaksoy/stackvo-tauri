@@ -80,7 +80,6 @@ vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: vi.fn(), openPath: vi.fn(
 const About = (await import('@/views/About.vue')).default;
 const Dumps = (await import('@/views/Dumps.vue')).default;
 const Logs = (await import('@/views/Logs.vue')).default;
-const Services = (await import('@/views/Services.vue')).default;
 const Dashboard = (await import('@/views/Dashboard.vue')).default;
 const Mail = (await import('@/views/Mail.vue')).default;
 const Projects = (await import('@/views/Projects.vue')).default;
@@ -130,7 +129,6 @@ const PAGES = [
   ['About', About],
   ['Dumps', Dumps],
   ['Logs', Logs],
-  ['Services', Services],
   ['Dashboard', Dashboard],
   ['Mail', Mail],
   ['Projects', Projects],
@@ -216,46 +214,6 @@ describe('every mountable page', () => {
 });
 
 describe('what the pages show once there is data', () => {
-  /** The shape `services_list` really returns — see `commands::Service`. */
-  function service(id, extra = {}) {
-    return {
-      id,
-      category: 'database',
-      enabled: true,
-      running: false,
-      built: true,
-      version: null,
-      containerName: `stackvo-${id}`,
-      url: null,
-      hostPort: null,
-      ports: [],
-      credentials: [],
-      required: [],
-      optional: [],
-      unmetDependencies: [],
-      ...extra,
-    };
-  }
-
-  it('Services lists what the boundary returned', async () => {
-    replies.servicesList = [
-      service('mysql', { running: true, version: '8.4' }),
-      service('redis', { category: 'cache', enabled: false }),
-    ];
-
-    const wrapper = await render(Services);
-    const text = wrapper.text();
-
-    expect(text).toContain('mysql');
-    expect(text).toContain('redis');
-    // The container name is the column that tells a user what to `docker exec`
-    // into, and it is derived rather than typed — worth asserting once.
-    expect(text).toContain('stackvo-mysql');
-    expect(text).toContain('8.4');
-
-    wrapper.unmount();
-  });
-
   it('About names the app and its version', async () => {
     const wrapper = await render(About);
     const text = wrapper.text();
@@ -277,9 +235,7 @@ describe('what the pages show once there is data', () => {
     replies.licencesNotice = '# Third-party notices\n\n| bollard | 0.21.0 | Apache-2.0 |';
     const wrapper = await render(About);
 
-    const button = wrapper
-      .findAll('button')
-      .find((b) => b.text().includes(en.about.licences));
+    const button = wrapper.findAll('button').find((b) => b.text().includes(en.about.licences));
     expect(button, 'no licences button in the About window').toBeTruthy();
 
     await button.trigger('click');
@@ -303,9 +259,7 @@ describe('what the pages show once there is data', () => {
     replies.licencesNotice = () => Promise.reject(new Error('no notice'));
     const wrapper = await render(About);
 
-    const button = wrapper
-      .findAll('button')
-      .find((b) => b.text().includes(en.about.licences));
+    const button = wrapper.findAll('button').find((b) => b.text().includes(en.about.licences));
     await button.trigger('click');
     await new Promise((resolve) => setTimeout(resolve, 0));
     await wrapper.vm.$nextTick();

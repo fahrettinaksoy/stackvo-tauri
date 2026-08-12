@@ -35,7 +35,7 @@ pub const MENU_NAV: &str = "nav:";
 /// not somewhere you jump to cold.
 const NAV_ITEMS: [(&str, &str); 4] = [
     ("Projects", "navProjects"),
-    ("Services", "navServices"),
+    ("Market", "navMarket"),
     ("Logs", "navLogs"),
     ("Settings", "navSettings"),
 ];
@@ -148,7 +148,7 @@ pub const LABEL_KEYS: &[&str] = &[
     "stopped",
     "noProjects",
     "navProjects",
-    "navServices",
+    "navMarket",
     "navLogs",
     "navSettings",
     "containers",
@@ -246,8 +246,8 @@ fn tr(locale: &str, key: &str) -> String {
         ("noProjects", false) => "No projects",
         ("navProjects", true) => "Projeler",
         ("navProjects", false) => "Projects",
-        ("navServices", true) => "Servisler",
-        ("navServices", false) => "Services",
+        ("navMarket", true) => "Katalog",
+        ("navMarket", false) => "Catalogue",
         ("navLogs", true) => "Loglar",
         ("navLogs", false) => "Logs",
         ("navSettings", true) => "Ayarlar",
@@ -793,7 +793,7 @@ mod tests {
             "noWorkspace",
             "engineUp",
             "navProjects",
-            "navServices",
+            "navMarket",
             "navLogs",
             "navSettings",
         ] {

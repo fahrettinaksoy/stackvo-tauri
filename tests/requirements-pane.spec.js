@@ -22,7 +22,10 @@ const api = vi.hoisted(() => ({
   projectRequirementsDeclare: vi.fn(),
 }));
 
-vi.mock('@/lib/ipc', () => ({ api }));
+// `asList` as well as `api`: the pane rebuilds what the boundary handed back
+// into the shape it guarantees, rather than assigning it wholesale, and a mock
+// that omits the helper fails the whole file with a message about exports.
+vi.mock('@/lib/ipc', () => ({ api, asList: (v) => (Array.isArray(v) ? v : []) }));
 
 const vuetify = createVuetify({ components, directives });
 

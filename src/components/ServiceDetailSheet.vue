@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n';
 import { useDisplay } from 'vuetify';
 import { api, asList } from '@/lib/ipc';
 import { listenAll } from '@/lib/events';
-import { bytes } from '@/lib/format';
+import { bytes, duration, percent } from '@/lib/format';
 import { useCopyTick } from '@/composables/useCopyTick';
 import SideSheet from '@/components/SideSheet.vue';
 import ErrorAlert from '@/components/ErrorAlert.vue';
@@ -22,11 +22,6 @@ import LogView from '@/components/LogView.vue';
 const props = defineProps({
   /** The row being read, or null when the sheet is closed. */
   service: { type: Object, default: null },
-  /**
-   * The suffix `.env` gives domains. Passed in rather than read again here:
-   * the table already resolved it, and two readers of one setting drift.
-   */
-  tld: { type: String, default: '' },
   modelValue: { type: Boolean, default: false },
 });
 const emit = defineEmits(['update:modelValue']);
@@ -44,8 +39,33 @@ const { copied, copy } = useCopyTick();
  */
 const width = computed(() => Math.round(Math.min(Math.max(display.width.value * 0.55, 560), 1040)));
 
-/** The `.env` value is a hostname fragment, not a URL. */
-const domain = computed(() => (props.service?.url ? `${props.service.url}.${props.tld}` : null));
+/** Already the whole domain — the suffix is applied at the boundary, once. */
+const domain = computed(() => props.service?.url ?? null);
+
+/**
+ * The one chip at the top, and what it is allowed to claim.
+ *
+ * Running and healthy are different questions and this used to answer only the
+ * first: twenty-four packages in the catalogue declare a healthcheck, and a
+ * database refusing every connection carried the same green "Running" chip as
+ * one that was answering. A container with no healthcheck keeps the old two
+ * states — inventing a third for it would be the same overclaim in reverse.
+ */
+const HEALTH_CHIP = {
+  healthy: { color: 'success', icon: 'mdi-heart-pulse' },
+  unhealthy: { color: 'error', icon: 'mdi-heart-broken' },
+  starting: { color: 'warning', icon: 'mdi-timer-sand' },
+};
+
+const status = computed(() => {
+  if (!props.service) return null;
+  if (!props.service.running) {
+    return { color: 'grey-darken-1', icon: 'mdi-stop-circle', label: t('system.stopped') };
+  }
+  const chip = HEALTH_CHIP[props.service.health];
+  if (chip) return { ...chip, label: t(`servicesView.health.${props.service.health}`) };
+  return { color: 'success', icon: 'mdi-check-circle', label: t('system.running') };
+});
 
 /**
  * Which half of the sheet is showing.
@@ -60,6 +80,92 @@ const tab = ref('detail');
 const details = ref(null);
 const loading = ref(false);
 const error = ref(null);
+
+/**
+ * Now, but only while the sheet is open.
+ *
+ * Uptime is the one row here that goes stale by sitting still — everything else
+ * is a fact about a container that would have to change for the row to be
+ * wrong. A timer that ran with the sheet closed would be a wake-up every half
+ * minute for a panel nobody is looking at, so it starts and stops with it.
+ */
+const now = ref(Date.now());
+let clock = null;
+
+function startClock() {
+  stopClock();
+  now.value = Date.now();
+  clock = setInterval(() => {
+    now.value = Date.now();
+    loadStats(props.service);
+  }, 30_000);
+}
+
+function stopClock() {
+  if (clock) clearInterval(clock);
+  clock = null;
+}
+
+/**
+ * How long this container has been up, or null.
+ *
+ * Null for a stopped one: Docker leaves `startedAt` at the last start, so a
+ * container that exited an hour ago would otherwise report the uptime it had
+ * when it died as though it were still accumulating.
+ */
+const uptime = computed(() => {
+  if (!details.value?.running || !details.value.startedAt) return null;
+  const started = Date.parse(details.value.startedAt);
+  if (Number.isNaN(started)) return null;
+  return duration(Math.max(0, Math.round((now.value - started) / 1000)));
+});
+
+/**
+ * The runtime rows worth a line, and only the ones that are.
+ *
+ * Every one of these came back from `container_inspect` already and was thrown
+ * away by this panel. They are built as a list rather than written out as
+ * markup because most of them are absent most of the time: a healthy container
+ * has no exit code, a container that has never crashed has no restart count
+ * worth reading, and a row rendered with an em dash in it is a line that costs
+ * height to say nothing.
+ */
+const runtimeRows = computed(() => {
+  const d = details.value;
+  if (!d) return [];
+  return [
+    d.image && { key: 'image', label: t('servicesView.image'), value: d.image, mono: true },
+    d.imageSize && {
+      key: 'imageSize',
+      label: t('servicesView.imageSize'),
+      value: bytes(d.imageSize),
+    },
+    uptime.value && { key: 'uptime', label: t('servicesView.uptime'), value: uptime.value },
+    // Only once it has happened. Zero restarts is the normal state and a row
+    // reading "0" invites the reader to wonder what it would mean.
+    d.restartCount > 0 && {
+      key: 'restarts',
+      label: t('servicesView.restarts'),
+      value: d.restartPolicy
+        ? t('servicesView.restartsWithPolicy', { n: d.restartCount, policy: d.restartPolicy })
+        : String(d.restartCount),
+      colour: 'warning',
+    },
+    // The single most useful number about a container that is not running, and
+    // it was being dropped on the floor. 137 is the out-of-memory kill.
+    !d.running &&
+      d.exitCode !== null &&
+      d.exitCode !== undefined && {
+        key: 'exit',
+        label: t('servicesView.exitCode'),
+        value:
+          d.exitCode === 137
+            ? t('servicesView.exitOutOfMemory', { code: d.exitCode })
+            : String(d.exitCode),
+        colour: d.exitCode === 0 ? undefined : 'error',
+      },
+  ].filter(Boolean);
+});
 
 /** Values revealed by an explicit click, keyed by their `.env` name. */
 const revealed = ref({});
@@ -114,9 +220,14 @@ async function toggleReveal(credential) {
   }
 
   try {
+    // Keyed on `envKey` because that is what the row is keyed on, but asked for
+    // by `key`: the boundary dispatches to the instance table or to `.env`, and
+    // an instance's setting is called `ROOT_PASSWORD` there. Asking with the
+    // `.env` spelling is what made the eye answer "not set in .env" over a
+    // password a migrated workspace does have.
     revealed.value = {
       ...revealed.value,
-      [credential.envKey]: await api.envReveal(credential.envKey),
+      [credential.envKey]: await api.serviceReveal(props.service.id, credential.key),
     };
   } catch (e) {
     error.value = e;
@@ -209,6 +320,105 @@ function credentialIcon(key) {
   if (/HOST|SERVER|URL/.test(key)) return { icon: 'mdi-server-network', color: 'primary' };
   return { icon: 'mdi-information-outline', color: 'grey' };
 }
+
+/**
+ * What upstream says about this version, or null.
+ *
+ * Only worth a chip when it is not the ordinary answer: "Supported" beside
+ * every service is a word that stops being read, and the two that matter are
+ * the two that change what you should do next. It was visible only in the
+ * catalogue tree — on the page you install from, which is not where somebody
+ * debugging an end-of-life database is standing.
+ */
+const support = computed(() => {
+  const status = props.service?.support;
+  if (status !== 'eol' && status !== 'deprecated') return null;
+  return {
+    color: status === 'eol' ? 'error' : 'warning',
+    label: t(`marketView.support.${status}`),
+    // The date is the difference between "ended two years ago" and "ends next
+    // month", and both were rendering as the same three words.
+    date: props.service.eolDate ?? null,
+  };
+});
+
+/**
+ * Live CPU and memory for this container.
+ *
+ * `container_stats` has been on the boundary the whole time and no service
+ * screen has ever called it. Sampled rather than streamed: the endpoint reads
+ * cumulative counters and needs two readings for a percentage, so one call is
+ * already two round trips, and a panel that did this every second would cost
+ * more than the number is worth. Refreshed on the same clock as uptime.
+ */
+const stats = ref(null);
+
+async function loadStats(service) {
+  if (!service?.running) {
+    stats.value = null;
+    return;
+  }
+  try {
+    stats.value = await api.containerStats(service.id);
+  } catch {
+    // A container that stopped between the list and this call is the ordinary
+    // case, and it is not worth a red panel over a detail sheet.
+    stats.value = null;
+  }
+}
+
+/**
+ * Which container the logs tab is showing.
+ *
+ * The main one, unless a companion's log button says otherwise. A companion
+ * with no way to read its output is a row that reports a problem and offers no
+ * way to look into it — and Kafka's Zookeeper is exactly the container whose
+ * log holds the answer when the broker will not start.
+ */
+const logTarget = ref(null);
+const logContainer = computed(() => logTarget.value?.container ?? props.service?.containerName);
+
+function openCompanionLogs(companion) {
+  logTarget.value = { container: companion.containerName, label: companion.name };
+  tab.value = 'logs';
+}
+
+const companionColour = (companion) => {
+  if (!companion.built) return 'grey-darken-1';
+  if (companion.health === 'unhealthy') return 'error';
+  return companion.running ? 'success' : 'grey-darken-1';
+};
+
+function companionLabel(companion) {
+  if (!companion.built) return t('servicesView.notCreatedShort');
+  if (!companion.running) return t('system.stopped');
+  const health = HEALTH_CHIP[companion.health] ? companion.health : null;
+  return health ? t(`servicesView.health.${health}`) : t('system.running');
+}
+
+/**
+ * The three states a dependency row can be in, told apart in one place.
+ *
+ * `provider` absent and `running` false are two different failures with two
+ * different fixes — install something that provides it, or start what you
+ * have — and a colour that merged them would send half the readers to the
+ * wrong page. An optional dependency nothing answers is not a fault at all,
+ * which is why `required` is read before anything else.
+ */
+function dependencyState(dep) {
+  if (dep.running) return t('servicesView.depRunning');
+  if (!dep.provider) return t('servicesView.depNotInstalled');
+  return t('servicesView.depStopped');
+}
+
+function dependencyColour(dep) {
+  if (dep.running) return 'success';
+  if (!dep.required) return 'grey';
+  return dep.provider ? 'warning' : 'error';
+}
+
+const dependencyIcon = (dep) =>
+  dep.running ? 'mdi-check-circle' : dep.provider ? 'mdi-stop-circle' : 'mdi-package-variant';
 
 /** A mount that lands under /var/log is the one the log section is about. */
 const isLogMount = (mount) => /(^|\/)log/i.test(mount.destination);
@@ -424,10 +634,15 @@ async function runDb(action, call, path) {
 watch(
   () => [props.modelValue, props.service?.id],
   ([open]) => {
-    if (!open) return;
+    if (!open) {
+      stopClock();
+      return;
+    }
     // A different service is a different panel: start it on the detail tab
     // rather than on whatever the last one was left showing.
     tab.value = 'detail';
+    // A companion's logs do not follow the sheet to the next service.
+    logTarget.value = null;
     dbLine.value = '';
     dbResult.value = '';
     openMessage.value = null;
@@ -435,7 +650,10 @@ watch(
     // A revealed password does not follow the sheet to the next service.
     connection.value = null;
     connectionRevealed.value = false;
+    stats.value = null;
+    startClock();
     load(props.service);
+    loadStats(props.service);
     loadConnection(props.service);
     loadMail();
     api.dbTargets().then(
@@ -456,7 +674,10 @@ onMounted(async () => {
     dbLine.value = payload?.line ?? '';
   });
 });
-onUnmounted(() => stopDbEvents?.());
+onUnmounted(() => {
+  stopDbEvents?.();
+  stopClock();
+});
 </script>
 
 <template>
@@ -469,14 +690,27 @@ onUnmounted(() => stopDbEvents?.());
     @update:model-value="emit('update:modelValue', $event)"
   >
     <template #header-append>
+      <!-- Only when it is not the ordinary answer. A "Supported" chip on every
+           service is a word that stops being read, and it would sit beside the
+           two that are worth stopping for. -->
       <v-chip
-        v-if="service"
+        v-if="support"
         size="small"
         variant="flat"
-        :color="service.running ? 'success' : 'grey-darken-1'"
-        :prepend-icon="service.running ? 'mdi-check-circle' : 'mdi-stop-circle'"
+        :color="support.color"
+        prepend-icon="mdi-clock-alert-outline"
+        class="mr-2"
       >
-        {{ service.running ? t('system.running') : t('system.stopped') }}
+        {{ support.date ? `${support.label} · ${support.date}` : support.label }}
+      </v-chip>
+      <v-chip
+        v-if="status"
+        size="small"
+        variant="flat"
+        :color="status.color"
+        :prepend-icon="status.icon"
+      >
+        {{ status.label }}
       </v-chip>
     </template>
 
@@ -495,8 +729,18 @@ onUnmounted(() => stopDbEvents?.());
           {{ t('mail.inbox') }}
           <v-chip v-if="mail?.total" size="x-small" class="ml-2">{{ mail.total }}</v-chip>
         </v-tab>
-        <v-tab value="logs" prepend-icon="mdi-text-box-outline" :disabled="!service?.built">
-          {{ t('logs.title') }}
+        <!-- Named when it is not the container the sheet is titled after:
+             opening a companion's log from the row below and landing on a tab
+             that still says "Logs" leaves no way to tell whose output is on
+             screen. Enabled when *either* container exists, because a
+             companion can be up while the service it belongs to is not — which
+             is the state you read a Zookeeper log in. -->
+        <v-tab
+          value="logs"
+          prepend-icon="mdi-text-box-outline"
+          :disabled="!service?.built && !logTarget"
+        >
+          {{ logTarget ? `${t('logs.title')} · ${logTarget.label}` : t('logs.title') }}
         </v-tab>
       </v-tabs>
     </template>
@@ -569,10 +813,14 @@ onUnmounted(() => stopDbEvents?.());
       </template>
     </template>
 
-    <!-- Streamed only while its tab is showing. -->
+    <!-- Streamed only while its tab is showing. `:key` so switching between
+         the main container and a companion tears the stream down and opens a
+         new one, rather than re-pointing a component that has an open handle
+         to the other container's output. -->
     <LogView
       v-if="tab === 'logs' && service"
-      :container="service.containerName"
+      :key="logContainer"
+      :container="logContainer"
       :active="modelValue && tab === 'logs'"
     />
 
@@ -582,6 +830,44 @@ onUnmounted(() => stopDbEvents?.());
     <template v-else-if="service && tab === 'detail'">
       <ErrorAlert :error="error" type="error" class="mb-2" />
 
+      <!-- Runtime -------------------------------------------------------- -->
+      <!-- First, because it answers the question the panel is usually opened
+           with. Every row here came back from `container_inspect` all along
+           and was discarded — so a container killed for memory reported
+           "Stopped" and nothing else, and one restarting every ten seconds
+           was indistinguishable from one that had been up for a week. -->
+      <template v-if="runtimeRows.length || stats">
+        <div class="sheet-group">{{ t('servicesView.runtime') }}</div>
+        <div v-for="row in runtimeRows" :key="row.key" class="row">
+          <span class="row-key">{{ row.label }}</span>
+          <span
+            class="text-body-2"
+            :class="[row.mono ? 'mono' : '', row.colour ? `text-${row.colour}` : '']"
+          >
+            {{ row.value }}
+          </span>
+        </div>
+
+        <!-- What this container is costing, from a command that has been on
+             the boundary since the port and that no service screen has ever
+             called. One sampled figure each rather than a chart: the question
+             here is "is this the thing eating the machine", and that is
+             answered by a number. -->
+        <div v-if="stats" class="row">
+          <span class="row-key">{{ t('stats.cpu') }}</span>
+          <span class="text-body-2">{{ percent(stats.cpuPercent) }}</span>
+        </div>
+        <div v-if="stats" class="row">
+          <span class="row-key">{{ t('stats.memory') }}</span>
+          <span class="text-body-2">
+            {{ bytes(stats.memoryUsed) }}
+            <span class="text-medium-emphasis">
+              / {{ bytes(stats.memoryLimit) }} · {{ percent(stats.memoryPercent) }}
+            </span>
+          </span>
+        </div>
+      </template>
+
       <!-- Network ------------------------------------------------------- -->
       <div class="sheet-group">{{ t('servicesView.networkInfo') }}</div>
 
@@ -590,6 +876,28 @@ onUnmounted(() => stopDbEvents?.());
         <v-chip size="small" variant="tonal" color="primary" class="path-chip">
           <v-icon start size="small">mdi-docker</v-icon>{{ service.containerName }}
         </v-chip>
+      </div>
+
+      <!-- The compatibility name, and it is the one that matters most on this
+           panel: every project written before packages says
+           `DB_HOST=stackvo-mysql`, and which instance answers to that is a
+           decision made on another page by a star-shaped button. The instance's
+           own name is the container row above, so only the extra ones are
+           listed here — a row repeating what is directly above it is a row
+           that teaches the reader to skip the section. -->
+      <div v-if="service.aliases.length > 1" class="row align-start">
+        <span class="row-key">{{ t('servicesView.alias') }}</span>
+        <div class="d-flex flex-wrap ga-1">
+          <v-chip
+            v-for="alias in service.aliases.slice(1)"
+            :key="alias"
+            size="small"
+            variant="tonal"
+            color="primary"
+          >
+            <v-icon start size="small">mdi-tag-outline</v-icon>{{ alias }}
+          </v-chip>
+        </div>
       </div>
 
       <template v-if="details">
@@ -636,17 +944,49 @@ onUnmounted(() => stopDbEvents?.());
         </v-chip>
       </div>
 
+      <!-- The package's own ports, under the names it gives them.
+           `service.ports` below is what the container publishes, which is
+           nothing at all until one exists — so an installed service that had
+           never been started showed no ports, and a running MinIO showed
+           `9000, 9001` with nothing saying which one is the console. -->
+      <div v-if="service.declaredPorts.length" class="row align-start">
+        <span class="row-key">{{ t('servicesView.portMappings') }}</span>
+        <div class="d-flex flex-wrap ga-1">
+          <v-chip
+            v-for="port in service.declaredPorts"
+            :key="port.name"
+            size="small"
+            variant="outlined"
+            :color="port.host ? 'success' : 'grey'"
+          >
+            <v-icon start size="small">
+              {{ port.host ? 'mdi-check-network' : 'mdi-lan-disconnect' }}
+            </v-icon>
+            {{ port.name }}: {{ port.container }}/{{ port.protocol }}
+            <template v-if="port.host"> → {{ port.host }}</template>
+            <span v-else class="ml-1 text-medium-emphasis">
+              {{ t('servicesView.internal') }}
+            </span>
+          </v-chip>
+        </div>
+      </div>
+
       <!-- Falls back to the configured port when the container is not running:
            a stopped service still has a host port, and an empty section would
            suggest it does not. -->
-      <div v-if="!service.ports.length && service.hostPort" class="row">
+      <div
+        v-if="!service.declaredPorts.length && !service.ports.length && service.hostPort"
+        class="row"
+      >
         <span class="row-key">{{ t('services.hostPort') }}</span>
         <v-chip size="small" variant="tonal" color="grey">
           <v-icon start size="small">mdi-lan-disconnect</v-icon>{{ service.hostPort }}
         </v-chip>
       </div>
 
-      <div v-if="service.ports.length" class="row align-start">
+      <!-- The container's own view, for a workspace that has not migrated and
+           therefore has no manifest to declare anything. -->
+      <div v-if="!service.declaredPorts.length && service.ports.length" class="row align-start">
         <span class="row-key">{{ t('servicesView.portMappings') }}</span>
         <div class="d-flex flex-wrap ga-1">
           <v-chip
@@ -915,6 +1255,56 @@ onUnmounted(() => stopDbEvents?.());
         {{ t('servicesView.noMounts') }}
       </div>
 
+      <!-- Companions ----------------------------------------------------- -->
+      <!-- Containers that come with this instance and are not separately
+           installable — Kafka's Zookeeper, the only one in the catalogue.
+           They were rendered into the compose file and then invisible: no row,
+           no status, no way to reach their logs. When Kafka does not come up,
+           the answer is usually in one of these, and the panel about Kafka was
+           the one place that did not mention it existed. -->
+      <template v-if="service.companions.length">
+        <div class="sheet-group">{{ t('servicesView.companions') }}</div>
+        <div class="text-caption text-medium-emphasis mb-2">
+          {{ t('servicesView.companionsSubtitle') }}
+        </div>
+
+        <div v-for="companion in service.companions" :key="companion.name" class="row align-start">
+          <span class="row-key">{{ companion.name }}</span>
+          <div class="d-flex flex-column ga-1 flex-grow-1">
+            <div class="d-flex align-center ga-2 flex-wrap">
+              <v-chip
+                size="small"
+                variant="flat"
+                :color="companionColour(companion)"
+                :prepend-icon="companion.running ? 'mdi-check-circle' : 'mdi-stop-circle'"
+              >
+                {{ companionLabel(companion) }}
+              </v-chip>
+              <!-- Its logs, in the same viewer as the main container's. This
+                   is the row's reason for existing: a broker that cannot
+                   reach its Zookeeper says so in the Zookeeper's log. -->
+              <!-- Named for a reader who cannot see which row it is in: on a
+                   service with two companions, "Logs" twice is two buttons
+                   with the same name and different jobs. -->
+              <v-btn
+                size="x-small"
+                variant="text"
+                prepend-icon="mdi-text-box-outline"
+                :aria-label="t('servicesView.companionLogs', { name: companion.name })"
+                :disabled="!companion.built"
+                @click="openCompanionLogs(companion)"
+              >
+                {{ t('logs.title') }}
+              </v-btn>
+            </div>
+            <v-chip size="small" variant="tonal" color="primary" class="path-chip">
+              <v-icon start size="small">mdi-docker</v-icon>{{ companion.containerName }}
+            </v-chip>
+            <span class="text-caption text-medium-emphasis mono">{{ companion.image }}</span>
+          </div>
+        </div>
+      </template>
+
       <!-- Dependencies -------------------------------------------------- -->
       <div class="sheet-group">{{ t('servicesView.dependencies') }}</div>
 
@@ -927,18 +1317,35 @@ onUnmounted(() => stopDbEvents?.());
       >
         {{ t('servicesView.noDependencies') }}
       </div>
-      <div v-for="dep in service.required" :key="dep" class="row">
-        <span class="row-key">{{ t('servicesView.required') }}</span>
-        <v-chip
-          size="small"
-          label
-          :color="service.unmetDependencies.includes(dep) ? 'warning' : 'success'"
-          >{{ dep }}</v-chip
-        >
-      </div>
-      <div v-for="dep in service.optional" :key="dep" class="row">
-        <span class="row-key">{{ t('servicesView.optional') }}</span>
-        <v-chip size="small" label>{{ dep }}</v-chip>
+
+      <!-- Every declared dependency, answered or not.
+           The unanswered one used to be dropped before it reached this
+           template, so Kibana with no Elasticsearch installed rendered "No
+           dependencies" — which is the opposite of true, in exactly the state
+           somebody opens this panel to diagnose. What the row says now is the
+           three-way answer: nothing provides it, something does and is
+           stopped, or it is running. -->
+      <div
+        v-for="dep in [...service.required, ...service.optional]"
+        :key="`${dep.capability}:${dep.service ?? ''}`"
+        class="row"
+      >
+        <span class="row-key">
+          {{ dep.required ? t('servicesView.required') : t('servicesView.optional') }}
+        </span>
+        <v-chip size="small" label :color="dependencyColour(dep)">
+          <v-icon start size="small">{{ dependencyIcon(dep) }}</v-icon>
+          {{ dep.provider ?? dep.service ?? dep.capability }}
+        </v-chip>
+        <!-- The capability, when the row is not already named by it. It is
+             what the manifest actually asks for, and it is the reason MariaDB
+             can answer a package that names no service at all. -->
+        <span v-if="dep.provider || dep.service" class="text-caption text-medium-emphasis">
+          {{ dep.capability }}
+        </span>
+        <span class="text-caption" :class="`text-${dependencyColour(dep)}`">
+          {{ dependencyState(dep) }}
+        </span>
       </div>
     </template>
 
@@ -1009,6 +1416,17 @@ onUnmounted(() => stopDbEvents?.());
 
 .credential-key {
   min-width: 0;
+}
+
+/* `.mono` is declared in settings-panes.css under `.settings-scroll`, which
+   this sheet is not inside — so the uses of it here (a snapshot name, the
+   dump's progress line, and now the image reference) have been rendering in
+   the body font. Declared locally rather than widened there: that file's own
+   comment says `.mono` is a name any page might reuse, which is exactly why it
+   is scoped and why this is a copy rather than a promotion. */
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
 }
 
 .credential-value {

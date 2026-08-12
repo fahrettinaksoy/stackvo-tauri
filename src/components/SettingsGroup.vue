@@ -32,7 +32,10 @@ defineProps({
       <slot name="append" />
     </div>
 
-    <div class="pa-4">
+    <!-- Named as well as spaced: a page that wants the group to fill a column
+         and scroll inside it needs something stable to reach for, and `.pa-4`
+         is a utility that could be anywhere. -->
+    <div class="pa-4 group-body">
       <slot />
     </div>
   </v-card>

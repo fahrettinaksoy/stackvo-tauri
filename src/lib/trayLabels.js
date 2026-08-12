@@ -46,7 +46,7 @@ export function trayLabels(t) {
 
     // Shared with the sidebar.
     navProjects: t('nav.projects'),
-    navServices: t('nav.services'),
+    navMarket: t('nav.market'),
     navLogs: t('nav.logs'),
     navSettings: t('nav.settings'),
 

@@ -49,6 +49,27 @@ export function useMarket() {
   /** Whether end-of-life versions are listed. */
   const showOlder = ref(false);
 
+  /**
+   * What is being searched for, if anything.
+   *
+   * The catalogue is twenty-five services and a hundred versions behind eight
+   * collapsed categories, and it had no search: finding Valkey meant knowing it
+   * is filed under `cache`. `keywords` is what makes it work rather than a
+   * name match — the index publishes them so that MySQL is findable by typing
+   * `database`, and by typing `mariadb`.
+   */
+  const query = ref('');
+
+  const matches = (entry, needle) =>
+    [
+      entry.service,
+      entry.category,
+      ...Object.values(entry.name ?? {}),
+      ...Object.values(entry.summary ?? {}),
+      ...(entry.keywords ?? []),
+      ...(entry.capabilities ?? []),
+    ].some((field) => String(field).toLowerCase().includes(needle));
+
   const fetched = computed(() => status.value?.fetched === true);
 
   /**
@@ -57,17 +78,22 @@ export function useMarket() {
    * An installed version is always shown, whatever its support status: hiding
    * something that is on the machine would leave a user unable to uninstall it.
    */
-  const visible = computed(() =>
-    packages.value.map((entry) => ({
-      ...entry,
-      versions: entry.versions.filter((v) => showOlder.value || v.support !== 'eol' || v.installed),
-      // Zero while they are being shown. Saying "1 hidden" next to a list
-      // that is showing it is a count that contradicts the thing beside it.
-      hidden: showOlder.value
-        ? 0
-        : entry.versions.filter((v) => v.support === 'eol' && !v.installed).length,
-    }))
-  );
+  const visible = computed(() => {
+    const needle = query.value.trim().toLowerCase();
+    return packages.value
+      .filter((entry) => !needle || matches(entry, needle))
+      .map((entry) => ({
+        ...entry,
+        versions: entry.versions.filter(
+          (v) => showOlder.value || v.support !== 'eol' || v.installed
+        ),
+        // Zero while they are being shown. Saying "1 hidden" next to a list
+        // that is showing it is a count that contradicts the thing beside it.
+        hidden: showOlder.value
+          ? 0
+          : entry.versions.filter((v) => v.support === 'eol' && !v.installed).length,
+      }));
+  });
 
   /**
    * The catalogue, grouped the way the packages repository is laid out.
@@ -182,8 +208,15 @@ export function useMarket() {
   const uninstall = (service, version) =>
     run(`${service}@${version}`, () => api.marketUninstall(service, version));
 
-  const create = (service, version) =>
-    run(`${service}@${version}`, () => api.instanceCreate(service, version));
+  /**
+   * Create one, with whatever the form collected.
+   *
+   * `settings` and `ports` are null when the caller had no form — creating with
+   * the package's own defaults, which is what the button did before the create
+   * dialog existed.
+   */
+  const create = (service, version, settings = null, ports = null) =>
+    run(`${service}@${version}`, () => api.instanceCreate(service, version, settings, ports));
 
   const remove = (id) => run(id, () => api.instanceRemove(id));
 
@@ -274,6 +307,7 @@ export function useMarket() {
     error,
     working,
     showOlder,
+    query,
     load,
     refresh,
     install,

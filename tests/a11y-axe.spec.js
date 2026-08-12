@@ -207,7 +207,7 @@ describe('axe over the components that can be mounted', () => {
 describe('axe over the pages that can be mounted', () => {
   const replies = {};
 
-  const PAGES = ['About', 'Dumps', 'Logs', 'Services', 'Dashboard', 'Mail', 'Projects'];
+  const PAGES = ['About', 'Dumps', 'Logs', 'Dashboard', 'Mail', 'Projects'];
 
   /**
    * Rules Vuetify's own markup breaks, on top of the shared set.
@@ -724,7 +724,6 @@ describe('axe over the extracted Settings panes', () => {
   });
 
   it.each([
-    ['ServicesPane', {}],
     [
       'PreferencesPane',
       { prefsGet: {}, appsAvailable: { terminals: [], editors: [], browsers: [] } },

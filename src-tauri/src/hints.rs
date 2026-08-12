@@ -155,6 +155,12 @@ hints! {
         "The .env format is one key per line; multi-line values cannot be read back.";
     REVEAL_VALUE_FIRST = "revealValueFirst",
         "Reveal the value first, or leave the field untouched.";
+    SETTING_IS_REQUIRED = "settingIsRequired",
+        "The package marks this setting required — the service will not start without it.";
+    PORT_HELD_BY_INSTANCE = "portHeldByInstance",
+        "Another instance publishes this port. Change that one first, or pick another number.";
+    PORT_IN_USE = "portInUse",
+        "Something on this machine is already listening there. Pick another number.";
     PHP_INI_DIRECTIVE_CHARSET = "phpIniDirectiveCharset",
         "Directive names are letters, digits, underscores and dots.";
     PHP_INI_IS_ONE_PER_LINE = "phpIniIsOnePerLine",

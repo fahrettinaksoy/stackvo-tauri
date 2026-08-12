@@ -21,7 +21,7 @@ Three parts, in the order a request travels:
 | ----------------------------------- | -------------------- | ----------------------- |
 | Front end — Vue 3, Vuetify 3, Pinia | `src/`               | 24k lines               |
 | Back end — Rust, 71 modules         | `src-tauri/src/`     | 38k lines               |
-| The boundary between them           | `contracts/ipc.json` | 185 commands, 69 events |
+| The boundary between them           | `contracts/ipc.json` | 180 commands, 63 events |
 
 The two halves never share a type. They share a **contract**, and §5 is about
 why that is a deliberate cost rather than an omission.
@@ -79,7 +79,7 @@ downward:
   entry              1.3k   lib.rs, main.rs, menu, tray — plugins, state, the
       │                     handler list, the window
       ▼
-  commands.rs        6.7k   the IPC surface: 164 #[tauri::command] functions
+  commands.rs        6.7k   the IPC surface: 174 #[tauri::command] functions
       │                     argument validation, orchestration, nothing else
       ▼
   domain            22.7k   32 modules: generator, manifest, certs, hosts,
@@ -196,7 +196,7 @@ rejections".
 
 ## 5. The contract
 
-`contracts/ipc.json` is the specification of the boundary: 185 commands, 69
+`contracts/ipc.json` is the specification of the boundary: 180 commands, 63
 events, 58 named types, 3 error shapes, and — for most entries — a `why`.
 
 It is a **hand-maintained document, not generated code**, and that is the

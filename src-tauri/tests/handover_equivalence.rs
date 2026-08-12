@@ -580,12 +580,18 @@ fn the_services_page_lists_instances_once_the_table_exists() {
     // versions of one service are two rows that must not collapse into one.
     assert!(ids.contains(&"mysql-8-0"), "{ids:?}");
     assert!(ids.contains(&"redis-7-0"), "{ids:?}");
-    assert!(!ids.contains(&"mysql"), "the pre-package id is still here: {ids:?}");
+    assert!(
+        !ids.contains(&"mysql"),
+        "the pre-package id is still here: {ids:?}"
+    );
 
     // And the compiled-in catalogue is not being listed alongside them. Before
     // this, every one of the twenty-five was a row.
     assert_eq!(ids.len(), rows.len());
-    assert!(rows.len() < 10, "the whole compiled catalogue came back: {ids:?}");
+    assert!(
+        rows.len() < 10,
+        "the whole compiled catalogue came back: {ids:?}"
+    );
 
     let mysql = rows.iter().find(|s| s.id == "mysql-8-0").unwrap();
     // The name the detail sheet asks the engine for.
@@ -615,6 +621,9 @@ fn a_workspace_with_no_table_still_lists_the_env_catalogue() {
         .block_on(stackvo_desktop_lib::commands::list_services(&root))
         .expect("the services list");
 
-    assert!(rows.len() > 20, "the compiled catalogue should still be the source");
+    assert!(
+        rows.len() > 20,
+        "the compiled catalogue should still be the source"
+    );
     assert!(rows.iter().any(|s| s.id == "mysql"));
 }

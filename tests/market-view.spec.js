@@ -3,6 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils';
 import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
+import { createPinia } from 'pinia';
 import { i18n } from '@/i18n';
 import Market from '@/views/Market.vue';
 
@@ -38,10 +39,31 @@ const api = vi.hoisted(() => ({
   instanceStart: vi.fn(),
   instanceStop: vi.fn(),
   instanceRestart: vi.fn(),
+  // The detail button resolves its row out of the services list, which is the
+  // same instance table under the other command's name.
+  servicesList: vi.fn(),
+  // What the detail sheet reaches for the moment it is handed a row. Stubbed
+  // rather than left out: an absent one rejects inside the sheet's own watcher,
+  // which reads here as the Market page failing.
+  containerInspect: vi.fn(),
+  serviceConnection: vi.fn(),
+  dbTargets: vi.fn(),
+  dbSnapshots: vi.fn(),
+  mailStatus: vi.fn(),
 }));
 
 vi.mock('@/lib/ipc', () => ({ api, asList: (v) => (Array.isArray(v) ? v : []) }));
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn() }));
+
+// The detail sheet subscribes to `db:progress` on mount, and it is mounted with
+// the page whether or not a row is open. Without this the subscription reaches
+// a Tauri runtime that is not there and rejects — outside any test's await, so
+// it lands as an unhandled rejection while every assertion still passes.
+vi.mock('@/lib/events', async (importOriginal) => ({
+  ...(await importOriginal()),
+  listenAll: async () => () => {},
+  listen: async () => () => {},
+}));
 
 const vuetify = createVuetify({ components, directives });
 
@@ -62,7 +84,10 @@ const CATALOG = [
     service: 'mysql',
     category: 'databases',
     name: { en: 'MySQL' },
-    summary: {},
+    summary: { en: 'The database most PHP projects assume.' },
+    // Published by the index since v1, dropped by `market_catalog` until the
+    // search box needed them.
+    keywords: ['database', 'sql', 'mariadb'],
     capabilities: ['sql'],
     multiple: true,
     versions: [
@@ -98,17 +123,18 @@ const CATALOG = [
 ];
 
 /**
- * A second category, so the tab strip is more than one tab.
+ * A second category, so the tree has more than one root.
  *
  * The catalogue fixture had exactly one, which meant every assertion about
  * grouping passed on a page that never had to choose between groups — and a
- * tab strip with one tab is indistinguishable from no tab strip at all.
+ * tree with one root is indistinguishable from a flat list.
  */
 const REDIS = {
   service: 'redis',
   category: 'cache',
   name: { en: 'Redis' },
   summary: {},
+  keywords: ['cache', 'kv'],
   capabilities: ['cache'],
   multiple: true,
   versions: [
@@ -138,15 +164,79 @@ const INSTANCES = [
   },
 ];
 
+/**
+ * The same instance as `services_list` answers it — same `id`, which is what
+ * the detail button matches on, and the running/ports/credentials shape the
+ * detail sheet reads.
+ */
+const SERVICES = [
+  {
+    id: 'mysql-8-0',
+    category: 'databases',
+    enabled: false,
+    running: false,
+    built: false,
+    version: '8.0',
+    containerName: 'stackvo-mysql-8-0',
+    health: null,
+    url: null,
+    hostPort: 3306,
+    ports: [],
+    declaredPorts: [{ name: 'main', container: 3306, host: 3306, protocol: 'tcp' }],
+    aliases: ['stackvo-mysql-8-0', 'stackvo-mysql'],
+    support: 'eol',
+    eolDate: '2026-04-30',
+    companions: [],
+    credentials: [],
+    required: [],
+    optional: [],
+    unmetDependencies: [],
+  },
+];
+
+/**
+ * Inside a `v-app`, because the page carries a side sheet now.
+ *
+ * `SideSheet` is a `v-navigation-drawer` underneath, and a drawer asks the
+ * layout it is in where its edges are. Mounted bare it throws "Could not find
+ * injected layout" before a single assertion runs — which says nothing about
+ * the page and everything about the harness.
+ */
 function mountPage() {
-  return mount(Market, { global: { plugins: [vuetify, i18n] } });
+  const app = mount(
+    { components: { Page: Market }, template: '<v-app><Page /></v-app>' },
+    { global: { plugins: [createPinia(), vuetify, i18n] } }
+  );
+  // The page itself, not the wrapper around it: every assertion below reaches
+  // for `page.vm.catalogueTree` or `page.text()`, and both should mean Market.
+  return app.findComponent(Market);
 }
+
+/**
+ * Every accessible name on the page.
+ *
+ * The catalogue's counts, its "runs more than one version" and the paragraph
+ * about end-of-life all live on `aria-label` with a tooltip beside them, so
+ * this is where those assertions have to look. It is also the stricter place:
+ * a tooltip is reachable by hover, and this is what everybody else gets.
+ */
+const labels = (page) =>
+  page
+    .findAll('[aria-label]')
+    .map((el) => el.attributes('aria-label'))
+    .filter(Boolean);
 
 beforeEach(() => {
   vi.clearAllMocks();
   api.marketStatus.mockResolvedValue(STATUS);
   api.marketCatalog.mockResolvedValue(CATALOG);
   api.instanceList.mockResolvedValue(INSTANCES);
+  api.servicesList.mockResolvedValue(SERVICES);
+  api.containerInspect.mockResolvedValue({ running: false, image: 'mysql:8.0', ports: [] });
+  api.serviceConnection.mockResolvedValue(null);
+  api.dbTargets.mockResolvedValue([]);
+  api.dbSnapshots.mockResolvedValue([]);
+  api.mailStatus.mockResolvedValue(null);
   // A workspace that has already migrated, which is what these fixtures
   // describe. Without it the composable's load() threw on an absent stub and
   // the page rendered its error line — passing tests, over a broken page.
@@ -192,108 +282,109 @@ describe('the market page', () => {
     const page = mountPage();
     await flushPromises();
 
-    // en.js's `serviceSettings.categories.databases`, which Settings already
-    // uses — not the `databases` directory name the package carries.
+    // en.js's `serviceCategories.databases` — not the `databases` directory
+    // name the package carries.
     expect(page.text()).toContain('Databases');
-    expect(page.text()).toContain('1 service(s)');
+    // The count is on the button's accessible name, not in the row's text: in a
+    // quarter-width column it was the half that survived and the service name
+    // was the half that got hyphenated. Asserting here rather than on the
+    // tooltip is deliberate — the accessible name is what a reader who never
+    // hovers is left with, so it is the one that has to carry the sentence.
+    // A substring, because the category's button carries both halves in one
+    // name — "1 service(s) · 1 end-of-life".
+    expect(labels(page).join(' ')).toContain('1 service(s)');
   });
 
   /// Hidden by default, listed behind a switch, never removed — somebody's
   /// workspace may name it.
+  ///
+  /// Asserted against the tree the page builds rather than against its rendered
+  /// text. Both work — `VTreeview` writes every descendant into the document
+  /// and collapses it visually, which was measured rather than assumed — but
+  /// this states the fact directly: the switch changes what the catalogue
+  /// *contains*, not what happens to be scrolled into view.
   it('keeps an end-of-life version out of the way without withdrawing it', async () => {
     const page = mountPage();
     await flushPromises();
 
-    expect(page.text()).not.toContain('5.7');
+    const versions = () =>
+      page.vm.catalogueTree
+        .flatMap((c) => c.children)
+        .flatMap((s) => s.children.map((v) => v.title));
+
+    expect(versions()).not.toContain('5.7');
     // "end-of-life", not "hidden". The count is a fact about the version's
     // upstream, and "hidden" reads as something the app is withholding.
-    expect(page.text()).toContain('1 end-of-life');
-    // And the page says why one is published at all, next to the switch.
-    expect(page.text()).toContain('upstream has stopped patching them');
+    expect(labels(page).join(' ')).toContain('1 end-of-life');
+    // And the page still says why one is published at all, next to the switch —
+    // on a button now rather than as a paragraph under the heading.
+    expect(labels(page).join(' ')).toContain('upstream has stopped patching them');
 
     page.vm.market.showOlder.value = true;
     await flushPromises();
-    expect(page.text()).toContain('5.7');
+    expect(versions()).toContain('5.7');
   });
 
-  /// One tab per category, and only the open one on screen.
-  ///
-  /// The categories were stacked headings, which on twenty-five services made
-  /// the catalogue one long scroll whatever you were looking for. The order is
-  /// the repository's own — a stack is a database and a cache before it is an
-  /// admin UI — so `databases` is what the page opens on.
-  it('offers a tab per category and opens on the first', async () => {
+  /// The catalogue's own shape: a category holds services, a service holds
+  /// versions. One tree with one idea of where you are, in place of a tab rail
+  /// over expansion panels — two collapsing mechanisms, each with its own.
+  it('builds the catalogue as category, service, version', async () => {
     api.marketCatalog.mockResolvedValue([...CATALOG, REDIS]);
 
     const page = mountPage();
     await flushPromises();
 
-    const tabs = page.findAll('.v-tab');
-    expect(tabs).toHaveLength(2);
-    // Translated names, and the fixed order rather than alphabetical — which
-    // would have opened the page on `cache`.
-    expect(tabs[0].text()).toContain('Databases');
-    expect(tabs[1].text()).toContain('Cache');
+    const tree = page.vm.catalogueTree;
+    expect(tree).toHaveLength(2);
+    // Translated names, and the repository's fixed order rather than
+    // alphabetical — a stack is a database and a cache before it is an admin UI.
+    expect(tree[0].title).toBe('Databases');
+    expect(tree[1].title).toBe('Cache');
 
-    expect(page.vm.category).toBe('databases');
+    expect(tree[0].children.map((s) => s.title)).toEqual(['MySQL']);
+    expect(tree[0].children[0].children.map((v) => v.title)).toEqual(['9.4', '8.0']);
   });
 
-  /// Down the side, not across the top.
-  ///
-  /// Horizontal was the first attempt and does not fit: eight category names in
-  /// a column that is half the page either scroll behind arrows — hiding the
-  /// thing the tabs were added to make visible — or wrap to three rows.
-  it('runs the category rail vertically', async () => {
+  /// Unique across all three depths, because two services can publish `8.0` and
+  /// the tree opens and closes on this value.
+  it('gives every node an id nothing else in the tree shares', async () => {
     api.marketCatalog.mockResolvedValue([...CATALOG, REDIS]);
 
     const page = mountPage();
     await flushPromises();
 
-    expect(page.find('.v-tabs--vertical').exists()).toBe(true);
-    // And no arrow affordance, which is what a horizontal strip needs and what
-    // hides categories behind a scroll.
-    expect(page.find('.v-slide-group__prev').exists()).toBe(false);
+    const ids = page.vm.catalogueTree.flatMap((c) => [
+      c.id,
+      ...c.children.flatMap((s) => [s.id, ...s.children.map((v) => v.id)]),
+    ]);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
-  /// Switching tabs shows the other category's services.
-  it('shows the category that is selected', async () => {
+  /// The way in is open and the rest is a click: a tree that opened nothing is
+  /// a column of category names with the catalogue behind them, and one that
+  /// opened everything is the stacked headings the rail replaced.
+  it('opens the first category and leaves the others closed', async () => {
     api.marketCatalog.mockResolvedValue([...CATALOG, REDIS]);
 
     const page = mountPage();
     await flushPromises();
 
-    const windows = page.findAll('.v-window-item');
-    expect(windows).toHaveLength(2);
-
-    page.vm.category = 'cache';
-    await flushPromises();
-
-    const active = page.find('.v-tab--selected');
-    expect(active.text()).toContain('Cache');
-    // `eager`, so both categories are in the document — a page a browser cannot
-    // find text in is one you have to already know your way around.
-    expect(page.text()).toContain('Redis');
-    expect(page.text()).toContain('MySQL');
+    expect(page.vm.opened).toEqual(['category:databases']);
   });
 
-  /// A selection that no longer exists leaves the strip with nothing active and
-  /// the window blank. The groups are rebuilt on every refresh and on every
-  /// change of source, so this is not a hypothetical.
-  it('moves the selection when the category it named is gone', async () => {
+  /// A refresh or a change of source rebuilds the groups. Re-seeding there
+  /// would close whatever the reader had opened and move them elsewhere.
+  it('does not reopen the first category when the catalogue reloads', async () => {
     api.marketCatalog.mockResolvedValue([...CATALOG, REDIS]);
 
     const page = mountPage();
     await flushPromises();
 
-    page.vm.category = 'cache';
-    await flushPromises();
-    expect(page.vm.category).toBe('cache');
-
-    api.marketCatalog.mockResolvedValue(CATALOG);
+    page.vm.opened = ['category:cache'];
     await page.vm.market.load();
     await flushPromises();
 
-    expect(page.vm.category).toBe('databases');
+    expect(page.vm.opened).toEqual(['category:cache']);
   });
 
   /// The handover panel says the problem once.
@@ -424,7 +515,12 @@ describe('the market page', () => {
     const page = mountPage();
     await flushPromises();
 
-    const uninstall = page.findAll('button').filter((b) => b.text() === 'Uninstall');
+    // By accessible name, not by text: the action buttons are glyphs with the
+    // label in a tooltip now, so `Uninstall` is on `aria-label` and matching on
+    // rendered text would find nothing and pass a weaker assertion by accident.
+    const uninstall = page
+      .findAll('button')
+      .filter((b) => b.attributes('aria-label') === 'Uninstall');
     expect(uninstall.length).toBeGreaterThan(0);
     expect(uninstall.every((b) => b.attributes('disabled') !== undefined)).toBe(true);
   });
@@ -436,6 +532,38 @@ describe('the market page', () => {
     expect(page.text()).toContain('mysql-8-0');
     expect(page.text()).toContain('stackvo-mysql-8-0');
     expect(page.text()).toContain('Primary');
+  });
+
+  /// The detail button resolves its row out of the services list, and the two
+  /// commands agree on `id` because both take it from the instance table. A
+  /// button that could not find its row would render disabled and say nothing
+  /// — which is exactly what this asserts against.
+  it('opens the detail sheet on the service behind the instance', async () => {
+    const page = mountPage();
+    await flushPromises();
+
+    const detail = page.findAll('button').filter((b) => b.attributes('aria-label') === 'Detail');
+    expect(detail).toHaveLength(1);
+    expect(detail[0].attributes('disabled')).toBeUndefined();
+
+    await detail[0].trigger('click');
+    expect(page.vm.detailTarget?.id).toBe('mysql-8-0');
+    // The row from `services_list`, not the one from `instance_list`: the sheet
+    // reads `containerName` and `running`, which the second does not carry.
+    expect(page.vm.detailTarget.containerName).toBe('stackvo-mysql-8-0');
+  });
+
+  /// A services list that has not answered yet leaves nothing to open, and the
+  /// button says so by being disabled rather than opening an empty sheet.
+  it('offers no detail while the services list is empty', async () => {
+    api.servicesList.mockResolvedValue([]);
+
+    const page = mountPage();
+    await flushPromises();
+
+    const detail = page.findAll('button').filter((b) => b.attributes('aria-label') === 'Detail');
+    expect(detail).toHaveLength(1);
+    expect(detail[0].attributes('disabled')).toBeDefined();
   });
 
   /// Errors arrive as errors rather than as a page that silently did nothing.
@@ -488,15 +616,120 @@ describe('the market page', () => {
     await flushPromises();
 
     expect(page.text()).toContain('Package missing');
-    const switches = page.findAll('input[type="checkbox"]');
-    expect(switches.some((s) => s.attributes('disabled') !== undefined)).toBe(true);
+    // The status button, which is what switches an instance on since the table
+    // gained the Services page's columns — the switch it replaced carried the
+    // same refusal.
+    const off = page.findAll('button').filter((b) => b.text() === 'OFF');
+    expect(off).toHaveLength(1);
+    expect(off[0].attributes('disabled')).toBeDefined();
+  });
+
+  /// Stop/Start is a different act from On/Off, and the row has to keep them
+  /// apart: one leaves the instance enabled and the compose file alone, the
+  /// other rewrites the table. The Services page makes the same distinction.
+  it('stops a running instance without switching it off', async () => {
+    api.instanceList.mockResolvedValue([{ ...INSTANCES[0], enabled: true }]);
+    api.servicesList.mockResolvedValue([{ ...SERVICES[0], enabled: true, running: true }]);
+    api.instanceStop.mockResolvedValue('stop-1');
+
+    const page = mountPage();
+    await flushPromises();
+
+    const stop = page.findAll('button').filter((b) => b.attributes('aria-label') === 'Stop');
+    expect(stop).toHaveLength(1);
+
+    await stop[0].trigger('click');
+    await flushPromises();
+
+    expect(api.instanceStop).toHaveBeenCalledWith('mysql-8-0');
+    expect(api.instanceDisable).not.toHaveBeenCalled();
+  });
+
+  /// A link to a container that is not running is a tab showing Traefik's 404,
+  /// so the button needs both halves to be true.
+  it('offers the browser only for a running instance that has a domain', async () => {
+    const withDomain = { ...SERVICES[0], enabled: true, url: 'phpmyadmin.stackvo.loc' };
+    api.instanceList.mockResolvedValue([{ ...INSTANCES[0], enabled: true }]);
+    api.servicesList.mockResolvedValue([{ ...withDomain, running: false }]);
+
+    let page = mountPage();
+    await flushPromises();
+    const open = () =>
+      page.findAll('button').filter((b) => b.attributes('aria-label') === 'Open in browser');
+    expect(open()).toHaveLength(0);
+
+    api.servicesList.mockResolvedValue([{ ...withDomain, running: true }]);
+    page = mountPage();
+    await flushPromises();
+    expect(open()).toHaveLength(1);
   });
 
   /// Reported rather than assumed: no key is pinned, so nothing verifies a
   /// signature, and the page says which.
+  ///
+  /// In the source menu now rather than on a permanent line above the
+  /// catalogue. The line said the same three things on every visit and cost a
+  /// row of the page to do it; the menu is where somebody is already asking
+  /// where the catalogue comes from. Opened here because a menu renders its
+  /// contents when it opens — asserting on the closed page would find nothing
+  /// and prove nothing.
   it('says the catalogue is not signature-checked', async () => {
     const page = mountPage();
     await flushPromises();
-    expect(page.text()).toContain('not signature-checked');
+
+    page.vm.sourceOpen = true;
+    await flushPromises();
+
+    expect(document.body.textContent).toContain('not signature-checked');
+    // And which source it is talking about, beside it.
+    expect(document.body.textContent).toContain('/Users/me/stackvo-service-packages');
+  });
+  /**
+   * The catalogue had no search: twenty-five services and a hundred versions
+   * behind eight collapsed categories, and finding Valkey meant knowing it is
+   * filed under `cache`. `keywords` is the field that makes it work — the
+   * index has published them since v1 and `market_catalog` was dropping them
+   * on the floor, so there was nothing to search even if there had been a box.
+   */
+  describe('searching the catalogue', () => {
+    // Both categories, so "it narrowed" means something: with one root a
+    // filtered tree is indistinguishable from an unfiltered one.
+    beforeEach(() => api.marketCatalog.mockResolvedValue([...CATALOG, REDIS]));
+
+    it('narrows to what matches, across categories', async () => {
+      const page = mountPage();
+      await flushPromises();
+
+      expect(page.vm.market.grouped.value.map((g) => g.category)).toEqual(['databases', 'cache']);
+
+      page.vm.market.query.value = 'redis';
+      await flushPromises();
+
+      const groups = page.vm.market.grouped.value;
+      expect(groups).toHaveLength(1);
+      expect(groups[0].packages.map((p) => p.service)).toEqual(['redis']);
+    });
+
+    it('finds a package by a keyword rather than by its name', async () => {
+      const page = mountPage();
+      await flushPromises();
+
+      // The whole point of the field: MySQL is meant to be findable by typing
+      // `database`, and by typing `mariadb`.
+      page.vm.market.query.value = 'mariadb';
+      await flushPromises();
+
+      expect(page.vm.market.grouped.value[0].packages.map((p) => p.service)).toEqual(['mysql']);
+    });
+
+    it('says so plainly when nothing matches', async () => {
+      const page = mountPage();
+      await flushPromises();
+
+      page.vm.market.query.value = 'nothing-is-called-this';
+      await flushPromises();
+
+      expect(page.vm.market.grouped.value).toHaveLength(0);
+    });
   });
 });

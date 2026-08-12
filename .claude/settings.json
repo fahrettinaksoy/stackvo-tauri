@@ -24,7 +24,40 @@
       "Bash(cargo run *)",
       "Bash(pkill -f \"http.server 5199\")",
       "Bash(node crawl.mjs /src/views/Settings.vue)",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:1420/src/views/Settings.vue)"
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:1420/src/views/Settings.vue)",
+      "Read(//Users/fahrettinaksoy/.stackvo/**)",
+      "Read(//Users/fahrettinaksoy/.stackvo/generated/**)",
+      "Bash(grep -inE 'mysql|mariadb|mongo|redis|rabbit|phpmyadmin|elastic|postgres|kafka|adminer|grafana|kibana|blackfire|cassandra|minio|memcach' ~/.stackvo/.env 2>&1 | head -60)",
+      "Bash(grep -rn \"fn list_services\" src-tauri/src --include=*.rs | head; echo \"=== market dir ===\"; ls -R ~/.stackvo/market 2>&1 | head -40)",
+      "Read(//Users/fahrettinaksoy/.stackvo/market/**)",
+      "Bash(docker stop *)",
+      "Bash(docker rm *)",
+      "Bash(docker rmi *)",
+      "Bash(sed -n 1630,1700a src-tauri/src/commands.rs 2>/dev/null || sed -n 1630,1700p src-tauri/src/commands.rs)",
+      "Read(//Users/fahrettinaksoy/.stackvo/generated/configs/**)",
+      "Read(//Users/fahrettinaksoy/.stackvo/generated/traefik/dynamic/**)",
+      "Bash(cp ~/.stackvo/.env ~/.stackvo/.env.pre-market.bak)",
+      "Bash(docker system *)",
+      "Bash(python3 -c ' *)",
+      "Bash(grep -n \"it\\(\\\\|test\\(\" src/../tests/i18n.spec.js | head -12)",
+      "Read(//Users/fahrettinaksoy/Desktop/stackvo/tests/**)",
+      "Bash(git diff *)",
+      "Bash(node tools/validate-contracts.mjs --root . --allow-no-manifests)",
+      "Bash(awk '{print $2, $11, $12, $13}')",
+      "Bash(kill 9508 22381)",
+      "Bash(cd src-tauri *)",
+      "Read(//Users/fahrettinaksoy/Desktop/**)",
+      "Bash(node tools/build-registry.mjs)",
+      "Bash(cp /Users/fahrettinaksoy/Desktop/stackvo-service-packages/packages/databases/mysql/versions/8.4/files/my.cnf.tpl ./my84.cnf)",
+      "Bash(docker run *)",
+      "Bash(find ~/.stackvo/market -path '*mysql*8.4*' -type f | head -10; echo \"=== kurulu şablonda var mı ===\"; grep -rn \"skip-character-set-client-handshake\" ~/.stackvo/market/ 2>/dev/null | head)",
+      "Read(//Users/fahrettinaksoy/.stackvo/generated/configs/mysql-8-4/**)",
+      "Bash(cp ~/.stackvo/market/packages/databases/mysql/versions/8.4/files/my.cnf.tpl ~/.stackvo/generated/configs/mysql-8-4/my.cnf.tpl)"
+    ],
+    "additionalDirectories": [
+      "/Users/fahrettinaksoy/Desktop/stackvo/src-tauri/src",
+      "/Users/fahrettinaksoy/.stackvo",
+      "/Users/fahrettinaksoy/.stackvo/generated"
     ]
   }
 }

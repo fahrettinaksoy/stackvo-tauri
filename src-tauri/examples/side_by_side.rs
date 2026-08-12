@@ -112,7 +112,7 @@ fn attempt(root: &Path, packages: &Path) -> Result<(), String> {
             version,
             policy::current().market(),
         )
-            .map_err(|e| format!("installing {SERVICE}@{version}: {}", e.message))?;
+        .map_err(|e| format!("installing {SERVICE}@{version}: {}", e.message))?;
         println!("  installed  {SERVICE}@{version}  ({} files)", done.files);
     }
 

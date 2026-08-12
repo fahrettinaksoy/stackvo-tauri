@@ -167,9 +167,7 @@ impl Market {
         // registry, which is the opposite of what the list is for. Only past a
         // slash is a head with a dot, a port or the name `localhost` a registry.
         let host = match reference.split_once('/') {
-            Some((head, _))
-                if head.contains('.') || head.contains(':') || head == "localhost" =>
-            {
+            Some((head, _)) if head.contains('.') || head.contains(':') || head == "localhost" => {
                 head
             }
             _ => "docker.io",
@@ -388,14 +386,17 @@ fn parse_market(given: Option<&serde_json::Value>, complaints: &mut Vec<String>)
         return market;
     };
 
-    let text = |value: &serde_json::Value, key: &str, complaints: &mut Vec<String>| {
-        match value.as_str().map(str::trim) {
-            Some("") | None => {
-                complaints.push(format!("market.{key} is not a non-empty string and was ignored"));
-                None
-            }
-            Some(found) => Some(found.to_string()),
+    let text = |value: &serde_json::Value, key: &str, complaints: &mut Vec<String>| match value
+        .as_str()
+        .map(str::trim)
+    {
+        Some("") | None => {
+            complaints.push(format!(
+                "market.{key} is not a non-empty string and was ignored"
+            ));
+            None
         }
+        Some(found) => Some(found.to_string()),
     };
 
     let list = |value: &serde_json::Value, key: &str, complaints: &mut Vec<String>| {
@@ -973,9 +974,8 @@ mod tests {
 
     #[test]
     fn an_allow_list_admits_what_it_names_and_nothing_else() {
-        let policy = market_of(
-            r#"{"schemaVersion": 1, "market": {"allowedPackages": ["mysql", "redis"]}}"#,
-        );
+        let policy =
+            market_of(r#"{"schemaVersion": 1, "market": {"allowedPackages": ["mysql", "redis"]}}"#);
         assert!(policy.market().allows_package("mysql"));
         assert!(!policy.market().allows_package("cassandra"));
         assert!(policy.constrains_market());
@@ -1015,7 +1015,11 @@ mod tests {
     /// check was never a check (ADR 0009).
     #[test]
     fn require_signature_is_off_until_it_is_asked_for() {
-        assert!(!market_of(r#"{"schemaVersion": 1}"#).market().require_signature);
+        assert!(
+            !market_of(r#"{"schemaVersion": 1}"#)
+                .market()
+                .require_signature
+        );
         assert!(
             market_of(r#"{"schemaVersion": 1, "market": {"requireSignature": true}}"#)
                 .market()
@@ -1028,8 +1032,7 @@ mod tests {
     /// who deployed it believes it is in force.
     #[test]
     fn an_unknown_market_key_is_named_rather_than_dropped() {
-        let policy =
-            market_of(r#"{"schemaVersion": 1, "market": {"allowedPackage": ["mysql"]}}"#);
+        let policy = market_of(r#"{"schemaVersion": 1, "market": {"allowedPackage": ["mysql"]}}"#);
         let error = policy.error().unwrap_or_default();
         assert!(error.contains("allowedPackage"), "{error}");
         assert!(policy.market().allows_package("cassandra"));
