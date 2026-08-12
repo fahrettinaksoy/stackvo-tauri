@@ -262,8 +262,8 @@ onUnmounted(() => clearInterval(timer));
                       : t('mail.enableAction', { service: catcher })
                   }}
                 </v-btn>
-                <v-btn variant="text" @click="router.push('/services')">
-                  {{ t('nav.services') }}
+                <v-btn variant="text" @click="router.push('/market')">
+                  {{ t('nav.market') }}
                 </v-btn>
               </div>
               <div v-if="activating" class="text-caption text-medium-emphasis mail-enabling">

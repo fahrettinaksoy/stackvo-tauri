@@ -40,8 +40,7 @@ export default {
   nav: {
     dashboard: 'Dashboard',
     projects: 'Projects',
-    services: 'Services',
-    market: 'Market',
+    market: 'Catalogue',
     logs: 'Logs',
     dumps: 'Dumps',
     mail: 'Mail',
@@ -152,7 +151,7 @@ export default {
   },
 
   catalogueSettings: {
-    title: 'Service catalogue',
+    title: 'Catalogue',
     desc: 'Where service packages are fetched from, and whether that address works',
     current:
       '{location} · {packages} package(s) published, {installed} version(s) installed on this machine',
@@ -175,19 +174,23 @@ export default {
     resolved: 'Fetched from {url}',
   },
   marketView: {
-    title: 'Market',
+    createTitle: 'New instance: {id}',
+    createBody:
+      'These are the package’s own defaults. Credentials are the ones worth changing now: an image reads a root password only while it is initialising an empty data directory, so this is the one moment it can be set.',
+    createNoPort: 'No free port could be found for {handles} — choose one yourself.',
+    search: 'Search the catalogue',
+    title: 'Catalogue',
     subtitle: 'Where services come from, and which versions this machine has',
-    catalogue: 'Catalogue',
     chooseSource: 'Choose a source',
     sourceTitle: 'Where the catalogue comes from',
-    sourceInSettings:
-      'Settings → Service catalogue keeps this address and can test it without fetching.',
+    sourceCounts: '{packages} package(s) published, {installed} version(s) installed',
+    unsigned: 'not signature-checked',
+    sourceInSettings: 'Settings → Catalogue keeps this address and can test it without fetching.',
     noCatalogue: 'No catalogue yet',
     noCatalogueBody:
       'StackVo ships no services inside itself. Point it at a source — an offline bundle, or a checkout of the service packages repository — and the catalogue is read from there.',
-    sourceLine: '{location} · {packages} package(s) published, {installed} version(s) installed',
-    unsigned: 'not signature-checked',
     available: 'Available',
+    availableDesc: 'What the source publishes, and which versions are on this machine',
     showOlder: 'Show end-of-life versions',
     multiVersion: 'Runs several versions',
     versionCount: '{n} version(s)',
@@ -206,18 +209,28 @@ export default {
     addInstance: 'Add instance',
     inUse: 'An instance is using this version',
     instances: 'Instances',
+    instancesDesc: 'The versions this workspace runs, each with its own data and its own port',
     noInstances: 'Nothing installed yet',
     noInstancesBody:
       'Install a package above, then add an instance of it. Two versions of one service can run side by side, each with its own data and its own port.',
     colInstance: 'Instance',
-    colContainer: 'Container',
+    colContainer: 'Container name',
     colPorts: 'Ports',
-    colEnabled: 'On',
+    colStopStart: 'Stop/Start',
+    colRestart: 'Restart',
+    colOpen: 'Open in browser',
+    colStatus: 'Status',
+    enabled: 'ON',
+    disabled: 'OFF',
+    stop: 'Stop',
+    start: 'Start',
     restart: 'Restart',
     primary: 'Primary',
     packageMissing: 'Package missing',
     makePrimary: 'Make primary',
     removeInstance: 'Remove',
+    instanceSettings: 'Settings',
+    detail: 'Detail',
     handoverTitle: 'This workspace still keeps its services in .env',
     handoverBody:
       '{n} service(s) would move to the instance table. Volumes are adopted, not renamed, so the data stays where it is; ports are kept; and the old container name survives as a network alias, so a project pointing at stackvo-mysql keeps working.',
@@ -244,14 +257,22 @@ export default {
     },
   },
   servicesView: {
-    disableTitle: 'Disable {name}?',
-    disableBody: 'Nothing of this service is left behind. These are deleted:',
-    disableContainer: 'The container (stopped, then removed)',
-    disableVolumes: 'Its named volumes — including database contents, with no undo',
-    disableImage: 'Its image, unless another container is using it',
-    disableLogs: 'Its log directory under logs/services',
-    disableHosts: 'The hosts entry for {domain} — an administrator password is asked for',
-    disableConfirm: 'Disable and delete',
+    companionLogs: '{name} log',
+    alias: 'Also reachable at',
+    companions: 'Companion containers',
+    companionsSubtitle:
+      'Shipped with this service and not separately installable. They are named per instance, so two Kafkas get two Zookeepers rather than sharing one.',
+    notCreatedShort: 'Not created',
+    runtime: 'Runtime',
+    image: 'Image',
+    imageSize: 'Image size',
+    uptime: 'Up for',
+    restarts: 'Restarts',
+    restartsWithPolicy: '{n} (restart policy: {policy})',
+    exitCode: 'Exit code',
+    // 137 is SIGKILL, and on a developer machine it is almost always the
+    // engine's memory limit rather than anything the service did.
+    exitOutOfMemory: '{code} — killed, most often out of memory',
     hide: 'Hide the value',
     colDetail: 'Detail',
     serviceInfo: 'Service information',
@@ -271,32 +292,37 @@ export default {
     notPublished:
       'The container is running but publishes no port to the host, so nothing on this machine can reach it.',
     credentials: 'Credentials',
-    noCredentials: 'This service declares no credentials in .env.',
+    // Not ".env" any more: on the market model an instance's settings live in
+    // instances.json and its secrets in the keystore, and a message naming a
+    // file the value is not in sends the reader to the wrong place.
+    noCredentials: 'This package declares nothing to configure.',
+    // Running and healthy are different questions. A container with no
+    // healthcheck gets neither of these words — it keeps "Running", because
+    // that is the whole of what is known about it.
+    health: {
+      healthy: 'Healthy',
+      unhealthy: 'Unhealthy',
+      starting: 'Starting up',
+    },
     reveal: 'Reveal the value',
     containerLogs: 'Container log',
     logPath: 'Log path',
     mount: 'Mount',
     noMounts: 'No mounts.',
     notCreated: 'The container has not been created yet.',
-    subtitle: "The stack's shared infrastructure services",
-    title: 'Services',
-    list: 'Services List',
-    searchPlaceholder: 'Search services...',
-    colService: 'Service',
     colContainerName: 'Container Name',
     colDomain: 'Domain',
-    colVersion: 'Version',
-    colStopStart: 'Stop/Start',
-    colRestart: 'Restart',
-    colOpen: 'Open in the browser',
-    colStatus: 'Status',
-    enabled: 'ENABLED',
-    disabled: 'DISABLED',
     networkInfo: 'Network Information',
     dependencies: 'Dependencies',
     noDependencies: 'No dependencies.',
     required: 'Required',
     optional: 'Optional',
+    // Three states, because "not installed" and "installed but stopped" have
+    // two different fixes and used to be told apart by nothing at all — the
+    // first of them did not reach this panel.
+    depRunning: 'running',
+    depStopped: 'not running',
+    depNotInstalled: 'nothing installed provides this',
   },
 
   projectDetail: {
@@ -870,12 +896,17 @@ export default {
     notReloaded:
       'The certificate was reissued, but the proxy is still serving the previous one. Restart the stack, or run generate, to pick it up.',
   },
-  serviceSettings: {
-    pick: 'Pick a service',
-    title: 'Services',
-    sectionDesc: 'Each service’s own .env settings.',
-    desc: 'Pick a service to edit what it is configured with. Applying rebuilds its container, because a running one keeps the environment it was created with.',
-    all: 'All',
+  serviceCategories: {
+    databases: 'Databases',
+    cache: 'Cache',
+    queue: 'Queues',
+    search: 'Search',
+    storage: 'Object storage',
+    monitoring: 'Monitoring',
+    devtools: 'Developer tools',
+    adminUis: 'Admin UIs',
+  },
+  instanceSettings: {
     fields: {
       VERSION: 'Version',
       URL: 'Subdomain',
@@ -907,27 +938,26 @@ export default {
       API_KEY: 'API key',
       CONSOLE_HOST_PORT: 'Console host port',
     },
-    categories: {
-      databases: 'Databases',
-      cache: 'Cache',
-      queue: 'Queues',
-      search: 'Search',
-      storage: 'Object storage',
-      monitoring: 'Monitoring',
-      devtools: 'Developer tools',
-      adminUis: 'Admin UIs',
-    },
-    off: 'Off',
-    empty: 'No services in this category.',
-    none: 'This service has no settings of its own.',
+    none: 'This package has nothing to configure.',
     default: 'default',
     reveal: 'Reveal',
     hide: 'Hide',
-    showKey: 'Show the .env key ({key})',
+    showKey: 'Show the setting key ({key})',
+    requiredMissing: 'Required and empty: {keys}',
+    firstBootWarning:
+      'If this instance already has data, {keys} may not take effect: images such as MySQL and Postgres read credentials only while initialising an empty data directory. The container is recreated either way — the value inside the database is not. Change it with the service’s own tools, or remove the instance and its volume and create it again.',
+    reset: 'Put back the package default ({value})',
+    secretChanged: 'replaced',
+    discardTitle: 'Discard these changes?',
+    discardBody: 'The values you have typed have not been applied and will be lost.',
+    ports: 'Host ports',
+    portsSubtitle:
+      'The number this instance publishes on your machine. Whether it is free is checked when you apply — against this machine and against every other instance.',
+    portOf: 'port {handle}',
     apply: 'Apply and rebuild',
     confirmTitle: 'Rebuild the container?',
     confirmBody:
-      'Saving these is not enough on its own: {service} is running with the environment it was created with, so its container will be stopped and recreated with the new values.',
+      'Saving these is not enough on its own: {instance} is running with the environment it was created with, so its container will be stopped and recreated with the new values.',
     confirmApply: 'Apply',
   },
   about: {
@@ -1722,6 +1752,11 @@ export default {
     envIsOneKeyPerLine:
       'The .env format is one key per line; multi-line values cannot be read back.',
     revealValueFirst: 'Reveal the value first, or leave the field untouched.',
+    settingIsRequired:
+      'The package marks this setting required — the service will not start without it.',
+    portHeldByInstance:
+      'Another instance publishes this port. Change that one first, or pick another number.',
+    portInUse: 'Something on this machine is already listening there. Pick another number.',
     phpIniDirectiveCharset: 'Directive names are letters, digits, underscores and dots.',
     phpIniIsOnePerLine: 'php.ini is one directive per line.',
     phpIniSizeFormat:

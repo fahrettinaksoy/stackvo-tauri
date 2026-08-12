@@ -18,6 +18,7 @@ import ServiceDetailSheet from '@/components/ServiceDetailSheet.vue';
 
 const api = vi.hoisted(() => ({
   containerInspect: vi.fn(),
+  containerStats: vi.fn(),
   serviceConnection: vi.fn(),
   mailStatus: vi.fn(),
   mailMessages: vi.fn(),
@@ -32,15 +33,23 @@ vi.mock('@/lib/events', () => ({ listenAll: vi.fn(async () => () => {}) }));
 
 const vuetify = createVuetify({ components, directives });
 
+/** A row as `services_list` builds it — every field, so the fixture cannot
+ *  quietly disagree with the boundary about what a service is. */
 const MONGO = {
   id: 'mongo',
   containerName: 'stackvo-mongo',
   enabled: true,
   running: true,
   built: true,
+  health: null,
   url: null,
   hostPort: null,
   ports: [{ container: 27017, host: 27017, protocol: 'tcp' }],
+  declaredPorts: [],
+  aliases: ['stackvo-mongo'],
+  support: null,
+  eolDate: null,
+  companions: [],
   credentials: [],
   required: [],
   optional: [],

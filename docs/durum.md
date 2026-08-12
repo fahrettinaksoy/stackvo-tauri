@@ -193,6 +193,15 @@ açılış kapısı, göçün yedeği ve arayüzü, healthcheck'ler ve örnek ba
 adı indi. Geriye tek büyük madde kaldı: **gömülü şablonların silinmesi (S-16)**,
 ve o bir mühendislik işi olmaktan çok bir karar bekliyor — §4'ün sonunda.
 
+**Arayüz turu da kapandı (S-19 … S-25).** Model bittikten sonra geriye kalan
+soru "sınırdan ne geçiyor ve ekranda ne görünüyor" idi, ve aradaki fark
+büyüktü: sağlık durumu, çıkış kodu, restart sayısı, companion konteynerler,
+EOL rozeti, port isimleri ve katalog araması. Bunların hiçbiri yeni ölçüm
+değil — hepsi zaten hesaplanıp atılıyordu. İki gerçek yetenek eklendi: **kurulum
+formu** (bir imajın ilk-boot parolasının ayarlanabildiği tek an) ve **port
+değiştirme** (tahsis edilen port hiçbir şekilde değiştirilemiyordu, ki bu `.env`
+modeline göre gerilemeydi).
+
 **Doğrulandı, akıl yürütülmedi.** `examples/side_by_side.rs` bu makinede iki
 mysqld başlattı: **8.0.46 ve 9.4.0**, ayrı volume, ayrı port (3316/3326 — 3306'yı
 makinenin kendi MySQL'i tutuyordu), ve `stackvo-mysql` ağ içinde çözülüyor.
@@ -217,6 +226,13 @@ makinenin kendi MySQL'i tutuyordu), ve `stackvo-mysql` ağ içinde çözülüyor
 | S-16 | Gömülü şablonların silinmesi | 🟡 | takas indi, `skeleton/core/templates/services/` **duruyor** — tablosuz çalışma alanları hâlâ onu kullanıyor. Kalanı §4'te |
 | S-17 | Göçün `.env` yedeği ve arayüzü | ✅ | `handover::apply` önce `.env.pre-market.bak` yazıyor ve servis satırlarını **tam satır** yorumla işaretliyor; `handover_preview`/`handover_apply` + Market sayfasında panel |
 | S-18 | Örnek başına alt alan adı | ✅ | `Instance::domain`; birincil çıplak adı korur, ötekiler `phpmyadmin-5-2.stackvo.loc`. 24 paket artık `instancing.multiple: true` |
+| S-19 | Sağlık durumu ekranda | ✅ | `engine::health_from_status` liste satırından okuyor (yirmi konteyneri inspect etmeden); `Service.health` → detay çipi ve Market tablosunda nokta. 24 healthcheck ölçülüyordu, hiçbiri **gösterilmiyordu** |
+| S-20 | Konteynerin çalışma bilgileri | ✅ | `container_inspect` on dokuz alan dönüyordu, panel dördünü okuyordu: çıkış kodu, restart sayısı/politikası, uptime, imaj + boyutu ve `container_stats`'tan CPU/bellek indi |
+| S-21 | Companion'lar görünür | ✅ | `CompanionRow`; ad `render::context` ile aynı yerden türetiliyor, durum + **kendi logu**. Dört Kafka manifestinin Zookeeper'ı derleniyor ve hiçbir ekranda yoktu |
+| S-22 | Kurulum formu (ilk-boot ayarları) | ✅ | `instance_plan` + `instance_create(settings, ports)`; seçilen parola konteyner hiç çalışmadan keystore'a yazılıyor — bir imajın onu okuduğu tek an |
+| S-23 | Port değiştirme | ✅ | `planned_ports`: bildirilmemiş handle, başka örneğin portu, makinede dolu port, tek numaranın iki handle'da yayınlanması — dördü ayrı ret. Tahsis edilen port **hiç** değiştirilemiyordu |
+| S-24 | Katalogda arama | ✅ | `MarketPackage.keywords` sınırı geçiyor (registry v1'den beri yayınlıyordu, komut düşürüyordu); ad, özet, keyword ve capability üzerinden |
+| S-25 | Manifest bilgisi detayda | ✅ | EOL rozeti + tarihi, `stackvo-mysql` alias'ı, port handle isimleri, capability'siyle bağımlılık satırı |
 
 **Yolda bulunan üç hata**, üçü de yalnız çalıştırınca görünen türden:
 
@@ -271,6 +287,59 @@ Ve **mongo-express** 401 döndürüyordu: basic auth varsayılan açık, kimlik
 bilgileri birer ayar, ve manifestin `health` bloğu ayar okuyamıyor (fragment gibi
 substitute edilmiyor, uygulama yazıyor). Dürüstçe sorulabilen daha zayıf soru
 soruluyor: sunucu dinliyor mu.
+
+#### Üçüncü tur: sınırın taşıdığı ile ekranın gösterdiğini karşılaştırmak
+
+Bu tur ne bir faz ne yeni bir yetenek turuydu: **sınırdan geçen alanların
+listesi ile ekranda görünenlerin listesi yan yana kondu.** Aradaki fark, S-19'dan
+S-25'e kadarki satırlar. Ölçüm yapılıp gösterilmeyen şeyin ölçülmemişten farkı
+yok, ve buradaki en pahalı örnek healthcheck'ti: bir önceki tur 24/24'ünü yeşile
+getirmişti ve hiçbir ekran cevabı okumuyordu — kendi kontrolünde çakılan bir
+veritabanı, sağlıklı olanla **aynı yeşil çipi** taşıyordu.
+
+Yolda çıkan, hepsi doğru render edilip yanlış olan sınıftan:
+
+**Kurulu olmayan zorunlu bağımlılık ekrandan siliniyordu.** `provider_instance`
+`None` dönünce satır `filter_map` ile düşüyordu, yani Elasticsearch kurulu
+değilken Kibana'nın paneli **"Bağımlılığı yok"** yazıyordu — doğrunun tersi, ve
+tam da panelin açıldığı durumda. `unmetDependencies` de aynı listeden türediği
+için "hiç kurulu değil" hâli Dashboard'ın uyarı bandına da hiç ulaşmıyordu.
+
+**Dashboard'ın tek eylem butonu hiçbir yere gitmiyordu.** Services sayfası
+Market'e katlandığında rota da gitti; "karşılanmamış bağımlılık" satırındaki
+buton `/services`'e bakmaya devam ediyordu.
+
+**Bir imajın ilk-boot ayarı, formun sessizce yalan söylediği yerdi.** Parolayı
+değiştirmek yazılıyor, compose yeniden üretiliyor, konteyner gerçekten yeniden
+kuruluyor, başarı raporlanıyor — ve veritabanındaki parola yerinde kalıyor. Her
+adım çalışıyor, sonuç yanlış. Kurulum formu (S-22) bunun için var; onay
+diyaloğundaki uyarı ise **anahtar adına bakan bir sezgisel** ve kodda öyle
+işaretli. Kalıcı cevap bir manifest alanı: paket kendi ayarının ilk-boot
+olduğunu bilir, uygulama isimden tahmin ediyor.
+
+**Vuetify'da `VTab`, `VBtn`'i genişletiyor.** "Logs yazan buton" seçicisi sekmeyi
+buluyordu; sekmeye tıklamak log paneline geçiriyor ama **kimin** logu olduğunu
+değiştirmiyordu — bozuk bir özelliğin üstünde yeşil bir test.
+`button-icons.spec.js`'in kuralı `v-icon` için de geçerli ve orada denetlenmiyor:
+`icon` prop'u yalnız slot boşken okunuyor.
+
+**Yeni diyalogun ayar alanlarında `@update:model-value` yoktu** — alanlar doğru
+görünüyor, doğru etiketleniyor, yazılan hiçbir şeyi tutmuyordu. Testi yazarken
+çıktı.
+
+**`.mono` sınıfı `settings-panes.css`'te `.settings-scroll` altında tanımlı** ve
+servis detayı o ağacın içinde değil: snapshot adları ve dump ilerleme satırı
+gövde fontunda render oluyordu.
+
+**Golden fixture'lar bir önceki commit'te yenilenmemişti.** Mongo şablonunun
+düzeltmesi (`--config` bayrağı, girintili YAML, 7.0'da kaldırılan `journal`)
+indi, golden'lar inmedi — yani `cargo test` bir sürümdür kırmızıydı.
+
+**Ve §7'nin ölçüm tablosunda yedi satırın altısı bayattı.** Bir kısmı bu turun
+eklediği dosyalardan, bir kısmı zaten öyleydi. `hint_translations` de üç yeni
+hint'in çevirisiz olduğunu yakaladı — o locale'deki kullanıcıya İngilizce
+gösterilecekti. §8'in söylediği şey tam olarak bu: nesirdeki bir sayının
+yaşlanma yolu yok, ölçüm olmaktan çıkıp ölçümün hatırası olur.
 
 ---
 
@@ -345,9 +414,15 @@ gerçek çözümü o.
 | F-3 | Flame graph | ⬜ | `profile.rs` cachegrind'i en pahalı fonksiyon tablosuna indiriyor |
 | F-4 | Xdebug'ın anahtar değil dedektör olması | ⬜ | proje başına aç/kapa + rebuild |
 | F-5 | Kendine ait REPL yüzeyi | ⬜ | PTY üzerinden `tinker` — dürüst %90, ama tezgâh değil |
+| F-6 | Servis başına sağlık, çıkış kodu, kaynak | ✅ | S-19/S-20; `container_stats` port edildiğinden beri sınırdaydı ve hiçbir servis ekranı çağırmıyordu |
 
 Herd Pro, Lerd ve EnvKit'in üçü de aynı şeyi satıyor ve F-1 üçünün de en çok
 anılan özelliği. Container içinde bir toplayıcı gerektirdiği için P0 değil.
+
+F-6 bu bölümün *uygulama* yarısıydı ve kapandı: bir konteynerin sağlıklı olup
+olmadığı, neden durduğu (137 = bellek), kaç kez yeniden başladığı ve ne kadar
+yediği artık ekranda. Kalan beş madde **uygulamanın içine** bir toplayıcı
+koymayı gerektiriyor ve ayrı bir tur.
 
 ### G — Veritabanları
 
@@ -823,13 +898,13 @@ Mekanik olarak sayılabilenler koda karşı tutuluyor:
 
 | | Sayı | Nasıl sayıldı |
 |---|---|---|
-| Toplam IPC komutu | **185** | `contracts/ipc.json` → `commands` (182 Rust + 3 `frontend-plugin`) |
-| Bunlardan `#[tauri::command]` olarak yazılmış | **181** | `commands.rs`, `#[cfg(test)]` dışı |
-| Frontend kaynak dosyası | **107** | `src/**/*.{js,vue}`, spec dosyaları hariç |
-| Bunlardan `@tauri-apps` kullanan | **19** | aynı küme içinde metin taraması |
+| Toplam IPC komutu | **181** | `contracts/ipc.json` → `commands` (178 Rust + 3 `frontend-plugin`) |
+| Bunlardan `#[tauri::command]` olarak yazılmış | **177** | `commands.rs`, `#[cfg(test)]` dışı |
+| Frontend kaynak dosyası | **106** | `src/**/*.{js,vue}`, spec dosyaları hariç |
+| Bunlardan `@tauri-apps` kullanan | **20** | aynı küme içinde metin taraması |
 | **Veri katmanının geçtiği fonksiyon** | **1** (`src/lib/ipc.js` → `call()`) | `invoke(` `ipc.js` dışında **0** yerde geçiyor |
-| `ipc.js` sarmalayıcısı | **178** | `api` nesnesinin üye sayısı |
-| Rust kaynağı | **71 modül, 53.643 satır** | `src-tauri/src/*.rs` |
+| `ipc.js` sarmalayıcısı | **174** | `api` nesnesinin üye sayısı |
+| Rust kaynağı | **71 modül, 54.479 satır** | `src-tauri/src/*.rs` |
 
 Elle sınıflandırma, kapıya dahil değil — yöntemi yazılı ki bir sonraki okuyucu
 yeniden üretebilsin:

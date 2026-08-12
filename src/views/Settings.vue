@@ -15,7 +15,6 @@ import AppearancePane from '@/components/settings/AppearancePane.vue';
 import PhpPane from '@/components/settings/PhpPane.vue';
 import LocalisationPane from '@/components/settings/LocalisationPane.vue';
 import ServerLimitsPane from '@/components/settings/ServerLimitsPane.vue';
-import ServicesPane from '@/components/settings/ServicesPane.vue';
 import CataloguePane from '@/components/settings/CataloguePane.vue';
 import PreferencesPane from '@/components/settings/PreferencesPane.vue';
 import { usePreferences } from '@/composables/usePreferences';
@@ -161,17 +160,12 @@ const SECTIONS = [
     label: 'settings.servers.title',
     desc: 'settings.servers.desc',
   },
-  {
-    key: 'services',
-    group: 'stack',
-    icon: 'mdi-cube-outline',
-    label: 'serviceSettings.title',
-    desc: 'serviceSettings.sectionDesc',
-  },
-  // Beside the services rather than under 'app': it answers where the things
-  // on that pane come from. It was reachable only from the first-run gate and
-  // from a folder picker on the Market page, so a person with a URL and a
-  // second launch had nowhere to type it.
+  // There is no Services pane beside this one any more, and its absence is the
+  // point. What a service is configured with belongs to an instance — a
+  // manifest's settings, written to `instances.json` — and an instance is
+  // created on the Market page, so its form opens from the row that made it.
+  // The pane this replaced edited `SERVICE_<ID>_*` keys in `.env`, which names
+  // a service two versions of can be running.
   {
     key: 'catalogue',
     group: 'stack',
@@ -477,10 +471,6 @@ onMounted(async () => {
 
           <template v-if="tab === 'servers'">
             <ServerLimitsPane @save="save" @directives-saved="(keys) => (lastSaved = keys)" />
-          </template>
-
-          <template v-if="tab === 'services'">
-            <ServicesPane />
           </template>
 
           <template v-if="tab === 'catalogue'">

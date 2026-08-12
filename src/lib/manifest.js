@@ -326,6 +326,31 @@ export function humaniseField(field) {
 }
 
 /**
+ * A package setting's label, in this order: what the package says, then the
+ * vocabulary that repeats across services, then a readable form of the key.
+ *
+ * The manifest comes first because it is the only source that knows what its
+ * own setting means. Only the shared vocabulary is translated — password,
+ * database, username and friends. The rest is left in the terms its own
+ * documentation uses: `BOOTSTRAP_SERVERS` is what Kafka calls that setting, and
+ * a Turkish rendering of it is a phrase nobody can search for.
+ *
+ * Here rather than in a component because two forms render these rows now — the
+ * settings sheet and the create dialog — and a label resolved twice is one that
+ * will come apart in one of the two.
+ *
+ * `t` and `te` are passed in rather than imported: `useI18n` is only callable
+ * inside a component's setup, and this file is also read by tests that have no
+ * app around them.
+ */
+export function settingLabel(row, { t, te, locale }) {
+  const fromManifest = row.label?.[locale] ?? row.label?.en;
+  if (fromManifest) return fromManifest;
+  if (te(`instanceSettings.fields.${row.key}`)) return t(`instanceSettings.fields.${row.key}`);
+  return humaniseField(row.key);
+}
+
+/**
  * The domain a project should be filed under, or null when it stands alone.
  *
  * `parser.ajans.loc` belongs with `tracking.ajans.loc`; `l00kout.loc` does not

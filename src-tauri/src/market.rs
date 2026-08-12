@@ -327,7 +327,9 @@ pub fn resolve_location(location: &str) -> String {
     // host is two things to keep in step, and `privacy_claims.rs` reads them as
     // two places this app can reach.
     let without_scheme = trimmed.strip_prefix("https://").unwrap_or(trimmed);
-    let host_and_path = without_scheme.strip_prefix("www.").unwrap_or(without_scheme);
+    let host_and_path = without_scheme
+        .strip_prefix("www.")
+        .unwrap_or(without_scheme);
     let Some(path) = host_and_path.strip_prefix("github.com/") else {
         return trimmed.to_string();
     };
@@ -461,10 +463,11 @@ fn get(url: &str, etag: Option<&str>) -> Result<Option<(Vec<u8>, Option<String>)
             } else {
                 crate::hints::REGISTRY_UNREACHABLE
             };
-            return Err(
-                Error::new(Code::NetworkError, format!("{url} answered {}", response.status()))
-                    .with_hint(hint),
-            );
+            return Err(Error::new(
+                Code::NetworkError,
+                format!("{url} answered {}", response.status()),
+            )
+            .with_hint(hint));
         }
 
         let tag = response
@@ -1248,7 +1251,9 @@ mod tests {
         assert_eq!(err.code, Code::Forbidden);
         assert!(err.message.contains("mysql"), "{}", err.message);
         assert!(
-            !packages_dir(&root).join("databases/mysql/versions/8.0").exists(),
+            !packages_dir(&root)
+                .join("databases/mysql/versions/8.0")
+                .exists(),
             "a refused package left files behind"
         );
     }
@@ -1269,7 +1274,9 @@ mod tests {
 
         assert_eq!(err.code, Code::Forbidden);
         assert!(
-            !packages_dir(&root).join("databases/mysql/versions/8.0").exists(),
+            !packages_dir(&root)
+                .join("databases/mysql/versions/8.0")
+                .exists(),
             "a refused package left files behind"
         );
     }
@@ -1328,10 +1335,16 @@ mod tests {
         assert_eq!(source.cached_etag("registry.json"), None);
 
         source.remember_etag("registry.json", "\"abc\"");
-        source.remember_etag("packages/databases/mysql/versions/8.0/manifest.json", "\"def\"");
+        source.remember_etag(
+            "packages/databases/mysql/versions/8.0/manifest.json",
+            "\"def\"",
+        );
 
         let reopened = HttpSource::new(&root, "https://packages.example/stackvo").unwrap();
-        assert_eq!(reopened.cached_etag("registry.json").as_deref(), Some("\"abc\""));
+        assert_eq!(
+            reopened.cached_etag("registry.json").as_deref(),
+            Some("\"abc\"")
+        );
         assert_eq!(
             reopened
                 .cached_etag("packages/databases/mysql/versions/8.0/manifest.json")
@@ -1410,9 +1423,15 @@ mod tests {
             assert_eq!(resolve_location(address), address);
         }
         // A trailing slash still goes, because it is joined onto.
-        assert_eq!(resolve_location("https://packages.stackvo.dev/"), "https://packages.stackvo.dev");
+        assert_eq!(
+            resolve_location("https://packages.stackvo.dev/"),
+            "https://packages.stackvo.dev"
+        );
         // Not a repository: no owner, or no name.
-        assert_eq!(resolve_location("https://github.com/stackvo"), "https://github.com/stackvo");
+        assert_eq!(
+            resolve_location("https://github.com/stackvo"),
+            "https://github.com/stackvo"
+        );
     }
 
     /// And the translation is what the source actually uses, not advice printed

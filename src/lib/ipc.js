@@ -127,8 +127,10 @@ export const api = {
   templateRevert: (path) => call('template_revert', { path }),
   envGet: () => call('env_get'),
   envDefaults: () => call('env_defaults'),
-  /** One secret, unmasked, on explicit request. See `env_reveal` in Rust. */
-  envReveal: (key) => call('env_reveal', { key }),
+  // `envReveal` was here and is not any more: its one caller was the services
+  // detail sheet, which now asks `serviceReveal` so the workspace's own model
+  // decides where the value lives. The Rust command stays — `service_reveal`
+  // is what calls it on the `.env` path.
 
   // --- Phase 2: mutations ---------------------------------------------------
   projectStart: (name) => call('project_start', { name }),
@@ -137,12 +139,9 @@ export const api = {
   /** Resolves with an operationId as soon as the build starts, not when it ends. */
   projectBuild: (name, noCache = false) => call('project_build', { name, noCache }),
 
-  serviceStart: (name) => call('service_start', { name }),
-  serviceStop: (name) => call('service_stop', { name }),
-  serviceRestart: (name) => call('service_restart', { name }),
-  serviceSettings: (name) => call('service_settings', { name }),
-  serviceApplySettings: (name, patch) => call('service_apply_settings', { name, patch }),
-  serviceEnable: (name) => call('service_enable', { name }),
+  // Dispatches to the instance table or to `.env`, whichever this workspace
+  // keeps its services in — the caller does not have to know which.
+  serviceReveal: (service, key) => call('service_reveal', { service, key }),
 
   // The market and the instance table. Neither touches Docker: enabling an
   // instance needs the generate path to render from the table, and that swap is
@@ -165,7 +164,15 @@ export const api = {
   handoverPreview: () => call('handover_preview'),
   handoverApply: () => call('handover_apply'),
   instanceList: () => call('instance_list'),
-  instanceCreate: (service, version) => call('instance_create', { service, version }),
+  // What creating one would produce — the manifest's settings with their
+  // defaults, and the ports the allocator would pick — so the form can be shown
+  // before anything is written. Nothing is reserved by asking.
+  instancePlan: (service, version) => call('instance_plan', { service, version }),
+  // `settings` and `ports` are what that form collected. Both null creates with
+  // the package's own defaults, which is what the button did before the form
+  // existed.
+  instanceCreate: (service, version, settings = null, ports = null) =>
+    call('instance_create', { service, version, settings, ports }),
   instanceRemove: (id) => call('instance_remove', { id }),
   instancePromote: (id) => call('instance_promote', { id }),
   instanceEnable: (id) => call('instance_enable', { id }),
@@ -173,7 +180,17 @@ export const api = {
   instanceStart: (id) => call('instance_start', { id }),
   instanceStop: (id) => call('instance_stop', { id }),
   instanceRestart: (id) => call('instance_restart', { id }),
-  serviceDisable: (name) => call('service_disable', { name }),
+
+  // What an instance is configured with, from its manifest — the settings a
+  // package declares, not `.env` keys. Applying recreates the container,
+  // because a running one keeps the environment it was created with.
+  instanceSettings: (id) => call('instance_settings', { id }),
+  instanceReveal: (id, key) => call('instance_reveal', { id, key }),
+  // `ports` travels with the settings rather than through a command of its own:
+  // both need the container stopped and recreated, and two commands would do
+  // that twice for one press of one button.
+  instanceApplySettings: (id, patch, ports = null) =>
+    call('instance_apply_settings', { id, patch, ports }),
 
   containerInspect: (name) => call('container_inspect', { name }),
   containerStats: (name) => call('container_stats', { name }),
@@ -455,7 +472,6 @@ export const api = {
   containersStopAll: () => call('containers_stop_all'),
   containersRestartAll: () => call('containers_restart_all'),
 
-  composeUpService: (name) => call('compose_up_service', { name }),
   composeUpProject: (name) => call('compose_up_project', { name }),
   composeRestart: () => call('compose_restart'),
 

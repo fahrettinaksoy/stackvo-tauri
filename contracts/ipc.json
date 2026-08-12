@@ -1,6 +1,6 @@
 {
   "$schema": "https://stackvo.dev/contracts/v1/ipc.meta.json",
-  "contractVersion": "1.1.0",
+  "contractVersion": "2.0.0",
   "description": "The Tauri IPC surface for StackVo Desktop — contract v1. Derived 1:1 from the Express routes in core/ui/server/routes/ and the Socket.io events in core/ui/server/, plus the commands the desktop app needs that no HTTP endpoint ever provided. This file is the agreement between the Vue front end and the Rust core; both sides are generated/checked against it.",
   "conventions": {
     "naming": "snake_case, <domain>_<verb>. The same string is the Rust #[tauri::command] fn name and the JS invoke() key.",
@@ -201,14 +201,6 @@
     },
     "compose_up_project": {
       "replaces": "POST /api/start-with-profile/project",
-      "kind": "operation",
-      "args": {
-        "name": "string"
-      },
-      "returns": "OperationId"
-    },
-    "compose_up_service": {
-      "replaces": "POST /api/start-with-profile/service",
       "kind": "operation",
       "args": {
         "name": "string"
@@ -514,16 +506,6 @@
       "returns": "map<string,string>",
       "notes": "MUST redact secret-matching keys unless `reveal: true` is passed and the user has confirmed in-session."
     },
-    "env_reveal": {
-      "new": true,
-      "kind": "query",
-      "args": {
-        "key": "string"
-      },
-      "returns": "string",
-      "why": "env_get redacts secrets, so revealing one needs a separate call the user has to ask for. Returning the whole map unmasked on a flag would put every password in one payload the moment anyone wanted to see one.",
-      "notes": "One key per call, by design. Declared retroactively: this shipped in lib.rs without a contract entry and suite E was reporting it as UNDECLARED_COMMAND."
-    },
     "env_set": {
       "new": true,
       "kind": "mutation",
@@ -685,16 +667,30 @@
       "why": "Brings one site into the workspace. The generator bind-mounts ${PROJECTS}/<name>, so a project lives under the projects directory or it does not exist — an import is a file operation, and this is that half only.",
       "notes": "The manifest is NOT written here: the caller follows with project_adopt, so an imported project goes through the same validation, the same domain question and the same name rules as any other adoption. Copies by default. `move` copies first and removes the original only once the copy is complete — the reverse order turns a full disk into a site that exists in neither place — and a failure to remove is logged rather than rolled back, because deleting a correct copy to honour the word 'move' destroys the half that worked. Nothing is ever written into the other installation. A half-finished copy is removed: adoption would otherwise find it and produce a project missing files nobody can name. Errors: ALREADY_EXISTS when the name is taken, NOT_FOUND for a path that is not a directory, INVALID_INPUT when the projects directory is inside the site being imported. Audited as `project_import`."
     },
+    "instance_apply_settings": {
+      "new": true,
+      "kind": "operation",
+      "args": {
+        "id": "string",
+        "patch": "Record<string, string>",
+        "ports": "Record<handle, number>? — optional, null when nothing moved"
+      },
+      "returns": "OperationId",
+      "why": "Write an instance's settings and rebuild its container with them. Replaces service_apply_settings, which wrote them to .env.",
+      "notes": "MUST reject keys the manifest does not declare, MUST reject a masked value being written back, and MUST reject emptying a setting the manifest marks required. `enabled`, `primary` and `version` are not settings and are not reachable here — each has its own command, and two controls for one field is how they come to disagree. Ports are the deliberate exception: they arrive as their own argument rather than in `patch`, because they are not settings, and they arrive *here* rather than through a command of their own because both need the container stopped and recreated — two commands would do that twice for one press of one button. A port is refused when the manifest does not declare the handle, when another instance holds the number, when the machine is already listening there, or when the patch would publish one number under two handles. The rebuild is the point: `instance_restart` keeps the environment the container was created with, so a setting saved and then restarted appears to have been applied and has not."
+    },
     "instance_create": {
       "new": true,
       "kind": "mutation",
       "args": {
         "service": "string",
-        "version": "string"
+        "version": "string",
+        "settings": "Record<string, string>? — what the create form collected; null creates with the package's defaults",
+        "ports": "Record<handle, number>? — null allocates every port"
       },
       "returns": "string",
       "why": "Create an instance of an installed package. Returns its id — the slug of service@version, which every derived name comes from.",
-      "notes": "Ports are allocated here and WRITTEN DOWN, not recomputed per render: a connection string that changes because an unrelated service was installed is a string somebody had already pasted somewhere. The instance is created disabled — creating is not starting. The first instance of a service becomes primary, because in a workspace with one version the pre-package name has to reach something."
+      "notes": "A supplied secret is written to the keystore before the container has ever run, which is the only moment an image reads one. A requested port is used or refused, never moved: the allocator's job is to find *a* free port, and handing back 3407 to somebody who typed 3307 is a different thing. Unrequested ports allocate as before."
     },
     "instance_disable": {
       "new": true,
@@ -735,6 +731,17 @@
       "why": "What is installed, how many times, and which one answers to the pre-package name.",
       "notes": "`packagePresent` is false when the instance names a package that is not installed. That is a state a user has to see, not an error that hides the row."
     },
+    "instance_plan": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "service": "string",
+        "version": "string"
+      },
+      "returns": "InstancePlan",
+      "why": "What creating this instance would produce, before it does — so a first-boot password can be chosen at the one moment an image will read it.",
+      "notes": "Writes nothing and reserves nothing. The ports are what the allocator would choose right now; `instance_create` allocates again for real, because between the two something else may have taken one. A port the allocator cannot place comes back null rather than failing the call, so the form can name it and let the user choose. `refused` is reported rather than thrown, so a single-instance service opens a dialog that says why instead of no dialog at all. A secret's value here is the manifest's published first-boot default and is NOT masked: there is no instance and no keystore entry, and masking a string that is in a file on disk would be theatre."
+    },
     "instance_promote": {
       "new": true,
       "kind": "mutation",
@@ -769,6 +776,27 @@
       ],
       "why": "The container, without touching what the instance table says. Distinct from enable/disable, which change whether the instance is part of the stack at all.",
       "notes": "Goes through the same lifecycle helper as project_* and service_*; the id is validated against the instance table first, because it is not in the service catalog and never will be."
+    },
+    "instance_reveal": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "id": "string",
+        "key": "string"
+      },
+      "returns": "string",
+      "why": "The real value behind a masked secret, for the one instance and the one key.",
+      "notes": "Returns the manifest's default when the keystore holds nothing, because that is what the container is running with — a reveal showing an empty box for a service reachable with `root` would be a lie of omission. Errors: NOT_FOUND for a key the manifest does not declare, INVALID_INPUT for a key that is not a secret."
+    },
+    "instance_settings": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "id": "string"
+      },
+      "returns": "InstanceSetting[]",
+      "why": "What one instance is configured with, as its manifest declares it. Replaces service_settings, which read SERVICE_<ID>_* keys out of .env — a name that identifies a service, of which two versions can be running.",
+      "notes": "Order is the manifest's, not sorted: a package author who put the database name above the password meant that. Values resolve the way render::context resolves them — what is stored, then the manifest default — because a form that showed one value while the compose file rendered another would be a form about nothing. Secrets are masked without consulting the keystore, so the mask is the same length for a set password and an unset one. `options` is an offer, not a constraint."
     },
     "instance_start": {
       "new": true,
@@ -1591,16 +1619,6 @@
       "returns": "void",
       "notes": "Written atomically. Takes effect on the next generate: the directives are rendered into each project's server config, not into a file the server reads directly."
     },
-    "service_apply_settings": {
-      "replaces": "none — new in the desktop app",
-      "kind": "operation",
-      "args": {
-        "name": "string",
-        "patch": "map<string,string>"
-      },
-      "returns": "OperationId",
-      "notes": "MUST reject keys outside the service's prefix, MUST reject ENABLE, and MUST reject a masked value being written back. Regenerates and recreates the container: a restart would keep the environment it was created with, so the setting would appear applied and not be."
-    },
     "service_connection": {
       "new": true,
       "kind": "query",
@@ -1622,78 +1640,16 @@
       "notes": "Kept for completeness; services_list already returns required/optional/unmetDependencies per service, so the front end has no reason to call this separately.",
       "rustInternal": true
     },
-    "service_disable": {
-      "replaces": "POST /api/services/:s/disable",
-      "kind": "operation",
-      "args": {
-        "name": "string"
-      },
-      "returns": "OperationId",
-      "emits": [
-        "service:disabling",
-        "service:disabled",
-        "service:error"
-      ]
-    },
-    "service_enable": {
-      "replaces": "POST /api/services/:s/enable",
-      "kind": "operation",
-      "args": {
-        "name": "string"
-      },
-      "returns": "OperationId",
-      "emits": [
-        "service:enabling",
-        "service:progress",
-        "service:enabled",
-        "service:error"
-      ],
-      "notes": "Flips SERVICE_<NAME>_ENABLE in .env, regenerates, then brings the profile up."
-    },
-    "service_restart": {
-      "replaces": "POST /api/services/:c/restart",
-      "kind": "mutation",
-      "args": {
-        "name": "string"
-      },
-      "returns": "void",
-      "emits": [
-        "service:restarting",
-        "service:restarted"
-      ]
-    },
-    "service_settings": {
-      "replaces": "none — new in the desktop app",
+    "service_reveal": {
+      "new": true,
       "kind": "query",
       "args": {
-        "name": "string"
+        "service": "string",
+        "key": "string"
       },
-      "returns": "ServiceSetting[]",
-      "notes": "Every SERVICE_<ID>_* key except ENABLE, which the services list owns, and VERSIONS, which arrives as the VERSION row's `options` rather than as a row. Secrets are masked; env_reveal is the only way to see one. `options` is the list a row offers and is empty for every key but VERSION; it is an offer, not a constraint — the field accepts a value that is not in it, because a registry has more tags than a list can carry."
-    },
-    "service_start": {
-      "replaces": "POST /api/services/:c/start",
-      "kind": "mutation",
-      "args": {
-        "name": "string"
-      },
-      "returns": "void",
-      "emits": [
-        "service:starting",
-        "service:started"
-      ]
-    },
-    "service_stop": {
-      "replaces": "POST /api/services/:c/stop",
-      "kind": "mutation",
-      "args": {
-        "name": "string"
-      },
-      "returns": "void",
-      "emits": [
-        "service:stopping",
-        "service:stopped"
-      ]
+      "returns": "string",
+      "why": "The value behind one masked credential on the services list, whichever place this workspace keeps it.",
+      "notes": "Dispatches the way every other reader of service state does — the instance table when there is one, `.env` when there is not. `key` is the manifest setting key for an instance (`ROOT_PASSWORD`) and the `.env` key for the legacy path (`SERVICE_MYSQL_ROOT_PASSWORD`), which is what the row carries in each case. The detail sheet called `env_reveal` directly before this existed, and after a handover that reported \"not set in .env\" over a password that does exist."
     },
     "services_list": {
       "replaces": "GET /api/services",
@@ -1970,30 +1926,6 @@
         "error": "string"
       }
     },
-    "service:enabling": {
-      "payload": {
-        "service": "string"
-      }
-    },
-    "service:enabled": {
-      "payload": {
-        "service": "string",
-        "configured": "bool",
-        "running": "bool"
-      }
-    },
-    "service:disabling": {
-      "payload": {
-        "service": "string"
-      }
-    },
-    "service:disabled": {
-      "payload": {
-        "service": "string",
-        "configured": "bool",
-        "running": "bool"
-      }
-    },
     "service:starting": {
       "payload": {
         "service": "string"
@@ -2038,19 +1970,6 @@
       },
       "emittedDynamically": true,
       "emittedBy": "commands::lifecycle — the name is built from the subject kind and the phase verb, so no literal appears in the source."
-    },
-    "service:progress": {
-      "payload": {
-        "service": "string",
-        "step": "string",
-        "percent": "u8?"
-      }
-    },
-    "service:error": {
-      "payload": {
-        "service": "string",
-        "error": "string"
-      }
     },
     "build:start": {
       "payload": {
@@ -2423,6 +2342,14 @@
       "stale": "bool",
       "note": "`covered` is read from the certificate's subjectAltName, not from the project list. `missing` is wildcard-aware: `*.stackvo.loc` covers `api.stackvo.loc` but not `shop.loc` and not `a.b.stackvo.loc`, because a wildcard matches exactly one label. `ca_trusted` is null when the platform gives no cheap way to ask, which is not the same as false. `stale` is true when anything is missing or the certificate has expired — it is what the UI badges."
     },
+    "CompanionRow": {
+      "name": "string — the manifest's handle, and the suffix of the container name",
+      "containerName": "string — stackvo-<instance>-<name>, derived exactly as render::context derives it",
+      "image": "string — the reference actually pulled, digest-pinned when the manifest pins one",
+      "built": "bool",
+      "running": "bool",
+      "health": "string? — same vocabulary as Service.health"
+    },
     "Connection": {
       "service": "string",
       "kind": "'mysql'|'postgres'|'mongo'|'redis'|'memcached'|'amqp'|'http'|'hostport'|'smtp'",
@@ -2440,6 +2367,12 @@
       "net_rx": "u64",
       "net_tx": "u64"
     },
+    "Credential": {
+      "key": "string — without the SERVICE_<ID>_ prefix",
+      "envKey": "string",
+      "value": "string — masked when secret",
+      "secret": "bool"
+    },
     "DbTarget": {
       "service": "string",
       "kind": "'mysql'|'mariadb'|'postgres'|'mongo'",
@@ -2450,6 +2383,12 @@
       "running": "bool",
       "extension": "string",
       "note": "`extension` is the suggested file extension, and it differs by engine rather than being cosmetic: mysql and postgres dump to plain SQL a person can read and edit, while mongodump produces a gzipped BSON archive that only mongorestore can read. `database` is null for mongo, where the dump covers the whole server."
+    },
+    "DeclaredPort": {
+      "name": "string — the manifest's handle: main, console, smtp",
+      "container": "u16",
+      "host": "u16? — what the container publishes when there is one, the recorded allocation when there is not",
+      "protocol": "'tcp'|'udp'"
     },
     "DependencyReport": {
       "service": "string",
@@ -2463,6 +2402,13 @@
       ],
       "has_unmet_dependencies": "bool",
       "internal": "string[]"
+    },
+    "DependencyRow": {
+      "capability": "string — what the manifest asks for, so MariaDB can answer 'sql'",
+      "service": "string? — the one service that will do, when only one will",
+      "provider": "string? — the installed instance answering it, null when none does",
+      "required": "bool",
+      "running": "bool — false whenever there is no provider; the two are told apart by `provider`"
     },
     "Detected": {
       "framework": "string?",
@@ -2647,6 +2593,12 @@
       ],
       "note": "Percentages are of the client/feature combinations Mailpit tests (186 on the version measured against)."
     },
+    "InstancePlan": {
+      "id": "string — the id this would take",
+      "refused": "string? — why a second instance is not allowed, or null",
+      "settings": "InstanceSetting[] — the manifest's, with defaults as values and secrets unmasked",
+      "ports": "DeclaredPort[] — host is what the allocator would choose, or null when it could find nothing"
+    },
     "InstanceRow": {
       "id": "string — the slug of service@version",
       "service": "string",
@@ -2657,6 +2609,17 @@
       "aliases": "string[]",
       "ports": "Record<handle, number>",
       "packagePresent": "boolean"
+    },
+    "InstanceSetting": {
+      "key": "string — as the manifest spells it, no SERVICE_<ID>_ prefix",
+      "kind": "string — the manifest's type: string | secret | int | bool | enum | instanceRef",
+      "value": "string — masked when secret",
+      "secret": "bool",
+      "isDefault": "bool — the value in force is the manifest's own default",
+      "defaultValue": "string? — the manifest's own default, so the form can put it back; null for a secret, whose default is never handed out unasked",
+      "required": "bool — instance_apply_settings refuses to empty one of these",
+      "options": "string[] — an offer, not a constraint. For an instanceRef it is the installed instances answering the capability it names",
+      "label": "Record<locale, string>"
     },
     "LinkCheck": {
       "errors": "u32",
@@ -2721,6 +2684,7 @@
       "name": "Record<locale, string>",
       "summary": "Record<locale, string>",
       "capabilities": "string[]",
+      "keywords": "string[] — search terms the index publishes, so mysql is findable by typing 'database' and by typing 'mariadb'",
       "multiple": "boolean — whether two versions may run at once",
       "versions": "MarketVersion[]"
     },
@@ -2975,15 +2939,26 @@
       "note": "Read out of the BUILT image by running it, not inferred from the Dockerfile. `xdebugActive` is null for a node image — there is no PHP to ask, which is not the same as \"no\". `clean` is all three checks passing."
     },
     "Service": {
-      "id": "string",
-      "name": "string",
-      "enabled": "bool",
+      "id": "string — the instance id (mysql-8-0) on the market model, the service id before it",
+      "category": "string",
+      "enabled": "bool — whether it should run, which is not whether it is running",
       "running": "bool",
-      "version": "string",
-      "container_name": "string",
-      "url": "string?",
+      "built": "bool — a container exists, running or not",
+      "version": "string?",
+      "containerName": "string",
+      "url": "string? — the whole domain, suffix included",
+      "health": "string? — 'healthy' | 'unhealthy' | 'starting'; null when the image declares no healthcheck",
+      "hostPort": "u16?",
       "ports": "Port[]",
-      "category": "string"
+      "declaredPorts": "DeclaredPort[] — every port the package declares, by handle, with the host number in force; empty before the migration",
+      "aliases": "string[] — the Docker network names this answers to, its own first; the second is the pre-package alias",
+      "support": "string? — 'supported' | 'deprecated' | 'eol', from the version manifest",
+      "eolDate": "string? — ISO date upstream support ends or ended",
+      "companions": "CompanionRow[] — containers shipped with this instance and not separately installable",
+      "credentials": "Credential[]",
+      "required": "DependencyRow[]",
+      "optional": "DependencyRow[]",
+      "unmetDependencies": "string[] — the subject of every required dependency that is unprovided or stopped"
     },
     "SourceProbe": {
       "location": "string — exactly what was asked for",

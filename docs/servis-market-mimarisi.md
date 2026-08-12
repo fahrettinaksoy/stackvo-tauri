@@ -800,13 +800,27 @@ değil.
 | `market_install` | mutation | `operation_id` |
 | `market_uninstall` | mutation | `void` (+ `purgeData: bool`) |
 | `instance_list` | query | `Vec<Instance>` |
-| `instance_create` | mutation | `InstanceId` |
+| `instance_plan` | query | `InstancePlan` (kurulmadan önce: ayarlar + tahsis edilecek portlar) |
+| `instance_create` | mutation | `InstanceId` (+ `settings`, `ports` — ikisi de opsiyonel) |
 | `instance_remove` | mutation | `void` |
 | `instance_enable` / `instance_disable` | mutation | `operation_id` |
 | `instance_start` / `instance_stop` / `instance_restart` | mutation | `operation_id` |
-| `instance_settings` / `instance_apply_settings` | query / mutation | — |
+| `instance_settings` / `instance_apply_settings` | query / mutation | — (`apply` ayrıca `ports` alır) |
 | `instance_connection` | query | `Option<Connection>` |
 | `instance_promote` | mutation | `void` (birincil takma adı devret) |
+
+`instance_plan` hiçbir şey yazmaz ve hiçbir şey rezerve etmez; döndürdüğü
+portlar **şu an** tahsis edilecek olanlardır ve `instance_create` gerçekte
+yeniden tahsis eder — ikisi arasında başka bir şey o portu almış olabilir. Bir
+`secret`'ın değeri burada **maskesiz** döner, ki bu uygulamadaki tek istisnadır
+ve sebebi değerin ne olduğudur: ortada örnek de keystore kaydı da yoktur, bu
+manifestin yayınlanmış ilk-boot varsayılanıdır ve zaten diskteki bir JSON
+dosyasındadır.
+
+Portlar `instance_apply_settings`'e kendi argümanı olarak gelir — `patch`'in
+içine değil, çünkü ayar değiller; ve *kendi komutu* olarak değil, çünkü ikisi de
+konteyneri durdurup yeniden kurmayı gerektirir ve iki komut bunu tek düğmeye
+basış için iki kez yapardı.
 
 Olaylar mevcut `service:*` ailesini yansıtır: `market:refreshing`,
 `market:refreshed`, `package:installing`, `package:progress`,
@@ -1172,6 +1186,39 @@ görünür.
 
 Yerel kaynakla çalışan bir makine bundan etkilenmiyor; ağ kaynağına bakan bir
 makine etkilenecek — ve doğru sıra bu, çünkü ağ kaynağı Faz 5.
+
+#### Arayüz yarısı, ayrı bir turda · **tamamlandı**
+
+"UI var" bu fazın çıkışıydı ve kurma/kaldırma/aç/kapat için doğruydu. Model
+bittikten sonra sorulan ikinci soru — **sınırdan ne geçiyor, ekranda ne
+görünüyor** — arayı büyük buldu, ve aradaki her şey zaten hesaplanıp atılıyordu:
+
+- **Sağlık.** Bu depo 24 healthcheck'i gerçek konteynerde yeşile getirmişti ve
+  hiçbir ekran cevabı okumuyordu. `engine::health_from_status` liste satırından
+  okuyor — yirmi satırlık bir sayfayı çizmek için yirmi `inspect` etmemek için —
+  ve durum çipi artık `running` ile `healthy`'yi ayırıyor. Healthcheck'i olmayan
+  konteyner eski iki kelimede kalıyor; onun için üçüncü bir kelime uydurmak aynı
+  fazla-iddianın tersi olurdu.
+- **`container_inspect` on dokuz alan dönüyordu, panel dördünü okuyordu.** Çıkış
+  kodu (137 = bellek), restart sayısı ve politikası, uptime, çalışan imaj ve
+  boyutu. Bellek için öldürülen bir servis "Durdu" deyip susuyordu.
+- **Companion'lar.** Dört Kafka manifestinin Zookeeper'ı compose'a derleniyor ve
+  `commands.rs`'te kelime hiç geçmiyordu: satır yok, durum yok, loguna erişim
+  yok. Konteyner adı `render::context` ile aynı yerden türetiliyor — elle senkron
+  tutulan ikinci bir türetme, yanlış konteynerin sağlığını raporlayan satırdır.
+- **`support`/`eolDate` yalnız katalog ağacındaydı**, yani kurduğunuz sayfada;
+  end-of-life bir veritabanında hata arayan kişi orada durmuyor.
+- **Port handle'ları.** `Object.values(...)` isimleri atıyordu: MinIO "9000,
+  9001" olarak okunuyor ve hangisinin konsol olduğunu tablo söyleyemiyordu.
+- **`keywords` sınırı hiç geçmiyordu** (registry v1'den beri yayınlıyor), yani
+  yirmi beş servis ve yüz sürüm sekiz kapalı kategorinin arkasında aranamıyordu.
+
+İki gerçek yetenek de bu turda indi ve ikisi de §1'in teşhislerinin kalanıydı:
+**kurulum formu** (§3.2'nin `settings` bloğu ilk boot'ta okunur; formsuz uygulama
+`root` ile kurup sonra düzenlemeyi öneriyordu, ki bu bir veritabanında işe
+yaramaz) ve **port değiştirme** (§1.4'ün eleştirisi elle tahsisti; tahsis
+otomatikleşti ama *değiştirilemez* hâle geldi — `HOST_PORT_MYSQL` en azından
+düzenlenebilir bir satırdı).
 
 ### Faz 5 — Market, ağ kaynağıyla · **tamamlandı**
 

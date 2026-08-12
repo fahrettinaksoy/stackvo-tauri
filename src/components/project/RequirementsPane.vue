@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { api } from '@/lib/ipc';
+import { api, asList } from '@/lib/ipc';
 import SettingsGroup from '@/components/SettingsGroup.vue';
 import ErrorAlert from '@/components/ErrorAlert.vue';
 
@@ -44,7 +44,18 @@ async function load() {
   loading.value = true;
   error.value = null;
   try {
-    state.value = await api.projectRequirements(props.name);
+    // Rebuilt into the shape this pane guarantees rather than assigned
+    // wholesale. Every computed below reads `state.declared.length`, so a
+    // boundary that answers nothing — a command that resolves undefined —
+    // replaced the object with `undefined` and the pane threw while rendering,
+    // outside any caller's `await`. Same reasoning as `asList`, which exists
+    // because a field is read off whatever the boundary handed back.
+    const answer = await api.projectRequirements(props.name);
+    state.value = {
+      declared: asList(answer?.declared),
+      suggested: asList(answer?.suggested),
+      plan: answer?.plan ?? null,
+    };
     picked.value = state.value.suggested.map((s) => s.service);
   } catch (e) {
     error.value = e;

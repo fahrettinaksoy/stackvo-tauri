@@ -343,37 +343,50 @@ pub struct Credential {
     pub secret: bool,
 }
 
-/// One editable `SERVICE_<ID>_*` setting.
+/// One editable setting of one instance, as its manifest declares it.
 ///
 /// Distinct from [`Credential`], which exists to *display* what a service is
-/// reachable with: it hides `ENABLE`, `VERSION` and `URL`, and drops anything
-/// empty. An editor needs the opposite — every key the service has, empty ones
-/// included, because an empty value is the one most likely to want filling in.
+/// reachable with and drops anything empty. An editor needs the opposite —
+/// every key the manifest declares, empty ones included, because an empty value
+/// is the one most likely to want filling in.
+///
+/// There is no `.env` key here and that is the whole difference from what this
+/// replaced. A setting belongs to an instance, lives in `instances.json` (or the
+/// keystore when it is secret), and is read from there. `SERVICE_MYSQL_DATABASE`
+/// names a service that two versions of can be running.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ServiceSetting {
-    /// The key without its `SERVICE_<ID>_` prefix — `ROOT_PASSWORD`.
+pub struct InstanceSetting {
+    /// As the manifest spells it — `ROOT_PASSWORD`, `DATABASE`.
     pub key: String,
-    pub env_key: String,
-    /// Masked when `secret`. Revealing one goes through `env_reveal`, the same
-    /// path the credentials list uses.
+    /// The manifest's `type`. Only `string` and `secret` occur today; carried
+    /// through rather than collapsed to a boolean so a manifest that adds one
+    /// does not need this struct changed.
+    pub kind: String,
+    /// Masked when `secret`. Revealing one goes through `instance_reveal`.
     pub value: String,
     pub secret: bool,
-    /// True when the value is what the binary ships, so the sheet can say so
-    /// rather than presenting a default as somebody's decision.
+    /// True when the value is the manifest's own default, so the sheet can say
+    /// so rather than presenting a default as somebody's decision.
     pub is_default: bool,
-    /// The values worth offering for this key, newest first, or empty when
-    /// there is no sensible list — which is every key but `VERSION` today.
+    /// The manifest's own default, so the form can offer to put it back.
     ///
-    /// Deliberately a property of the row rather than a second command. The
-    /// sheet renders whatever `service_settings` returns, in order, without
-    /// knowing what any of it means; a key that grows a list of options should
-    /// not also require the front end to learn that this particular key has
-    /// one. Anything enumerable later — a storage engine, a log level — fills
-    /// this in and the sheet needs no change.
+    /// `None` for a secret, and that is deliberate rather than an omission: the
+    /// value would cross the boundary unasked and sit in a field the same sheet
+    /// takes care to mask. A secret is put back through `instance_reveal`,
+    /// which is a request the user makes.
+    pub default_value: Option<String>,
+    pub required: bool,
+    /// The values worth offering, or empty when there is no sensible list.
     ///
-    /// Non-empty does not mean closed. See `Env::service_versions`.
+    /// Deliberately a property of the row rather than a second command: the
+    /// sheet renders what it is given, in order, without knowing what any of it
+    /// means. Non-empty does not mean closed — the sheet offers a combobox, so
+    /// a value the manifest did not think of stays typeable.
     pub options: Vec<String>,
+    /// Locale → human label, straight from the manifest. Absent for a locale
+    /// means the front end falls back to its own vocabulary and then to the key.
+    pub label: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -386,16 +399,133 @@ pub struct Service {
     pub built: bool,
     pub version: Option<String>,
     pub container_name: String,
+    /// The whole domain this is reached at — `phpmyadmin.stackvo.loc` — and not
+    /// the subdomain on its own. A caller pastes it into a browser or a hosts
+    /// file; neither wants half of it, and a half that has to be completed is a
+    /// half two callers will complete differently.
     pub url: Option<String>,
+    /// `healthy`, `unhealthy`, `starting`, or `None` when the image declares no
+    /// healthcheck.
+    ///
+    /// Distinct from `running`, and the distinction is the point: twenty-four
+    /// packages in the catalogue declare a healthcheck, and until this field
+    /// existed a container whose database was refusing every connection was
+    /// reported to the user with the same green chip as a healthy one.
+    pub health: Option<String>,
     pub host_port: Option<u16>,
     pub ports: Vec<Port>,
+    /// Every port the package declares, by the handle it declares it under,
+    /// with the host number in force.
+    ///
+    /// `ports` above is what the *container* publishes, which is nothing at all
+    /// until one exists — so a service that had been installed and never
+    /// started showed no ports, and a running MinIO showed `9000, 9001` with
+    /// nothing saying which of them is the console. Empty on a workspace that
+    /// has not migrated: there is no manifest there to declare anything.
+    pub declared_ports: Vec<DeclaredPort>,
+    /// The names this instance answers to on the Docker network, its own first.
+    ///
+    /// The second one is the whole reason `primary` exists: every project's
+    /// `DB_HOST=stackvo-mysql` reaches whichever instance holds it, and until
+    /// now the only place that said so was a chip reading "Primary" on another
+    /// page, which does not tell you the name.
+    pub aliases: Vec<String>,
+    /// What upstream says about this version — `supported`, `deprecated`, `eol`
+    /// — and when it ends. `None` before the migration, which has no manifests.
+    ///
+    /// It was readable only in the catalogue tree, on the page you install
+    /// from. The person who hits a bug in an end-of-life database is usually
+    /// not the person who installed it.
+    pub support: Option<String>,
+    pub eol_date: Option<String>,
+    /// Containers this instance cannot run without and that are not separately
+    /// installable — Kafka's Zookeeper, the only one in the catalogue today.
+    ///
+    /// They were rendered into the compose file and then invisible: no row, no
+    /// status, no way to reach their logs. When Kafka does not come up the
+    /// answer is usually in one of these.
+    pub companions: Vec<CompanionRow>,
     /// `SERVICE_<ID>_*` values, secrets masked. See `Env::service_credentials`.
     pub credentials: Vec<Credential>,
-    pub required: Vec<String>,
-    pub optional: Vec<String>,
-    /// A required dependency that is not running. The web UI only knew about
-    /// three services' dependencies, so it started admin UIs against nothing.
+    pub required: Vec<DependencyRow>,
+    pub optional: Vec<DependencyRow>,
+    /// The subject of every required dependency that is not answered — nothing
+    /// provides it, or something does and is not running. The web UI only knew
+    /// about three services' dependencies, so it started admin UIs against
+    /// nothing.
     pub unmet_dependencies: Vec<String>,
+}
+
+/// One port a package declares, under the name it declares it under.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeclaredPort {
+    /// The manifest's handle — `main`, `console`, `smtp`. This is the half that
+    /// was being thrown away, and it is the half that says what the port is
+    /// for.
+    pub name: String,
+    pub container: u16,
+    /// The host number in force: what the container actually publishes when
+    /// there is one, and the allocation recorded in `instances.json` when there
+    /// is not. `None` only when nothing has been allocated at all.
+    pub host: Option<u16>,
+    pub protocol: String,
+}
+
+/// A container that comes with an instance rather than being installed.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompanionRow {
+    /// The manifest's handle, and the suffix of the derived container name.
+    pub name: String,
+    /// `stackvo-<instance>-<name>`, derived exactly as `render::context`
+    /// derives it. A companion named per service rather than per instance is
+    /// how two Kafkas came to fight over one Zookeeper.
+    pub container_name: String,
+    pub image: String,
+    pub built: bool,
+    pub running: bool,
+    pub health: Option<String>,
+}
+
+/// One line of "what this service needs", answered or not.
+///
+/// It used to be a bare instance id, resolved through `provider_instance` and
+/// dropped when that returned `None` — so Kibana with no Elasticsearch
+/// installed rendered **"No dependencies."**, which is the opposite of the
+/// truth and is exactly the state somebody opens this panel in. A dependency
+/// nothing answers is the one worth a row; the row is what carries the reason.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DependencyRow {
+    /// What the manifest asks for — `sql`, `search`. Stated as a capability
+    /// rather than a service so MariaDB can answer a package that says `sql`.
+    pub capability: String,
+    /// The one service that will do, when only one will (Kafbat genuinely
+    /// needs Kafka, not any queue).
+    pub service: Option<String>,
+    /// The installed instance answering it, or `None` when none does.
+    pub provider: Option<String>,
+    pub required: bool,
+    /// Whether the provider is up. False whenever there is no provider — the
+    /// two states are told apart by `provider`, and collapsing them here would
+    /// make "not installed" and "installed but stopped" the same sentence.
+    pub running: bool,
+}
+
+impl DependencyRow {
+    /// What to call this dependency when there is no provider to name: the
+    /// service the manifest narrowed to, else the capability it asked for.
+    fn subject(&self) -> String {
+        self.provider
+            .clone()
+            .or_else(|| self.service.clone())
+            .unwrap_or_else(|| self.capability.clone())
+    }
+
+    fn unmet(&self) -> bool {
+        self.required && !self.running
+    }
 }
 
 #[tauri::command]
@@ -436,32 +566,97 @@ fn instance_services(
             // A dependency is stated by capability in a manifest, and answered
             // by whichever instance provides it — which is the whole point of
             // stating it that way: phpMyAdmin is satisfied by MariaDB.
-            let required: Vec<String> = manifest
+            //
+            // Every declared dependency yields a row, answered or not. The
+            // unanswered one used to be dropped here, which meant the panel
+            // said "no dependencies" in precisely the case where the sentence
+            // needed to be "Elasticsearch is required and is not installed".
+            let rows: Vec<DependencyRow> = manifest
                 .as_ref()
                 .map(|m| {
                     m.depends_on
                         .iter()
-                        .filter(|d| d.required)
-                        .filter_map(|d| provider_instance(&table, &tree, d))
+                        .map(|d| {
+                            let provider = provider_instance(&table, &tree, d);
+                            DependencyRow {
+                                capability: d.capability.clone(),
+                                service: d.service.clone(),
+                                running: provider.as_ref().is_some_and(|id| {
+                                    containers.get(id).is_some_and(|c| c.running)
+                                }),
+                                provider,
+                                required: d.required,
+                            }
+                        })
                         .collect()
                 })
                 .unwrap_or_default();
-            let optional: Vec<String> = manifest
+            let (required, optional): (Vec<_>, Vec<_>) =
+                rows.into_iter().partition(|row| row.required);
+
+            // The host number in force, which is two different facts depending
+            // on whether a container exists. A running one publishes what it
+            // publishes and that is the truth; a stopped one has only the
+            // allocation, and reporting nothing for it is how a service that
+            // has never been started came to show no ports at all.
+            let declared_ports: Vec<DeclaredPort> = manifest
                 .as_ref()
                 .map(|m| {
-                    m.depends_on
+                    m.ports
                         .iter()
-                        .filter(|d| !d.required)
-                        .filter_map(|d| provider_instance(&table, &tree, d))
+                        .map(|port| DeclaredPort {
+                            host: container
+                                .and_then(|c| {
+                                    c.ports
+                                        .iter()
+                                        .find(|p| p.container == port.container)
+                                        .and_then(|p| p.host)
+                                })
+                                .or_else(|| instance.ports.get(&port.name).copied()),
+                            name: port.name.clone(),
+                            container: port.container,
+                            protocol: port.protocol.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            // Named the way `render::context` names them, and that is not a
+            // coincidence to be maintained by hand: a companion the compose
+            // file calls one thing and this panel calls another is a row that
+            // reports the wrong container's health.
+            let companions: Vec<CompanionRow> = manifest
+                .as_ref()
+                .map(|m| {
+                    m.companions
+                        .iter()
+                        .map(|companion| {
+                            let id = format!("{}-{}", instance.id, companion.name);
+                            let container = containers.get(&id);
+                            CompanionRow {
+                                container_name: format!("stackvo-{id}"),
+                                name: companion.name.clone(),
+                                image: companion.image.reference(),
+                                built: container.is_some(),
+                                running: container.is_some_and(|c| c.running),
+                                health: container.and_then(|c| c.health.clone()),
+                            }
+                        })
                         .collect()
                 })
                 .unwrap_or_default();
 
             Service {
+                declared_ports,
+                companions,
+                aliases: instance.aliases(),
+                support: manifest.as_ref().map(|m| m.support.status.clone()),
+                eol_date: manifest.as_ref().and_then(|m| m.support.eol_date.clone()),
                 container_name: instance.container(),
                 enabled: instance.enabled,
                 running: container.is_some_and(|c| c.running),
                 built: container.is_some(),
+                health: container.and_then(|c| c.health.clone()),
                 version: Some(instance.version.clone()),
                 url: manifest
                     .as_ref()
@@ -510,8 +705,8 @@ fn instance_services(
                 ports: container.map(|c| c.ports.clone()).unwrap_or_default(),
                 unmet_dependencies: required
                     .iter()
-                    .filter(|id| !containers.get(*id).is_some_and(|c| c.running))
-                    .cloned()
+                    .filter(|row| row.unmet())
+                    .map(DependencyRow::subject)
                     .collect(),
                 required,
                 optional,
@@ -570,6 +765,7 @@ pub async fn list_services(root: &std::path::Path) -> Result<Vec<Service>> {
     }
 
     let schema = env_schema();
+    let tld = env.get("DEFAULT_TLD_SUFFIX").unwrap_or("stackvo.loc");
 
     let is_running = |id: &str| {
         containers
@@ -582,11 +778,25 @@ pub async fn list_services(root: &std::path::Path) -> Result<Vec<Service>> {
         .into_iter()
         .map(|(id, category)| {
             let deps = schema.dependencies_for(&id);
-            let unmet: Vec<String> = deps
-                .required
+            // Before packages a dependency was a service id and nothing else —
+            // there are no capabilities in `env.schema.json`. The row is filled
+            // out with the id in all three places rather than left half empty,
+            // because the panel reading it must not need to know which of the
+            // two models produced the row.
+            let row = |service: &String, required: bool| DependencyRow {
+                capability: service.clone(),
+                service: Some(service.clone()),
+                provider: Some(service.clone()),
+                running: is_running(service),
+                required,
+            };
+            let required: Vec<DependencyRow> = deps.required.iter().map(|d| row(d, true)).collect();
+            let optional: Vec<DependencyRow> =
+                deps.optional.iter().map(|d| row(d, false)).collect();
+            let unmet: Vec<String> = required
                 .iter()
-                .filter(|d| !is_running(d))
-                .cloned()
+                .filter(|row| row.unmet())
+                .map(DependencyRow::subject)
                 .collect();
             let container = containers.get(&id);
 
@@ -595,8 +805,15 @@ pub async fn list_services(root: &std::path::Path) -> Result<Vec<Service>> {
                 enabled: env.service_enabled(&id),
                 running: container.is_some_and(|c| c.running),
                 built: container.is_some(),
+                health: container.and_then(|c| c.health.clone()),
                 version: env.service_version(&id).map(str::to_string),
-                url: env.service_url(&id).map(str::to_string),
+                // The whole domain, as the instance branch above already
+                // returns. This used to be the subdomain alone, and the two
+                // callers made up the difference by appending the suffix
+                // themselves — which is why a migrated phpMyAdmin rendered as
+                // `phpmyadmin.stackvo.loc.stackvo.loc` and its Open button led
+                // nowhere. One field cannot mean two things.
+                url: env.service_url(&id).map(|url| format!("{url}.{tld}")),
                 host_port: env.service_host_port(&id),
                 credentials: env
                     .service_credentials(&id)
@@ -609,8 +826,16 @@ pub async fn list_services(root: &std::path::Path) -> Result<Vec<Service>> {
                     })
                     .collect(),
                 ports: container.map(|c| c.ports.clone()).unwrap_or_default(),
-                required: deps.required,
-                optional: deps.optional,
+                // Nothing to declare them: before the migration there is no
+                // manifest, the container name is the only network name, and
+                // the compiled-in catalogue never carried a support status.
+                declared_ports: Vec::new(),
+                companions: Vec::new(),
+                aliases: vec![format!("{}{}", engine::CONTAINER_PREFIX, id)],
+                support: None,
+                eol_date: None,
+                required,
+                optional,
                 unmet_dependencies: unmet,
                 id,
                 category,
@@ -962,28 +1187,6 @@ pub async fn project_restart(
     lifecycle(&events::sink(&app), "project", &name, events::RESTART).await
 }
 
-#[tauri::command]
-pub async fn service_start(app: AppHandle, state: State<'_, AppState>, name: String) -> Result<()> {
-    let _busy = state.inflight.acquire(format!("service:{name}"))?;
-    lifecycle(&events::sink(&app), "service", &name, events::START).await
-}
-
-#[tauri::command]
-pub async fn service_stop(app: AppHandle, state: State<'_, AppState>, name: String) -> Result<()> {
-    let _busy = state.inflight.acquire(format!("service:{name}"))?;
-    lifecycle(&events::sink(&app), "service", &name, events::STOP).await
-}
-
-#[tauri::command]
-pub async fn service_restart(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    name: String,
-) -> Result<()> {
-    let _busy = state.inflight.acquire(format!("service:{name}"))?;
-    lifecycle(&events::sink(&app), "service", &name, events::RESTART).await
-}
-
 // ---------------------------------------------------------------- inspect
 
 #[tauri::command]
@@ -1309,374 +1512,6 @@ fn checked_service(name: &str) -> Result<()> {
     }
     Err(Error::not_found(format!("service {name}"))
         .with_hint(crate::hints::SERVICE_MUST_BE_IN_CATALOG))
-}
-
-/// Is every key in `patch` a setting this service owns, and is every value one
-/// that can safely be written?
-///
-/// Two separate refusals, both of them things a UI can do by accident.
-///
-/// The prefix check keeps this from being a general `.env` writer that happens
-/// to restart a container — it is reached from a sheet whose whole framing is
-/// "these are Redis's settings", and it should mean that. `ENABLE` is excluded
-/// because the services list owns that toggle; two controls for one key is how
-/// they come to disagree.
-///
-/// The mask check is the sharper one. A read returns the bullet string for a
-/// secret, so a form that round-trips what it was given would save the mask as
-/// the password and lock the service out of its own database.
-fn check_service_patch(
-    name: &str,
-    patch: &std::collections::BTreeMap<String, String>,
-) -> Result<()> {
-    let prefix = Env::service_prefix(name);
-    let enable = format!("{prefix}ENABLE");
-
-    for (key, value) in patch {
-        if !key.starts_with(&prefix) || key == &enable {
-            return Err(Error::new(
-                Code::InvalidInput,
-                format!("\"{key}\" is not a setting of service \"{name}\""),
-            ));
-        }
-        if value == "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}" {
-            return Err(Error::new(
-                Code::InvalidInput,
-                format!("\"{key}\" would be saved as its own mask"),
-            )
-            .with_hint(crate::hints::REVEAL_VALUE_FIRST));
-        }
-    }
-    Ok(())
-}
-
-/// Every `SERVICE_<ID>_*` setting, with the enable flag left out.
-///
-/// `ENABLE` is not here on purpose: it is the toggle in the services list, and
-/// two controls for one key is how they end up disagreeing.
-#[tauri::command]
-pub fn service_settings(state: State<'_, AppState>, name: String) -> Result<Vec<ServiceSetting>> {
-    checked_service(&name)?;
-    let root = state.root()?;
-    let env = Env::load(&root)?;
-    let prefix = Env::service_prefix(&name);
-
-    let defaults: std::collections::BTreeMap<&str, &str> =
-        crate::config::EMBEDDED.iter().copied().collect();
-
-    let versions = env.service_versions(&name);
-
-    Ok(env
-        .raw()
-        .iter()
-        .filter_map(|(env_key, value)| {
-            let key = env_key.strip_prefix(&prefix)?;
-            // VERSIONS is the catalog `VERSION` is chosen from, so it reaches
-            // the sheet as that row's options and not as a row of its own.
-            // Two controls for one decision is how they come to disagree —
-            // the same reason ENABLE is not here.
-            if matches!(key, "ENABLE" | "VERSIONS") {
-                return None;
-            }
-            let secret = Env::is_secret(env_key);
-            Some(ServiceSetting {
-                key: key.to_string(),
-                env_key: env_key.clone(),
-                value: if secret {
-                    crate::config::MASK.to_string()
-                } else {
-                    value.clone()
-                },
-                secret,
-                is_default: defaults.get(env_key.as_str()) == Some(&value.as_str()),
-                options: if key == "VERSION" {
-                    versions.clone()
-                } else {
-                    Vec::new()
-                },
-            })
-        })
-        .collect())
-}
-
-/// Write a service's settings and rebuild its container with them.
-///
-/// The rebuild is the point. `service_restart` restarts the container that is
-/// already there, which keeps the environment it was created with — so a
-/// setting saved and then "restarted" appears to have been applied and has
-/// not. This regenerates the compose file and forces a recreate, which is the
-/// only sequence where the new value actually reaches the process.
-#[tauri::command]
-pub async fn service_apply_settings(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    name: String,
-    patch: std::collections::BTreeMap<String, String>,
-) -> Result<String> {
-    checked_service(&name)?;
-    let _busy = state.inflight.acquire(format!("service:{name}"))?;
-    let root = state.root()?;
-    let operation_id = events::next_operation_id("service-settings");
-
-    check_service_patch(&name, &patch)?;
-    events::emit(&app, "service:enabling", SubjectEvent::service(&name));
-
-    let outcome = async {
-        env_writer::apply(&root, &patch)?;
-        generate(&app, &root, &operation_id, "projects_and_services").await?;
-
-        let mut args = runner::compose_base_args(&root);
-        args.extend(runner::profile_args("custom", std::slice::from_ref(&name))?);
-        args.extend([
-            "up".into(),
-            "-d".into(),
-            "--no-build".into(),
-            // Without this, compose recreates only when it sees the compose
-            // file change. A setting that lands in a rendered config file the
-            // container mounts leaves the compose file identical, and the old
-            // container would be left running with the old value.
-            "--force-recreate".into(),
-        ]);
-
-        runner::run_operation(
-            &events::sink(&app),
-            runner::Operation {
-                operation_id: &operation_id,
-                subject: &name,
-                progress_event: "service:progress",
-                finished_event: "service:enabled",
-                program: "docker",
-                args: &args,
-                cwd: &root,
-                env: &[],
-            },
-        )
-        .await
-    }
-    .await;
-
-    if let Err(e) = &outcome {
-        events::emit(
-            &app,
-            "service:error",
-            SubjectEvent::service(&name).error(e.message.clone()),
-        );
-    }
-    outcome.map(|_| operation_id)
-}
-
-#[tauri::command]
-pub async fn service_enable(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    name: String,
-) -> Result<String> {
-    checked_service(&name)?;
-    let _busy = state.inflight.acquire(format!("service:{name}"))?;
-    let root = state.root()?;
-    let operation_id = events::next_operation_id("enable");
-
-    events::emit(&app, "service:enabling", SubjectEvent::service(&name));
-
-    let outcome = async {
-        env_writer::set_service_enabled(&root, &name, true)?;
-        generate(&app, &root, &operation_id, "projects_and_services").await?;
-
-        let mut args = runner::compose_base_args(&root);
-        args.extend(runner::profile_args("custom", std::slice::from_ref(&name))?);
-        args.extend(["up".into(), "-d".into(), "--no-build".into()]);
-
-        runner::run_operation(
-            &events::sink(&app),
-            runner::Operation {
-                operation_id: &operation_id,
-                subject: &name,
-                progress_event: "service:progress",
-                finished_event: "service:enabled",
-                program: "docker",
-                args: &args,
-                cwd: &root,
-                env: &[],
-            },
-        )
-        .await
-    }
-    .await;
-
-    if let Err(e) = &outcome {
-        events::emit(
-            &app,
-            "service:error",
-            SubjectEvent::service(&name).error(e.message.clone()),
-        );
-    }
-    // The name has to resolve for the service to be reachable, and stop
-    // resolving when it is not — asked for only when the file would change.
-    if outcome.is_ok() {
-        if let Err(e) = sync_service_host(&root, &name, true).await {
-            tracing::warn!(service = %name, error = %e.message, "hosts entry not updated");
-        }
-    }
-
-    outcome.map(|_| operation_id)
-}
-
-/// The named volumes one service's template declares, as the engine has them.
-///
-/// Read from the template rather than matched by name prefix, and the
-/// difference is not cosmetic: `stackvo-mongo-` is a prefix of
-/// `stackvo-mongo-express-…`, so switching off Mongo would have taken
-/// Mongo Express's data with it. The template says exactly which volumes are
-/// this service's, and nothing else does.
-///
-/// Compose prefixes a declared volume with the project name — `base.yml` sets
-/// `name: stackvo`, so `stackvo-mysql-data` is `stackvo_stackvo-mysql-data` on
-/// the engine. Both spellings are returned because a workspace that has taken
-/// the template over can pin a `name:` and get the bare one.
-fn declared_volumes(root: &std::path::Path, service: &str) -> Vec<String> {
-    let relative = format!("core/templates/services/{service}/docker-compose.{service}.tpl");
-    let Some(text) = crate::skeleton::read_template(root, &relative) else {
-        return Vec::new();
-    };
-
-    let mut out = Vec::new();
-    let mut in_volumes = false;
-    for line in text.lines() {
-        let indent = line.len() - line.trim_start().len();
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-
-        if indent == 0 {
-            in_volumes = trimmed == "volumes:";
-            continue;
-        }
-        // Only the top-level `volumes:` block: a service's own `volumes:` list
-        // is bind mounts and named references, not declarations.
-        if in_volumes && indent == 2 && trimmed.ends_with(':') && !trimmed.starts_with('-') {
-            let declared = trimmed.trim_end_matches(':');
-            // A name still carrying `{{ }}` was never substituted, which means
-            // this is not a file the generator wrote and guessing is worse than
-            // leaving it.
-            if declared.contains("{{") {
-                continue;
-            }
-            out.push(format!("stackvo_{declared}"));
-            out.push(declared.to_string());
-        }
-    }
-    out
-}
-
-/// What a disabled service leaves behind, removed.
-///
-/// **This deletes data.** A service's named volume is its databases, and there
-/// is no undo — re-enabling MySQL after this gives an empty MySQL. That is the
-/// behaviour asked for, and the front end confirms it before calling; the
-/// destructive step must not become reachable without that dialog.
-///
-/// Best effort per item, and it returns what it managed rather than failing:
-/// the service is already gone by the time this runs, so an image another
-/// container happens to hold is a reason to leave that image, not a reason to
-/// report the whole operation as failed.
-async fn discard_service(
-    root: &std::path::Path,
-    service: &str,
-    image: Option<&str>,
-) -> Vec<String> {
-    let mut removed = Vec::new();
-
-    for volume in declared_volumes(root, service) {
-        // Ask the engine which of the two spellings exists rather than
-        // deleting blind; `remove_volume` treats a 404 as success, so a wrong
-        // guess would be indistinguishable from a real removal in the report.
-        let exists = engine::volumes_named(&volume)
-            .await
-            .is_ok_and(|found| found.iter().any(|v| v == &volume));
-        if exists && engine::remove_volume(&volume).await.is_ok() {
-            removed.push(format!("volume {volume}"));
-        }
-    }
-
-    if let Some(tag) = image {
-        if engine::remove_image(tag).await.unwrap_or(false) {
-            removed.push(format!("image {tag}"));
-        }
-    }
-
-    // The log directory the template bind-mounts. Confined by construction:
-    // `checked_service` has already vetted the name against the catalogue, so
-    // it cannot carry a separator.
-    let logs = root.join("logs").join("services").join(service);
-    if logs.is_dir() && std::fs::remove_dir_all(&logs).is_ok() {
-        removed.push(format!("logs {}", logs.display()));
-    }
-
-    removed
-}
-
-#[tauri::command]
-pub async fn service_disable(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    name: String,
-) -> Result<String> {
-    checked_service(&name)?;
-    let _busy = state.inflight.acquire(format!("service:{name}"))?;
-    let root = state.root()?;
-    let operation_id = events::next_operation_id("disable");
-
-    events::emit(&app, "service:disabling", SubjectEvent::service(&name));
-
-    let outcome = async {
-        // The hosts entry first, and it is allowed to fail the whole thing.
-        //
-        // It needs an administrator password, and until now a cancelled prompt
-        // was written to the app log and nowhere else — the service went "off"
-        // while its domain kept resolving, which is the residue that is hardest
-        // to notice and hardest to explain. Doing it first means a cancelled
-        // password leaves everything intact rather than half-destroyed: nothing
-        // below this line has run yet.
-        sync_service_host(&root, &name, false).await?;
-
-        // Stop *and remove*, then unconfigure. The order is load-bearing: the
-        // reverse regenerates the compose file without the service, and compose
-        // can no longer see the container it is supposed to be taking down.
-        //
-        // Removal, not just a stop. Stopping left the container behind, and the
-        // next regenerate wrote it out of the compose file — so it stopped
-        // being anything's responsibility while still occupying its name, its
-        // disk and every container list in the app. Turning a service off has
-        // to mean it is not there, or "off" is a label rather than a state.
-        let image = engine::inspect(&name).await.ok().and_then(|c| c.image);
-        let _ = engine::stop_container(&name).await;
-        let _ = engine::remove_container(&name).await;
-
-        // Then everything the container leaves behind. Read `discard_service`
-        // before changing any of this: it deletes data on purpose.
-        let discarded = discard_service(&root, &name, image.as_deref()).await;
-        tracing::info!(service = %name, ?discarded, "service disabled and its leftovers removed");
-
-        env_writer::set_service_enabled(&root, &name, false)?;
-        generate(&app, &root, &operation_id, "projects_and_services").await
-    }
-    .await;
-
-    match &outcome {
-        Ok(()) => events::emit(
-            &app,
-            "service:disabled",
-            SubjectEvent::service(&name).running(false),
-        ),
-        Err(e) => events::emit(
-            &app,
-            "service:error",
-            SubjectEvent::service(&name).error(e.message.clone()),
-        ),
-    }
-
-    outcome.map(|_| operation_id)
 }
 
 // ---------------------------------------------------------------- generate
@@ -4928,18 +4763,6 @@ async fn compose_profile_up(
 }
 
 #[tauri::command]
-pub async fn compose_up_service(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    name: String,
-) -> Result<String> {
-    checked_service(&name)?;
-    let _busy = state.inflight.acquire(format!("service:{name}"))?;
-    let root = state.root()?;
-    compose_profile_up(&app, &root, &name, &name).await
-}
-
-#[tauri::command]
 pub async fn compose_up_project(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -5910,13 +5733,33 @@ pub fn logs_info() -> serde_json::Value {
 /// password that crosses the boundary by default is in every screenshot of the
 /// page that shows it. This is the deliberate exception — a single key, on a
 /// click, so revealing a database password is an act rather than a default.
-#[tauri::command]
 pub fn env_reveal(state: State<'_, AppState>, key: String) -> Result<String> {
     let env = Env::load(&state.root()?)?;
 
     env.get(&key)
         .map(str::to_string)
         .ok_or_else(|| Error::new(Code::NotFound, format!("{key} is not set in .env")))
+}
+
+/// The value behind one masked credential on the services list.
+///
+/// Dispatches the way every other reader of service state does — the table when
+/// there is one, `.env` when there is not. The detail sheet used to call
+/// `env_reveal` directly, which is right for a workspace that keeps its
+/// services in `.env` and wrong for a migrated one: the key it would ask for is
+/// `SERVICE_MYSQL_ROOT_PASSWORD`, and after a handover nothing sets that. The
+/// eye reported "not set in .env" over a password that exists.
+///
+/// `key` is the *setting* key for an instance (`ROOT_PASSWORD`) and the `.env`
+/// key for the legacy path (`SERVICE_MYSQL_ROOT_PASSWORD`), which is what the
+/// row already carries in each case.
+#[tauri::command]
+pub fn service_reveal(state: State<'_, AppState>, service: String, key: String) -> Result<String> {
+    let root = state.root()?;
+    if crate::instances::path(&root).exists() {
+        return instance_reveal(state, service, key);
+    }
+    env_reveal(state, key)
 }
 
 // ---------------------------------------------------------------- secrets
@@ -7583,6 +7426,13 @@ pub struct MarketPackage {
     pub name: BTreeMap<String, String>,
     pub summary: BTreeMap<String, String>,
     pub capabilities: Vec<String>,
+    /// Search terms the index publishes, so that `mysql` is findable by typing
+    /// `database` and by typing `mariadb`.
+    ///
+    /// The registry has carried these since v1 and this struct dropped them, so
+    /// the catalogue had no search at all — twenty-five services and a hundred
+    /// versions, found by opening categories one at a time.
+    pub keywords: Vec<String>,
     /// Whether two versions may run at once, so a card can say so before
     /// anything is downloaded.
     pub multiple: bool,
@@ -7742,6 +7592,7 @@ pub fn market_catalog(state: State<'_, AppState>) -> Result<Vec<MarketPackage>> 
             name: package.name.clone(),
             summary: package.summary.clone(),
             capabilities: package.capabilities.clone(),
+            keywords: package.keywords.clone(),
             multiple: package.instancing.map(|i| i.multiple).unwrap_or(false),
             versions: package
                 .versions
@@ -7908,7 +7759,12 @@ pub async fn market_probe(state: State<'_, AppState>, location: String) -> Resul
             // `Trust::Unsigned` and `previous: None` on purpose. Trust is the
             // refresh's decision, and passing the cached index here would make
             // a backwards index an error instead of the fact this reports.
-            crate::market::refresh(&scratch, source.as_ref(), crate::market::Trust::Unsigned, None)
+            crate::market::refresh(
+                &scratch,
+                source.as_ref(),
+                crate::market::Trust::Unsigned,
+                None,
+            )
         })
         .await
         .map_err(|e| Error::new(Code::IoError, format!("the probe could not be run: {e}")))?
@@ -8223,16 +8079,121 @@ pub fn instance_list(state: State<'_, AppState>) -> Result<Vec<InstanceRow>> {
         .collect())
 }
 
+/// What creating an instance of this package would produce, before it does.
+///
+/// The form that reads this is the answer to the worst trap in the app. An
+/// image reads `MYSQL_ROOT_PASSWORD` only while its data directory is empty, so
+/// the one moment a password can be set is *before* the first boot — and until
+/// this existed the only route was create-with-defaults and then edit, which
+/// rebuilds the container, reports success, and leaves the database on `root`.
+///
+/// Nothing is written and nothing is reserved. The ports here are what the
+/// allocator would choose right now; by the time the user presses Create,
+/// something else may hold one, and `instance_create` allocates again for real.
+/// Showing a number that might move is still worth it — it is the number in
+/// nearly every case, and a form that showed no ports would be one where the
+/// first sight of them is in a table afterwards.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstancePlan {
+    /// The id this would take — `mysql-8-0`.
+    pub id: String,
+    /// True when the service already has an instance and forbids a second.
+    /// Reported rather than refused: the dialog can say why the button is off,
+    /// which a thrown error on open cannot.
+    pub refused: Option<String>,
+    pub settings: Vec<InstanceSetting>,
+    pub ports: Vec<DeclaredPort>,
+}
+
+#[tauri::command]
+pub fn instance_plan(
+    state: State<'_, AppState>,
+    service: String,
+    version: String,
+) -> Result<InstancePlan> {
+    let root = state.root()?;
+    let tree = crate::pkg::Tree::open(&crate::market::dir(&root))?;
+    let manifest = tree.load(&service, &version)?;
+    let table = crate::instances::Table::load(&root)?;
+
+    let refused = (table.of_service(&service).count() > 0 && !manifest.instancing.multiple)
+        .then(|| format!("{service} declares that only one version may run at a time"));
+
+    let reserved = table.reserved_ports();
+    let mut claims = crate::ports::Claims::default();
+    let ports = manifest
+        .ports
+        .iter()
+        .map(|port| {
+            Ok(DeclaredPort {
+                name: port.name.clone(),
+                container: port.container,
+                // `ok()` rather than `?`: a machine with nothing free near the
+                // preferred number should open a form saying so per port, not
+                // fail to open at all.
+                host: crate::ports::allocate(
+                    port.preferred,
+                    &reserved,
+                    &mut claims,
+                    &crate::ports::is_free,
+                )
+                .ok(),
+                protocol: port.protocol.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(InstancePlan {
+        id: crate::instances::slug(&service, &version)?,
+        refused,
+        ports,
+        settings: manifest
+            .settings
+            .iter()
+            .map(|setting| InstanceSetting {
+                key: setting.key.clone(),
+                kind: setting.kind.clone(),
+                // Not masked, unlike every other reading of a secret in this
+                // app, and the difference is what the value *is*. There is no
+                // instance yet and no keystore entry: this is the manifest's
+                // published first-boot default, sitting in a JSON file on
+                // disk that anybody with the package can read. Masking it
+                // would be theatre — and this form exists precisely so that
+                // `root` is changed before it ever becomes a real credential.
+                value: setting.default_text().unwrap_or_default(),
+                secret: setting.is_secret(),
+                is_default: true,
+                default_value: setting.default_text(),
+                required: setting.required,
+                options: if setting.kind == "instanceRef" {
+                    instances_providing(&table, &tree, setting.capability.as_deref())
+                } else {
+                    setting.options.clone()
+                },
+                label: setting.label.clone(),
+            })
+            .collect(),
+    })
+}
+
 /// Create an instance of an installed package.
 ///
 /// Ports are allocated here and written down, not recomputed per render: a
 /// connection string that changes because an unrelated service was installed is
 /// a string somebody had already pasted somewhere.
+///
+/// `settings` and `ports` are what the create form collected, and both are
+/// optional — creating with the package's own defaults is still one call with
+/// two nulls. A supplied secret goes into the keystore *before* the container
+/// has ever run, which is the only moment an image will read it.
 #[tauri::command]
 pub async fn instance_create(
     state: State<'_, AppState>,
     service: String,
     version: String,
+    settings: Option<BTreeMap<String, String>>,
+    ports: Option<BTreeMap<String, u16>>,
 ) -> Result<String> {
     let root = state.root()?;
     let tree = crate::pkg::Tree::open(&crate::market::dir(&root))?;
@@ -8249,19 +8210,60 @@ pub async fn instance_create(
     }
 
     let id = crate::instances::slug(&service, &version)?;
+    let chosen = settings.unwrap_or_default();
+    check_instance_patch(&id, &manifest.settings, &chosen)?;
+
+    let requested = ports.unwrap_or_default();
+    for handle in requested.keys() {
+        if !manifest.ports.iter().any(|p| &p.name == handle) {
+            return Err(Error::new(
+                Code::InvalidInput,
+                format!("\"{handle}\" is not a port of {service}@{version}"),
+            ));
+        }
+    }
+
     let reserved = table.reserved_ports();
     let mut claims = crate::ports::Claims::default();
     let mut ports = BTreeMap::new();
     for port in &manifest.ports {
-        ports.insert(
-            port.name.clone(),
-            crate::ports::allocate(
+        let chosen_port = match requested.get(&port.name) {
+            // A number the user typed is used or refused, never moved. The
+            // allocator's job is to find *a* free port; asking for 3307 and
+            // being handed 3407 without a word is a different thing, and the
+            // person who typed it has a reason.
+            Some(&wanted) => {
+                if wanted == 0 {
+                    return Err(Error::new(
+                        Code::InvalidInput,
+                        "port 0 asks the kernel to choose, which cannot be written down",
+                    ));
+                }
+                if reserved.contains(&wanted) || claims.pending.contains(&wanted) {
+                    return Err(Error::new(
+                        Code::Conflict,
+                        format!("port {wanted} is already held by another instance"),
+                    )
+                    .with_hint(crate::hints::PORT_HELD_BY_INSTANCE));
+                }
+                if !crate::ports::is_free(wanted) {
+                    return Err(Error::new(
+                        Code::Conflict,
+                        format!("port {wanted} is in use on this machine"),
+                    )
+                    .with_hint(crate::hints::PORT_IN_USE));
+                }
+                claims.pending.insert(wanted);
+                wanted
+            }
+            None => crate::ports::allocate(
                 port.preferred,
                 &reserved,
                 &mut claims,
                 &crate::ports::is_free,
             )?,
-        );
+        };
+        ports.insert(port.name.clone(), chosen_port);
     }
 
     let mut settings = BTreeMap::new();
@@ -8271,11 +8273,23 @@ pub async fn instance_create(
             // `secrets::reference_for`, not a formatted string: it appends a
             // digest of the workspace path so two checkouts on one machine do
             // not share a keychain entry.
-            secret_refs.insert(
-                setting.key.clone(),
-                crate::secrets::reference_for(&format!("{id}/{}", setting.key), &root),
-            );
-        } else if let Some(value) = setting.default_text() {
+            let reference = crate::secrets::reference_for(&format!("{id}/{}", setting.key), &root);
+
+            // A password chosen on the form goes into the store now, before the
+            // container has ever run. That is the whole point of the form: an
+            // image reads its root password while the data directory is empty
+            // and never again, so this is the one moment it can be set.
+            if let Some(value) = chosen.get(&setting.key) {
+                if let Some(entry) = crate::secrets::entry_of(&reference) {
+                    crate::secrets::write(entry, value)?;
+                }
+            }
+            secret_refs.insert(setting.key.clone(), reference);
+        } else if let Some(value) = chosen
+            .get(&setting.key)
+            .cloned()
+            .or_else(|| setting.default_text())
+        {
             settings.insert(setting.key.clone(), value);
         }
     }
@@ -8338,6 +8352,443 @@ fn instance_of(root: &std::path::Path, id: &str) -> Result<crate::instances::Ins
         .get(id)
         .cloned()
         .ok_or_else(|| Error::not_found(format!("instance {id}")))
+}
+
+/// The manifest an instance was created from, or a refusal naming the package.
+///
+/// An instance can outlive its package files — `instance_list` reports that as
+/// `packagePresent: false` rather than hiding the row. Every settings call goes
+/// through here so that state produces one sentence about the package instead
+/// of an empty form that looks like a service with nothing to configure.
+fn instance_manifest(
+    root: &std::path::Path,
+    instance: &crate::instances::Instance,
+) -> Result<crate::pkg::Manifest> {
+    crate::pkg::Tree::open(&crate::market::dir(root))?.load(&instance.service, &instance.version)
+}
+
+/// The value in force for one setting: what was stored, then the default.
+///
+/// The same order `render::context` resolves in, and it has to stay the same
+/// order. A form that showed one value while the compose file rendered another
+/// would be a form about nothing.
+fn setting_value(
+    instance: &crate::instances::Instance,
+    setting: &crate::pkg::Setting,
+) -> Option<String> {
+    if setting.is_secret() {
+        return instance
+            .secret_refs
+            .get(&setting.key)
+            .and_then(|reference| crate::secrets::entry_of(reference))
+            .and_then(|entry| crate::secrets::read(entry).ok().flatten());
+    }
+    instance.settings.get(&setting.key).cloned()
+}
+
+/// Every setting one instance's manifest declares, with the value in force.
+///
+/// Order is the manifest's, not sorted: a package author who put the database
+/// name above the password meant that, and an alphabetical form would put
+/// `DATABASE` under `BASEURL` for no reason a reader could see.
+#[tauri::command]
+pub fn instance_settings(state: State<'_, AppState>, id: String) -> Result<Vec<InstanceSetting>> {
+    let root = state.root()?;
+    let instance = instance_of(&root, &id)?;
+    let manifest = instance_manifest(&root, &instance)?;
+    let table = crate::instances::Table::load(&root)?;
+    let tree = crate::pkg::Tree::open(&crate::market::dir(&root))?;
+
+    Ok(manifest
+        .settings
+        .iter()
+        .map(|setting| {
+            let stored = setting_value(&instance, setting);
+            let default = setting.default_text();
+            InstanceSetting {
+                key: setting.key.clone(),
+                kind: setting.kind.clone(),
+                // Masked without consulting the keystore: the mask is the same
+                // eight bullets whether the entry holds a password or has never
+                // been written, and a form that showed a shorter mask for an
+                // unset secret would be leaking its length.
+                value: if setting.is_secret() {
+                    crate::config::MASK.to_string()
+                } else {
+                    stored
+                        .clone()
+                        .or_else(|| default.clone())
+                        .unwrap_or_default()
+                },
+                secret: setting.is_secret(),
+                // Nothing stored means the default is what runs. Stored *equal*
+                // to the default counts too — the value in force is the same
+                // thing, and the chip is about the value, not about whether
+                // somebody once typed it.
+                is_default: stored.is_none() || stored == default,
+                default_value: if setting.is_secret() {
+                    None
+                } else {
+                    default.clone()
+                },
+                required: setting.required,
+                // The manifest's list, except for an `instanceRef`, whose list
+                // is a question about this machine rather than about the
+                // package: which installed instance can answer the capability
+                // it names. Filled here so the form needs to know nothing about
+                // it — a row that carries options already renders a combobox,
+                // and this is that, with the candidates in it.
+                //
+                // A combobox and not a select, on the same terms as everything
+                // else on the form: an instance the app has not heard of is
+                // still a name somebody may need to type.
+                options: if setting.kind == "instanceRef" {
+                    instances_providing(&table, &tree, setting.capability.as_deref())
+                } else {
+                    setting.options.clone()
+                },
+                label: setting.label.clone(),
+            }
+        })
+        .collect())
+}
+
+/// Which installed instances can answer a capability, for an `instanceRef`.
+///
+/// Every instance when the setting names no capability: the manifest is saying
+/// "point me at another instance" and nothing narrower, so narrowing it here
+/// would be this side inventing a constraint the package did not state.
+fn instances_providing(
+    table: &crate::instances::Table,
+    tree: &crate::pkg::Tree,
+    capability: Option<&str>,
+) -> Vec<String> {
+    table
+        .instances
+        .iter()
+        .filter(|instance| match capability {
+            // `primary` is the documented special value: it means whichever
+            // instance currently holds the legacy alias, so it is offered as
+            // itself rather than resolved to a name that moves when somebody
+            // presses the star button on another page.
+            None | Some("primary") => true,
+            Some(wanted) => tree
+                .load(&instance.service, &instance.version)
+                .map(|m| m.capabilities.iter().any(|c| c == wanted))
+                .unwrap_or(false),
+        })
+        .map(|instance| instance.id.clone())
+        .collect()
+}
+
+/// The real value behind a masked secret.
+///
+/// The keystore when it holds one, the manifest's default otherwise — because
+/// that is what the container is running with, and a reveal that showed an
+/// empty box for a service reachable with `root` would be a lie of omission.
+#[tauri::command]
+pub fn instance_reveal(state: State<'_, AppState>, id: String, key: String) -> Result<String> {
+    let root = state.root()?;
+    let instance = instance_of(&root, &id)?;
+    let manifest = instance_manifest(&root, &instance)?;
+
+    let setting = manifest
+        .settings
+        .iter()
+        .find(|s| s.key == key)
+        .ok_or_else(|| Error::not_found(format!("setting {key} of instance {id}")))?;
+
+    if !setting.is_secret() {
+        return Err(Error::new(
+            Code::InvalidInput,
+            format!("{key} is not a secret — its value is already on the form"),
+        ));
+    }
+
+    Ok(setting_value(&instance, setting)
+        .or_else(|| setting.default_text())
+        .unwrap_or_default())
+}
+
+/// Is every key in `patch` one this instance's manifest declares, and is every
+/// value one that can safely be written?
+///
+/// Two separate refusals, both of them things a UI can do by accident.
+///
+/// The first keeps this from being a general writer into `instances.json` that
+/// happens to restart a container. It is reached from a sheet whose whole
+/// framing is "these are this instance's settings", and it should mean that.
+/// `enabled`, `primary`, `ports` and `version` are not settings and are not
+/// reachable here — each has its own command, and two controls for one field is
+/// how they come to disagree.
+///
+/// The second is the sharper one. A read returns the bullet string for a
+/// secret, so a form that round-trips what it was given would save the mask as
+/// the password and lock the service out of its own database.
+///
+/// The third is `required`. A manifest that marks a setting required means the
+/// service cannot start without it, and emptying such a field used to be
+/// written, committed and applied — the container was recreated and failed to
+/// boot, and the form that caused it reported success. Checked here rather than
+/// only in the sheet because the sheet is one caller of a command that writes to
+/// disk and restarts a container.
+fn check_instance_patch(
+    id: &str,
+    settings: &[crate::pkg::Setting],
+    patch: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
+    for (key, value) in patch {
+        let Some(setting) = settings.iter().find(|s| &s.key == key) else {
+            return Err(Error::new(
+                Code::InvalidInput,
+                format!("\"{key}\" is not a setting of instance \"{id}\""),
+            ));
+        };
+        if value == crate::config::MASK {
+            return Err(Error::new(
+                Code::InvalidInput,
+                format!("\"{key}\" would be saved as its own mask"),
+            )
+            .with_hint(crate::hints::REVEAL_VALUE_FIRST));
+        }
+        // Trimmed, because a required field holding one space satisfies every
+        // check that asks whether it is empty and none of the ones the service
+        // makes of it.
+        if setting.required && value.trim().is_empty() {
+            return Err(Error::new(
+                Code::InvalidInput,
+                format!("\"{key}\" is required by {id} and cannot be emptied"),
+            )
+            .with_hint(crate::hints::SETTING_IS_REQUIRED));
+        }
+    }
+    Ok(())
+}
+
+/// What the ports would be after applying `patch`, if they can be.
+///
+/// Until this existed there was no way to change an allocated port at all.
+/// `instance_create` picks one, moves on when the preferred number is taken,
+/// and nothing afterwards could move it — so somebody whose 3306 had been given
+/// to something else had to edit `instances.json` by hand. That is a real
+/// regression on the `.env` model, where `HOST_PORT_MYSQL` was a line in a file
+/// the app already edited.
+///
+/// Three refusals, and they are not interchangeable:
+///
+/// - a handle the manifest does not declare, for the same reason
+///   `check_instance_patch` refuses an undeclared key: this writes to
+///   `instances.json` and restarts a container, and it should only be able to
+///   write the things it is named after.
+/// - a number another instance holds. The table is the record of that, and two
+///   instances claiming one port is a compose file that fails to come up with a
+///   message about neither of them.
+/// - a number the machine is already using. `probe` is a parameter for the same
+///   reason `ports::allocate` takes one: a test that binds real sockets fails on
+///   whichever CI machine happens to be running something.
+///
+/// Ports this instance already holds are exempt from the last check, and have
+/// to be: its own container is bound to them, so probing would report the
+/// service's own port as taken and refuse a patch that does not touch it.
+fn planned_ports(
+    id: &str,
+    manifest: &crate::pkg::Manifest,
+    instance: &crate::instances::Instance,
+    table: &crate::instances::Table,
+    patch: &std::collections::BTreeMap<String, u16>,
+    probe: &dyn Fn(u16) -> bool,
+) -> Result<std::collections::BTreeMap<String, u16>> {
+    let mine: std::collections::BTreeSet<u16> = instance.ports.values().copied().collect();
+    let others: std::collections::BTreeSet<u16> = table
+        .instances
+        .iter()
+        .filter(|other| other.id != id)
+        .flat_map(|other| other.ports.values().copied())
+        .collect();
+
+    let mut planned = instance.ports.clone();
+    for (handle, port) in patch {
+        if !manifest.ports.iter().any(|p| &p.name == handle) {
+            return Err(Error::new(
+                Code::InvalidInput,
+                format!("\"{handle}\" is not a port of instance \"{id}\""),
+            ));
+        }
+        if *port == 0 {
+            return Err(Error::new(
+                Code::InvalidInput,
+                "port 0 asks the kernel to choose, which cannot be written down",
+            ));
+        }
+        if others.contains(port) {
+            return Err(Error::new(
+                Code::Conflict,
+                format!("port {port} is already held by another instance"),
+            )
+            .with_hint(crate::hints::PORT_HELD_BY_INSTANCE));
+        }
+        // Unchanged is not a move, so it is not probed: this instance's own
+        // container is bound to it, and asking the kernel would say "taken".
+        if !mine.contains(port) && !probe(*port) {
+            return Err(Error::new(
+                Code::Conflict,
+                format!("port {port} is in use on this machine"),
+            )
+            .with_hint(crate::hints::PORT_IN_USE));
+        }
+        planned.insert(handle.clone(), *port);
+    }
+
+    // Two handles on one number. Reachable by patching `console` to whatever
+    // `main` already holds, which passes every check above — `main` is this
+    // instance's own port, so it is neither another instance's nor probed.
+    let mut seen = std::collections::BTreeSet::new();
+    for (handle, port) in &planned {
+        if !seen.insert(*port) {
+            return Err(Error::new(
+                Code::Conflict,
+                format!("port {port} would be published twice, once as \"{handle}\""),
+            ));
+        }
+    }
+
+    Ok(planned)
+}
+
+/// Write an instance's settings and rebuild its container with them.
+///
+/// The rebuild is the point. `instance_restart` restarts the container that is
+/// already there, which keeps the environment it was created with — so a
+/// setting saved and then "restarted" appears to have been applied and has not.
+/// This regenerates the compose file and forces a recreate, which is the only
+/// sequence where the new value actually reaches the process.
+///
+/// Ports come through here rather than through a command of their own, and that
+/// is a deliberate exception to the rule stated on `check_instance_patch`. The
+/// rule is about two *controls* for one field; this is one control, on one
+/// sheet, behind one confirmation. Split into two commands, a user who changed
+/// a password and a port would have their container stopped and recreated
+/// twice, and the second failure would land on a container the first had
+/// already rebuilt.
+#[tauri::command]
+pub async fn instance_apply_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    patch: std::collections::BTreeMap<String, String>,
+    ports: Option<std::collections::BTreeMap<String, u16>>,
+) -> Result<String> {
+    let _busy = state.inflight.acquire(format!("instance:{id}"))?;
+    let root = state.root()?;
+    let instance = instance_of(&root, &id)?;
+    let manifest = instance_manifest(&root, &instance)?;
+    check_instance_patch(&id, &manifest.settings, &patch)?;
+
+    // Planned before anything is written, so a refused port does not leave the
+    // settings half applied.
+    let ports = match ports.filter(|p| !p.is_empty()) {
+        Some(patch) => Some(planned_ports(
+            &id,
+            &manifest,
+            &instance,
+            &crate::instances::Table::load(&root)?,
+            &patch,
+            &crate::ports::is_free,
+        )?),
+        None => None,
+    };
+
+    let operation_id = events::next_operation_id("instance-settings");
+    events::emit(&app, "instance:enabling", SubjectEvent::service(&id));
+
+    let outcome = async {
+        let mut table = crate::instances::Table::load(&root)?;
+        let row = table
+            .instances
+            .iter_mut()
+            .find(|i| i.id == id)
+            .ok_or_else(|| Error::not_found(format!("instance {id}")))?;
+
+        for (key, value) in &patch {
+            let setting = manifest
+                .settings
+                .iter()
+                .find(|s| &s.key == key)
+                .expect("check_instance_patch accepted this key");
+
+            if !setting.is_secret() {
+                row.settings.insert(key.clone(), value.clone());
+                continue;
+            }
+
+            // An adopted instance can reach here with no reference: the
+            // handover carries a service over without inventing keystore
+            // entries for settings nobody has changed yet.
+            let reference = row
+                .secret_refs
+                .entry(key.clone())
+                .or_insert_with(|| crate::secrets::reference_for(&format!("{id}/{key}"), &root))
+                .clone();
+            let entry = crate::secrets::entry_of(&reference).ok_or_else(|| {
+                Error::new(
+                    Code::InvalidInput,
+                    format!("{key} has a keystore reference that names no entry: {reference}"),
+                )
+            })?;
+
+            // The value into the keystore before the table records where it
+            // went — the same order `secret_move` writes in, for the same
+            // reason. The other way round points the table at an entry that
+            // failed to take the password, and the fallback quietly serves the
+            // manifest default in its place.
+            crate::secrets::write(entry, value)?;
+        }
+
+        if let Some(planned) = &ports {
+            row.ports = planned.clone();
+        }
+        table.save(&root)?;
+
+        generate(&app, &root, &operation_id, "projects_and_services").await?;
+
+        let mut args = runner::compose_base_args(&root);
+        args.extend(runner::profile_args("custom", std::slice::from_ref(&id))?);
+        args.extend([
+            "up".into(),
+            "-d".into(),
+            "--no-build".into(),
+            // Without this, compose recreates only when it sees the compose
+            // file change. A setting that lands in a rendered config file the
+            // container mounts leaves the compose file identical, and the old
+            // container would be left running with the old value.
+            "--force-recreate".into(),
+        ]);
+
+        runner::run_operation(
+            &events::sink(&app),
+            runner::Operation {
+                operation_id: &operation_id,
+                subject: &id,
+                progress_event: "instance:progress",
+                finished_event: "instance:enabled",
+                program: "docker",
+                args: &args,
+                cwd: &root,
+                env: &[],
+            },
+        )
+        .await
+    }
+    .await;
+
+    if let Err(e) = &outcome {
+        events::emit(
+            &app,
+            "instance:error",
+            SubjectEvent::service(&id).error(e.message.clone()),
+        );
+    }
+    outcome.map(|_| operation_id)
 }
 
 #[tauri::command]
@@ -8508,53 +8959,6 @@ pub async fn instance_promote(state: State<'_, AppState>, id: String) -> Result<
 mod tests {
     use super::*;
 
-    /// The volumes a disable deletes, from the shipped templates.
-    ///
-    /// The prefix approach this replaced would have taken Mongo Express's data
-    /// with Mongo's, because `stackvo-mongo-` is a prefix of
-    /// `stackvo-mongo-express-…`. That is the whole reason the names are read
-    /// from the template, and it is asserted against the real ones in the
-    /// binary rather than a fixture — a template gaining a volume must show up
-    /// here.
-    #[test]
-    fn a_services_volumes_are_its_own_and_not_a_name_prefix_match() {
-        let root = std::env::temp_dir().join("stackvo-declared-volumes-none");
-
-        // Compose prefixes with the project name from base.yml; both spellings
-        // are offered because a pinned `name:` produces the bare one.
-        let mysql = declared_volumes(&root, "mysql");
-        assert!(mysql.contains(&"stackvo_stackvo-mysql-data".to_string()));
-        assert!(mysql.contains(&"stackvo-mysql-data".to_string()));
-
-        // Mongo's list must not reach into Mongo Express's namespace.
-        for volume in declared_volumes(&root, "mongo") {
-            assert!(
-                !volume.contains("mongo-express"),
-                "{volume} belongs to another service"
-            );
-        }
-
-        // A service that declares none gets none — not an empty-prefix match
-        // that would sweep every volume on the machine.
-        assert!(
-            declared_volumes(&root, "phpmyadmin").is_empty(),
-            "phpmyadmin declares no volumes"
-        );
-    }
-
-    /// A service's own `volumes:` list is bind mounts and references to
-    /// volumes declared elsewhere. Reading those as declarations would delete
-    /// paths on the host and volumes belonging to other services.
-    #[test]
-    fn only_the_top_level_volumes_block_declares_anything() {
-        for volume in declared_volumes(&std::env::temp_dir(), "mysql") {
-            assert!(
-                !volume.contains('/'),
-                "{volume} is a bind mount, not a named volume"
-            );
-        }
-    }
-
     /// The stack answers on more than its projects.
     ///
     /// `hosts_missing` offered project domains and nothing else, so an admin
@@ -8587,6 +8991,184 @@ mod tests {
         // with the reason rather than after three passes.
         let missing = remove_project_dir(&dir).await.unwrap_err();
         assert_eq!(missing.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn an_instance_patch_cannot_reach_past_its_own_manifest() {
+        let setting = |key: &str, kind: &str| crate::pkg::Setting {
+            key: key.into(),
+            kind: kind.into(),
+            default: None,
+            required: false,
+            options: Vec::new(),
+            capability: None,
+            label: std::collections::BTreeMap::new(),
+        };
+        let declared = [
+            setting("DATABASE", "string"),
+            setting("ROOT_PASSWORD", "secret"),
+        ];
+        let patch = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+
+        assert!(
+            check_instance_patch("mysql-8-0", &declared, &patch(&[("DATABASE", "shop")])).is_ok()
+        );
+
+        // The fields that are not settings. Each has its own command, and a
+        // sheet that could write them here would be a second control for a
+        // state something else owns — `primary` above all, which decides which
+        // instance answers to the bare service name.
+        for key in [
+            "enabled",
+            "primary",
+            "version",
+            "ports",
+            "SERVICE_MYSQL_DATABASE",
+        ] {
+            assert!(
+                check_instance_patch("mysql-8-0", &declared, &patch(&[(key, "x")])).is_err(),
+                "{key} should be refused"
+            );
+        }
+
+        // The read masks secrets, so a form that returns what it was handed
+        // would save the mask as the password and lock MySQL out of its own
+        // database.
+        assert!(check_instance_patch(
+            "mysql-8-0",
+            &declared,
+            &patch(&[("ROOT_PASSWORD", crate::config::MASK)])
+        )
+        .is_err());
+
+        // A setting the package says the service cannot start without. No
+        // package in the catalogue marks one today, which is precisely why
+        // this is pinned here: emptying it used to be written, committed and
+        // applied, and the container came back up refusing to boot while the
+        // form that did it reported success.
+        let mut needed = setting("MASTER_KEY", "string");
+        needed.required = true;
+        let with_required = [needed];
+
+        assert!(check_instance_patch(
+            "meilisearch-1-0",
+            &with_required,
+            &patch(&[("MASTER_KEY", "")])
+        )
+        .is_err());
+        // Trimmed: one space satisfies every check that asks whether a string
+        // is empty and none of the ones the service makes of it.
+        assert!(check_instance_patch(
+            "meilisearch-1-0",
+            &with_required,
+            &patch(&[("MASTER_KEY", "   ")])
+        )
+        .is_err());
+        assert!(check_instance_patch(
+            "meilisearch-1-0",
+            &with_required,
+            &patch(&[("MASTER_KEY", "a-real-key")])
+        )
+        .is_ok());
+
+        // And an optional one is still allowed to be emptied — the refusal is
+        // about what the manifest declared, not about empty strings.
+        assert!(check_instance_patch("mysql-8-0", &declared, &patch(&[("DATABASE", "")])).is_ok());
+    }
+
+    /// Changing a port, which until now could not be done from the app at all:
+    /// `instance_create` allocated one and nothing afterwards could move it, so
+    /// a taken 3306 meant editing `instances.json` by hand.
+    #[test]
+    fn a_port_may_move_but_not_onto_one_that_is_taken() {
+        // Built through serde rather than by naming every field: these are the
+        // shapes the boundary actually parses, and a literal would have to be
+        // updated by hand every time one of them grows a field.
+        let instance = |id: &str, ports: serde_json::Value| -> crate::instances::Instance {
+            serde_json::from_value(serde_json::json!({
+                "id": id,
+                "service": id.split('-').next().unwrap(),
+                "version": "1",
+                "package": { "source": "official", "sha256": "", "installedAt": "" },
+                "enabled": true,
+                "primary": true,
+                "ports": ports,
+            }))
+            .unwrap()
+        };
+
+        let manifest: crate::pkg::Manifest = serde_json::from_value(serde_json::json!({
+            "apiVersion": "stackvo.dev/package/v1",
+            "service": "minio",
+            "version": "1",
+            "image": { "repository": "minio/minio", "tag": "1" },
+            "instancing": { "multiple": true },
+            "ports": [
+                { "name": "main", "container": 9000, "preferred": 9000, "primary": true },
+                { "name": "console", "container": 9001, "preferred": 9001 },
+            ],
+            "compose": { "file": "compose.yml.tpl", "sha256": "0".repeat(64) },
+            "support": { "status": "supported" },
+        }))
+        .unwrap();
+
+        let mine = instance(
+            "minio-1",
+            serde_json::json!({ "main": 9000, "console": 9001 }),
+        );
+        let table = crate::instances::Table {
+            instances: vec![
+                mine.clone(),
+                instance("mysql-8-0", serde_json::json!({ "main": 3306 })),
+            ],
+            ..Default::default()
+        };
+        let patch = |pairs: &[(&str, u16)]| {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), *v))
+                .collect::<BTreeMap<_, _>>()
+        };
+        let free = |_: u16| true;
+        let taken = |_: u16| false;
+        let plan = |patch: &BTreeMap<String, u16>, probe: &dyn Fn(u16) -> bool| {
+            planned_ports("minio-1", &manifest, &mine, &table, patch, probe)
+        };
+
+        // The ordinary move: a free number, and the untouched handle keeps what
+        // it had rather than being dropped from the map.
+        let moved = plan(&patch(&[("main", 9500)]), &free).unwrap();
+        assert_eq!(moved.get("main"), Some(&9500));
+        assert_eq!(moved.get("console"), Some(&9001));
+
+        // A handle this package does not declare. Same rule as an undeclared
+        // setting key: this writes to instances.json and restarts a container.
+        assert!(plan(&patch(&[("grpc", 9500)]), &free).is_err());
+        assert!(plan(&patch(&[("main", 0)]), &free).is_err());
+
+        // Another instance's port. The table is the record of that, and two
+        // instances on one number is a compose file that fails to come up with
+        // a message about neither of them.
+        assert!(plan(&patch(&[("main", 3306)]), &free).is_err());
+
+        // Taken on the machine by something that is not StackVo at all.
+        assert!(plan(&patch(&[("main", 9500)]), &taken).is_err());
+
+        // Its own port, unchanged, is never probed — the instance's container
+        // is bound to it, so asking the kernel would refuse a patch that does
+        // not touch it. This one moves `console` while `main` stays put, with
+        // every probe answering "taken".
+        assert!(plan(&patch(&[("console", 9001)]), &taken).is_ok());
+
+        // Both handles onto one number. It passes every check above — 9000 is
+        // this instance's own port, so it is neither another instance's nor
+        // probed — and would publish the same port twice.
+        assert!(plan(&patch(&[("console", 9000)]), &free).is_err());
     }
 
     #[test]
@@ -8638,56 +9220,6 @@ mod tests {
         assert!(wanted.contains(&"traefik.dev.test".to_string()));
         // And the suffix itself, which the certificate is already issued for.
         assert!(wanted.contains(&"dev.test".to_string()));
-    }
-    #[test]
-    fn a_service_patch_cannot_reach_past_its_own_service() {
-        let patch = |pairs: &[(&str, &str)]| {
-            pairs
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect::<std::collections::BTreeMap<_, _>>()
-        };
-
-        assert!(
-            check_service_patch("redis", &patch(&[("SERVICE_REDIS_HOST_PORT", "6380")])).is_ok()
-        );
-
-        // A sheet titled "redis" writing another service's password, or a
-        // global setting, would be a general .env writer wearing a costume.
-        for key in [
-            "SERVICE_MYSQL_ROOT_PASSWORD",
-            "DEFAULT_TLD_SUFFIX",
-            "SERVICE_REDIS",
-        ] {
-            assert!(
-                check_service_patch("redis", &patch(&[(key, "x")])).is_err(),
-                "{key} should be refused"
-            );
-        }
-
-        // The list owns the toggle. Two controls for one key is how they end
-        // up disagreeing about whether the service is on.
-        assert!(
-            check_service_patch("redis", &patch(&[("SERVICE_REDIS_ENABLE", "false")])).is_err()
-        );
-
-        // The read masks secrets, so a form that returns what it was handed
-        // would save the mask as the password.
-        assert!(check_service_patch(
-            "mysql",
-            &patch(&[(
-                "SERVICE_MYSQL_ROOT_PASSWORD",
-                "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}"
-            )])
-        )
-        .is_err());
-
-        // Dashes in a service id become underscores in the key.
-        assert!(check_service_patch(
-            "mongo-express",
-            &patch(&[("SERVICE_MONGO_EXPRESS_BASEURL", "/db")])
-        )
-        .is_ok());
     }
     #[test]
     fn every_generate_scope_its_callers_pass_writes_something() {

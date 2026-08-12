@@ -137,13 +137,7 @@ afterEach(() => {
 describe('the navigation drawer', () => {
   it('renders every destination', () => {
     const text = wrapper.text();
-    for (const label of [
-      'nav.dashboard',
-      'nav.projects',
-      'nav.services',
-      'nav.logs',
-      'nav.settings',
-    ]) {
+    for (const label of ['nav.dashboard', 'nav.projects', 'nav.logs', 'nav.settings']) {
       const title = i18n.global.t(label);
       expect(text, `${label} is missing from the drawer`).toContain(title);
     }

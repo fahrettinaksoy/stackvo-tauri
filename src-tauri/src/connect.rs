@@ -504,9 +504,158 @@ async fn published(service: &str, container_port: u16) -> Published {
     }
 }
 
+/// The [`Kind`] a manifest's `connection.scheme` names.
+///
+/// The inverse of [`scheme_of`], and it has to stay that way: the package
+/// contract writes the scheme as a string and this is the only place that turns
+/// it back into the enum `uri` switches on. An unknown scheme is `None` rather
+/// than a guess — a URI built on the wrong kind is a string somebody pastes
+/// into a client that then cannot connect, which is worse than no string.
+fn kind_from_scheme(scheme: &str) -> Option<Kind> {
+    Some(match scheme {
+        "mysql" => Kind::Mysql,
+        "postgresql" => Kind::Postgres,
+        "mongodb" => Kind::Mongo,
+        "redis" => Kind::Redis,
+        "amqp" => Kind::Amqp,
+        "http" => Kind::Http,
+        "smtp" => Kind::Smtp,
+        "host-port" => Kind::HostPort,
+        _ => return None,
+    })
+}
+
+/// One instance's connection, built from its manifest rather than from `.env`.
+///
+/// The same rule `list_services`, `service_source` and `service_domains` follow:
+/// the table when there is one, `.env` when there is not. This half did not
+/// exist, which is why a migrated workspace's detail sheet showed no connection
+/// string at all — `spec_for` is keyed by the pre-package service name and an
+/// instance is called `mysql-8-0`, so it matched nothing and the sheet was told
+/// there was nothing to show.
+///
+/// `None` here means the same as it does below: not a service anybody connects
+/// to with a string. A package says so by declaring no `connection` block.
+async fn instance_of(root: &Path, id: &str, reveal: bool) -> Result<Option<Connection>> {
+    let table = crate::instances::Table::load(root)?;
+    let Some(instance) = table.get(id) else {
+        return Ok(None);
+    };
+    let tree = crate::pkg::Tree::open(&crate::market::dir(root))?;
+    let Ok(manifest) = tree.load(&instance.service, &instance.version) else {
+        return Ok(None);
+    };
+    let (Some(conn), Some(kind)) = (
+        manifest.connection.as_ref(),
+        manifest
+            .connection
+            .as_ref()
+            .and_then(|c| kind_from_scheme(&c.scheme)),
+    ) else {
+        return Ok(None);
+    };
+    let Some(port) = manifest.ports.iter().find(|p| p.name == conn.port) else {
+        return Ok(None);
+    };
+
+    // Stored, then the manifest's default — the order `render::context` and
+    // `instance_settings` both resolve in, because all three describe the value
+    // the container is actually running with.
+    let setting = |key: &str| -> Option<String> {
+        let declared = manifest.settings.iter().find(|s| s.key == key)?;
+        instance
+            .settings
+            .get(key)
+            .cloned()
+            .or_else(|| {
+                instance
+                    .secret_refs
+                    .get(key)
+                    .and_then(|reference| crate::secrets::entry_of(reference))
+                    .and_then(|entry| crate::secrets::read(entry).ok().flatten())
+            })
+            .or_else(|| declared.default_text())
+            .filter(|v| !v.is_empty())
+    };
+
+    let user = conn
+        .user_setting
+        .as_deref()
+        .and_then(setting)
+        .or_else(|| conn.default_user.clone());
+    let secret = conn.password_setting.as_deref().and_then(setting);
+    let database = conn
+        .database_setting
+        .as_deref()
+        .and_then(setting)
+        .or_else(|| conn.default_database.clone());
+
+    // Same rule as the `.env` path: a user with no password is not a login
+    // anybody asked for, and naming one in the URI claims an account the server
+    // would refuse.
+    let user = secret.as_ref().and(user);
+
+    let rendered = secret.as_ref().map(|password| {
+        if reveal {
+            encode(password)
+        } else {
+            MASK.to_string()
+        }
+    });
+    let rendered_user = user.as_deref().map(encode);
+
+    let build = |host: &str, port: u16| Endpoint {
+        uri: uri(
+            kind,
+            host,
+            port,
+            rendered_user.as_deref(),
+            rendered.as_deref(),
+            database.as_deref(),
+        ),
+        host: host.to_string(),
+        port,
+    };
+
+    // The allocated port, not the manifest's preference: `ports::allocate`
+    // wrote down what this instance actually got, and two versions of one
+    // service cannot both have the preferred number.
+    let configured = instance
+        .ports
+        .get(&conn.port)
+        .copied()
+        .unwrap_or(port.preferred);
+
+    let from_host = match published(&instance.container(), port.container).await {
+        Published::Port(host_port) => Some(build("127.0.0.1", host_port)),
+        Published::Unknown => Some(build("127.0.0.1", configured)),
+        Published::Nothing => None,
+    };
+
+    Ok(Some(Connection {
+        service: id.to_string(),
+        kind,
+        from_host,
+        // The instance's own container name. The pre-package alias resolves too
+        // while this one is primary, but it is the one that stops resolving the
+        // moment somebody promotes another version — and a connection string is
+        // a thing people paste into a file and keep.
+        from_container: build(&instance.container(), port.container),
+        masked: secret.is_some() && !reveal,
+        // The manifest's setting key, not a `.env` key. Nothing reads it as a
+        // `.env` key any more: `service_reveal` dispatches the same way this
+        // function does.
+        password_key: conn.password_setting.clone(),
+    }))
+}
+
 /// Everything one service is reachable at, or `None` when it is not the kind of
 /// service anybody connects to with a string.
 pub async fn of(root: &Path, service: &str, reveal: bool) -> Result<Option<Connection>> {
+    if crate::instances::path(root).exists() {
+        return instance_of(root, service, reveal).await;
+    }
+
     let Some(spec) = spec_for(service) else {
         return Ok(None);
     };
@@ -578,6 +727,43 @@ pub async fn of(root: &Path, service: &str, reveal: bool) -> Result<Option<Conne
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `scheme_of` and `kind_from_scheme` are one mapping written twice, and a
+    /// package's `connection.scheme` is validated against the first and read by
+    /// the second. A kind that lost its way back would give a manifest a scheme
+    /// the contract accepts and this module cannot turn into a URI — so the
+    /// service would validate, install, run, and show no connection string,
+    /// which is exactly the failure this pair was added to end.
+    #[test]
+    fn every_scheme_a_kind_writes_is_a_scheme_that_reads_back() {
+        for kind in [
+            Kind::Mysql,
+            Kind::Postgres,
+            Kind::Mongo,
+            Kind::Redis,
+            Kind::Memcached,
+            Kind::Amqp,
+            Kind::Http,
+            Kind::HostPort,
+            Kind::Smtp,
+        ] {
+            let scheme = scheme_of(kind);
+            let back = kind_from_scheme(scheme)
+                .unwrap_or_else(|| panic!("{scheme} does not read back to a kind"));
+            // `Memcached` and `HostPort` share the one name a manifest can
+            // write, so the round trip lands on whichever of the two that name
+            // means — the assertion is on the scheme, which is the thing both
+            // sides actually exchange.
+            assert_eq!(scheme_of(back), scheme, "{scheme}");
+        }
+    }
+
+    /// A scheme nothing writes is not silently a URI of some other shape.
+    #[test]
+    fn an_unknown_scheme_is_refused_rather_than_guessed() {
+        assert!(kind_from_scheme("ftp").is_none());
+        assert!(kind_from_scheme("").is_none());
+    }
 
     /// The bug that started this: a container name is not a host.
     ///

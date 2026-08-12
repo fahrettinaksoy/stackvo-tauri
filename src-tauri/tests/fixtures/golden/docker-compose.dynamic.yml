@@ -111,7 +111,7 @@ services:
           until mongosh --quiet -u "root" -p "root" --authenticationDatabase admin --eval "db.adminCommand({ping:1})" >/dev/null 2>&1; do sleep 1; done
           mongosh --quiet -u "root" -p "root" --authenticationDatabase admin --eval "try { rs.status() } catch (e) { rs.initiate({_id: \"rs0\", members: [{_id: 0, host: \"stackvo-mongo:27017\"}]}) }" >/dev/null 2>&1
         ) &
-        exec docker-entrypoint.sh mongod --auth --bind_ip_all --replSet rs0 --keyFile /data/db/.keyfile
+        exec docker-entrypoint.sh mongod --config /etc/mongo/mongo.conf --auth --bind_ip_all --replSet rs0 --keyFile /data/db/.keyfile
 
     environment:
       MONGO_INITDB_ROOT_USERNAME: "root"
@@ -121,7 +121,7 @@ services:
     volumes:
       - stackvo-mongo-data:/data/db
       - /stackvo/generated/configs/mongo.conf:/etc/mongo/mongo.conf:ro
-      - /stackvo/logs/services/mongo:/var/log/mongodb
+      # Log volume mount removed - logs go to stdout/stderr (GEMINI.md compliance)
 
     ports:
       - "27017:27017"

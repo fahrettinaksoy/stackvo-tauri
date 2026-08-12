@@ -54,7 +54,6 @@ const routes = [
     component: view(() => import('@/views/ProjectDetail.vue')),
     props: true,
   },
-  { path: '/services', name: 'Services', component: view(() => import('@/views/Services.vue')) },
   // Where services come from, as opposed to what is running. Beside Services
   // because the two are read together and a user moving between them is asking
   // one question: what have I got, and what could I have.

@@ -202,7 +202,7 @@ fn probe(
         version,
         policy::current().market(),
     )
-        .map_err(|e| format!("installing: {}", e.message))?;
+    .map_err(|e| format!("installing: {}", e.message))?;
     let tree = pkg::Tree::open(&market::dir(root)).map_err(|e| e.message)?;
     let manifest = tree.load(service, version).map_err(|e| e.message)?;
 
@@ -231,7 +231,7 @@ fn probe(
             &row.version,
             policy::current().market(),
         )
-            .map_err(|e| format!("installing the dependency {provider}: {}", e.message))?;
+        .map_err(|e| format!("installing the dependency {provider}: {}", e.message))?;
         plan.push((provider, row.version.clone()));
     }
     plan.push((service.to_string(), version.to_string()));

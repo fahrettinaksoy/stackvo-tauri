@@ -256,7 +256,7 @@ onMounted(() => {
         </v-col>
 
         <v-col cols="12" md="3">
-          <v-card elevation="1" hover class="cursor-pointer" @click="$router.push('/services')">
+          <v-card elevation="1" hover class="cursor-pointer" @click="$router.push('/market')">
             <v-card-text style="min-height: 100px">
               <div class="d-flex align-center">
                 <v-icon color="info" size="48" class="mr-4">mdi-server</v-icon>
@@ -646,7 +646,11 @@ onMounted(() => {
                   {{ inventory.brokenDependencies.length }} × {{ t('services.unmetDependency') }}
                 </span>
                 <v-spacer />
-                <v-btn size="x-small" variant="text" to="/services">{{ t('app.services') }}</v-btn>
+                <!-- `/market`, not `/services`. The Services page was folded
+                     into the Market page and the route went with it, so this
+                     button — the only action on the one banner that reports a
+                     broken stack — navigated to nothing at all. -->
+                <v-btn size="x-small" variant="text" to="/market">{{ t('app.services') }}</v-btn>
               </div>
             </v-card-text>
           </v-card>

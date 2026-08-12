@@ -845,7 +845,10 @@ SERVICE_MYSQL_ROOT_PASSWORD=hunter2
         let plan = plan(&root, &env, &catalogue(), &free, NOW);
         apply(&root, &plan).unwrap();
 
-        assert_eq!(std::fs::read_to_string(backup_path(&root)).unwrap(), REAL_ENV);
+        assert_eq!(
+            std::fs::read_to_string(backup_path(&root)).unwrap(),
+            REAL_ENV
+        );
     }
 
     /// A second run does not replace it. The first migration already happened,
@@ -906,8 +909,11 @@ SERVICE_MYSQL_ROOT_PASSWORD=hunter2
     #[test]
     fn a_blocked_plan_leaves_no_backup() {
         let root = scratch("blocked-backup");
-        std::fs::write(root.join(".env"), "SERVICE_MYSQL_ENABLE=true\nSERVICE_MYSQL_VERSION=5.5\n")
-            .unwrap();
+        std::fs::write(
+            root.join(".env"),
+            "SERVICE_MYSQL_ENABLE=true\nSERVICE_MYSQL_VERSION=5.5\n",
+        )
+        .unwrap();
         let env = Env::parse("SERVICE_MYSQL_ENABLE=true\nSERVICE_MYSQL_VERSION=5.5\n");
         let plan = plan(&root, &env, &catalogue(), &free, NOW);
 

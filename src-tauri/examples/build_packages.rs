@@ -1611,10 +1611,7 @@ fn health_of(id: &str) -> Option<(Vec<&'static str>, &'static str, u32, Option<&
         "redis" => (vec!["CMD", "redis-cli", "ping"], "10s", 10, Some("5s")),
         "valkey" => (vec!["CMD", "valkey-cli", "ping"], "10s", 10, Some("5s")),
         "memcached" => (
-            vec![
-                "CMD-SHELL",
-                "timeout 2 bash -c '</dev/tcp/127.0.0.1/11211'",
-            ],
+            vec!["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/11211'"],
             "10s",
             10,
             Some("5s"),
@@ -1653,7 +1650,10 @@ fn health_of(id: &str) -> Option<(Vec<&'static str>, &'static str, u32, Option<&
             Some("60s"),
         ),
         "meilisearch" => (
-            vec!["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:7700/health"],
+            vec![
+                "CMD-SHELL",
+                "curl -fsS -o /dev/null http://127.0.0.1:7700/health",
+            ],
             "10s",
             10,
             Some("10s"),
@@ -1746,7 +1746,9 @@ fn health_of(id: &str) -> Option<(Vec<&'static str>, &'static str, u32, Option<&
 }
 
 /// The same table, for the one companion in the catalogue.
-fn companion_health_of(name: &str) -> Option<(Vec<&'static str>, &'static str, u32, Option<&'static str>)> {
+fn companion_health_of(
+    name: &str,
+) -> Option<(Vec<&'static str>, &'static str, u32, Option<&'static str>)> {
     match name {
         // Not `ruok`, and the probe is why.
         //
