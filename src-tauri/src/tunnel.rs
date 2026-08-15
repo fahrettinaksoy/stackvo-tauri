@@ -207,6 +207,7 @@ mod tests {
             server: Some("nginx".into()),
             document_root: None,
             aliases: vec![],
+            lan_share: false,
             services: vec![],
             php: None,
             node: None,
@@ -214,6 +215,8 @@ mod tests {
             valid: true,
             errors: vec![],
             warnings: vec![],
+            hooks: Default::default(),
+            local: Vec::new(),
         };
         assert_eq!(internal_port(&m), 80);
 
@@ -227,6 +230,7 @@ mod tests {
             build: None,
             start: "npm start".into(),
             port: 4321,
+            package_manager: None,
         });
         assert_eq!(internal_port(&m), 4321);
 

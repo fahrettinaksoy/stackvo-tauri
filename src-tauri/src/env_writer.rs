@@ -262,18 +262,6 @@ fn validate(patch: &BTreeMap<String, String>) -> Result<()> {
     Ok(())
 }
 
-/// Flip `SERVICE_<NAME>_ENABLE`.
-///
-/// The service id comes from the contract catalog, never from reversing an env
-/// key — see CONFLICTS.md C-09, where reversing the transform is exactly what
-/// makes `mongo-express` unstartable.
-pub fn set_service_enabled(root: &Path, service_id: &str, enabled: bool) -> Result<()> {
-    let key = format!("{}ENABLE", crate::config::Env::service_prefix(service_id));
-    let mut patch = BTreeMap::new();
-    patch.insert(key, if enabled { "true" } else { "false" }.to_string());
-    apply(root, &patch)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

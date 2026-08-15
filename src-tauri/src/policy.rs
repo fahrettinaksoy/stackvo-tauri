@@ -92,6 +92,8 @@ pub struct Policy {
     registry_prefix: Option<String>,
     /// What an administrator says about where packages come from.
     market: Market,
+    /// What an administrator says about a project's lifecycle hooks.
+    hooks: Hooks,
     /// Where this came from, for an error message that can be acted on. `None`
     /// when no policy file was found, which is the ordinary case.
     source: Option<PathBuf>,
@@ -136,6 +138,22 @@ pub struct Market {
     pub allowed_packages: BTreeSet<String>,
     /// Registries an image may come from. Empty means no opinion.
     pub allowed_registries: BTreeSet<String>,
+    /// Catalogue sources this machine may fetch a package index from.
+    ///
+    /// `docs/servis-market-mimarisi.md` §4.6's recommendation, which is that
+    /// third-party packages are not a v1 feature and the architecture should be
+    /// *ready* for them: the source field, the signature verifier and the
+    /// compose policy exist, and opening the gate is a separate decision. This
+    /// is the enterprise half of that gate — an organisation that runs its own
+    /// mirror names it here and the machine will fetch from nothing else.
+    ///
+    /// An `https://` entry is matched on its **host**, so listing a mirror does
+    /// not mean listing every path on it separately. A local path is matched as
+    /// a directory prefix, because a source is a directory tree and naming its
+    /// root is the only spelling that survives somebody picking a subdirectory.
+    ///
+    /// Empty means no opinion, like every other list here — not "none".
+    pub allowed_sources: BTreeSet<String>,
     /// Whether the app may replace an installed package on its own.
     pub auto_update: Option<bool>,
     /// Extra ed25519 public keys, for an organisation signing its own mirror.
@@ -175,14 +193,112 @@ impl Market {
         self.allowed_registries.contains(host)
     }
 
+    /// Is this catalogue source one the organisation allows?
+    ///
+    /// Two spellings, because a source is one of two very different things.
+    ///
+    /// * `https://…` is matched on the **host**. A policy naming
+    ///   `https://packages.corp.example` allows every path under that host and
+    ///   nothing on any other, which is what an administrator writing one line
+    ///   means — and matching the whole string instead would refuse the same
+    ///   mirror the moment a path or a trailing slash differed.
+    /// * A local path is matched as a **directory prefix**, on a boundary. A
+    ///   policy naming `/opt/stackvo` allows `/opt/stackvo/packages` and
+    ///   refuses `/opt/stackvo-evil`, which a bare `starts_with` would let
+    ///   through — the same class of bug as reading `mysql:8.0`'s tag as a
+    ///   port, and worth avoiding the same way.
+    ///
+    /// Not a security boundary — ADR 0009's sentence holds here as everywhere
+    /// in this file. It stops a well-meaning user pointing the app at the wrong
+    /// mirror; it does not stop the person holding the machine.
+    pub fn allows_source(&self, location: &str) -> bool {
+        if self.allowed_sources.is_empty() {
+            return true;
+        }
+        // The scheme must actually be a scheme. Splitting on the first `://`
+        // alone reads `/tmp/https://packages.example` as the host
+        // `packages.example`, so a directory anybody can create under /tmp
+        // would satisfy a policy naming a mirror.
+        let host_of = |value: &str| {
+            let (scheme, rest) = value.split_once("://")?;
+            if scheme.is_empty() || scheme.contains('/') {
+                return None;
+            }
+            Some(rest.split('/').next().unwrap_or("").to_ascii_lowercase())
+        };
+
+        match host_of(location) {
+            Some(host) if !host.is_empty() => self
+                .allowed_sources
+                .iter()
+                .filter_map(|allowed| host_of(allowed))
+                .any(|allowed| allowed == host),
+            // A path, or a URL this build cannot read a host out of. Either way
+            // it is compared as a path, and an entry that *is* a URL will not
+            // match one — which is correct: `https://x` does not authorise
+            // a directory called `https://x`.
+            _ => self.allowed_sources.iter().any(|allowed| {
+                if host_of(allowed).is_some() {
+                    return false;
+                }
+                let base = allowed.trim_end_matches('/');
+                location == base
+                    || location
+                        .strip_prefix(base)
+                        .is_some_and(|rest| rest.starts_with('/'))
+            }),
+        }
+    }
+
     fn is_set(&self) -> bool {
         self.registry_url.is_some()
             || self.offline_bundle.is_some()
             || self.require_signature
             || !self.allowed_packages.is_empty()
             || !self.allowed_registries.is_empty()
+            || !self.allowed_sources.is_empty()
             || self.auto_update.is_some()
             || !self.additional_keys.is_empty()
+    }
+}
+
+/// The `hooks` block: whether a project may run commands when it starts.
+///
+/// B-3. Both fields default to on, which is the same "no opinion" default the
+/// rest of this file has — an unmanaged machine behaves as though no policy
+/// existed.
+///
+/// ## Both of these can only tighten
+///
+/// The same asymmetry as [`Market::require_signature`], and worth stating for
+/// the same reason. Neither key can turn a check *off*: `allowHost` false stops
+/// host commands, and `allowHost` true is the default, so there is no value of
+/// either that grants something the machine did not already grant. In
+/// particular **neither of them replaces consent** — an administrator can
+/// forbid host steps fleet-wide, and cannot approve them on the user's behalf.
+/// Approval is a thing a person does after reading a list of commands, and a
+/// file pushed to three hundred laptops has not read anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hooks {
+    /// Whether hooks run at all.
+    pub enabled: bool,
+    /// Whether a hook may run a command on the machine rather than in the
+    /// project's container.
+    pub allow_host: bool,
+}
+
+impl Default for Hooks {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            allow_host: true,
+        }
+    }
+}
+
+impl Hooks {
+    fn is_set(&self) -> bool {
+        *self != Self::default()
     }
 }
 
@@ -194,6 +310,10 @@ impl Policy {
 
     pub fn market(&self) -> &Market {
         &self.market
+    }
+
+    pub fn hooks(&self) -> &Hooks {
+        &self.hooks
     }
 
     /// Is there anything here at all?
@@ -353,12 +473,14 @@ impl Policy {
         }
 
         let market = parse_market(object.get("market"), &mut complaints);
+        let hooks = parse_hooks(object.get("hooks"), &mut complaints);
 
         Self {
             settings,
             locked,
             registry_prefix,
             market,
+            hooks,
             source,
             error: (!complaints.is_empty()).then(|| complaints.join("; ")),
         }
@@ -367,6 +489,11 @@ impl Policy {
     /// Does the policy say anything about the market at all?
     pub fn constrains_market(&self) -> bool {
         self.market.is_set()
+    }
+
+    /// Does the policy say anything about hooks at all?
+    pub fn constrains_hooks(&self) -> bool {
+        self.hooks.is_set()
     }
 }
 
@@ -436,6 +563,7 @@ fn parse_market(given: Option<&serde_json::Value>, complaints: &mut Vec<String>)
             },
             "allowedPackages" => market.allowed_packages = list(value, key, complaints),
             "allowedRegistries" => market.allowed_registries = list(value, key, complaints),
+            "allowedSources" => market.allowed_sources = list(value, key, complaints),
             "additionalKeys" => {
                 market.additional_keys = list(value, key, complaints).into_iter().collect()
             }
@@ -447,6 +575,41 @@ fn parse_market(given: Option<&serde_json::Value>, complaints: &mut Vec<String>)
     }
 
     market
+}
+
+/// The `hooks` block, field by field. Same shape as [`parse_market`].
+fn parse_hooks(given: Option<&serde_json::Value>, complaints: &mut Vec<String>) -> Hooks {
+    let mut hooks = Hooks::default();
+    let Some(value) = given else {
+        return hooks;
+    };
+    let Some(object) = value.as_object() else {
+        complaints.push("hooks is not an object and was ignored".to_string());
+        return hooks;
+    };
+
+    for (key, value) in object {
+        match key.as_str() {
+            "enabled" => match value.as_bool() {
+                Some(on) => hooks.enabled = on,
+                None => {
+                    complaints.push("hooks.enabled is not a boolean and was ignored".to_string())
+                }
+            },
+            "allowHost" => match value.as_bool() {
+                Some(on) => hooks.allow_host = on,
+                None => {
+                    complaints.push("hooks.allowHost is not a boolean and was ignored".to_string())
+                }
+            },
+            // Named rather than dropped, for the reason `market` gives: a typo
+            // deploys a file that does nothing, and the app is a better place
+            // to find that out than a user is.
+            other => complaints.push(format!("hooks.{other} is not a key this build knows")),
+        }
+    }
+
+    hooks
 }
 
 /// The file this build will look at, override included.
@@ -1062,5 +1225,65 @@ mod tests {
             Some(Path::new("/opt/stackvo/packages"))
         );
         assert!(policy.constrains_market());
+    }
+
+    // ---- market.allowedSources (C-2) --------------------------------------
+
+    fn sources(list: &[&str]) -> Market {
+        Market {
+            allowed_sources: list.iter().map(|s| s.to_string()).collect(),
+            ..Market::default()
+        }
+    }
+
+    /// Silence is not a refusal — the same reading every other list here gets.
+    #[test]
+    fn an_empty_source_list_allows_everything() {
+        let market = Market::default();
+        assert!(market.allows_source("https://packages.example/x"));
+        assert!(market.allows_source("/opt/anything"));
+    }
+
+    /// One line naming a mirror has to mean the mirror, not one path on it.
+    #[test]
+    fn an_https_source_is_matched_on_its_host() {
+        let market = sources(&["https://packages.corp.example"]);
+        assert!(market.allows_source("https://packages.corp.example"));
+        assert!(market.allows_source("https://packages.corp.example/catalogue/v2"));
+        assert!(market.allows_source("https://PACKAGES.CORP.EXAMPLE/x"));
+        assert!(!market.allows_source("https://evil.example/packages.corp.example"));
+    }
+
+    /// The `mysql:8.0`-read-as-a-port class of bug, in its path form: a bare
+    /// `starts_with` would let a sibling directory through.
+    #[test]
+    fn a_local_source_matches_on_a_directory_boundary() {
+        let market = sources(&["/opt/stackvo"]);
+        assert!(market.allows_source("/opt/stackvo"));
+        assert!(market.allows_source("/opt/stackvo/packages"));
+        assert!(!market.allows_source("/opt/stackvo-evil"));
+        assert!(!market.allows_source("/opt"));
+    }
+
+    /// A trailing slash in the policy is a typo, not a different rule.
+    #[test]
+    fn a_trailing_slash_in_the_policy_changes_nothing() {
+        assert!(sources(&["/opt/stackvo/"]).allows_source("/opt/stackvo/packages"));
+    }
+
+    /// The two spellings do not authorise each other.
+    #[test]
+    fn a_url_entry_does_not_authorise_a_path_that_looks_like_it() {
+        assert!(
+            !sources(&["https://packages.example"]).allows_source("/tmp/https://packages.example")
+        );
+        assert!(!sources(&["/opt/stackvo"]).allows_source("https://opt/stackvo"));
+    }
+
+    /// The block counts as "an administrator said something", so Settings can
+    /// explain why a field is refusing rather than looking broken.
+    #[test]
+    fn naming_a_source_makes_the_market_block_active() {
+        assert!(sources(&["/opt/stackvo"]).is_set());
     }
 }

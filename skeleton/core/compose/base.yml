@@ -25,6 +25,21 @@ services:
       - "--providers.file.watch=true"
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
+      # The access log (I-2), and why it is here rather than in the generated
+      # traefik.yml: `tests/fixtures_differential.rs` compares that file byte
+      # for byte against output frozen from the Bash generator this port
+      # replaced, so a new block in it fails that proof — correctly.
+      #
+      # Two fields kept and everything else dropped. This log answers one
+      # question — when did Traefik last route to this router — and a log kept
+      # for one question must not also become a record of every URL somebody
+      # visited on their own machine.
+      - "--accesslog=true"
+      - "--accesslog.filepath=/var/log/traefik/access.log"
+      - "--accesslog.format=json"
+      - "--accesslog.fields.defaultmode=drop"
+      - "--accesslog.fields.names.RouterName=keep"
+      - "--accesslog.fields.names.StartUTC=keep"
 
     ports:
       - "80:80"
@@ -35,6 +50,19 @@ services:
       - "./traefik/traefik.yml:/etc/traefik/traefik.yml:ro"
       - "./traefik/dynamic:/etc/traefik/dynamic:ro"
       - "./certs:/certs:ro"
+      # The access log (I-2). Written here so the app can read "when did this
+      # router last serve something" — the only honest idle signal, since
+      # php-fpm's CPU sits near zero whether it is serving or asleep. Two
+      # fields are kept and the rest dropped; see the generator.
+      - "./traefik/log:/var/log/traefik"
+
+    # So a user route (E-4) can point at something running on this machine.
+    # Inside a container `localhost` is the container, which is why routes.rs
+    # rewrites it — and the name it rewrites to resolves on Docker Desktop by
+    # itself but on nothing else. Declaring it where it already resolves is
+    # harmless; leaving it out on Linux is a 502 with no explanation.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
     networks:
       - stackvo-net

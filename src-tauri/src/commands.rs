@@ -75,6 +75,31 @@ pub struct AppState {
     /// processes write the same compose file is worse. A Tokio mutex because it
     /// is held across the await.
     pub generate_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+    /// The DNS responder, when it is running (E-1).
+    ///
+    /// A handle rather than a "should it run" setting, because whether the
+    /// socket is bound is the only honest answer to "is this working" — a
+    /// preference saying yes over a port something else took would be a screen
+    /// that lies. The flag stops the thread; the join handle is kept so
+    /// stopping actually waits for it rather than leaving a socket bound behind
+    /// a `false`.
+    pub dns: Mutex<Option<DnsResponder>>,
+}
+
+/// A running responder, and the two things needed to stop one.
+pub struct DnsResponder {
+    pub suffix: String,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl DnsResponder {
+    fn stop(mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
 }
 
 impl AppState {
@@ -94,6 +119,7 @@ impl AppState {
             ),
             inflight: crate::inflight::Registry::new(),
             generate_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            dns: Mutex::new(None),
         }
     }
 
@@ -262,6 +288,7 @@ pub async fn list_projects(root: &std::path::Path) -> Result<Vec<Project>> {
                         server: None,
                         document_root: None,
                         aliases: Vec::new(),
+                        lan_share: false,
                         services: Vec::new(),
                         php: None,
                         node: None,
@@ -273,6 +300,8 @@ pub async fn list_projects(root: &std::path::Path) -> Result<Vec<Project>> {
                             message: e.message,
                         }],
                         warnings: Vec::new(),
+                        hooks: Default::default(),
+                        local: Vec::new(),
                     },
                 ));
             }
@@ -855,9 +884,14 @@ pub struct RuntimeOption {
     pub id: String,
     pub versions: Vec<String>,
     pub default: Option<String>,
-    /// False for the four runtimes `.env` advertises with no generator behind
-    /// them (CONFLICTS.md C-02). The UI greys these out instead of offering a
+    /// False for a runtime `.env` advertises with no generator behind it
+    /// (CONFLICTS.md C-02). The UI greys those out instead of offering a
     /// choice that silently produces nothing.
+    ///
+    /// True is not the same as "`.env` lists it": `build_catalog` also appends
+    /// the runtimes this binary can generate for that the workspace's `.env`
+    /// predates, which is how Bun and Deno reach a picker on a machine set up
+    /// before they existed here.
     pub available: bool,
 }
 
@@ -892,7 +926,8 @@ pub struct Catalog {
 /// Every runtime the Rust generator can build. The Bash CLI still knows only
 /// php and node; since Sprint 17 the app generates for itself, so the four
 /// lang runtimes exist here first (C-02, closed).
-const IMPLEMENTED_RUNTIMES: [&str; 6] = ["php", "node", "python", "go", "ruby", "rust"];
+const IMPLEMENTED_RUNTIMES: [&str; 8] =
+    ["php", "node", "python", "go", "ruby", "rust", "bun", "deno"];
 
 #[tauri::command]
 pub fn catalog_get(state: State<'_, AppState>) -> Result<Catalog> {
@@ -926,6 +961,31 @@ pub fn build_catalog(root: &std::path::Path) -> Result<Catalog> {
             }
         })
         .collect();
+
+    // Runtimes this build can generate for that `.env` has never heard of.
+    //
+    // `SUPPORTED_LANGUAGES` is a workspace setting written when the workspace
+    // was created, so a machine set up before Bun and Deno existed here lists
+    // neither — and keying the picker off it alone would mean the feature
+    // arrives only for people who edit `.env` by hand, or not at all. What the
+    // app can build is a fact about this binary, not about a file on disk.
+    //
+    // No versions and no default from `.env`, because neither has a key there:
+    // the answer comes from `manifest::lang_defaults`, which is where the rest
+    // of the app already reads it. Deno's is a full patch version and has to
+    // be — see that function.
+    let mut runtimes: Vec<RuntimeOption> = runtimes;
+    for id in IMPLEMENTED_RUNTIMES {
+        if runtimes.iter().any(|r| r.id == id) {
+            continue;
+        }
+        runtimes.push(RuntimeOption {
+            id: id.to_string(),
+            versions: Vec::new(),
+            default: crate::manifest::lang_defaults(id).map(|l| l.version),
+            available: true,
+        });
+    }
 
     let catalog_names = env.list("SUPPORTED_LANGUAGES_PHP_EXTENSIONS");
     let matrix = &php_extensions().extensions;
@@ -1167,13 +1227,21 @@ async fn lifecycle(
 
 #[tauri::command]
 pub async fn project_start(app: AppHandle, state: State<'_, AppState>, name: String) -> Result<()> {
+    let root = state.root()?;
     let _busy = state.inflight.acquire(format!("project:{name}"))?;
-    lifecycle(&events::sink(&app), "project", &name, events::START).await
+    lifecycle(&events::sink(&app), "project", &name, events::START).await?;
+    run_hooks(&app, &root, &name, crate::hooks::Event::PostStart).await;
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn project_stop(app: AppHandle, state: State<'_, AppState>, name: String) -> Result<()> {
+    let root = state.root()?;
     let _busy = state.inflight.acquire(format!("project:{name}"))?;
+    // Before the stop, which is what `pre-stop` means and is also the only
+    // moment it can work: a container that has gone down has nothing to exec
+    // into, so a step that ran afterwards would fail every time.
+    run_hooks(&app, &root, &name, crate::hooks::Event::PreStop).await;
     lifecycle(&events::sink(&app), "project", &name, events::STOP).await
 }
 
@@ -1183,8 +1251,15 @@ pub async fn project_restart(
     state: State<'_, AppState>,
     name: String,
 ) -> Result<()> {
+    let root = state.root()?;
     let _busy = state.inflight.acquire(format!("project:{name}"))?;
-    lifecycle(&events::sink(&app), "project", &name, events::RESTART).await
+    // Both ends, in the order they happen. A restart is a stop and a start, and
+    // a project whose hooks fired on neither would be one where "restart" and
+    // "stop then start" quietly did different things.
+    run_hooks(&app, &root, &name, crate::hooks::Event::PreStop).await;
+    lifecycle(&events::sink(&app), "project", &name, events::RESTART).await?;
+    run_hooks(&app, &root, &name, crate::hooks::Event::PostStart).await;
+    Ok(())
 }
 
 // ---------------------------------------------------------------- inspect
@@ -1703,6 +1778,145 @@ pub async fn compose_down(app: AppHandle, state: State<'_, AppState>) -> Result<
 
 // ---------------------------------------------------------------- build
 
+// ---------------------------------------------------------- lifecycle hooks
+
+/// Run a project's hooks for one lifecycle event (B-3).
+///
+/// Everything about *whether* a step runs is `hooks::plan`'s; this reads the
+/// three inputs it needs and reports what happened.
+///
+/// **A hook failure does not fail the operation it hangs off.** A container
+/// that started is started, and reporting the start as failed because a
+/// convenience afterwards did not work would leave nobody able to tell which
+/// half broke. The failure is emitted on the hook's own events and logged here.
+async fn run_hooks(
+    app: &AppHandle,
+    root: &std::path::Path,
+    name: &str,
+    event: crate::hooks::Event,
+) {
+    let dir = match workspace::project_dir(root, name) {
+        Ok(dir) => dir,
+        Err(_) => return,
+    };
+    // The effective manifest, deliberately: `stackvo.local.json` may override
+    // hooks the same way it overrides anything else, and a machine that wants
+    // a different post-start step is exactly the case B-2 exists for.
+    let Ok(manifest) = manifest::read(&dir.join("stackvo.json"), name) else {
+        return;
+    };
+    if manifest.hooks.is_empty() {
+        return;
+    }
+
+    let consent = crate::hooks::consent_path()
+        .map(|path| crate::hooks::read_consent(&path))
+        .unwrap_or_default();
+
+    let operation_id = events::next_operation_id("hook");
+    if let Err(e) = crate::hooks::run(
+        &events::sink(app),
+        crate::hooks::Run {
+            operation_id: &operation_id,
+            project: name,
+            dir: &dir,
+            container: &format!("stackvo-{}", name.to_ascii_lowercase()),
+            hooks: &manifest.hooks,
+            event,
+            policy: crate::policy::current().hooks(),
+            consent: &consent,
+        },
+    )
+    .await
+    {
+        tracing::warn!(project = name, event = event.key(), error = %e.message, "a hook failed");
+    }
+}
+
+/// What would run for a project's hooks, and what would not.
+#[tauri::command]
+pub fn project_hooks_plan(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<Vec<crate::hooks::Plan>> {
+    let root = state.root()?;
+    let dir = workspace::project_dir(&root, &name)?;
+    let manifest = manifest::read(&dir.join("stackvo.json"), &name)?;
+    let consent = crate::hooks::consent_path()
+        .map(|path| crate::hooks::read_consent(&path))
+        .unwrap_or_default();
+    let policy = crate::policy::current().hooks();
+
+    Ok(crate::hooks::Event::ALL
+        .iter()
+        .map(|event| crate::hooks::plan(&name, &manifest.hooks, *event, policy, &consent))
+        .collect())
+}
+
+/// Agree to this project's host commands, exactly as they are now.
+///
+/// The digest is sent back by the caller rather than recomputed here, and that
+/// is the point of the round trip: it is a receipt for the list the person
+/// actually read. If the manifest changed between the screen being drawn and
+/// the button being pressed, the digest no longer matches and the grant is
+/// refused — which is the whole property that makes this consent rather than a
+/// checkbox.
+#[tauri::command]
+pub fn project_hooks_approve(
+    state: State<'_, AppState>,
+    name: String,
+    digest: String,
+) -> Result<Vec<crate::hooks::Plan>> {
+    let root = state.root()?;
+    let dir = workspace::project_dir(&root, &name)?;
+    let manifest = manifest::read(&dir.join("stackvo.json"), &name)?;
+
+    let current = manifest.hooks.host_digest().ok_or_else(|| {
+        Error::new(
+            Code::InvalidInput,
+            format!("{name} has no host commands to approve"),
+        )
+    })?;
+    if current != digest {
+        return Err(Error::new(
+            Code::Conflict,
+            "the commands changed since they were shown; read them again before approving"
+                .to_string(),
+        ));
+    }
+
+    let path = crate::hooks::consent_path().ok_or_else(|| {
+        Error::new(
+            Code::Unsupported,
+            "no application directory on this platform",
+        )
+    })?;
+    let mut consent = crate::hooks::read_consent(&path);
+    consent.grant(&name, &current);
+    crate::hooks::write_consent(&path, &consent)?;
+
+    project_hooks_plan(state, name)
+}
+
+/// Withdraw approval. Takes no digest — you may always revoke.
+#[tauri::command]
+pub fn project_hooks_revoke(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<Vec<crate::hooks::Plan>> {
+    let path = crate::hooks::consent_path().ok_or_else(|| {
+        Error::new(
+            Code::Unsupported,
+            "no application directory on this platform",
+        )
+    })?;
+    let mut consent = crate::hooks::read_consent(&path);
+    consent.revoke(&name);
+    crate::hooks::write_consent(&path, &consent)?;
+
+    project_hooks_plan(state, name)
+}
+
 #[tauri::command]
 pub async fn project_build(
     app: AppHandle,
@@ -1778,6 +1992,15 @@ pub async fn project_build(
     }
     .await;
 
+    // After the container exists, not after the image: `post-build` steps are
+    // things like `composer install`, and a step that runs inside a container
+    // needs one to be there. Only on success — a build that failed leaves
+    // whatever the previous image was, and running the new manifest's hooks
+    // against it is a state nobody described.
+    if outcome.is_ok() {
+        run_hooks(&app, &root, &name, crate::hooks::Event::PostBuild).await;
+    }
+
     if let Err(e) = &outcome {
         events::emit(
             &app,
@@ -1796,6 +2019,304 @@ pub async fn project_build(
 // Desktop integration: hosts file, terminals, notifications.
 
 use crate::pty::{self, PtyTarget};
+
+// ------------------------------------------------ idle projects (I-2)
+
+/// How long since each running project was last asked for anything.
+#[tauri::command]
+pub async fn projects_idle(state: State<'_, AppState>) -> Result<Vec<crate::idle::Idle>> {
+    let root = state.root()?;
+    let threshold = crate::idle::threshold_seconds(&root)?;
+
+    let projects: Vec<(String, bool)> = list_projects(&root)
+        .await?
+        .into_iter()
+        .map(|p| (p.name, p.running))
+        .collect();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    Ok(crate::idle::assess(&root, &projects, threshold, now))
+}
+
+/// Stop every project past the threshold, and say which.
+///
+/// Returns what it stopped rather than a count. "3 projects suspended" is a
+/// number somebody then has to go and match against a list; the names are the
+/// thing they actually want, and this is a background action whose whole risk
+/// is being surprising.
+#[tauri::command]
+pub async fn projects_suspend_idle(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<String>> {
+    let idle = projects_idle(state.clone()).await?;
+    let mut stopped = Vec::new();
+
+    for entry in idle.iter().filter(|entry| entry.suspendable) {
+        // Skipped rather than queued when something else holds the project: a
+        // sweep that waited behind a build would stop a container the moment
+        // the build finished, which is the opposite of idle.
+        let Ok(_busy) = state.inflight.acquire(format!("project:{}", entry.project)) else {
+            continue;
+        };
+        if lifecycle(&events::sink(&app), "project", &entry.project, events::STOP)
+            .await
+            .is_ok()
+        {
+            stopped.push(entry.project.clone());
+        }
+    }
+
+    Ok(stopped)
+}
+
+// ------------------------------------------- moving a database (G-4)
+
+/// Every database instance, which is what a move names.
+#[tauri::command]
+pub async fn db_instances(state: State<'_, AppState>) -> Result<Vec<crate::db::DbInstance>> {
+    let root = state.root()?;
+    crate::db::instances(&root).await
+}
+
+/// What moving one instance's contents into another would do, and whether it
+/// may happen at all.
+#[tauri::command]
+pub fn db_move_plan(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+) -> Result<crate::dbmove::Plan> {
+    let root = state.root()?;
+    crate::dbmove::plan(&root, &from, &to)
+}
+
+/// Dump one instance and restore it into another, reporting as an operation.
+///
+/// Both ends are held busy for the whole thing. A move reads one database and
+/// replaces another, and either of them being started, stopped or dumped
+/// underneath it is a torn result nobody would be able to explain afterwards.
+#[tauri::command]
+pub async fn db_move_apply(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+) -> Result<crate::dbmove::Moved> {
+    let root = state.root()?;
+    let _source = state.inflight.acquire(format!("instance:{from}"))?;
+    let _target = state.inflight.acquire(format!("instance:{to}"))?;
+
+    let operation_id = events::next_operation_id("dbmove");
+    let sink = events::sink(&app);
+    let subject = format!("{from} → {to}");
+
+    events::emit(
+        &app,
+        "db:progress",
+        serde_json::json!({ "operationId": operation_id, "subject": subject, "line": "planning" }),
+    );
+
+    let id = operation_id.clone();
+    let who = subject.clone();
+    let outcome = crate::dbmove::run(&root, &from, &to, move |line| {
+        crate::progress::emit(
+            &sink,
+            "db:progress",
+            crate::events::ProgressEvent {
+                operation_id: id.clone(),
+                subject: who.clone(),
+                line,
+            },
+        );
+    })
+    .await;
+
+    events::emit(
+        &app,
+        "db:done",
+        serde_json::json!({
+            "operationId": operation_id,
+            "subject": subject,
+            "success": outcome.is_ok(),
+            "error": outcome.as_ref().err().map(|e| e.message.clone()),
+        }),
+    );
+    outcome
+}
+
+// --------------------------------------------------- user routes (E-4)
+
+/// The saved routes, each with what it would actually do.
+///
+/// Checked on the way out rather than stored checked: `host.docker.internal` is
+/// the app's answer to `localhost`, and freezing it into the file would mean a
+/// route written today keeping today's answer after the rule changed. The file
+/// holds what the user typed.
+#[tauri::command]
+pub fn routes_list(state: State<'_, AppState>) -> Result<Vec<serde_json::Value>> {
+    let root = state.root()?;
+    let env = crate::config::Env::load(&root)?;
+    let suffix = env
+        .get("DEFAULT_TLD_SUFFIX")
+        .unwrap_or("stackvo.loc")
+        .to_string();
+
+    Ok(crate::routes::read(&root)
+        .into_iter()
+        .map(|route| match route.normalise(&suffix) {
+            Ok(checked) => serde_json::to_value(checked).unwrap_or_default(),
+            // Reported, not dropped: a route the renderer skips must be visible
+            // here, or the screen shows a route and the proxy has none.
+            Err(e) => serde_json::json!({
+                "domain": route.domain,
+                "target": route.target,
+                "enabled": route.enabled,
+                "notes": [],
+                "error": e.message,
+            }),
+        })
+        .collect())
+}
+
+/// Replace the whole list, then regenerate so Traefik picks it up.
+///
+/// The whole list rather than add/remove/edit: the file is a handful of pairs
+/// the user is looking at in a table, and three commands over one small
+/// document is three chances for the file and the screen to disagree about
+/// order. Every route is checked before anything is written, so one bad row
+/// fails the save instead of writing half of it.
+#[tauri::command]
+pub async fn routes_save(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    routes: Vec<crate::routes::Route>,
+) -> Result<Vec<serde_json::Value>> {
+    let root = state.root()?;
+    let env = crate::config::Env::load(&root)?;
+    let suffix = env
+        .get("DEFAULT_TLD_SUFFIX")
+        .unwrap_or("stackvo.loc")
+        .to_string();
+
+    for route in &routes {
+        route.normalise(&suffix)?;
+    }
+
+    // Two routes on one name is a router Traefik loads twice and resolves by
+    // whichever it read last — a coin toss the user cannot see.
+    let mut seen = std::collections::BTreeSet::new();
+    for route in &routes {
+        let domain = route.domain.trim().to_ascii_lowercase();
+        if !seen.insert(domain.clone()) {
+            return Err(Error::new(
+                Code::Conflict,
+                format!("{domain} is listed twice; one name routes to one place"),
+            ));
+        }
+    }
+
+    crate::routes::write(&root, &routes)?;
+
+    let operation_id = events::next_operation_id("routes");
+    generate(&app, &root, &operation_id, "services").await?;
+
+    routes_list(state)
+}
+
+// ------------------------------------------------------------- DNS (E-1)
+
+/// The suffix this workspace's names end in.
+fn dns_suffix(state: &State<'_, AppState>) -> String {
+    state
+        .root()
+        .ok()
+        .map(|root| crate::certs::suffix(&root))
+        .unwrap_or_else(|| "stackvo.loc".to_string())
+}
+
+/// Whether the responder is answering, and what the machine still needs.
+#[tauri::command]
+pub fn dns_status(state: State<'_, AppState>) -> Result<crate::dns::Status> {
+    let suffix = dns_suffix(&state);
+    let listening = recover(&state.dns)
+        .as_ref()
+        .is_some_and(|responder| responder.suffix == suffix);
+    Ok(crate::dns::status(&suffix, listening))
+}
+
+/// Start answering, or say why the socket could not be had.
+///
+/// Idempotent for the same suffix and a restart for a different one: a
+/// workspace whose TLD changed must not leave a responder serving the old one,
+/// which would answer for names nothing renders any more and refuse the ones it
+/// does.
+#[tauri::command]
+pub fn dns_start(state: State<'_, AppState>) -> Result<crate::dns::Status> {
+    let suffix = dns_suffix(&state);
+    {
+        let mut slot = recover(&state.dns);
+        if let Some(running) = slot.take() {
+            if running.suffix == suffix {
+                *slot = Some(running);
+                return Ok(crate::dns::status(&suffix, true));
+            }
+            running.stop();
+        }
+    }
+
+    let socket = crate::dns::bind()?;
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let worker = {
+        let stop = std::sync::Arc::clone(&stop);
+        let suffix = suffix.clone();
+        std::thread::Builder::new()
+            .name("stackvo-dns".into())
+            .spawn(move || crate::dns::serve(socket, suffix, stop))
+            .map_err(|e| Error::io("starting the DNS responder", e))?
+    };
+
+    *recover(&state.dns) = Some(DnsResponder {
+        suffix: suffix.clone(),
+        stop,
+        worker: Some(worker),
+    });
+    Ok(crate::dns::status(&suffix, true))
+}
+
+#[tauri::command]
+pub fn dns_stop(state: State<'_, AppState>) -> Result<crate::dns::Status> {
+    let suffix = dns_suffix(&state);
+    if let Some(running) = recover(&state.dns).take() {
+        running.stop();
+    }
+    Ok(crate::dns::status(&suffix, false))
+}
+
+/// Write `/etc/resolver/<tld>`, with a password.
+///
+/// Separate from `dns_start` on purpose, and it is the same separation
+/// `hosts_plan`/`hosts_apply` has: one of these is a socket this app owns and
+/// the other changes how the whole machine resolves names. Folding them into
+/// one button would mean a password prompt appearing from something that reads
+/// like "turn on a feature".
+#[tauri::command]
+pub fn dns_resolver_install(state: State<'_, AppState>) -> Result<crate::dns::Status> {
+    let suffix = dns_suffix(&state);
+    crate::dns::install_resolver(&suffix)?;
+    dns_status(state)
+}
+
+#[tauri::command]
+pub fn dns_resolver_remove(state: State<'_, AppState>) -> Result<crate::dns::Status> {
+    let suffix = dns_suffix(&state);
+    crate::dns::remove_resolver(&suffix)?;
+    dns_status(state)
+}
 
 // ---------------------------------------------------------------- hosts
 
@@ -2391,6 +2912,242 @@ pub async fn service_connection(
     connect::of(&root, &service, reveal).await
 }
 
+/// Which desktop clients could open this service, on this machine.
+///
+/// Empty for most rows and that is the answer, not a failure: a service with no
+/// connection string has nothing to open, and AMQP or SMTP has a string that no
+/// desktop database client takes. The caller shows the button only when this
+/// comes back with something in it.
+#[tauri::command]
+pub async fn service_db_clients(
+    state: State<'_, AppState>,
+    service: String,
+) -> Result<Vec<crate::apps::App>> {
+    let root = state.root()?;
+    let Some(connection) = connect::of(&root, &service, false).await? else {
+        return Ok(Vec::new());
+    };
+    Ok(crate::apps::db_clients(connect::scheme_of(connection.kind)))
+}
+
+/// Hand this service's address to a database client.
+///
+/// The last of G-3, and the smaller half by a distance: the correct string has
+/// been available since `connect.rs` was written and the sheet has offered to
+/// copy it since. What was missing was the step that pastes it, which is what
+/// everybody was doing by hand.
+///
+/// ## Which of the two addresses
+///
+/// The host one, always. The container address is a name on a Docker network
+/// and a client on this desktop has never heard of it — that confusion is the
+/// reason `connect` returns two endpoints in the first place, and choosing the
+/// wrong one here would reintroduce it at the one call site that cannot be
+/// corrected by reading. A running container that publishes nothing has no host
+/// address at all, and this says so rather than inventing `127.0.0.1`.
+///
+/// ## The password is in the string
+///
+/// It has to be — a URI with bullets in it is a URI that fails to connect, and
+/// the point of the button is that nothing is retyped. So this is `reveal` in
+/// the sense of `env_reveal` and `service_connection`: an act, on a click, for
+/// one service, and it is recorded like one.
+///
+/// What it costs is that the secret is an argument to `open`, so it is visible
+/// in `ps` for as long as that process lives. That is a real exposure and it is
+/// written down rather than left for someone to find: the alternative is a
+/// temporary file holding the same secret with the same reachability and a
+/// lifetime nobody controls, which is worse. On a single-user machine holding
+/// development credentials it is the right trade; on a shared one it is a
+/// reason to copy the string instead, and the copy button is still there.
+#[tauri::command]
+pub async fn service_open_in_client(
+    state: State<'_, AppState>,
+    service: String,
+    client: String,
+) -> Result<()> {
+    let root = state.root()?;
+
+    let Some(connection) = connect::of(&root, &service, true).await? else {
+        return Err(Error::new(
+            Code::NotFound,
+            format!("{service} has no connection string to open"),
+        ));
+    };
+    let Some(endpoint) = connection.from_host else {
+        return Err(Error::new(
+            Code::NotFound,
+            format!("{service} is not publishing a port to this machine"),
+        )
+        .with_hint(crate::hints::SERVICE_PUBLISHES_NOTHING));
+    };
+
+    // A client is offered only when it declares the scheme, so a request naming
+    // one that does not is either a stale UI or a caller inventing values. Both
+    // are refused here rather than launched and left to fail silently, which is
+    // the failure mode that made Redis Insight worth writing a test about.
+    let scheme = connect::scheme_of(connection.kind);
+    if !client.is_empty()
+        && !crate::apps::db_clients(scheme)
+            .iter()
+            .any(|a| a.id == client && a.available)
+    {
+        return Err(Error::new(
+            Code::NotFound,
+            format!("{client} is not installed here, or does not open {scheme} addresses"),
+        )
+        .with_hint(crate::hints::CHOOSE_A_DB_CLIENT));
+    }
+
+    // Deliberately not audited, and the first draft of this had it the other
+    // way. `audit.rs` states its bar — acts that change something outside this
+    // app and cannot be undone — and says in the same breath that reading
+    // anything is not one, nor is starting a process. This is both of those:
+    // the same disclosure `env_reveal` makes, followed by a launch. Auditing it
+    // while `env_reveal` and `instance_reveal` are not audited would leave a
+    // trail where a password shown on screen is invisible and the same password
+    // handed to TablePlus is a line, which is a worse record than either choice.
+    // If reveals ever become auditable, this belongs with them and not before.
+
+    if let Some(launch) = crate::apps::resolve_db_client(&client) {
+        let spawned = match launch {
+            crate::apps::Launch::Command(cmd) => std::process::Command::new(cmd)
+                .arg(&endpoint.uri)
+                .spawn()
+                .is_ok(),
+            crate::apps::Launch::Bundle(bundle) => std::process::Command::new("open")
+                .args(["-a", bundle])
+                .arg(&endpoint.uri)
+                .spawn()
+                .is_ok(),
+        };
+        if spawned {
+            return Ok(());
+        }
+        // Fall through to the system handler rather than leaving the click with
+        // nothing to show for it, exactly as `open_in_browser` does.
+    }
+
+    let opened = if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+            .arg(&endpoint.uri)
+            .spawn()
+    } else if cfg!(target_os = "windows") {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", ""])
+            .arg(&endpoint.uri)
+            .spawn()
+    } else {
+        std::process::Command::new("xdg-open")
+            .arg(&endpoint.uri)
+            .spawn()
+    };
+
+    opened.map(|_| ()).map_err(|e| {
+        Error::new(
+            Code::NotFound,
+            format!("nothing on this machine opens {scheme} addresses: {e}"),
+        )
+        .with_hint(crate::hints::CHOOSE_A_DB_CLIENT)
+    })
+}
+
+// ------------------------------------------------------- query log (F-1)
+
+/// What the database was asked, and what it was asked repeatedly.
+///
+/// F-1. The row in §2 said this needed a collector inside the container, and
+/// for MySQL and MariaDB it does not: their general query log can be pointed at
+/// a table and switched on with two statements, at runtime, on a stock image.
+/// See [`crate::querylog`] for what that buys and what it costs.
+///
+/// A kind with no such log answers `supported: false` rather than an error —
+/// the screen asks whichever database the project uses and has to be able to
+/// say "not this one" without looking broken.
+#[tauri::command]
+pub async fn query_log(
+    state: State<'_, AppState>,
+    service: String,
+) -> Result<crate::querylog::Session> {
+    let root = state.root()?;
+    crate::querylog::read(&root, &service).await
+}
+
+/// Start or stop recording.
+///
+/// Deliberately one command with a boolean rather than two: the two are a pair,
+/// and the interesting failure — turning it on and forgetting — is one a single
+/// switch makes visible. Stopping also truncates the log, because what it holds
+/// is statement text and in a development database that is the data.
+#[tauri::command]
+pub async fn query_log_record(
+    state: State<'_, AppState>,
+    service: String,
+    recording: bool,
+) -> Result<crate::querylog::Session> {
+    let root = state.root()?;
+    if recording {
+        crate::querylog::enable(&root, &service).await?;
+    } else {
+        crate::querylog::disable(&root, &service).await?;
+    }
+    crate::querylog::read(&root, &service).await
+}
+
+/// Throw away what has been collected, without stopping.
+///
+/// The "start again from here" somebody reaches for before reloading the page
+/// they are investigating — without it every read is the whole session and the
+/// one request under study is buried in it.
+#[tauri::command]
+pub async fn query_log_clear(
+    state: State<'_, AppState>,
+    service: String,
+) -> Result<crate::querylog::Session> {
+    let root = state.root()?;
+    crate::querylog::clear(&root, &service).await?;
+    crate::querylog::read(&root, &service).await
+}
+
+/// One request, from the code's side and the database's side, on one axis.
+///
+/// F-2. The row said "dump/mail/log three separate screens, no correlation",
+/// and the two halves that matter — what the code thought it had, and what it
+/// actually asked the database for — were readable only by comparing clocks by
+/// eye across two panes.
+///
+/// `service` is optional: without one this is the dumps alone, which is still
+/// the timeline it always could have been. See [`crate::timeline`] for what
+/// correlates (dumps, by the request they name) and what only sorts (queries,
+/// because nothing in a general log says which request caused a statement).
+#[tauri::command]
+pub async fn request_timeline(
+    state: State<'_, AppState>,
+    project: String,
+    service: Option<String>,
+) -> Result<crate::timeline::Timeline> {
+    let root = state.root()?;
+    let dumps = crate::debugbridge::read_events(&root, &project);
+
+    let (queries, recording) = match service {
+        Some(service) => match crate::querylog::read(&root, &service).await {
+            Ok(session) => (session.entries, session.recording),
+            // A database that cannot be reached is not a reason to withhold the
+            // dumps: half a timeline is worth more than an error page, and the
+            // screen says the query half is absent.
+            Err(_) => (Vec::new(), false),
+        },
+        None => (Vec::new(), false),
+    };
+
+    // Best effort, and deliberately not a reason to fail: a catcher that is not
+    // running is a common state and half a timeline is worth more than an error
+    // page. The same rule the query half follows two lines up.
+    let mail = crate::mail::messages(&root, 100).await.unwrap_or_default();
+
+    Ok(crate::timeline::build(&dumps, &queries, &mail, recording))
+}
+
 /// Read a database out to a file the user chose.
 #[tauri::command]
 pub async fn db_dump(
@@ -2914,6 +3671,141 @@ pub async fn release_build(
     Ok(ReleaseResult { plan, verification })
 }
 
+/// Whether a built image may be pushed (H-1).
+///
+/// Verification is re-run rather than remembered from the build. It is a
+/// question about an image that is on this machine now, and the answer between
+/// the build and the push is exactly the interval in which somebody could have
+/// retagged something else onto the name.
+#[tauri::command]
+pub async fn release_push_plan(
+    state: State<'_, AppState>,
+    name: String,
+    tag: Option<String>,
+) -> Result<crate::release::PushPlan> {
+    let root = state.root()?;
+    let plan = crate::release::plan(&root, &name, tag)?;
+    let verification = crate::release::verify(&plan.tag, &plan.runtime).await.ok();
+    Ok(crate::release::push_plan(&plan.tag, verification.as_ref()))
+}
+
+/// Push it, refusing again on the way out.
+#[tauri::command]
+pub async fn release_push(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    tag: Option<String>,
+) -> Result<crate::release::PushPlan> {
+    let root = state.root()?;
+    let _busy = state.inflight.acquire("release")?;
+
+    let plan = crate::release::plan(&root, &name, tag.clone())?;
+    let verification = crate::release::verify(&plan.tag, &plan.runtime).await.ok();
+    // Re-checked here rather than trusting the plan the caller was shown: that
+    // plan crossed the IPC boundary and came back, and a check that only runs
+    // on the way out is not a check.
+    let push = crate::release::push_plan(&plan.tag, verification.as_ref());
+    if !push.possible {
+        return Err(Error::new(
+            Code::Forbidden,
+            push.refused
+                .unwrap_or_else(|| "this image may not be pushed".into()),
+        ));
+    }
+
+    let operation_id = events::next_operation_id("push");
+    runner::run_operation(
+        &events::sink(&app),
+        runner::Operation {
+            operation_id: &operation_id,
+            subject: &name,
+            progress_event: "build:progress",
+            finished_event: "build:success",
+            program: "docker",
+            args: &crate::release::push_argv(&plan.tag),
+            cwd: &root,
+            env: &[],
+        },
+    )
+    .await?;
+
+    Ok(push)
+}
+
+/// A compose file for running the built image somewhere else (H-1).
+///
+/// Returned as text rather than written to a path the caller names. Where a
+/// deployment recipe belongs is the user's decision — a repository, a server, a
+/// paste — and a command that wrote it somewhere would be this app guessing.
+#[tauri::command]
+pub fn release_recipe(
+    state: State<'_, AppState>,
+    name: String,
+    tag: Option<String>,
+) -> Result<String> {
+    let root = state.root()?;
+    let plan = crate::release::plan(&root, &name, tag)?;
+    let dir = workspace::project_dir(&root, &name)?;
+    let manifest = manifest::read(&dir.join("stackvo.json"), &name)?;
+
+    // The port the project actually answers on, per runtime. A recipe that
+    // published the wrong one is a deployment that starts and serves nothing.
+    let port = manifest
+        .node
+        .as_ref()
+        .map(|n| n.port)
+        .or_else(|| manifest.lang.as_ref().map(|l| l.port))
+        .unwrap_or(80);
+
+    // Named from the project's own `.env`, not from the workspace's: the
+    // workspace file holds this machine's stack, and half of it is credentials
+    // for containers that are not going anywhere.
+    let env_keys = project_env_keys(&dir);
+
+    Ok(crate::release::recipe(&name, &plan.tag, port, &env_keys))
+}
+
+/// The variable *names* a project's own `.env` files use.
+///
+/// Names only, and read rather than copied — the whole point of the recipe is
+/// that it carries no values. A project with no `.env` yields nothing, which is
+/// a recipe with no `environment:` block rather than an error.
+fn project_env_keys(dir: &std::path::Path) -> Vec<String> {
+    let mut keys = std::collections::BTreeSet::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with(".env") || name.ends_with(".bak") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some((key, _)) = line.split_once('=') {
+                let key = key.trim();
+                if !key.is_empty()
+                    && key
+                        .chars()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+                {
+                    keys.insert(key.to_string());
+                }
+            }
+        }
+    }
+    keys.into_iter().collect()
+}
+
 /// Write a built image out as a tarball. Returns its size.
 #[tauri::command]
 pub async fn release_save(
@@ -3039,6 +3931,27 @@ pub fn profiler_read(
     id: String,
 ) -> Result<crate::profile::Report> {
     crate::profile::read(&state.root()?, &name, &id)
+}
+
+/// The same profile as a call tree, for the flame view.
+///
+/// F-3. `profiler_read` answers "where did the time go" — a table of the
+/// costliest functions — and cannot answer "what called that", which is the
+/// question a flame view exists for. Separate from `profiler_read` rather than
+/// a field on it: the table is what the pane opens with and the tree is
+/// thousands of nodes, so a page that only wanted the top sixty would carry the
+/// whole graph across the boundary to ignore it.
+///
+/// A call tree and not, strictly, a flame graph — see [`crate::profile::call_tree`]
+/// for what cachegrind holds and what it does not.
+#[tauri::command]
+pub fn profiler_tree(
+    state: State<'_, AppState>,
+    name: String,
+    id: String,
+) -> Result<Vec<crate::profile::Frame>> {
+    let report = crate::profile::read(&state.root()?, &name, &id)?;
+    Ok(crate::profile::call_tree(&report))
 }
 
 #[tauri::command]
@@ -3636,13 +4549,58 @@ pub async fn project_get(state: State<'_, AppState>, name: String) -> Result<Pro
         .ok_or_else(|| Error::not_found(format!("project {name}")))
 }
 
+/// The committed manifest, which is what the editor edits.
+///
+/// `read_committed`, not `read`: this text round-trips straight back through
+/// `project_manifest_write`, so handing it the effective manifest would offer
+/// somebody this machine's overrides to save into the file the team shares.
+/// `manifest::write` refuses that, which means the editor would simply stop
+/// being able to save — correct, and a bad way to find out. The overrides have
+/// their own pair of commands below.
 #[tauri::command]
 pub fn project_manifest_read(state: State<'_, AppState>, name: String) -> Result<Manifest> {
     let root = state.root()?;
-    manifest::read(
+    manifest::read_committed(
         &workspace::project_dir(&root, &name)?.join("stackvo.json"),
         &name,
     )
+}
+
+/// This machine's overrides for a project (B-2).
+#[tauri::command]
+pub fn project_local_read(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<manifest::LocalOverride> {
+    let root = state.root()?;
+    let dir = workspace::project_dir(&root, &name)?;
+    if !dir.is_dir() {
+        return Err(Error::not_found(format!("project {name}")));
+    }
+    manifest::read_local(&dir, &name)
+}
+
+/// Write this machine's overrides, or remove them when the text is empty.
+///
+/// Text rather than a parsed object, unlike `project_manifest_write`. That one
+/// takes a `ProjectManifest` because the form builds it field by field; this is
+/// a file somebody types, and round-tripping it through a struct would drop the
+/// comments — no, JSON has none — but it would also silently reorder and
+/// reformat what they wrote, and this is the one file in the project nobody
+/// else reads.
+#[tauri::command]
+pub fn project_local_write(
+    state: State<'_, AppState>,
+    name: String,
+    text: String,
+) -> Result<manifest::LocalOverride> {
+    let root = state.root()?;
+    let dir = workspace::project_dir(&root, &name)?;
+    if !dir.is_dir() {
+        return Err(Error::not_found(format!("project {name}")));
+    }
+    let _busy = state.inflight.acquire(format!("project:{name}"))?;
+    manifest::write_local(&dir, &name, &text)
 }
 
 #[tauri::command]
@@ -3662,6 +4620,127 @@ pub fn project_manifest_write(
 
     manifest::write(&dir.join("stackvo.json"), &spec)?;
     Ok(spec)
+}
+
+// ----------------------------------------------------- LAN sharing (E-3)
+
+/// What another device on this network can reach, and what it cannot.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanStatus {
+    /// This machine's private address, or `None` when there is none to offer.
+    ///
+    /// `None` is two different situations with the same answer: no network at
+    /// all, and a machine whose address is public. The second is the one worth
+    /// refusing — a development site under a name anybody on the internet can
+    /// resolve is not what a switch called "share on this network" promises.
+    pub address: Option<String>,
+    /// The suffix, so the screen can say where the name comes from rather than
+    /// showing a domain nobody recognises and hoping it is trusted.
+    pub suffix: String,
+    /// Projects that asked, each with the host it currently answers on.
+    pub projects: Vec<LanProject>,
+    /// A name rendered into the compose file or the certificate that this
+    /// machine would no longer produce — a laptop that changed networks.
+    ///
+    /// The one thing a derived address cannot tell you by being derived: the
+    /// value on disk is a copy, and a copy of an expired lease points at
+    /// whatever machine took it next.
+    pub stale: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanProject {
+    pub name: String,
+    /// `None` when the project asked but this machine has no address to build
+    /// one from — the switch is on and there is nothing to show for it, which
+    /// is a state the screen has to be able to say out loud.
+    pub host: Option<String>,
+}
+
+/// Where this workspace is reachable from the rest of the network.
+///
+/// E-3. `shop.loc` lives in exactly one `/etc/hosts` and that is this machine's,
+/// so a real phone has never been able to open it. See [`crate::lan`] for why
+/// the answer is a wildcard DNS suffix rather than a resolver of our own, and
+/// for the warning the visiting browser will show.
+#[tauri::command]
+pub fn lan_status(state: State<'_, AppState>) -> Result<LanStatus> {
+    let root = state.root()?;
+    let address = crate::lan::address();
+
+    let mut projects = Vec::new();
+    if let Some(entries) =
+        crate::workspace::projects_root(&root).and_then(|p| std::fs::read_dir(p).ok())
+    {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !path.join("stackvo.json").is_file() {
+                continue;
+            }
+            let Ok(manifest) = crate::manifest::read(&path.join("stackvo.json"), name) else {
+                continue;
+            };
+            if manifest.lan_share {
+                projects.push(LanProject {
+                    name: name.to_string(),
+                    host: address.map(|ip| crate::lan::domain_for(name, ip)),
+                });
+            }
+        }
+    }
+    projects.sort_by(|a, b| a.name.cmp(&b.name));
+
+    // Read from what was actually written, not from what would be written now
+    // — the whole question is whether those two still agree.
+    let rendered = std::fs::read_to_string(root.join("generated/docker-compose.projects.yml"))
+        .unwrap_or_default();
+    let baked: Vec<String> = rendered
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '-'))
+        .filter(|token| token.ends_with(crate::lan::SUFFIX))
+        .map(str::to_string)
+        .collect();
+
+    Ok(LanStatus {
+        address: address.map(|ip| ip.to_string()),
+        suffix: crate::lan::SUFFIX.to_string(),
+        projects,
+        stale: crate::lan::stale(&baked, address),
+    })
+}
+
+/// Turn LAN sharing on or off for one project.
+///
+/// Writes the intent and nothing else. The hostname is not stored — it is
+/// derived from this machine's address every time it is asked for, which is the
+/// whole of `lan.rs`'s argument — so the caller still has to regenerate for the
+/// router and the certificate to carry it. That is the same shape every other
+/// manifest change has and deliberately not special-cased here: a command that
+/// quietly regenerated the whole workspace would be doing an expensive thing
+/// behind a switch that reads as cheap.
+#[tauri::command]
+pub fn project_lan_share(
+    state: State<'_, AppState>,
+    name: String,
+    enabled: bool,
+) -> Result<Manifest> {
+    let root = state.root()?;
+    let dir = workspace::project_dir(&root, &name)?;
+    if !dir.is_dir() {
+        return Err(Error::not_found(format!("project {name}")));
+    }
+    let _busy = state.inflight.acquire(format!("project:{name}"))?;
+
+    // Committed, not effective: the next line edits it and the line after
+    // writes it back. See `manifest::read`.
+    let mut manifest = manifest::read_committed(&dir.join("stackvo.json"), &name)?;
+    manifest.lan_share = enabled;
+    manifest::write(&dir.join("stackvo.json"), &manifest)?;
+    Ok(manifest)
 }
 
 // ------------------------------------------------- declared services (B-1)
@@ -3775,7 +4854,8 @@ pub fn project_requirements_declare(
     let _busy = state.inflight.acquire(format!("project:{name}"))?;
 
     let path = dir.join("stackvo.json");
-    let mut manifest = manifest::read(&path, &name)?;
+    // Committed: this is read to be written back.
+    let mut manifest = manifest::read_committed(&path, &name)?;
 
     // Normalised here as well as in `read`, because this list comes from the
     // webview rather than from the file: same trim, same lower-case, same
@@ -6700,94 +7780,40 @@ pub type Rendered = (Vec<GenFile>, Vec<(String, String)>);
 /// second source. Kept whole rather than merged with the new path: they share
 /// an output and nothing else, and a single function with a branch through the
 /// middle of it would be a function nobody could read either half of.
-fn env_service_files(
-    root: &std::path::Path,
-    vars: &std::collections::BTreeMap<String, String>,
-) -> Vec<GenFile> {
-    let mut files = Vec::new();
-    {
-        // (template, output) — the exact mapping in config.sh. The first five
-        // are rendered; the last two are copied verbatim by Bash.
-        const RENDERED: [(&str, &str); 6] = [
-            ("redis/redis.conf.tpl", "redis.conf"),
-            ("mysql/my.cnf.tpl", "mysql.cnf"),
-            ("mongo/mongo.conf.tpl", "mongo.conf"),
-            ("postgres/postgres.conf.tpl", "postgres.conf"),
-            ("elasticsearch/elasticsearch.yml.tpl", "elasticsearch.yml"),
-            // Valkey's compose template bind-mounts this file. A service whose
-            // config is not rendered starts against whatever the image ships
-            // and quietly ignores every setting the workspace holds — which is
-            // the failure this list exists to prevent, one entry per template.
-            ("valkey/valkey.conf.tpl", "valkey.conf"),
-        ];
-        const COPIED: [(&str, &str); 2] = [
-            ("mariadb/my.cnf", "mariadb.cnf"),
-            ("percona/my.cnf", "percona.cnf"),
-        ];
-
-        for (template, output) in RENDERED {
-            // The workspace's copy wins, the compiled-in one is the fallback:
-            // shipping templates must not take away the ability to edit them.
-            let Some(text) = crate::skeleton::read_template(
-                root,
-                &format!("core/templates/services/{template}"),
-            ) else {
-                continue;
-            };
-            files.push(GenFile {
-                label: format!("configs/{output}"),
-                path: root.join("generated/configs").join(output),
-                scope: "services",
-                content: crate::template::render(&text, vars),
-            });
-        }
-        for (source, output) in COPIED {
-            let Some(text) =
-                crate::skeleton::read_template(root, &format!("core/templates/services/{source}"))
-            else {
-                continue;
-            };
-            files.push(GenFile {
-                label: format!("configs/{output}"),
-                path: root.join("generated/configs").join(output),
-                scope: "services",
-                content: text,
-            });
-        }
-    }
-
-    // ---- the dynamic compose ----
-    files.push(GenFile {
-        label: "docker-compose.dynamic.yml".into(),
-        path: root.join("generated/docker-compose.dynamic.yml"),
-        scope: "services",
-        content: crate::template::render_dynamic_compose(root, vars),
-    });
-
-    files
-}
-
-/// Where the services half of a render comes from.
+/// Where the services half of a render comes from — and there is only one.
 ///
-/// Faz 6 of `docs/servis-market-mimarisi.md`, and the whole of the switch is
-/// this one decision. The rule is deliberately blunt:
+/// Faz 6 of `docs/servis-market-mimarisi.md` is closed here. This used to be a
+/// switch: no `instances.json` meant render from `.env` and the templates
+/// compiled into the binary, an `instances.json` meant render from the table
+/// and the package tree. Both branches existed so that every workspace in
+/// existence could keep working while the second one was built.
 ///
-/// * **No `instances.json`** — the old path, unchanged, byte for byte. That is
-///   every workspace in existence today, and none of them notice this release.
-/// * **An `instances.json`** — the new path. Somebody migrated on purpose, and
-///   after that the table is the truth about which services this workspace
-///   runs.
+/// The first branch is gone (ADR 0016). What made keeping it untenable was not
+/// the code — it was that the two branches knew about **different catalogues**:
+/// `.env` knew the twenty-five services that had a template inside the binary,
+/// the table knows whatever the package tree holds. Adding Solr and ClickHouse
+/// as packages made that concrete rather than theoretical — a project declaring
+/// `services: ["solr"]` got a correct declaration met with a wrong warning, and
+/// the warning could not be fixed without putting a templateless entry into the
+/// `.env` catalogue, where it would have offered a switch that renders nothing.
 ///
-/// There is no falling back. A table that exists and cannot render is an error
-/// with a name in it; quietly rendering from `.env` instead would produce a
-/// stack built from state the user has already replaced — which is precisely
-/// the drift the instance table exists to end, arriving through the door marked
-/// "safety".
-fn service_source(root: &std::path::Path) -> Result<Option<crate::instances::Table>> {
+/// A workspace with no table is now a workspace that has not migrated, and it
+/// is met by `MigrationGate` before it ever reaches a render. Reaching here
+/// without one is a bug in the gate, so it says so with a name rather than
+/// producing an empty stack.
+fn service_source(root: &std::path::Path) -> Result<crate::instances::Table> {
     if !crate::instances::path(root).exists() {
-        return Ok(None);
+        // `Conflict` rather than a new code: the workspace's state and this
+        // version's renderer disagree, which is what that code already means,
+        // and a new variant is a contract change (ADR 0008) for a message.
+        return Err(Error::new(
+            Code::Conflict,
+            "this workspace still keeps its services in .env, and this version renders them \
+             from instances.json",
+        )
+        .with_hint(crate::hints::MIGRATE_THE_WORKSPACE));
     }
-    crate::instances::Table::load(root).map(Some)
+    crate::instances::Table::load(root)
 }
 
 pub fn render_generated(root: &std::path::Path) -> Result<Rendered> {
@@ -6833,6 +7859,11 @@ pub fn render_generated(root: &std::path::Path) -> Result<Rendered> {
     let mut files: Vec<GenFile> = Vec::new();
     let mut errors: Vec<(String, String)> = Vec::new();
 
+    // Once, not per project: every project that shares on the LAN shares on the
+    // same address, and asking the routing table in a loop would be asking the
+    // same question once per manifest.
+    let lan_address = crate::lan::address();
+
     // ---- per-project files ----
     let mut manifests: Vec<(String, crate::manifest::Manifest)> = Vec::new();
     if let Some(entries) =
@@ -6849,9 +7880,22 @@ pub fn render_generated(root: &std::path::Path) -> Result<Rendered> {
             if name.starts_with('.') || !path.join("stackvo.json").is_file() {
                 continue;
             }
-            let Ok(m) = crate::manifest::read(&path.join("stackvo.json"), name) else {
+            let Ok(mut m) = crate::manifest::read(&path.join("stackvo.json"), name) else {
                 continue;
             };
+
+            // LAN sharing is an extra hostname and nothing more, so it joins
+            // the list the manifest already has rather than growing a second
+            // path through the renderer. Added here rather than in
+            // `manifest::read`, because `read` answers what is on disk and this
+            // name is not: it is computed from the address this machine has
+            // right now, and a manifest that reported it would be reporting
+            // something that expires with a DHCP lease.
+            if m.lan_share {
+                if let Some(ip) = lan_address {
+                    m.aliases.push(crate::lan::domain_for(name, ip));
+                }
+            }
 
             // Node writes into the project source dir, PHP into generated/ (C-19).
             // C-19, generalised: every snapshot runtime builds from the
@@ -6937,13 +7981,10 @@ pub fn render_generated(root: &std::path::Path) -> Result<Rendered> {
 
     // ---- services: configs and the dynamic compose ----
     //
-    // Two sources, one output. See `service_source` for why there is no
-    // fallback between them.
-    match service_source(root)? {
-        None => {
-            files.extend(env_service_files(root, &vars));
-        }
-        Some(table) => {
+    // One source. See `service_source` for what happened to the other.
+    {
+        let table = service_source(root)?;
+        {
             let tree = crate::pkg::Tree::open(&crate::market::dir(root))?;
             let network = vars
                 .get("DOCKER_DEFAULT_NETWORK")
@@ -6995,12 +8036,24 @@ pub fn render_generated(root: &std::path::Path) -> Result<Rendered> {
         .map(|(id, _)| (id.as_str(), env.service_enabled(id), env.service_url(id)))
         .collect();
 
+    // A route that no longer normalises — a target edited by hand into
+    // something invalid — is dropped from the render rather than failing it.
+    // The whole stack refusing to regenerate because of one optional route is a
+    // worse outcome than that route being absent, and `routes_list` is where
+    // somebody sees why.
+    let suffix = env.get("DEFAULT_TLD_SUFFIX").unwrap_or("stackvo.loc");
+    let user_routes: Vec<crate::routes::Checked> = crate::routes::read(root)
+        .iter()
+        .filter_map(|route| route.normalise(suffix).ok())
+        .collect();
+
     let traefik = generator::TraefikOptions {
-        tld_suffix: env.get("DEFAULT_TLD_SUFFIX").unwrap_or("stackvo.loc"),
+        tld_suffix: suffix,
         network: env.get("DOCKER_DEFAULT_NETWORK").unwrap_or("stackvo-net"),
         ssl_enabled: env.bool("SSL_ENABLE"),
         redirect_to_https: env.bool("REDIRECT_TO_HTTPS"),
         services,
+        routes: user_routes,
     };
 
     files.push(GenFile {
@@ -7054,6 +8107,8 @@ fn generator_warnings(root: &std::path::Path) -> Vec<String> {
         ssl_enabled: env.bool("SSL_ENABLE"),
         redirect_to_https: env.bool("REDIRECT_TO_HTTPS"),
         services,
+        // The warning this asks for is about entry points, not about routes.
+        routes: Vec::new(),
     };
     crate::generator::traefik_routing_warning(&traefik)
         .map(|w| vec![w])
@@ -7135,6 +8190,38 @@ fn scope_includes(scope: &str, file_scope: &str) -> bool {
 ///
 /// `on_file` is called once per file written, which is what the operation
 /// console shows as progress.
+/// Every managed project's directory and manifest, for the callers that walk
+/// them. Broken ones are skipped: a project that cannot be read has nothing to
+/// write a context for, and it is already reported by `list_projects`.
+fn project_manifests(
+    root: &std::path::Path,
+) -> Vec<(String, std::path::PathBuf, manifest::Manifest)> {
+    let Ok(projects_dir) = workspace::require_projects_root(root) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&projects_dir) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name.starts_with('.') || !path.join("stackvo.json").is_file() {
+            continue;
+        }
+        if let Ok(manifest) = manifest::read(&path.join("stackvo.json"), name) {
+            out.push((name.to_string(), path, manifest));
+        }
+    }
+    out
+}
+
 pub fn write_generated(
     root: &std::path::Path,
     scope: &str,
@@ -7169,6 +8256,29 @@ pub fn write_generated(
             .map_err(|e| Error::io(format!("writing {}", f.path.display()), e))?;
         on_file(&f.label);
         written.push(f.label);
+    }
+
+    // The agent context (K-2), written into each project's own directory
+    // rather than into `generated/`. It is not a file the stack reads — the
+    // reader is an assistant working inside the container, which sees the
+    // project tree and not this app's.
+    //
+    // Best-effort, per project. A directory that has been deleted, or one the
+    // app cannot write to, must not stop the stack being regenerated: this is
+    // a convenience for a reader that may not exist, and the compose files are
+    // the thing somebody is waiting for.
+    if scope_includes(scope, "projects") {
+        for (name, dir, manifest) in project_manifests(root) {
+            if let Ok(context) = crate::agentctx::build(root, &manifest) {
+                if crate::agentctx::write(&dir, &context).is_ok() {
+                    written.push(format!(
+                        "{name}/{}/{}",
+                        crate::agentctx::DIR,
+                        crate::agentctx::FILE
+                    ));
+                }
+            }
+        }
     }
 
     Ok(serde_json::json!({
@@ -7572,6 +8682,67 @@ pub async fn market_refresh(state: State<'_, AppState>, location: String) -> Res
     .map_err(|e| Error::new(Code::IoError, format!("the refresh could not be run: {e}")))??;
 
     market_status(state)
+}
+
+// ------------------------------------------------------- authoring (C-1)
+
+/// Write a new package under this workspace's own package tree.
+///
+/// Under the workspace rather than at a path the caller names, and that is a
+/// boundary rather than a convenience: `root` comes from the app state and the
+/// rest of the path is built here from checked components, so the webview names
+/// a service and a version and never a directory. The same handle-not-a-path
+/// rule `applog` and `quickcmd` state as their security model.
+#[tauri::command]
+pub fn package_scaffold(
+    state: State<'_, AppState>,
+    category: String,
+    service: String,
+    version: String,
+    image: String,
+) -> Result<crate::authoring::Report> {
+    let root = state.root()?;
+    crate::authoring::scaffold(
+        &crate::market::dir(&root),
+        &category,
+        &service,
+        &version,
+        &image,
+    )
+}
+
+/// What sealing would change, and what would still be wrong afterwards.
+#[tauri::command]
+pub fn package_lint(
+    state: State<'_, AppState>,
+    category: String,
+    service: String,
+    version: String,
+) -> Result<crate::authoring::Report> {
+    let root = state.root()?;
+    crate::authoring::lint(&crate::authoring::version_dir(
+        &crate::market::dir(&root),
+        &category,
+        &service,
+        &version,
+    ))
+}
+
+/// Recompute the manifest's hashes after an edit, then check the package.
+#[tauri::command]
+pub fn package_seal(
+    state: State<'_, AppState>,
+    category: String,
+    service: String,
+    version: String,
+) -> Result<crate::authoring::Report> {
+    let root = state.root()?;
+    crate::authoring::reseal(&crate::authoring::version_dir(
+        &crate::market::dir(&root),
+        &category,
+        &service,
+        &version,
+    ))
 }
 
 #[tauri::command]
@@ -9355,6 +10526,14 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         crate::skeleton::install(&dir).expect("install the embedded skeleton");
         crate::workspace::point_at_projects(&dir, &dir.join("projects")).expect("projects pointer");
+        // An empty instance table, because a workspace without one is refused
+        // rather than rendered (ADR 0016). Empty rather than populated: these
+        // tests are about the generator reporting progress and writing files,
+        // not about what a service renders to, and an empty table exercises the
+        // same path with nothing to install.
+        crate::instances::Table::default()
+            .save(&dir)
+            .expect("an empty instance table");
         dir
     }
 

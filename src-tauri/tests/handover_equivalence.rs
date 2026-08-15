@@ -170,13 +170,25 @@ fn unquote(text: &str) -> String {
     text.trim().trim_matches('"').trim_matches('\'').to_string()
 }
 
-/// What the app renders today, from `.env` and the compiled-in templates.
-fn today(root: &Path, env: &Env) -> BTreeMap<String, Block> {
-    let vars = template::variables(env, root);
-    blocks(&template::render_dynamic_compose(
-        Path::new("/nonexistent"),
-        &vars,
-    ))
+/// What the app rendered from `.env` and the templates compiled into the
+/// binary — read from a frozen file, because that renderer no longer exists.
+///
+/// ADR 0016 removed it. This test is the proof that the migration keeps every
+/// image, port and volume, and it made that proof by rendering *both* sides;
+/// with one side gone the choice was to delete the proof or to keep its output.
+/// The output is kept. `tests/fixtures/golden/handover-before.yml` is what
+/// `render_dynamic_compose` produced from `ENV` below on the last commit that
+/// still had it, and every assertion in this file still compares against it.
+///
+/// A frozen side cannot drift, which is the honest limitation: this no longer
+/// notices if `ENV` changes and the fixture does not. So `ENV` and the fixture
+/// are a pair, and the file says so at the top.
+fn today(_root: &Path, _env: &Env) -> BTreeMap<String, Block> {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden/handover-before.yml");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+    blocks(&text)
 }
 
 /// What it renders after the handover, from the instance table and the packages.
@@ -401,68 +413,48 @@ fn a_port_the_machine_has_since_taken_moves_and_is_reported() {
     assert!(ports::is_free(mysql.ports["main"]) || mysql.ports["main"] == 3306);
 }
 
-// ---------------------------------------------------------------- the switch
+// ------------------------------------------------------------ the refusal
 
-/// The generator's source, and the one property the switch must have.
+/// What a workspace that has not migrated gets now.
 ///
-/// `render_generated` renders the services half from `.env` when there is no
-/// instance table and from the table when there is. Every workspace in
-/// existence today is in the first case, so the test that matters is not that
-/// the new path works — the tests above are that — but that the old one is
-/// **untouched**: same bytes, same files, same order.
-mod the_switch {
+/// This module used to assert the opposite property, and the change is the
+/// whole of ADR 0016. `render_generated` had two sources — `.env` and the
+/// templates compiled into the binary when there was no instance table, the
+/// table and the package tree when there was — and the test that mattered was
+/// that the *old* path stayed byte for byte identical, because every install in
+/// existence was on it.
+///
+/// The old path is gone. So the property that matters is the opposite one: a
+/// workspace still keeping its services in `.env` must be refused **with a name
+/// on it**, not rendered into an empty stack. `MigrationGate` is what a person
+/// meets before this; reaching here means the gate was bypassed, and a silent
+/// empty render would be the worst possible answer to that.
+mod the_refusal {
     use super::*;
 
-    /// A workspace with services in `.env` and no table renders exactly what it
-    /// rendered before this existed.
     #[test]
-    fn a_workspace_that_has_not_migrated_renders_byte_for_byte_as_before() {
+    fn an_unmigrated_workspace_is_refused_rather_than_rendered_empty() {
         let root = workspace("unmigrated");
         std::fs::create_dir_all(root.join("projects")).unwrap();
-        // `render_generated` asks where the projects are, and the pointer is
-        // the only thing that answers.
         workspace::point_at_projects(&root, &root.join("projects")).unwrap();
         std::fs::write(root.join(".env"), ENV).unwrap();
-        // No instances.json: this is every install that exists today.
         assert!(!instances::path(&root).exists());
 
-        let (files, _) = commands::render_generated(&root).expect("the old path");
-        let dynamic = files
-            .iter()
-            .find(|f| f.label == "docker-compose.dynamic.yml")
-            .expect("the services file is still produced");
+        // `GenFile` has no `Debug`, so the Ok side cannot be unwrapped into a
+        // panic message — matched instead, which says the same thing.
+        let err = match commands::render_generated(&root) {
+            Err(e) => e,
+            Ok(_) => panic!("a workspace with no table must not render a stack"),
+        };
 
-        // The renderer that produced it before the switch, called directly.
-        let env = Env::parse(ENV);
-        let vars = template::variables(&env, &root);
-        let before = template::render_dynamic_compose(&root, &vars);
-
-        assert_eq!(dynamic.content, before, "the unmigrated path changed");
-    }
-
-    /// And the config files still land where they always did — flat under
-    /// `generated/configs`, not per instance.
-    #[test]
-    fn an_unmigrated_workspace_keeps_its_flat_config_paths() {
-        let root = workspace("flat");
-        std::fs::create_dir_all(root.join("projects")).unwrap();
-        // `render_generated` asks where the projects are, and the pointer is
-        // the only thing that answers.
-        workspace::point_at_projects(&root, &root.join("projects")).unwrap();
-        std::fs::write(root.join(".env"), ENV).unwrap();
-
-        let (files, _) = commands::render_generated(&root).unwrap();
-        let configs: Vec<&str> = files
-            .iter()
-            .filter(|f| f.label.starts_with("configs/"))
-            .map(|f| f.label.as_str())
-            .collect();
-
-        assert!(configs.contains(&"configs/redis.conf"), "{configs:?}");
+        // The message has to name the state, because the only repair is a
+        // migration and a generic failure sends people to the wrong place.
         assert!(
-            configs.iter().all(|c| c.matches('/').count() == 1),
-            "a per-instance path leaked into the unmigrated render: {configs:?}"
+            err.message.contains(".env") && err.message.contains("instances.json"),
+            "the refusal does not say what is wrong: {}",
+            err.message
         );
+        assert!(err.hint.is_some(), "and it has to say what to do about it");
     }
 
     /// Once the table exists, the services half comes from it: instance-named

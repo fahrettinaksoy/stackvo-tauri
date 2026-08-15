@@ -478,98 +478,66 @@ for (const e of defaultSet) {
 // ================================================================ SUITE C — services
 
 /**
- * The templates this app ships, not the ones a workspace happens to hold.
+ * What suite C can still check, now that services are packages.
  *
- * The workspace copy was the only source when the templates lived in a
- * checkout. They live in `skeleton/` now and are compiled into the binary, and
- * a workspace has a copy of one only when somebody overrode it — so reading the
- * workspace made this suite report all twenty-one services as having no
- * template on any normal machine, which is the reverse of the truth.
+ * This suite used to be built entirely around
+ * `skeleton/core/templates/services/` — one directory per service, each with a
+ * compose fragment — and it asked three things of it: that every declared
+ * service had a template, that every template was declared, and that each
+ * template's compose profiles matched the id the app starts it by.
  *
- * Reading `skeleton/` also makes the check run everywhere: "is every service in
- * env.schema.json backed by a template" is a question about this repository,
- * and it now gets answered on every machine rather than only on one with a
- * clone of the retired project beside it.
+ * ADR 0016 deleted that directory. A service is a **package** now, fetched from
+ * a catalogue at run time, and there is no copy of it in this repository to
+ * check against — which is the point of the catalogue and not a gap in it. So
+ * three of the four checks lost their subject, and leaving them in place meant
+ * twenty-five errors a reader can do nothing about, on every run, for a
+ * directory somebody deliberately removed. A gate that is always red is a gate
+ * nobody reads.
+ *
+ * What survives is the half that never needed a template: a declared service
+ * must have something that can switch it on. `contracts/package.schema.json`
+ * carries the shape a fragment has to have, and `compose_policy` enforces it
+ * against real package contents at run time — so the profile rules are checked,
+ * just not here and not against files that no longer exist.
  */
-const templatesDir = join(HERE, '..', 'skeleton', 'core', 'templates', 'services');
-const templateIds = existsSync(templatesDir)
-  ? readdirSync(templatesDir).filter(
-      (d) => !d.startsWith('.') && statSync(join(templatesDir, d)).isDirectory()
-    )
-  : [];
-
 const declaredIds = Object.entries(envSchema.services)
   .filter(([k]) => k !== '_note')
   .flatMap(([, v]) => v);
 
-for (const id of templateIds) {
-  if (!declaredIds.includes(id))
+/**
+ * Every `.env` service switch names a service, checked in that direction.
+ *
+ * The obvious check is the other way round — every declared service has a
+ * switch — and it is wrong here, by this schema's own account of itself:
+ * `env.schema.json` → services → `_note` says the list is "the vocabulary, not
+ * an inventory", and names solr and clickhouse as entries with nothing behind
+ * them. Demanding a switch for each would be demanding that the vocabulary stop
+ * being a vocabulary.
+ *
+ * Read this way it still catches a real defect and only real ones: a
+ * `SERVICE_MYQSL_ENABLE` in a workspace is a switch that will never turn
+ * anything on, and nothing else in the toolchain would notice.
+ *
+ * These keys are a migration surface and are meant to go — see docs/durum.md §3
+ * #36. When they do, this check goes with them.
+ */
+const SWITCH = /^SERVICE_([A-Z0-9_]+)_ENABLE$/;
+for (const key of new Set([...Object.keys(env), ...EMBEDDED])) {
+  const match = SWITCH.exec(key);
+  if (!match) continue;
+  const id = match[1].toLowerCase().replace(/_/g, '-');
+  // The catalogue spells `mongo-express` with a dash and the key with an
+  // underscore, and CONFLICTS.md's rule is that the reverse mapping uses the
+  // catalog rather than a naive substitution — so a key is accepted if either
+  // spelling is a known id.
+  if (!declaredIds.includes(id) && !declaredIds.includes(match[1].toLowerCase())) {
     err(
       'C',
-      'env.schema.json',
-      'SERVICE_UNDECLARED',
-      `template "${id}" exists but is not listed in env.schema.json services`
+      '.env',
+      'SWITCH_UNKNOWN_SERVICE',
+      `${key} names "${id}", which is not a service in env.schema.json — it will never turn anything on`
     );
-
-  const envKey = `SERVICE_${id.toUpperCase().replace(/-/g, '_')}_ENABLE`;
-  // Same reasoning as MISSING_KEY above: a key the app carries as a default is
-  // not a key the service is missing. Only a service nothing can switch at all
-  // is the defect this is looking for.
-  if (!(envKey in env) && !EMBEDDED.has(envKey)) {
-    err('C', '.env', 'SERVICE_NO_ENABLE_KEY', `template "${id}" has no ${envKey}`);
-    continue;
   }
-
-  // The profiles a template has to declare, checked against what actually
-  // starts it.
-  //
-  // This used to assert the *Bash CLI's* derivation — lowercase the env key's
-  // service part, so `SERVICE_MONGO_EXPRESS_ENABLE` yields `mongo_express`
-  // while the template declares `mongo-express`. That is C-09, and it was a
-  // real bug in a program this repo no longer contains: the shell was deleted,
-  // and `compose_up_service` passes the service id straight through
-  // (`--profile mongo-express`), which is the mapping CONFLICTS.md decided on —
-  // "the reverse mapping MUST use the service catalog, never a naive
-  // tr '_' '-'". So the check kept failing the desktop app for a bug the
-  // desktop app does not have, on the one service whose id contains a dash.
-  //
-  // What matters now is the rule the app relies on, and both halves of it: the
-  // id itself, for starting one service alone, and `services`, for starting the
-  // enabled set. A template missing either really does never start that way.
-  const tplFile = join(templatesDir, id, `docker-compose.${id}.tpl`);
-  if (existsSync(tplFile)) {
-    const tpl = readFileSync(tplFile, 'utf8');
-    const match = tpl.match(/profiles:\s*\[([^\]]*)\]/);
-    const profiles = match
-      ? match[1].split(',').map((s) => s.trim().replace(/^["']|["']$/g, ''))
-      : [];
-    if (profiles.length) {
-      if (!profiles.includes(id))
-        err(
-          'C',
-          `templates/services/${id}`,
-          'PROFILE_NOT_SERVICE_ID',
-          `starting this service alone passes --profile "${id}", but the template declares [${profiles.join(', ')}] — nothing would start`
-        );
-      if (!profiles.includes('services'))
-        err(
-          'C',
-          `templates/services/${id}`,
-          'PROFILE_NOT_IN_SERVICES',
-          `the template declares [${profiles.join(', ')}] — "services" is missing, so starting the enabled set skips it`
-        );
-    }
-  }
-}
-
-for (const id of declaredIds) {
-  if (!templateIds.includes(id))
-    err(
-      'C',
-      'env.schema.json',
-      'SERVICE_NO_TEMPLATE',
-      `service "${id}" is declared but has no template directory`
-    );
 }
 
 // Dependency graph must reference real services.

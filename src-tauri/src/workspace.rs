@@ -84,6 +84,18 @@ pub struct Workspace {
     /// be a second answer to a question the file on disk already answers, and
     /// it would keep saying yes after that file was deleted.
     pub catalogue_fetched: bool,
+    /// Does this workspace still keep its services in `.env`?
+    ///
+    /// True while the instance table is absent and `.env` still has a service
+    /// switched on — the two halves `handover::is_pending` weighs. The screen
+    /// this opens is a gate rather than a banner, and that is the decision
+    /// recorded as ADR 0016: the `.env` branch of the renderer is gone, so a
+    /// workspace in this state cannot build a stack at all, and telling it
+    /// gently would be telling it nothing.
+    ///
+    /// Computed here rather than left to the Market page for the reason
+    /// `catalogue_fetched` is: the answer decides which *screen* opens.
+    pub migration_pending: bool,
     pub source: Source,
     pub stackvo_version: Option<String>,
     pub env_file: Option<String>,
@@ -96,6 +108,7 @@ impl Workspace {
             valid: false,
             bootstrapped: false,
             catalogue_fetched: false,
+            migration_pending: false,
             source: Source::None,
             stackvo_version: None,
             projects_dir: None,
@@ -226,6 +239,15 @@ fn describe(root: PathBuf, source: Source) -> Workspace {
         valid: projects.is_some(),
         bootstrapped: bootstrap_marker(&root).is_file(),
         catalogue_fetched: crate::market::registry_path(&root).is_file(),
+        // Read through the catalogue the workspace actually has, not through a
+        // compiled-in list — there is no compiled-in list any more (ADR 0011).
+        // A machine with no catalogue cannot answer this yet, and does not need
+        // to: `CatalogueGate` comes first, and until it is past there is nothing
+        // to migrate *into*.
+        migration_pending: crate::config::Env::load(&root)
+            .ok()
+            .zip(crate::pkg::Tree::open(&crate::market::dir(&root)).ok())
+            .is_some_and(|(env, tree)| crate::handover::is_pending(&root, &env, &tree)),
         projects_dir: projects.map(|p| p.display().to_string()),
         source,
         root: Some(root.display().to_string()),

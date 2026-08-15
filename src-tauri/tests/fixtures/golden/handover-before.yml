@@ -1,0 +1,138 @@
+services:
+
+  mysql:
+    profiles: ["services", "mysql"]  # --services for all, --profile mysql for this service only
+    image: "mysql:8.0"
+    container_name: "stackvo-mysql"
+    restart: unless-stopped
+
+    environment:
+      MYSQL_ROOT_PASSWORD: "hunter2"
+      MYSQL_DATABASE: "shop"
+
+    volumes:
+      - stackvo-mysql-data:/var/lib/mysql
+      - /nonexistent/generated/configs/mysql.cnf:/etc/mysql/conf.d/stackvo.cnf:ro
+      - /nonexistent/logs/services/mysql:/var/log/mysql
+
+    command: >
+      mysqld
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --skip-character-set-client-handshake
+
+    ports:
+      - "3399:3306"
+
+    networks:
+      - "stackvo-net"
+
+
+  redis:
+    profiles: ["services", "redis"]  # --services for all, --profile redis for this service only
+    image: "redis:7.0"
+    container_name: "stackvo-redis"
+    restart: unless-stopped
+
+    command: ["redis-server", "/etc/redis/redis.conf"]
+
+    volumes:
+      - stackvo-redis-data:/data
+      - /nonexistent/generated/configs/redis.conf:/etc/redis/redis.conf:ro
+      - /nonexistent/logs/services/redis:/var/log/redis
+
+    ports:
+      - "6379:6379"
+
+    networks:
+      - "stackvo-net"
+
+
+  zookeeper:
+    profiles: ["services", "kafka"]  # --services for all, --profile kafka for this service only
+    image: confluentinc/cp-zookeeper:latest
+    container_name: stackvo-zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - /nonexistent/logs/services/zookeeper:/var/log/zookeeper
+    ports:
+      - "2181:2181"
+    networks:
+      - "stackvo-net"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: stackvo-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://stackvo-kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_PROCESS_ROLES: ""
+    volumes:
+      - stackvo-kafka-data:/var/lib/kafka/data
+      - /nonexistent/logs/services/kafka:/var/log/kafka
+    networks:
+      - "stackvo-net"
+
+
+  phpmyadmin:
+    profiles: ["services", "phpmyadmin"]  # --services for all, --profile phpmyadmin for this service only
+    image: "phpmyadmin:5.2"
+    container_name: "stackvo-phpmyadmin"
+    restart: unless-stopped
+
+    environment:
+      PMA_ARBITRARY: "1"
+      PMA_HOST: "stackvo-mysql"
+      PMA_PORT: "3306"
+      UPLOAD_LIMIT: "300M"
+
+    volumes:
+      - /nonexistent/logs/services/phpmyadmin:/var/log/phpmyadmin
+
+    ports:
+      - "8081:80"
+
+    networks:
+      - "stackvo-net"
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.phpmyadmin.rule=Host(`phpmyadmin.stackvo.loc`)"
+      - "traefik.http.routers.phpmyadmin.entrypoints=websecure"
+      - "traefik.http.routers.phpmyadmin.tls=true"
+      - "traefik.http.services.phpmyadmin.loadbalancer.server.port=80"
+
+
+volumes:
+  stackvo-cassandra-data: {}
+  stackvo-elasticsearch-data: {}
+  stackvo-grafana-config: {}
+  stackvo-grafana-data: {}
+  stackvo-kafka-data: {}
+  stackvo-kibana-data: {}
+  stackvo-mailpit-data: {}
+  stackvo-mariadb-data: {}
+  stackvo-meilisearch-data: {}
+  stackvo-minio-data: {}
+  stackvo-mongo-data: {}
+  stackvo-mysql-data: {}
+  stackvo-pgadmin-data: {}
+  stackvo-phpcacheadmin-data: {}
+  stackvo-postgres-data: {}
+  stackvo-rabbitmq-data: {}
+  stackvo-rabbitmq-logs: {}
+  stackvo-redis-data: {}
+  stackvo-typesense-data: {}
+  stackvo-valkey-data: {}

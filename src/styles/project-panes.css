@@ -82,7 +82,17 @@
   word-break: break-all;
 }
 
+/* A `button`, not an `a`: these open a URL through a command rather than
+   navigating, and an anchor with no href takes no focus and is announced as
+   plain text. The reset is what lets a button read as the link it replaced. */
 .detail-content .field-link {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  text-align: inherit;
+
   color: rgb(var(--v-theme-primary));
   cursor: pointer;
   word-break: break-all;

@@ -913,29 +913,6 @@ pub async fn remove_image(tag: &str) -> Result<bool> {
     }
 }
 
-/// Every named volume whose name starts with `prefix`, as the engine has them.
-///
-/// Matched by name rather than by compose label because the compose file that
-/// declared them is regenerated without them the moment a service is switched
-/// off — by the time anything wants to clean up, the label's source is gone.
-pub async fn volumes_named(prefix: &str) -> Result<Vec<String>> {
-    use bollard::query_parameters::ListVolumesOptions;
-
-    let docker = connect()?;
-    let list = docker
-        .list_volumes(None::<ListVolumesOptions>)
-        .await
-        .map_err(|e| Error::new(Code::EngineUnreachable, format!("Cannot list volumes: {e}")))?;
-
-    Ok(list
-        .volumes
-        .unwrap_or_default()
-        .into_iter()
-        .map(|v| v.name)
-        .filter(|name| name.starts_with(prefix))
-        .collect())
-}
-
 /// Delete a named volume and everything in it.
 ///
 /// Irreversible, and the only caller is behind an explicit confirmation. A 404
@@ -1283,6 +1260,49 @@ pub struct LogLine {
     pub stream: &'static str,
 }
 
+/// One container's recent output, as a string.
+///
+/// `logs_stream` follows; this reads once and stops, which is what a caller
+/// that wants to *parse* the tail needs. Written for the Postgres half of the
+/// query log (F-1): that server writes its statements to stderr, and with
+/// `logging_collector` off — the default in the official image — stderr is the
+/// container's log.
+///
+/// The name is the container's, not an id this function prefixes: an instance
+/// is `stackvo-postgres-17`, and a caller that already resolved that must not
+/// have `stackvo-` put in front of it a second time.
+pub async fn logs_tail(container: &str, tail: u32) -> Result<String> {
+    use bollard::container::LogOutput;
+    use bollard::query_parameters::LogsOptionsBuilder;
+    use futures_util::StreamExt;
+
+    let docker = connect()?;
+    let options = LogsOptionsBuilder::new()
+        .follow(false)
+        .stdout(true)
+        .stderr(true)
+        .timestamps(false)
+        .tail(&tail.to_string())
+        .build();
+
+    let mut stream = docker.logs(container, Some(options));
+    let mut out = String::new();
+    while let Some(item) = stream.next().await {
+        let Ok(frame) = item else { break };
+        let bytes = match frame {
+            LogOutput::StdOut { message }
+            | LogOutput::StdErr { message }
+            | LogOutput::Console { message } => message,
+            LogOutput::StdIn { .. } => continue,
+        };
+        // Lossy for the reason `logs_stream` gives: Docker frames are chunks
+        // and may split mid-UTF-8, and a partial character must not end the
+        // read.
+        out.push_str(&String::from_utf8_lossy(&bytes));
+    }
+    Ok(out)
+}
+
 /// A live log stream for a container.
 ///
 /// The web UI had no equivalent: following logs existed only as `stackvo logs`
@@ -1342,6 +1362,33 @@ pub fn logs_stream(
 ///
 /// Runs until the connection drops, which is normal when Docker restarts — the
 /// caller reconnects.
+///
+/// Is this Docker action worth telling the UI about, and is the container up
+/// after it? `None` for the ones that are not.
+///
+/// A free function so it can be tested: the stream around it needs a daemon,
+/// and this is the part of the watcher with a decision in it.
+///
+/// `health_status: …` is the entry that took the longest to earn its place.
+/// Docker reports a healthcheck verdict as its own event, not as a state
+/// change, so it fell through the catch-all with `exec_start` — and the
+/// consequence was a service that had genuinely become healthy still showing
+/// the hourglass it was given at boot. Nothing was wrong with the reading; the
+/// reading simply never arrived, and the fix looked like "navigate away and
+/// come back", which refetches on mount. The container is running either way,
+/// including for `health_status: unhealthy` — a failing healthcheck is a
+/// verdict about a container that is up, which is the whole reason the glyph
+/// beside it is worth drawing.
+fn transition(action: &str) -> Option<bool> {
+    // `exec_start: …` and friends are noise; only real transitions matter.
+    match action {
+        "start" | "unpause" | "restart" => Some(true),
+        "die" | "stop" | "kill" | "pause" | "destroy" => Some(false),
+        a if a.starts_with("health_status") => Some(true),
+        _ => None,
+    }
+}
+
 pub async fn watch_container_events<F>(mut on_change: F) -> Result<()>
 where
     F: FnMut(String, String, bool) + Send,
@@ -1363,11 +1410,8 @@ where
         let Some(action) = event.action.as_deref() else {
             continue;
         };
-        // `exec_start: …` and friends are noise; only real transitions matter.
-        let running = match action {
-            "start" | "unpause" | "restart" => true,
-            "die" | "stop" | "kill" | "pause" | "destroy" => false,
-            _ => continue,
+        let Some(running) = transition(action) else {
+            continue;
         };
 
         let name = event
@@ -1397,6 +1441,28 @@ mod tests {
         assert_eq!(container_name("mysql"), "stackvo-mysql");
         // Passing an already-prefixed name must not double it.
         assert_eq!(container_name("stackvo-mysql"), "stackvo-mysql");
+    }
+
+    /// The event that was being dropped, and the noise that still is.
+    ///
+    /// A healthcheck verdict is its own Docker event rather than a state
+    /// change, so it used to fall through the same arm as `exec_start` — and a
+    /// service that had become healthy kept the hourglass it was given at
+    /// boot until something else made the UI refetch. Both verdicts count, and
+    /// both mean the container is up: "unhealthy" is a verdict about a running
+    /// container, which is exactly what the glyph beside it exists to say.
+    #[test]
+    fn health_verdicts_reach_the_ui_and_noise_does_not() {
+        assert_eq!(transition("health_status: healthy"), Some(true));
+        assert_eq!(transition("health_status: unhealthy"), Some(true));
+        assert_eq!(transition("health_status: starting"), Some(true));
+
+        assert_eq!(transition("start"), Some(true));
+        assert_eq!(transition("die"), Some(false));
+
+        assert_eq!(transition("exec_start: /bin/sh -c ls"), None);
+        assert_eq!(transition("exec_create"), None);
+        assert_eq!(transition("attach"), None);
     }
 
     #[test]

@@ -14,6 +14,16 @@ import { api, asList } from '@/lib/ipc';
 export function useProfiler(name) {
   const status = ref(null);
   const report = ref(null);
+  /**
+   * The call tree for the open profile, fetched only when the flame view is
+   * asked for (F-3).
+   *
+   * Lazily and separately, because the two answers are different sizes: the
+   * table is sixty rows and the tree is thousands of nodes. A pane that opens
+   * on the table should not carry the graph across the boundary to ignore it.
+   */
+  const tree = ref(null);
+  const treeBusy = ref(false);
   const openId = ref('');
   const error = ref(null);
 
@@ -93,6 +103,9 @@ export function useProfiler(name) {
     report.value = null;
     try {
       report.value = await api.profilerRead(name.value, file.id);
+      // A tree belonging to the profile that was open a moment ago is worse
+      // than none: it renders, and it is about a different request.
+      tree.value = null;
       openId.value = file.id;
       return report.value;
     } catch (e) {
@@ -142,9 +155,26 @@ export function useProfiler(name) {
     }
   }
 
+  /** Fetch the call tree for whatever is open. */
+  async function loadTree() {
+    if (!openId.value || treeBusy.value) return;
+    treeBusy.value = true;
+    error.value = null;
+    try {
+      tree.value = await api.profilerTree(name.value, openId.value);
+    } catch (e) {
+      error.value = e;
+    } finally {
+      treeBusy.value = false;
+    }
+  }
+
   return {
     status,
     report,
+    tree,
+    treeBusy,
+    loadTree,
     openId,
     busy,
     error,

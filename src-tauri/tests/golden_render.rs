@@ -43,20 +43,6 @@ use std::path::{Path, PathBuf};
 /// and what makes this test independent of anything on disk.
 const NO_WORKSPACE: &str = "/stackvo-golden-render-no-such-workspace";
 
-/// The five configs `render_generated` writes into `generated/configs/`, as
-/// (template, output) pairs.
-const CONFIGS: [(&str, &str); 6] = [
-    ("services/redis/redis.conf.tpl", "redis.conf"),
-    ("services/mysql/my.cnf.tpl", "mysql.cnf"),
-    ("services/mongo/mongo.conf.tpl", "mongo.conf"),
-    ("services/postgres/postgres.conf.tpl", "postgres.conf"),
-    (
-        "services/elasticsearch/elasticsearch.yml.tpl",
-        "elasticsearch.yml",
-    ),
-    ("services/valkey/valkey.conf.tpl", "valkey.conf"),
-];
-
 fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden")
 }
@@ -133,26 +119,6 @@ fn variables() -> std::collections::BTreeMap<String, String> {
     template::variables(&env, Path::new("/this-path-must-not-appear"))
 }
 
-#[test]
-fn the_service_configs_render_as_frozen() {
-    let vars = variables();
-
-    for (tpl, out) in CONFIGS {
-        let text =
-            skeleton::read_template(Path::new(NO_WORKSPACE), &format!("core/templates/{tpl}"))
-                .unwrap_or_else(|| panic!("{tpl} is not compiled into the binary"));
-
-        check(&format!("configs/{out}"), &template::render(&text, &vars));
-    }
-}
-
-#[test]
-fn the_assembled_services_file_renders_as_frozen() {
-    let vars = variables();
-    let rendered = template::render_dynamic_compose(Path::new(NO_WORKSPACE), &vars);
-    check("docker-compose.dynamic.yml", &rendered);
-}
-
 /// The frozen files must not carry anything true only of the machine that
 /// produced them.
 ///
@@ -172,7 +138,12 @@ fn the_render_carries_nothing_from_this_machine() {
     assert_eq!(vars.get("HOST_UID").map(String::as_str), Some("1000"));
     assert_eq!(vars.get("HOST_GID").map(String::as_str), Some("1000"));
 
-    let rendered = template::render_dynamic_compose(Path::new(NO_WORKSPACE), &vars);
+    // Asserted against a config render rather than the assembled services file:
+    // that file is no longer produced (ADR 0016), and these three variables are
+    // the ones every remaining template still interpolates.
+    let text = skeleton::read_template(Path::new(NO_WORKSPACE), "core/compose/base.yml")
+        .expect("base.yml is compiled in");
+    let rendered = template::render(&text, &vars);
     assert!(
         !rendered.contains("/this-path-must-not-appear"),
         "the fallback root reached the output — the fixture is not pinning it"
@@ -182,34 +153,6 @@ fn the_render_carries_nothing_from_this_machine() {
         assert!(
             !rendered.contains(&home),
             "this machine's home directory is in the render"
-        );
-    }
-}
-
-/// The render describes the whole catalogue, not a subset.
-///
-/// `render_dynamic_compose` warns and continues when a template will not
-/// resolve, which is right for one missing file and wrong as a silent floor: a
-/// service that stopped resolving would simply leave the output, be regenerated
-/// out of the golden file on the next update, and read as an intended change.
-///
-/// Asserted against the render rather than the frozen file on purpose. Reading
-/// the file would make this test depend on another test having written it —
-/// they run in parallel, and it failed exactly that way the first time.
-/// `the_assembled_services_file_renders_as_frozen` ties the two together.
-#[test]
-fn every_dynamic_service_is_in_the_render() {
-    let text = template::render_dynamic_compose(Path::new(NO_WORKSPACE), &variables());
-
-    for (flag, path) in template::DYNAMIC_SERVICES {
-        // `services/mysql/docker-compose.mysql.tpl` → `mysql`
-        let service = path
-            .split('/')
-            .nth(1)
-            .expect("a template path names its service");
-        assert!(
-            text.contains(&format!("stackvo-{service}")),
-            "{flag} ({service}) is enabled in the fixture but absent from the render"
         );
     }
 }

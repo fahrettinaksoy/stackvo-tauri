@@ -65,6 +65,25 @@ pub struct Fingerprint {
     /// than the Django marker: other ecosystems' repos occasionally carry one
     /// for tooling.
     pub python_deps: bool,
+    /// `deno.json`, `deno.jsonc` or `deno.lock`.
+    ///
+    /// Deno's own manifest, and a repository carrying one has committed to
+    /// Deno resolving its imports — which `node` cannot do, so this is a
+    /// certainty rather than a preference between two runtimes that would both
+    /// work.
+    pub deno_config: bool,
+    /// `bun.lock`, `bun.lockb` or `bunfig.toml`.
+    ///
+    /// Weaker than Deno's marker and deliberately so: a Bun project's
+    /// `package.json` is a Node project's `package.json`, and the only thing
+    /// separating them is which tool wrote the lockfile. A repository with both
+    /// a Bun lockfile and an npm one has been installed both ways, and there is
+    /// no honest way to say which the author meant.
+    pub bun_lock: bool,
+    /// `package-lock.json`, `yarn.lock` or `pnpm-lock.yaml` — an npm-family
+    /// lockfile, which is what makes a Bun marker ambiguous rather than
+    /// decisive.
+    pub npm_lock: bool,
 }
 
 /// How sure the inference is, said plainly.
@@ -242,6 +261,22 @@ pub fn infer(print: &Fingerprint) -> Detected {
         evidence: vec![evidence.to_string()],
     };
 
+    // Deno first among the JavaScript runtimes, and before Go for the same
+    // reason the whole block sits where it does: `deno.json` is Deno's import
+    // map and nothing else reads it, so a repository carrying one has already
+    // committed. Node would not resolve its imports at all.
+    if print.deno_config {
+        return lang("deno", Confidence::Certain, "deno.json / deno.lock");
+    }
+    // Bun only when nothing says npm. A Bun project's `package.json` is a Node
+    // project's `package.json`; the lockfile is the only difference, and a
+    // repository holding both has been installed both ways. Guessing Bun there
+    // would pick a runtime on the strength of whichever install ran last —
+    // so it falls through to the node heuristics below, which is the answer
+    // that was right before Bun was an option.
+    if print.bun_lock && !print.npm_lock {
+        return lang("bun", Confidence::Certain, "bun.lock / bunfig.toml");
+    }
     if print.go_mod {
         return lang("go", Confidence::Certain, "go.mod");
     }
@@ -605,6 +640,17 @@ pub fn fingerprint(dir: &Path) -> Fingerprint {
         gemfile: dir.join("Gemfile").is_file(),
         manage_py: dir.join("manage.py").is_file(),
         python_deps: dir.join("requirements.txt").is_file() || dir.join("pyproject.toml").is_file(),
+        deno_config: dir.join("deno.json").is_file()
+            || dir.join("deno.jsonc").is_file()
+            || dir.join("deno.lock").is_file(),
+        // `bun.lockb` is the binary lockfile Bun wrote before 1.2; `bun.lock`
+        // is the text one it writes now. Both are still on disk in the wild.
+        bun_lock: dir.join("bun.lock").is_file()
+            || dir.join("bun.lockb").is_file()
+            || dir.join("bunfig.toml").is_file(),
+        npm_lock: dir.join("package-lock.json").is_file()
+            || dir.join("yarn.lock").is_file()
+            || dir.join("pnpm-lock.yaml").is_file(),
         ..Default::default()
     };
 
@@ -762,6 +808,52 @@ mod tests {
             assert_eq!(d.runtime, runtime, "{field}");
             assert_eq!(d.confidence, Confidence::Certain);
         }
+    }
+
+    /// J-1. Deno's marker is exclusive; Bun's is not, and the difference is the
+    /// whole of what these two cover.
+    ///
+    /// A repository with `deno.json` has committed — nothing else reads it, and
+    /// Node would not resolve its imports at all. A repository with a Bun
+    /// lockfile has a `package.json` that is indistinguishable from a Node
+    /// project's, so the lockfile is the only evidence, and it stops being
+    /// evidence the moment an npm-family lockfile sits beside it.
+    #[test]
+    fn deno_is_certain_from_its_own_manifest() {
+        let print = Fingerprint {
+            deno_config: true,
+            // Deno 2 reads package.json too, so its presence proves nothing.
+            package_json: true,
+            node_dependencies: s(&["oak"]),
+            ..Default::default()
+        };
+        let d = infer(&print);
+        assert_eq!(d.runtime, "deno");
+        assert_eq!(d.confidence, Confidence::Certain);
+    }
+
+    #[test]
+    fn bun_wins_on_its_lockfile_and_yields_when_npm_also_installed() {
+        let bun_only = Fingerprint {
+            bun_lock: true,
+            package_json: true,
+            node_scripts: s(&["start"]),
+            ..Default::default()
+        };
+        assert_eq!(infer(&bun_only).runtime, "bun");
+
+        // Installed both ways. Picking Bun here would be picking a runtime on
+        // the strength of whichever install happened to run last, so it falls
+        // through to the node heuristics — the answer that was right before Bun
+        // was an option.
+        let both = Fingerprint {
+            bun_lock: true,
+            npm_lock: true,
+            package_json: true,
+            node_scripts: s(&["start"]),
+            ..Default::default()
+        };
+        assert_eq!(infer(&both).runtime, "node");
     }
 
     #[test]

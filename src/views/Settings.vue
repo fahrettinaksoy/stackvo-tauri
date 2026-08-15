@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useIconRail } from '@/composables/useIconRail';
 import { useAppStore } from '@/stores/app';
 import { api } from '@/lib/ipc';
 import { checkForUpdate, updatesConfigured } from '@/lib/updates';
@@ -10,6 +11,9 @@ import CertificatesPane from '@/components/settings/CertificatesPane.vue';
 import { useCertificates } from '@/composables/useCertificates';
 import { useEnvEditor, provideEnvEditor } from '@/composables/useEnvEditor';
 import DomainPane from '@/components/settings/DomainPane.vue';
+import DnsPane from '@/components/settings/DnsPane.vue';
+import RoutesPane from '@/components/settings/RoutesPane.vue';
+import IdlePane from '@/components/settings/IdlePane.vue';
 import WorkspacePane from '@/components/settings/WorkspacePane.vue';
 import AppearancePane from '@/components/settings/AppearancePane.vue';
 import PhpPane from '@/components/settings/PhpPane.vue';
@@ -227,6 +231,16 @@ const groupedSections = computed(() =>
 );
 
 const section = computed(() => SECTIONS.find((s) => s.key === tab.value) ?? SECTIONS[0]);
+
+/**
+ * Icons only while the window is narrow — the reasoning is in the composable,
+ * which the project detail rail shares.
+ *
+ * The 900 is this page's own: under it the rail is not a rail at all, it
+ * becomes a strip above the pane, and there the labels are what make a wrapped
+ * row of icons readable.
+ */
+const railOnly = useIconRail(900);
 
 /** Which surface family to preview a neutral swatch in — they differ per mode. */
 const checkingUpdate = ref(false);
@@ -463,6 +477,16 @@ onMounted(async () => {
               @save="save"
               @regenerate="regenerateAfterChange"
             />
+            <!-- Under the hosts file rather than in a tab of its own: it is the
+                 other answer to the same question, and somebody reading "these
+                 names need a line in /etc/hosts" is exactly who wants it. -->
+            <DnsPane />
+            <!-- The other half of "what does this proxy serve": the generated
+                 routes above, and the ones the user pointed somewhere else. -->
+            <RoutesPane />
+            <!-- Under the proxy, because the proxy's access log is where the
+                 answer to "is this project idle" comes from. -->
+            <IdlePane />
           </template>
 
           <template v-if="tab === 'php'">
@@ -657,20 +681,33 @@ onMounted(async () => {
       <!-- The pane list. On the right rather than the left: the app already has
            two rails on the left edge, and a third one would put three columns of
            navigation between the window edge and the thing being configured. -->
-      <nav class="settings-nav">
+      <nav class="settings-nav" :class="{ 'settings-nav--rail': railOnly }">
         <v-list nav class="pa-2">
           <template v-for="(g, i) in groupedSections" :key="g.key">
-            <v-list-subheader :class="i ? 'mt-3' : ''">{{ t(g.label) }}</v-list-subheader>
+            <!-- The group heading becomes the rule it was already drawing with
+                 whitespace. Truncating it instead would put "Çalışma…" over
+                 the icons, which is a heading that has to be guessed at. -->
+            <v-divider v-if="railOnly && i" class="my-2 mx-3" />
+            <v-list-subheader v-if="!railOnly" :class="i ? 'mt-3' : ''">
+              {{ t(g.label) }}
+            </v-list-subheader>
             <v-list-item
               v-for="s in g.items"
               :key="s.key"
               rounded="lg"
               color="primary"
               :prepend-icon="s.icon"
-              :title="t(s.label)"
+              :title="railOnly ? undefined : t(s.label)"
+              :aria-label="railOnly ? t(s.label) : undefined"
               :active="tab === s.key"
               @click="tab = s.key"
             >
+              <!-- The name, on hover, for as long as it is not on the row. A
+                   tooltip beside a label that is already there is noise; in
+                   place of one it is the only way to read the icon. -->
+              <v-tooltip v-if="railOnly" activator="parent" location="left">
+                {{ t(s.label) }}
+              </v-tooltip>
               <!-- The certificate going stale is silent otherwise: the first
                  sign is a browser warning on a project that worked yesterday,
                  and nothing connects that to a settings pane. -->
@@ -723,6 +760,41 @@ onMounted(async () => {
 .settings-nav {
   flex: 0 0 220px;
   overflow-y: auto;
+}
+
+/* Icons only, so the width is the icon's. The class comes from `railOnly`
+   rather than from a media query of its own — the labels are not hidden here,
+   they were never rendered, and a second breakpoint would be a second place to
+   change. */
+.settings-nav--rail {
+  flex: 0 0 64px;
+}
+
+/* Centred, and this is the part that has to be said out loud.
+   `v-list-item` is a three-column grid — prepend, content, append — and the gap
+   after the icon is not a margin but a `.v-list-item__spacer` element, 32px
+   wide by default. With the label gone that spacer is still there, so the
+   prepend column stays 56px inside a 48px item: the icon sits left of centre
+   and hangs over the edge of its own highlight, which is exactly how the first
+   attempt shipped. Zero the spacer through the variable it reads, then let the
+   prepend span all three columns so "centre" means the item and not the column
+   the icon happens to be in. */
+.settings-nav--rail :deep(.v-list-item) {
+  --v-list-prepend-gap: 0px;
+  padding-inline: 0;
+}
+
+.settings-nav--rail :deep(.v-list-item__prepend) {
+  grid-column: 1 / -1;
+  justify-content: center;
+}
+
+/* The stale-certificate mark, which has no row left to sit at the end of. In
+   the corner of the icon instead, where a badge goes. */
+.settings-nav--rail :deep(.v-list-item__append) {
+  position: absolute;
+  inset-block-start: 2px;
+  inset-inline-end: 6px;
 }
 
 /* Under about 900px the rail costs more width than it earns, so it becomes a

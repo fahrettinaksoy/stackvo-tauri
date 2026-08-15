@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { mount, flushPromises } from '@vue/test-utils';
 import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
@@ -50,6 +51,10 @@ const api = vi.hoisted(() => ({
   dbTargets: vi.fn(),
   dbSnapshots: vi.fn(),
   mailStatus: vi.fn(),
+  // C-1's three, driven per test through `mockResolvedValue`.
+  packageScaffold: vi.fn(),
+  packageLint: vi.fn(),
+  packageSeal: vi.fn(),
 }));
 
 vi.mock('@/lib/ipc', () => ({ api, asList: (v) => (Array.isArray(v) ? v : []) }));
@@ -483,6 +488,62 @@ describe('the market page', () => {
     expect(catalogue.text()).not.toContain('mysql-8-0');
   });
 
+  /// The search field stays the height of a search field.
+  ///
+  /// Side by side, the catalogue column is a flex column so its tree can scroll
+  /// inside the card. Vuetify's `.v-input` carries `flex: 1 1 auto`, which in a
+  /// column reads as "grow taller" — so with the categories collapsed the field
+  /// split the unused height with the tree and stood at twice its own size,
+  /// with the label floating in the middle of an empty box.
+  ///
+  /// Read from the source: jsdom applies neither Vuetify's stylesheet nor a
+  /// scoped `<style>` block, and every assertion in this file passed while the
+  /// field was 80px tall.
+  it('does not let the search field grow into the column', async () => {
+    const source = readFileSync('src/views/Market.vue', 'utf8');
+    const style = source.slice(source.indexOf('<style'));
+    const rule = /\.market-col\s+:deep\(\.group-body\)\s*>\s*\.v-input\s*\{([^}]*)\}/.exec(style);
+
+    expect(rule, 'nothing stops .v-input from growing in the column').not.toBeNull();
+    expect(rule[1]).toMatch(/flex:\s*0\s+0/);
+
+    // Inside the two-column media query, because stacked there is no leftover
+    // height to take and the rule would be answering a question nobody asked.
+    const query = style.indexOf('@media (min-width: 1281px)');
+    expect(query).toBeGreaterThan(-1);
+    expect(style.indexOf(rule[0])).toBeGreaterThan(query);
+  });
+
+  /// Every instance is one row of one line.
+  ///
+  /// A service with two ports — RabbitMQ's broker and its management UI — put
+  /// them on two lines, and that row stood at twice the height of the others;
+  /// the container names and three of the column headings wrapped as well, so
+  /// the table had rows of three different heights and the eye lost the one it
+  /// was reading. The cell content is asserted here; the `nowrap` that stops
+  /// the rest is read from the source, because jsdom applies no stylesheet.
+  it('keeps an instance on one line however many ports it has', async () => {
+    api.instanceList.mockResolvedValue([
+      { ...INSTANCES[0], id: 'rabbitmq-4', ports: { main: 5672, mgmt: 15672 } },
+    ]);
+
+    const page = mountPage();
+    await flushPromises();
+
+    const cells = page.findAll('.instances-table tbody td');
+    const ports = cells.find((c) => c.text().includes('5672'));
+    expect(ports.text()).toContain('main: 5672');
+    expect(ports.text()).toContain('mgmt: 15672');
+    // Stacked, each port was a block of its own. Inline, they are spans.
+    expect(ports.findAll('div')).toHaveLength(0);
+
+    const style = readFileSync('src/views/Market.vue', 'utf8');
+    const rule =
+      /\.instances-table :deep\(th\),\s*\.instances-table :deep\(td\)\s*\{([^}]*)\}/.exec(style);
+    expect(rule, 'nothing stops the cells wrapping').not.toBeNull();
+    expect(rule[1]).toMatch(/white-space:\s*nowrap/);
+  });
+
   /// An installed version is shown whatever its support status, or a user could
   /// not uninstall something that is on their machine.
   it('never hides a version that is installed', async () => {
@@ -731,5 +792,88 @@ describe('the market page', () => {
 
       expect(page.vm.market.grouped.value).toHaveLength(0);
     });
+  });
+});
+
+/**
+ * The package authoring dialog (C-1).
+ *
+ * The property worth a test is the one that is silent when wrong: a report
+ * carrying problems means **nothing was written**, so the screen must not show
+ * a package as valid beside a list of refusals. That is exactly the mistake a
+ * later "tidy the alerts" change would make.
+ */
+describe('writing a package', () => {
+  /**
+   * Queried through `document`, not the wrapper: `v-dialog` teleports its card
+   * to the body, so `wrapper.find` reaches an element that is not there.
+   */
+  async function open() {
+    document.body.innerHTML = '';
+    const component = (await import('@/components/PackageAuthorDialog.vue')).default;
+    mount(
+      {
+        components: { PackageAuthorDialog: component },
+        template: '<v-app><PackageAuthorDialog :model-value="true" /></v-app>',
+      },
+      { global: { plugins: [createPinia(), vuetify, i18n] }, attachTo: document.body }
+    );
+    await flushPromises();
+  }
+
+  const type = (placeholder, value) => {
+    const input = document.querySelector(`input[placeholder="${placeholder}"]`);
+    input.value = value;
+    input.dispatchEvent(new Event('input'));
+    return flushPromises();
+  };
+
+  const press = (label) => {
+    const button = [...document.querySelectorAll('button')].find(
+      (b) => b.textContent.trim() === label
+    );
+    button.click();
+    return flushPromises();
+  };
+
+  it('reports refusals and does not also call the package valid', async () => {
+    api.packageSeal.mockResolvedValue({
+      service: 'widget',
+      version: '1.0',
+      dir: '/tmp/widget',
+      resealed: ['compose.yml'],
+      problems: ['widget@1.0: privileged — Container escape, in one word.'],
+    });
+    await open();
+
+    await type('widget', 'widget');
+    await type('1.0', '1.0');
+    await press(i18n.global.t('authoring.seal'));
+
+    expect(document.body.textContent).toContain('privileged');
+    expect(document.body.textContent).not.toContain(
+      i18n.global.t('authoring.valid', { service: 'widget', version: '1.0' })
+    );
+  });
+
+  it('names the files it rewrote and the directory to edit', async () => {
+    api.packageScaffold.mockResolvedValue({
+      service: 'widget',
+      version: '1.0',
+      dir: '/tmp/market/packages/databases/widget/versions/1.0',
+      resealed: ['compose.yml'],
+      problems: [],
+    });
+    await open();
+
+    await type('widget', 'widget');
+    await type('1.0', '1.0');
+    await type('widget:1.0', 'widget:1.0');
+    await press(i18n.global.t('authoring.create'));
+
+    expect(document.body.textContent).toContain('compose.yml');
+    expect(document.body.textContent).toContain(
+      '/tmp/market/packages/databases/widget/versions/1.0'
+    );
   });
 });

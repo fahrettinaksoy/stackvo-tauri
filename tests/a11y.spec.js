@@ -55,3 +55,46 @@ describe('icon-only buttons', () => {
     expect(unnamed, 'icon buttons a screen reader would announce as "button"').toEqual([]);
   });
 });
+
+/**
+ * An anchor that navigates nowhere.
+ *
+ * `<a class="…-link" @click="…">` renders as a link, reads as a link, and is
+ * neither: with no `href` it takes no focus, is skipped by every keyboard, and
+ * a screen reader announces it as plain text. Six of them shipped — the domain
+ * in every row of the projects table among them — so the whole table was
+ * mouse-only, and nothing in this repository could see it. jsdom has no focus
+ * model and a mount test asserting on the text passes either way.
+ *
+ * The browser suite found it (`tests/e2e/shell.e2e.js`, which asks for a
+ * `link` role and got nothing). This is the guard that stops it coming back,
+ * and it is a source read for the reason the other two are: the rule is about
+ * what was written, and reading it needs no engine.
+ *
+ * `<a href="…">` is untouched — that is a real link and belongs in the markup.
+ */
+describe('anchors', () => {
+  it('never carry a click handler instead of an href', () => {
+    const offenders = [];
+
+    for (const file of vueFiles()) {
+      const text = readFileSync(file, 'utf8');
+
+      // Each opening `<a …>` with its attributes. Non-greedy to the first `>`,
+      // which is enough: none of these carry a `>` inside an attribute value.
+      for (const match of text.matchAll(/<a(\s[^>]*)>/g)) {
+        const attrs = match[1];
+        if (/\bhref\b/.test(attrs)) continue;
+        if (!/@click|v-on:click/.test(attrs)) continue;
+
+        const line = text.slice(0, match.index).split('\n').length;
+        offenders.push(`${relative(SRC, file)}:${line}`);
+      }
+    }
+
+    expect(
+      offenders,
+      'anchors with a click handler and no href — use <button type="button">, which takes focus'
+    ).toEqual([]);
+  });
+});

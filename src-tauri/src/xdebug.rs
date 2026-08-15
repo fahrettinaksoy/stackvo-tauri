@@ -364,6 +364,14 @@ pub struct XdebugStatus {
     pub running: bool,
     /// The extension is compiled in, so the manifest can be ahead of the image.
     pub needs_rebuild: bool,
+    /// Does the image carry the extension at all?
+    ///
+    /// Separate from [`Self::enabled`] since F-4 split the two, and the split
+    /// is what the screen needs to explain itself: switching on for the *first*
+    /// time rebuilds the image, and every time after that recreates a
+    /// container. Without this the second toggle looks identical to the first
+    /// and the difference in how long it takes reads as a fault.
+    pub compiled_in: bool,
     pub port: u16,
     pub mode: String,
     pub ide_key: String,
@@ -496,7 +504,12 @@ fn entries(root: &Path) -> Vec<Entry> {
             continue;
         }
         let Some(php) = &manifest.php else { continue };
-        if !listed(&php.extensions) {
+        // Switched on, not merely compiled in. Those were the same thing until
+        // F-4 split them, and conflating them is what made every toggle a
+        // rebuild: turning debugging off removed the extension from the image.
+        // Measured — an image carrying Xdebug at `mode=off` runs at the speed
+        // of one without it — so the extension stays and only the mode moves.
+        if !php.xdebug || !listed(&php.extensions) {
             continue;
         }
 
@@ -581,7 +594,11 @@ pub async fn status(root: &Path, name: &str) -> Result<XdebugStatus> {
 
     let supported = manifest.runtime == "php";
     let php = manifest.php.as_ref();
-    let enabled = supported && php.is_some_and(|p| listed(&p.extensions));
+    // What the manifest asks for — the switch, not the extension. A project can
+    // carry Xdebug and have it off, which is the whole point of the split and
+    // the state every project lands in after being used once.
+    let enabled = supported && php.is_some_and(|p| p.xdebug);
+    let compiled_in = supported && php.is_some_and(|p| listed(&p.extensions));
 
     let dockerfile = dockerfile_path(root, name);
     let dockerfile_text = std::fs::read_to_string(&dockerfile).unwrap_or_default();
@@ -605,6 +622,7 @@ pub async fn status(root: &Path, name: &str) -> Result<XdebugStatus> {
     Ok(XdebugStatus {
         supported,
         enabled,
+        compiled_in,
         active,
         active_mode: details.as_ref().and_then(|d| env_mode(&d.env)),
         running,
@@ -648,7 +666,8 @@ pub async fn set(root: &Path, name: &str, enabled: bool) -> Result<XdebugStatus>
         return Err(Error::not_found(format!("project {name}")));
     }
 
-    let mut manifest = crate::manifest::read(&file, name)?;
+    // Committed: the extension list is edited below and written back.
+    let mut manifest = crate::manifest::read_committed(&file, name)?;
 
     if manifest.runtime != "php" {
         return Err(Error::new(
@@ -667,11 +686,28 @@ pub async fn set(root: &Path, name: &str, enabled: bool) -> Result<XdebugStatus>
         )
     })?;
 
-    // Only write when something actually changes: every manifest write wakes
+    // Two decisions, and only one of them costs a rebuild.
+    //
+    // The extension goes in when debugging is first switched on and **never
+    // comes out**. That is the change F-4 asked for: removing it on the way off
+    // meant the next `on` rebuilt the image, minutes for something that should
+    // be seconds. It can stay because it is free when off — measured at the
+    // speed of an image without it, against about 6.7× for `mode=debug` — so
+    // the only thing a toggle now moves is `XDEBUG_MODE`, and that is a
+    // container recreate.
+    //
+    // Only written when something actually changes: every manifest write wakes
     // the file watcher, which flags the project as needing a regenerate.
-    // Toggling to the state it is already in would raise that flag for nothing.
-    if listed(&php.extensions) != enabled {
-        php.extensions = with_extension(&php.extensions, enabled);
+    let mut changed = false;
+    if enabled && !listed(&php.extensions) {
+        php.extensions = with_extension(&php.extensions, true);
+        changed = true;
+    }
+    if php.xdebug != enabled {
+        php.xdebug = enabled;
+        changed = true;
+    }
+    if changed {
         crate::manifest::write(&file, &manifest)?;
     }
 
@@ -681,6 +717,47 @@ pub async fn set(root: &Path, name: &str, enabled: bool) -> Result<XdebugStatus>
 
 #[cfg(test)]
 mod tests {
+    // ------------------------------------------------- the split (F-4)
+
+    /// The change F-4 asked for, as an assertion about the manifest.
+    ///
+    /// Turning debugging off used to remove the extension, so the next `on`
+    /// rebuilt the image. It stays now, because it is free when off: measured
+    /// at the speed of an image without it, against about 6.7× for
+    /// `mode=debug` on a call-heavy benchmark.
+    #[test]
+    fn the_extension_goes_in_once_and_never_comes_out() {
+        // On: both.
+        let on = with_extension(&s(&["gd"]), true);
+        assert!(listed(&on));
+
+        // Off: `with_extension(.., false)` is still the function that removes
+        // it, and `set` no longer calls it — that is the behaviour under test,
+        // and it lives in `set` rather than here because it needs a workspace.
+        // What this pins is that the two are separable at all.
+        assert!(!listed(&with_extension(&on, false)));
+    }
+
+    /// The overlay is keyed on the switch, not on the extension. A project that
+    /// carries Xdebug with the switch off must get no overlay — that is what
+    /// makes the extension free to leave in.
+    #[test]
+    fn a_compiled_in_extension_alone_does_not_turn_debugging_on() {
+        let carried = crate::manifest::PhpConfig {
+            version: "8.4".into(),
+            xdebug: false,
+            extensions: s(&["gd", "xdebug"]),
+        };
+        assert!(listed(&carried.extensions), "the image carries it");
+        assert!(!carried.xdebug, "and the switch is off");
+
+        let switched = crate::manifest::PhpConfig {
+            xdebug: true,
+            ..carried
+        };
+        assert!(switched.xdebug);
+    }
+
     use super::*;
 
     fn s(items: &[&str]) -> Vec<String> {

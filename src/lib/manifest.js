@@ -64,8 +64,8 @@ export function overExtensionLimit(form, catalog) {
   return limit > 0 && form.extensions.length > limit;
 }
 
-/** The four runtimes that share one config shape (mirror of LANG_RUNTIMES). */
-export const LANG_RUNTIMES = ['python', 'go', 'ruby', 'rust'];
+/** The six runtimes that share one config shape (mirror of LANG_RUNTIMES). */
+export const LANG_RUNTIMES = ['python', 'go', 'ruby', 'rust', 'bun', 'deno'];
 
 /**
  * Each lang runtime's ecosystem defaults — the same values the Rust side
@@ -101,6 +101,23 @@ export const LANG_DEFAULTS = {
     start: 'cargo run --release',
     port: 8080,
   },
+  bun: {
+    version: '1',
+    install: 'bun install',
+    build: '',
+    start: 'bun run start',
+    port: 3000,
+  },
+  // A full patch version, and not a style choice: denoland/deno publishes no
+  // major or minor tag, so `2` or `2.9` names an image that does not exist.
+  // The Rust side says the same thing at more length in `lang_defaults`.
+  deno: {
+    version: '2.9.5',
+    install: 'deno install',
+    build: '',
+    start: 'deno task start',
+    port: 8000,
+  },
 };
 
 /** A form with the contract's own defaults in it. */
@@ -119,6 +136,9 @@ export function blankForm() {
     phpVersion: '',
     extensions: [],
     nodeVersion: '',
+    // Empty is not 'npm'. Absent means the image is built as it always has
+    // been, with no Corepack line — see project.schema.json.
+    packageManager: '',
     install: 'npm install',
     build: '',
     start: 'npm run dev -- --host 0.0.0.0 --port 3000',
@@ -168,6 +188,7 @@ export function formFromManifest(manifest) {
 
   if (manifest.node) {
     form.nodeVersion = manifest.node.version ?? '';
+    form.packageManager = manifest.node.packageManager ?? '';
     if (manifest.node.install) form.install = manifest.node.install;
     // `build` is optional in the contract, and absent is a meaningful state —
     // it must come back as empty, not as the placeholder command.
@@ -216,6 +237,9 @@ export function formToSpec(form, tld) {
       port: Number(form.port),
     };
     if (form.build) spec.node.build = form.build;
+    // Written only when chosen: an empty value must not become `"npm"`, or
+    // every node project saved through this form starts enabling Corepack.
+    if (form.packageManager) spec.node.package_manager = form.packageManager;
   } else if (LANG_RUNTIMES.includes(form.runtime)) {
     const block = {
       version: form.langVersion,

@@ -11,9 +11,9 @@
 //! checkout. A generator that produces "basically the same" output is a
 //! generator that silently changes people's images.
 //!
-//! Scope: all six runtimes. PHP (five servers) and Node were ported from the
-//! Bash generator and held to byte parity; Python, Go, Ruby and Rust exist
-//! here first — written once, after the takeover, which is what closed C-02.
+//! Scope: all eight runtimes. PHP (five servers) and Node were ported from the
+//! Bash generator and held to byte parity; Python, Go, Ruby, Rust, Bun and Deno
+//! exist here first — written once, after the takeover, which closed C-02.
 //! The lang runtimes share the node template's shape: snapshot container,
 //! HOST/PORT contract, Traefik to the app port.
 
@@ -583,6 +583,24 @@ pub fn render_node_dockerfile(project_name: &str, node: &crate::manifest::NodeCo
     out.push_str(&format!("# Project: {project_name}\n"));
     out.push_str(&format!("FROM node:{}-alpine\n\n", node.version));
     out.push_str("WORKDIR /app\n\n");
+
+    // J-2. Emitted only when the manifest names a package manager, so a project
+    // that never asked builds the image it has always built — byte for byte,
+    // which `fixtures_differential.rs` checks.
+    //
+    // Before `COPY . .`, and that ordering is the point rather than tidiness:
+    // `corepack enable` installs the shims, and the shim reads
+    // `packageManager` out of `package.json` when it first runs. Enabling after
+    // the copy would work too; enabling before it means the layer is cached
+    // across every source change, and this layer is the one that reaches the
+    // network.
+    if let Some(pm) = node.package_manager.as_deref() {
+        out.push_str(&format!(
+            "# Pin the package manager (reads `packageManager` from package.json)\n\
+             RUN corepack enable {pm}\n\n"
+        ));
+    }
+
     out.push_str("# Copy project source (node_modules excluded via .dockerignore)\nCOPY . .\n\n");
     out.push_str(&format!("# Install dependencies\nRUN {}\n", node.install));
 
@@ -607,7 +625,7 @@ pub fn render_node_dockerfile(project_name: &str, node: &crate::manifest::NodeCo
 /// in is how you get an arm64 binary in an amd64 container.
 pub const NODE_DOCKERIGNORE: &str = "node_modules\n.output\n.nuxt\ndist\n.git\n.gitignore\n*.log\nnpm-debug.log*\nDockerfile\n.dockerignore\n";
 
-// ================================================== the four lang runtimes
+// =================================================== the six lang runtimes
 
 /// Per-runtime facts the shared template needs: the image, its tag suffix,
 /// and what must never be copied into the build context — each ecosystem's
@@ -618,6 +636,10 @@ fn lang_image(runtime: &str) -> Option<(&'static str, &'static str)> {
         "go" => Some(("golang", "")),
         "ruby" => Some(("ruby", "-slim")),
         "rust" => Some(("rust", "")),
+        "bun" => Some(("oven/bun", "-alpine")),
+        // No suffix, and the version carries the whole tag — `denoland/deno`
+        // publishes only patch-level tags. See `manifest::lang_defaults`.
+        "deno" => Some(("denoland/deno", "")),
         _ => None,
     }
 }
@@ -632,6 +654,17 @@ pub fn lang_dockerignore(runtime: &str) -> Option<&'static str> {
             ".bundle\nvendor/bundle\nlog\ntmp\n.git\n.gitignore\n*.log\nDockerfile\n.dockerignore\n",
         ),
         "rust" => Some("target\n.git\n.gitignore\n*.log\nDockerfile\n.dockerignore\n"),
+        // The lockfile is deliberately NOT excluded, in either of these: it is
+        // the whole point of copying the project in. What must not come is the
+        // installed tree — a `node_modules` built on an arm64 laptop carries
+        // arm64 binaries into an amd64 image, which is the mistake every entry
+        // in this table is a version of.
+        "bun" => Some(
+            "node_modules\n.output\ndist\n.git\n.gitignore\n*.log\nDockerfile\n.dockerignore\n",
+        ),
+        "deno" => Some(
+            "node_modules\nvendor\n.output\ndist\n.git\n.gitignore\n*.log\nDockerfile\n.dockerignore\n",
+        ),
         _ => None,
     }
 }
@@ -651,6 +684,8 @@ pub fn render_lang_dockerfile(
         "go" => "Go",
         "ruby" => "Ruby",
         "rust" => "Rust",
+        "bun" => "Bun",
+        "deno" => "Deno",
         other => other,
     };
 
@@ -1483,6 +1518,12 @@ pub struct TraefikOptions<'a> {
     pub redirect_to_https: bool,
     /// service id -> (enabled, subdomain override)
     pub services: Vec<(&'a str, bool, Option<&'a str>)>,
+    /// Names the user pointed at something this app did not start (E-4).
+    ///
+    /// Already checked and normalised by [`crate::routes`], so the renderer
+    /// does no validation of its own — a second opinion about what a target
+    /// means is how the screen and the proxy come to disagree.
+    pub routes: Vec<crate::routes::Checked>,
 }
 
 impl TraefikOptions<'_> {
@@ -1517,6 +1558,7 @@ pub fn render_traefik_config(opts: &TraefikOptions) -> String {
         }
         out.push_str("  websecure:\n    address: \":443\"\n");
     }
+
 
     out
 }
@@ -1553,6 +1595,13 @@ pub fn render_traefik_routes(opts: &TraefikOptions) -> String {
         ));
     }
 
+    // The user's routes join the same two maps, between the generated routers
+    // and the generated services. Emitted here rather than appended at the end
+    // because `routes.yml` has exactly one `routers:` and one `services:` map,
+    // and a second of either is valid YAML in which the second silently wins.
+    let (user_routers, user_services) = crate::routes::render(&opts.routes);
+    out.push_str(&user_routers);
+
     out.push_str("\n  services:\n");
     for (service, port) in TRAEFIK_ROUTED {
         if !opts.enabled(service) {
@@ -1562,6 +1611,8 @@ pub fn render_traefik_routes(opts: &TraefikOptions) -> String {
             "    {service}:\n      loadBalancer:\n        servers:\n          - url: \"http://stackvo-{service}:{port}\"\n"
         ));
     }
+
+    out.push_str(&user_services);
 
     if opts.ssl_enabled {
         out.push_str(
@@ -1680,9 +1731,11 @@ mod tests {
             server: Some(server.into()),
             document_root: Some("public".into()),
             aliases: vec![],
+            lan_share: false,
             services: vec![],
             php: Some(crate::manifest::PhpConfig {
                 version: "8.4".into(),
+                xdebug: false,
                 extensions: vec![],
             }),
             node: None,
@@ -1690,6 +1743,8 @@ mod tests {
             valid: true,
             errors: vec![],
             warnings: vec![],
+            hooks: Default::default(),
+            local: Vec::new(),
         }
     }
 
@@ -1823,6 +1878,43 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// J-2, and the assertion the whole design of the field rests on: a node
+    /// project that named no package manager produces the bytes it always did.
+    ///
+    /// `fixtures_differential.rs` compares the generated tree against output
+    /// frozen from the Bash generator, so this is not a style preference — a
+    /// `corepack` line appearing by default would be a different image for
+    /// every project that never asked for one, and the differential is what
+    /// would catch it. This catches it one layer earlier and says why.
+    #[test]
+    fn corepack_appears_only_when_a_package_manager_is_named() {
+        let mut node = crate::manifest::NodeConfig {
+            version: "22".into(),
+            install: "npm install".into(),
+            build: None,
+            start: "npm start".into(),
+            port: 3000,
+            package_manager: None,
+        };
+
+        let plain = render_node_dockerfile("web", &node);
+        assert!(
+            !plain.contains("corepack"),
+            "a project that asked for nothing got a corepack line: {plain}"
+        );
+
+        node.package_manager = Some("pnpm".into());
+        let pinned = render_node_dockerfile("web", &node);
+        assert!(pinned.contains("RUN corepack enable pnpm"), "{pinned}");
+
+        // Before the source copy, so the layer that reaches the network is
+        // cached across every edit to the project.
+        assert!(
+            pinned.find("corepack").unwrap() < pinned.find("COPY . .").unwrap(),
+            "{pinned}"
+        );
+    }
+
     #[test]
     fn each_lang_dockerfile_is_the_node_templates_sibling() {
         for (runtime, image_line, must_contain) in [
@@ -1830,6 +1922,9 @@ mod tests {
             ("go", "FROM golang:1.23", "RUN go build -o /app/server ."),
             ("ruby", "FROM ruby:3.3-slim", "RUN bundle install"),
             ("rust", "FROM rust:1", "RUN cargo build --release"),
+            ("bun", "FROM oven/bun:1-alpine", "RUN bun install"),
+            // No suffix and the whole tag in the version — see `lang_image`.
+            ("deno", "FROM denoland/deno:2.9.5", "RUN deno install"),
         ] {
             let lang = crate::manifest::lang_defaults(runtime).unwrap();
             let text = render_lang_dockerfile(runtime, "svc", &lang).unwrap();

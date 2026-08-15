@@ -78,6 +78,183 @@ export default {
     menuAbout: 'StackVo Hakkında',
   },
 
+  /**
+   * Komut paleti (A-2).
+   *
+   * `keys` kısayolu tuş resmiyle değil cümleyle veriyor: bu satır bir altbilgi
+   * ve paleti ilk kez gören okuyucunun ihtiyacı olan şey cümle.
+   */
+  palette: {
+    title: 'Komut paleti',
+    placeholder: 'Bir komut ya da proje adı yazın…',
+    empty: '“{query}” ile eşleşen bir şey yok.',
+    keys: '↑ ↓ gezinir · Enter çalıştırır · Esc kapatır',
+    sections: {
+      navigate: 'Git',
+      projects: 'Projeler',
+      stack: 'Yığın',
+      app: 'Uygulama',
+    },
+    /**
+     * Proje fiilleri `actions.*`'ı kullanmıyor: oradakiler "Konteyneri başlat"
+     * diyor, ki yazıldıkları düğme için doğru ama bir proje adının yanında
+     * yanlış okunuyor — ve satır aynı zamanda okuyucunun yazdığı yer, yani en
+     * kesin cümleyi değil en kısa doğru cümleyi istiyor.
+     */
+    project: {
+      start: '{name} başlat',
+      stop: '{name} durdur',
+      restart: '{name} yeniden başlat',
+      build: '{name} derle',
+      site: '{domain} adresini tarayıcıda aç',
+    },
+  },
+
+  /**
+   * `stackvo.local.json` — bu makineye özel geçersiz kılmalar (B-2).
+   *
+   * Üç git durumundan yalnız `notIgnored` bir uyarı, ve neyin yanlış olduğunu
+   * değil ne yapılacağını söylüyor: commit'e giren bir dosya artık makine
+   * ayarı olmaktan çıkıp herkesin ayarı olur.
+   */
+  local: {
+    title: 'Yalnız bu makine',
+    explain:
+      'Buradaki değerler bu checkout için stackvo.json’u geçersiz kılar ve commit’lenmek için değildir. Test ettiğiniz bir sürüm ya da bu makinede başka bir şeyle çakışan bir alan adı için.',
+    applied: 'Bu makinede yürürlükte:',
+    refused:
+      'Yok sayıldı: {keys}. Bunlar bu makineyi değil depoyu tarif ediyor, o yüzden yalnız stackvo.json’dan okunuyor.',
+    ignored: 'git bu dosyayı commit’lerin dışında tutuyor.',
+    notIgnored:
+      'git bu dosyayı commit’ler. stackvo.local.json’u .gitignore’a ekleyin — yoksa bu ayarlar tüm ekibin ayarı olur.',
+    remove: 'Kaldır',
+  },
+
+  /**
+   * Yaşam döngüsü hook'ları (B-3).
+   *
+   * `explain` yalnız özelliği değil riski adlandırıyor. Onaylamayı okumaktan
+   * kolaylaştıran bir ekran, bu ekranın var olma nedeninin tersi olurdu.
+   */
+  hooks: {
+    title: 'Bu proje başlarken ve dururken',
+    explain:
+      'stackvo.json\u2019da tanımlı komutlar. Konteynerde çalışan adımlar onay gerektirmez — konteyner zaten bu deponun kodunu çalıştırıyor. Makinenizde çalışanlar gerektirir.',
+    inContainer: 'konteynerde',
+    onThisMachine: 'bu makinede',
+    needsConsent:
+      'Bu komutlar makinenizde çalışacak ve onaylanmadı. Okuyun, sonra onaylayın — onay tam olarak bu komutlara kaydedilir, yani bir değişiklik yeniden sorar.',
+    approved: 'Bu makinede, tam olarak bu komutlar için onaylandı.',
+    approve: 'Bu komutları onayla',
+    revoke: 'Onayı geri çek',
+    policyOff: 'Bu makinede hook\u2019lar bir yönetici tarafından kapatılmış.',
+    policyHost:
+      'Makinede çalışan komutlar bir yönetici tarafından kapatılmış. Konteynerde çalışan adımlar etkilenmiyor.',
+  },
+
+  /**
+   * Servis paketi yazma (C-1).
+   *
+   * `explain` özelliği değil engeli adlandırıyor: paket yazmayı imkânsız
+   * kılan şey JSON değil, sha256 defter tutmaydı.
+   */
+  authoring: {
+    title: 'Paket yaz',
+    explain:
+      'Bir manifest taşıdığı her dosyanın hash’ini yazar ve StackVo bunları her okumada kontrol eder — yani bir fragment’i elle düzenlemek yüklenmeyen bir paket bırakır. Oluştur, baştan doğru olanı yazar; Mühürle, siz düzenledikten sonra hash’leri düzeltir ve doğrulayıcının reddedeceği hiçbir şeyi mühürlemez.',
+    category: 'Kategori',
+    service: 'Servis kimliği',
+    version: 'Sürüm',
+    image: 'İmaj',
+    imageHint: 'depo:etiket — bir paket çalıştırdığı imajı sabitler. Yalnız oluştururken gerekli.',
+    create: 'Oluştur',
+    check: 'Denetle',
+    seal: 'Mühürle',
+    refused: 'Reddedildi — hiçbir şey yazılmadı:',
+    valid: '{service} {version} geçerli.',
+    resealed: 'Hash’leri yeniden yazılanlar: {files}',
+  },
+
+  /**
+   * Yerel DNS yanıtlayıcısı (E-1).
+   *
+   * `explain` ne *olmadığını* söylüyor — bir çözümleyici değil — çünkü kendi
+   * makinesinde DNS'e cevap veren bir şeyi açmadan önce insanın ihtiyacı olan
+   * bilgi bu.
+   */
+  dns: {
+    title: 'Yerel DNS',
+    subtitle: 'Hosts dosyasını düzenlemeden bu çalışma alanının adlarına cevap ver',
+    explain:
+      'Tek bir soneke cevap veren, diğer her şeyi reddeden bir yanıtlayıcı. Asla iletmiyor, üst sunucusu ve önbelleği yok — bu makinenin çözümleyicisi değil, yalnız StackVo’nun ürettiği adların. Joker adları da bu çalıştırıyor; hosts dosyası bunu hiç yapamıyor.',
+    responder: '127.0.0.1:{port} üzerinde cevap ver',
+    responderHint: '{suffix} ile biten her ad bu makineye çözülür, proje başına kayıt gerekmeden.',
+    resolver: 'Sistem buna sorsun',
+    resolverHint:
+      '{file} dosyasını yazar. Yönetici parolası ister ve bu makinenin o soneki nasıl çözdüğünü değiştirir.',
+    manual:
+      'Bu platformda sonek başına çözümleyici dizini yok. Bu satırı resolv.conf’un önünde ne varsa — dnsmasq ya da NetworkManager — ona ekleyip yeniden yükleyin:',
+    unsupported:
+      'Windows’ta sonek başına çözümleyici yok: tek mekanizma makinedeki her adı yönlendiriyor, ki bu buradaki amacın tersi. Projeler burada hosts dosyasını kullanmaya devam ediyor.',
+  },
+
+  /**
+   * Kullanıcı rotaları (E-4).
+   *
+   * `explain` `localhost` ile başlıyor, çünkü herkesin yazdığı ve yardımsız
+   * çalışamayan tek şey o.
+   */
+  routes: {
+    title: 'Özel rotalar',
+    subtitle: 'Bir adı StackVo’nun başlatmadığı bir şeye yönlendirin',
+    explain:
+      'Kendi başlattığınız bir dev sunucusu, başka bir araçtaki servis, bir staging adresi. http://localhost:3000 yazın, StackVo düzeltir — proxy’nin konteynerinin içinde “localhost” proxy’nin kendisidir, ki bu açıklamasız bir 502 demektir.',
+    domain: 'Ad',
+    target: 'Şuraya gider',
+    enabled: 'Etkin',
+    add: 'Rota ekle',
+    remove: 'Bu rotayı kaldır',
+    save: 'Kaydet ve uygula',
+    empty: 'Henüz özel rota yok.',
+  },
+
+  /**
+   * Bir örneğin verisini diğerine taşıma (G-4).
+   *
+   * `explain` yıkıcı yarıyla başlıyor, çünkü planın var olma nedeni tam da bu
+   * bilgiyi düğmeye basmaya değer olmadan önce ekrana koymak.
+   */
+  dbMove: {
+    title: 'Veriyi başka bir örneğe taşı',
+    explain:
+      'Bu örneği döker ve bir diğerine geri yükler; oradaki her şeyin yerine geçer. Aynı motor çalışır; MySQL ve MariaDB birbirini dikkatle okur; farklı aileler reddedilir.',
+    target: 'Şuraya',
+    move: 'Taşı',
+    confirm: '{to} içindeki her şey bu örneğin içeriğiyle değiştirilsin mi?',
+    done: '{to} içine {bytes} bayt taşındı.',
+  },
+
+  /**
+   * Boştaki projeleri askıya alma (I-2).
+   *
+   * `explain` sinyali adlandırıyor, çünkü kendi başına konteyner durduran bir
+   * şey hakkındaki ilk soru "nereden biliyor".
+   */
+  idle: {
+    title: 'Boştaki projeleri askıya al',
+    subtitle: 'Kimsenin istemediğini durdur',
+    explain:
+      'Proxy’nin erişim günlüğünden ölçülüyor — tek dürüst sinyal, çünkü php-fpm hizmet verirken de uyurken de CPU kullanmıyor. Askıya alınan proje sadece durdurulmuş olur; listeden, tepsiden ya da ⌘K’dan başlatın. İstek üzerine uyandırma yok.',
+    threshold: 'Boşta dakika',
+    thresholdHint: '0 bunu kapatır. Günlüğün hiç anmadığı bir proje asla askıya alınmaz.',
+    suspendNow: '{count} tanesini şimdi askıya al',
+    none: 'Çalışan proje yok.',
+    never: 'henüz istek yok',
+    justNow: 'az önce',
+    minutes: '{minutes} dk önce',
+    wouldStop: 'eşiği geçti',
+  },
+
   quickActions: {
     startAll: 'Tüm konteynerleri başlat',
     stopAll: 'Tüm konteynerleri durdur',
@@ -141,6 +318,19 @@ export default {
     colOpen: 'Tarayıcıda aç',
     colDetail: 'Detay',
     colDelete: 'Sil',
+    // Her biri projenin adını taşıyor. Yirmi satırlık bir tabloda her butonun
+    // "Sil" demesi, ekran okuyucu kullanıcısına hangi projeyi kaldırmak üzere
+    // olduğunu söylemez.
+    aria: {
+      build: '{name} projesini derle',
+      stop: '{name} projesini durdur',
+      start: '{name} projesini başlat',
+      restart: '{name} projesini yeniden başlat',
+      open: '{name} projesini tarayıcıda aç',
+      detail: '{name} projesinin ayrıntılarını aç',
+      delete: '{name} projesini sil',
+      fixHosts: '{name} için hosts kaydı ekle',
+    },
     default: 'Varsayılan',
     noDnsRecord: 'hosts kaydı yok',
     addToHosts: 'hosts dosyasına ekleyin:',
@@ -282,6 +472,7 @@ export default {
     fromHostHint: 'Compass, TablePlus, psql',
     fromContainer: 'Başka bir konteynerden',
     fromContainerHint: 'projenizin kendi uygulaması',
+    openInClient: 'Bir veritabanı istemcisinde aç',
     notPublished:
       'Konteyner çalışıyor ama host tarafına hiçbir port yayınlamıyor; bu makineden erişilemez.',
     credentials: 'Kimlik bilgileri',
@@ -559,6 +750,16 @@ export default {
     notThere: 'O klasör bir {source} kurulumuna benzemiyor.',
     sizeAtLeast: 'en az {size}',
   },
+  unmanaged: {
+    title: 'Sahiplenilmemiş kod',
+    review: 'Sahiplenilecek klasörler ve siteler',
+    explain:
+      'Bu makinede olup StackVo’nun çalıştırmadığı kod: projects/ altında stackvo.json dosyası olmayan klasörler ve XAMPP ya da Laragon’a ait siteler.',
+    waiting: '{n} tane bekliyor.',
+    nothing: 'Bekleyen bir şey yok.',
+    pickExplain: 'Yalnızca alışılmış kurulum yolları tarandı. Başka bir yeri gösterin.',
+    none: 'Bir şey bulunamadı. projects/ altındaki her klasörün stackvo.json dosyası var ve bu araçların normalde kurulduğu yerlerde XAMPP ya da Laragon sitesi görülmedi.',
+  },
   adopt: {
     found: 'projects/ altındaki {n} klasörün stackvo.json dosyası yok.',
     from: '{files} dosyasından algılandı',
@@ -659,6 +860,10 @@ export default {
     subtitle: 'Bu proje için adım adım hata ayıklama.',
     on: 'Etkin',
     off: 'Devre dışı',
+    firstTime:
+      'İlk kez açmak uzantıyı imaja ekliyor ve yeniden derleme gerektiriyor. Ondan sonra aç/kapa yalnızca konteyneri yeniden başlatıyor — uzantı kalıyor ve kapalıyken hiçbir maliyeti yok.',
+    staysInstalled:
+      'Bu kapalıyken uzantı imajda kalıyor. Orada bir maliyeti yok, ve hata ayıklamayı yeniden açmak yeniden derleme değil bir konteyner yeniden başlatması.',
     needsRebuild:
       'Eklenti imaja derleniyor, bu yüzden proje yeniden üretilip derlenene kadar bunun bir etkisi olmaz.',
     notActive:
@@ -732,6 +937,11 @@ export default {
   },
 
   release: {
+    pushExplain:
+      'Bir registry’ye gönderin ya da çalıştıracak bir compose dosyası alın. StackVo yalnız doğrulanmış bir imajı ve yalnız registry adı taşıyan bir etikete gönderir — registry katmanları saklar, sonradan etiketi silmek içindekini kaldırmaz.',
+    pushCheck: 'Denetle',
+    push: 'Gönder',
+    recipe: 'Dağıtım reçetesi',
     load: 'Paket yükle',
     loadExplain:
       'Kaydet’in yazdığı bir .tar dosyasını bu makinenin Docker’ına geri okur. İnternete kapalı bir devrin alıcı ucu olduğu için ne proje ne plan gerektirir.',
@@ -776,6 +986,10 @@ export default {
     open: 'Aç',
     deleteOne: 'Bu profili sil',
     summary: '{n} fonksiyon · ölçülen işin {total} kadarı · {creator}',
+    flame: 'Çağrı ağacı',
+    flameHint: 'Neyin neyi çağırdığı ve her dalın maliyeti.',
+    noTree:
+      'Bu profil hiç çağrı kaydetmemiş — tek bir fonksiyon, ya da kuyruğu kesilmiş bir dosya.',
     truncated:
       'Bu profil okuma sınırından büyüktü; aşağıdaki sayılar yalnızca bir bölümünü kapsıyor.',
     colFunction: 'Fonksiyon',
@@ -1452,6 +1666,67 @@ export default {
       'Bu URL genel internette canlıdır ve kimlik doğrulaması yoktur. Elinde olan herkes makinenizdeki bu projeye erişir. Test bitince paylaşımı durdurun.',
   },
 
+  migration: {
+    title: 'Servisleriniz taşınıyor',
+    lead: 'Bu çalışma alanı servislerini hâlâ `.env` içinde tutuyor. Bu sürüm onları bir örnek tablosundan ve paket kataloğundan üretiyor; eski yol kaldırıldı — yani onlar taşınana kadar yığın kurulamaz.',
+    reversible:
+      'Önce `.env` dosyası `.env.pre-market.bak` olarak kopyalanıyor ve servis satırları yorum satırına alınıyor; bu işlem Market sayfasından geri alınabilir.',
+    reading: '.env içinde ne olduğu okunuyor…',
+    willKeep: 'Taşınacak olan — {count} servis, portlarını ve verilerini koruyarak:',
+    blocked: 'Önce bunların çözülmesi gerekiyor',
+    missing: 'Bu makinede henüz olmayan paketler',
+    notInCatalogue: 'bu makinenin çektiği katalogda yok',
+    nothing: '`.env` içinde açık hiçbir servis yok, yani taşınacak bir şey de yok.',
+    apply: 'Taşı',
+    later: 'Şimdi değil',
+    laterHint:
+      'Buradan çıkmak uygulamayı servissiz açar. Projeler, alan adları ve sertifikalar çalışmaya devam eder; aynı taşımayı Market sayfası da sunuyor.',
+  },
+
+  timeline: {
+    title: 'İstek zaman çizelgesi',
+    explain:
+      'Kodun elinde ne olduğunu sandığı, veritabanına gerçekte ne sorduğu ve ne gönderdiği — tek bir eksende. Dump’lar hangi istekte olduklarını taşıyor; sorgular ve postalar taşımıyor, çünkü ne bir veritabanı günlüğü ne de bir posta yakalayıcısı kaydı hangi isteğin ürettiğini tutuyor, ve tahmin etmek iki istek ilk çakıştığında yanlış olurdu.',
+    database: 'Veritabanı',
+    requests: 'İstekler:',
+    notRecording:
+      'Sorgu günlüğü kayıtta değil, o yüzden burada yalnız dump’lar var. Üstteki panelden açın, incelediğiniz sayfayı yeniden yükleyin, sonra burayı tazeleyin.',
+    empty: 'Henüz bir şey yok — incelediğiniz sayfayı yeniden yükleyin.',
+  },
+
+  queryLog: {
+    title: 'Sorgu günlüğü',
+    explain:
+      'Veritabanına gerçekte ne soruldu, ve aynı soru satır başına bir kez nerede soruldu. Buradan açılıyor — ajan yok, yeniden derleme yok, uygulamanıza kod girmiyor.',
+    database: 'Veritabanı',
+    record: 'Sorguları kaydet',
+    clear: 'Baştan başla',
+    noTarget:
+      'Bu çalışma alanında günlüğü okunabilen bir veritabanı çalışmıyor. MySQL ve MariaDB günlüğü bir tabloda tutuyor, Postgres konteynerin akışına biçimini bu uygulamanın sabitlediği bir önekle yazıyor, Mongo ise veritabanı başına bir koleksiyona profil çıkarıyor — dördü de çalışma anında, ajansız ve yeniden derlemesiz açılıyor.',
+    cost: 'Kayıt her ifadeyi örneklemeden günlüğe yazıyor ve her yazmada bir bedeli var. İşiniz bitince kapatın — bu bir ölçüm aracı değil, bir teşhis aleti. Durdurmak toplananı da siliyor, çünkü günlük ifade metnini tutuyor.',
+    howTo:
+      'Açın, incelediğiniz sayfayı yeniden yükleyin, sonra bakın. Tekrarlanan şekiller önce listeleniyor.',
+    repeats: 'Tekrarlanan sorgular',
+    noRepeats: 'Üç ya da daha fazla tekrarlanan bir şey yok.',
+    nothingYet: 'Henüz kayıt yok — baktığınız sayfayı yeniden yükleyin.',
+    example: 'örneğin',
+    statements: 'İfadeler ({count})',
+  },
+
+  lan: {
+    title: 'Bu ağda',
+    explain:
+      'Bu projeyi aynı ağdaki bir telefondan ya da başka bir bilgisayardan açın. Ad sslip.io üzerinden çözülüyor; adres adın kendisinden hesaplanıyor — hiçbir şey kaydedilmiyor, hiçbir şey yayınlanmıyor ve ağdan dışarı trafik çıkmıyor.',
+    share: 'Diğer cihazların çözebileceği bir adla da cevap ver',
+    noAddress:
+      'Bu makinenin sunabileceği özel bir ağ adresi yok. Ya çevrimdışı, ya da adresi genel — ve internetteki herkesin çözebileceği bir adla yayınlanan bir geliştirme sitesi bu anahtarın işi değil.',
+    certWarning:
+      'Ziyaret eden tarayıcı sertifika uyarısı gösterecek. Sertifikayı bu makinenin yerel CA’sı verdi ve o cihaz onu hiç duymadı — bağlantı gerçek, ad doğru. Uyarıyı kaldırmak için CA’yı oraya kurun ya da uyarıyı geçin.',
+    regenerateHint: 'Ad, bir sonraki yeniden üretimde yönlendiriciye ve sertifikaya iniyor.',
+    stale:
+      '{host} üretilmiş dosyalara yazılı ve bu makine artık o ağda değil. Yeniden üretin — o zamana kadar bu ad, adresi devralan makineye çözülür.',
+  },
+
   doctor: {
     title: 'Doktor',
     sectionDesc: 'Neyin bozuk olduğu, adıyla — ve her bulgunun yanında onarımı.',
@@ -1613,6 +1888,10 @@ export default {
     runtime: 'Çalışma ortamı',
     phpVersion: 'PHP sürümü',
     nodeVersion: 'Node sürümü',
+    packageManager: 'Paket yöneticisi',
+    packageManagerNone: 'Sabitlenmemiş (imajın getirdiği npm)',
+    packageManagerHint:
+      'İmajda Corepack’i etkinleştirir; package.json’daki `packageManager` alanının bir sürümü sabitlemesini sağlayan şey budur. Sabitlemeden bırakmak imajı eskisiyle birebir aynı kurar.',
     server: 'Web sunucusu',
     documentRoot: 'Doküman kökü',
     extensions: 'PHP eklentileri',
@@ -1773,6 +2052,12 @@ export default {
     installATerminal: 'Birini kurun ya da yerleşik terminali kullanın.',
     chooseABrowser: 'Ayarlar → Dış uygulamalar bölümünden bir tarayıcı seçin.',
     chooseAnEditor: "Ayarlar'dan bir düzenleyici seçin ya da klasörü elle açın.",
+    migrateTheWorkspace:
+      'Bu çalışma alanının servislerini .env dışına taşıyın — uygulama bir sonraki açılışta bunu öneriyor, aynı taşımayı Market sayfası da sunuyor. Geri alınabilir.',
+    servicePublishesNothing:
+      'Servisi başlatın ya da bir port yayınladığını doğrulayın — yalnızca Docker ağından erişilebilen bir konteynerin, bu makinedeki bir istemcinin kullanabileceği adresi yoktur.',
+    chooseADbClient:
+      'Bu tür adresleri açan bir istemci kurun ya da bağlantı dizesini kopyalayıp kendiniz yapıştırın.',
     waitForOperation: 'Bitmesini bekleyin ya da ilerlemeyi işlem konsolundan izleyin.',
     quickCommandsAreFixed: 'Komutlar sabit katalogdan gelir; kimlikler serbest değildir.',
     imageReferenceCharset: 'Yalnızca küçük harf, rakam ve . _ - / : karakterleri.',

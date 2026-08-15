@@ -128,8 +128,16 @@ fn hosts_in(text: &str) -> BTreeSet<String> {
 ///   message telling the user what a URL should look like.
 /// * **This machine's own stack** — `.loc`, `.test`, `.localhost`, the suffixes
 ///   project domains take, resolved out of `/etc/hosts` on this machine.
-/// * **Reserved for documentation** — `example.com` and its siblings, which
-///   RFC 2606 guarantees resolve to nothing anybody owns.
+/// * **Reserved for documentation** — the whole of RFC 2606, not half of it.
+///   The second-level names (`example.com` and its siblings) and the reserved
+///   *top*-level ones (`.example`, `.invalid`), which the same RFC guarantees
+///   resolve to nothing anybody owns. `.test` and `.localhost` are reserved by
+///   it too and are already excluded above, for a different reason.
+///
+///   The TLD half was missing, and it is the half a doc comment reaches for:
+///   `https://packages.corp.example` is how you write "the mirror an
+///   organisation runs" without naming a real one. Leaving it out meant the
+///   gate demanded that PRIVACY.md list a host that cannot exist.
 fn is_reachable_elsewhere(host: &str) -> bool {
     let interpolated = host.contains(['{', '}', '$']) || host.ends_with('.');
     let loopback = host == "localhost" || host.starts_with("127.") || host.starts_with("[::1]");
@@ -137,7 +145,9 @@ fn is_reachable_elsewhere(host: &str) -> bool {
     let own_stack =
         host.ends_with(".loc") || host.ends_with(".test") || host.ends_with(".localhost");
     let reserved = matches!(host, "example.com" | "example.org" | "example.net")
-        || host.ends_with(".example.com");
+        || host.ends_with(".example.com")
+        || host.ends_with(".example")
+        || host.ends_with(".invalid");
 
     !(interpolated || loopback || not_a_name || own_stack || reserved)
 }
@@ -280,7 +290,10 @@ fn the_not_a_destination_rules_hold() {
         "127.0.0.1",         // the mail catcher
         "host",              // git.rs, in "use ssh://host/path"
         "stackvo.loc",       // this machine's own stack
-        "example.com",       // RFC 2606
+        "example.com",       // RFC 2606, second level
+        "packages.example",  // RFC 2606, the reserved TLD
+        "mirror.corp.example",
+        "nothing.invalid",
     ] {
         assert!(
             !is_reachable_elsewhere(placeholder),

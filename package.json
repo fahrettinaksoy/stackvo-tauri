@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Native desktop app for StackVo — Docker-based local development environment manager",
+  "description": "Native desktop app for StackVo \u2014 Docker-based local development environment manager",
   "license": "MIT",
   "scripts": {
     "dev": "vite",
@@ -21,6 +21,8 @@
     "test:js": "vitest run",
     "test:js:watch": "vitest",
     "test:js:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "test:rs:coverage": "cargo llvm-cov --manifest-path src-tauri/Cargo.toml --summary-only && cargo llvm-cov report --manifest-path src-tauri/Cargo.toml --json --summary-only > rust-coverage.json && node tools/check-coverage.mjs --rust",
     "coverage:floors": "node tools/check-coverage.mjs",
     "bundle:budget": "node tools/check-bundle.mjs",
@@ -48,7 +50,9 @@
     "vuetify": "^3.12.11"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@eslint/js": "^9.39.5",
+    "@playwright/test": "^1.62.1",
     "@tauri-apps/cli": "^2.11.4",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vitest/coverage-v8": "^3.2.7",

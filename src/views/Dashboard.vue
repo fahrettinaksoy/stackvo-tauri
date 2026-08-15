@@ -211,7 +211,12 @@ onMounted(() => {
       </v-btn>
     </template>
 
-    <div class="dash-body">
+    <!-- `tabindex` because it scrolls. A scrollable region that cannot take
+         focus cannot be scrolled from a keyboard at all — the wheel and the
+         scrollbar are the only ways in, and neither is available to somebody
+         who is not using a mouse. axe grades it serious; the browser suite is
+         what noticed, because jsdom has no scroll height to notice with. -->
+    <div class="dash-body" tabindex="0">
       <!-- Counters -->
       <v-row class="dash-row">
         <v-col cols="12" md="3">

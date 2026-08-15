@@ -9,6 +9,11 @@
 //! Detection rather than a free-text box. A list of what is actually on the
 //! machine is the difference between a setting someone can use and one they
 //! have to research.
+//!
+//! The database clients at the bottom arrived the same way and for the same
+//! reason. `connect.rs` had been producing the correct URI and offering to copy
+//! it since it was written; what nobody had written was the twenty lines that
+//! hand that string to the application it was built for.
 
 use crate::error::{Code, Error, Result};
 use serde::Serialize;
@@ -365,6 +370,175 @@ pub fn resolve_terminal(
         })
 }
 
+// ------------------------------------------------------- database clients
+
+/// Desktop database clients worth offering, by bundle.
+///
+/// Only the identity is in this table. Which *protocols* an entry can open is
+/// deliberately absent, and asking the application itself instead is the whole
+/// design: this machine has Redis Insight installed, and Redis Insight declares
+/// exactly one URL scheme — `redisinsight`. A hand-written table would have put
+/// it beside `redis://` on the strength of its name, and the result would be a
+/// button that launches an application which then ignores the address it was
+/// given. `mdi-` icons and display names cannot be got wrong that way; scheme
+/// support can, so it is read rather than claimed.
+///
+/// macOS only, and the reason is not laziness about the other two. A bundle
+/// carries `CFBundleURLTypes`, so what it opens is answerable from disk;
+/// Windows keeps the same fact in the registry under a different key per app
+/// and Linux in `.desktop` files spread over three directories. On those the
+/// system handler below is the whole offer, which is still the thing G-3 was
+/// missing — something that opens.
+#[cfg(target_os = "macos")]
+const DB_CLIENTS: &[(&str, &str, &str)] = &[
+    // (id, display name, bundle)
+    ("tableplus", "TablePlus", "/Applications/TablePlus.app"),
+    ("dbeaver", "DBeaver", "/Applications/DBeaver.app"),
+    ("datagrip", "DataGrip", "/Applications/DataGrip.app"),
+    (
+        "compass",
+        "MongoDB Compass",
+        "/Applications/MongoDB Compass.app",
+    ),
+    ("sequel-ace", "Sequel Ace", "/Applications/Sequel Ace.app"),
+    (
+        "beekeeper",
+        "Beekeeper Studio",
+        "/Applications/Beekeeper Studio.app",
+    ),
+    ("postico", "Postico", "/Applications/Postico 2.app"),
+    (
+        "redis-insight",
+        "Redis Insight",
+        "/Applications/Redis Insight.app",
+    ),
+    ("medis", "Medis", "/Applications/Medis.app"),
+];
+
+#[cfg(not(target_os = "macos"))]
+const DB_CLIENTS: &[(&str, &str, &str)] = &[];
+
+/// The spellings an application may register for one of our schemes.
+///
+/// `connect::scheme_of` names a protocol once, for a manifest; the desktop world
+/// names the same protocol more than once. Postgres is `postgres` about as often
+/// as `postgresql`, and MariaDB clients register `mariadb` for what this app
+/// calls `mysql`. Matching on the exact string would hide a client that handles
+/// the service perfectly well.
+fn aliases(scheme: &str) -> &'static [&'static str] {
+    match scheme {
+        "mysql" => &["mysql", "mariadb"],
+        "postgresql" => &["postgresql", "postgres"],
+        "mongodb" => &["mongodb", "mongodb+srv"],
+        "redis" => &["redis", "rediss"],
+        _ => &[],
+    }
+}
+
+/// The URL schemes an installed bundle says it opens.
+///
+/// `defaults` rather than a plist crate: an `Info.plist` inside a bundle is
+/// usually the binary form, `defaults read` is the reader macOS ships for it,
+/// and the alternative is a dependency to answer a question asked about at most
+/// nine paths on one platform.
+///
+/// The output is old-style plist text and what is wanted from it is a set of
+/// bare words, so it is scanned for tokens rather than parsed. A scheme name is
+/// matched whole — `redis` must not match `redisinsight`, which is the exact
+/// pair this function was written against.
+#[cfg(target_os = "macos")]
+fn declared_schemes(bundle: &str) -> Vec<String> {
+    let Ok(out) = std::process::Command::new("defaults")
+        .arg("read")
+        .arg(format!("{bundle}/Contents/Info"))
+        .arg("CFBundleURLTypes")
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+
+    String::from_utf8_lossy(&out.stdout)
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.'))
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_ascii_lowercase())
+        .collect()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn declared_schemes(_bundle: &str) -> Vec<String> {
+    Vec::new()
+}
+
+/// Every client that can open `scheme`, installed or not, plus the system
+/// handler.
+///
+/// "Installed or not" is the same rule the editor list follows — a greyed row
+/// says this app knows about TablePlus, an absent one says it does not. But an
+/// installed client that does not declare the scheme is left out altogether
+/// rather than greyed: it is not missing, it is not applicable, and a Redis
+/// Insight greyed out under a MySQL service would read as a broken install.
+///
+/// The system handler heads the list and is always available, exactly as the
+/// system default browser does, and for the same reason: it is the absence of a
+/// choice rather than a choice, and something answers a registered scheme.
+pub fn db_clients(scheme: &str) -> Vec<App> {
+    let wanted = aliases(scheme);
+    if wanted.is_empty() {
+        // Not a protocol a desktop client opens — AMQP, SMTP, a bare host and
+        // port. The caller shows nothing rather than an empty picker.
+        return Vec::new();
+    }
+
+    let mut apps = vec![App {
+        id: String::new(),
+        name: "System default".to_string(),
+        icon: "mdi-open-in-app".to_string(),
+        available: true,
+        default: false,
+    }];
+
+    for (id, name, bundle) in DB_CLIENTS {
+        if !std::path::Path::new(bundle).exists() {
+            apps.push(App {
+                id: (*id).to_string(),
+                name: (*name).to_string(),
+                icon: "mdi-database".to_string(),
+                available: false,
+                default: false,
+            });
+            continue;
+        }
+        let declared = declared_schemes(bundle);
+        if !wanted.iter().any(|w| declared.iter().any(|d| d == w)) {
+            continue;
+        }
+        apps.push(App {
+            id: (*id).to_string(),
+            name: (*name).to_string(),
+            icon: "mdi-database".to_string(),
+            available: true,
+            default: false,
+        });
+    }
+
+    mark_default(apps)
+}
+
+/// How to hand a URI to `id`, or `None` when nothing there can take it.
+///
+/// The empty id is the system handler and resolves to `None` on purpose — the
+/// caller's fallback is already "let the OS decide", which is the same thing,
+/// and giving it a `Launch` would mean two code paths for one behaviour.
+pub fn resolve_db_client(id: &str) -> Option<Launch> {
+    let entry = DB_CLIENTS.iter().find(|(i, ..)| *i == id)?;
+    std::path::Path::new(entry.2)
+        .exists()
+        .then_some(Launch::Bundle(entry.2))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,6 +550,7 @@ mod tests {
         for list in [
             TERMINALS.iter().map(|(id, ..)| *id).collect::<Vec<_>>(),
             EDITORS.iter().map(|(id, ..)| *id).collect::<Vec<_>>(),
+            DB_CLIENTS.iter().map(|(id, ..)| *id).collect::<Vec<_>>(),
         ] {
             let mut seen = std::collections::HashSet::new();
             for id in &list {
@@ -475,6 +650,105 @@ mod tests {
         let flagged = browsers().into_iter().find(|a| a.default).unwrap();
         assert_eq!(flagged.id, "", "the system default entry has the empty id");
         assert!(resolve_browser(Some(&flagged.id)).is_none());
+    }
+
+    /// The bug the design exists to avoid, held as an assertion rather than a
+    /// comment: `redis` must not match `redisinsight`. Whole-token matching is
+    /// what separates a client that opens the address from one that launches
+    /// and ignores it.
+    #[test]
+    fn a_scheme_is_matched_whole_and_not_as_a_prefix() {
+        let declared = ["redisinsight".to_string()];
+        let wanted = aliases("redis");
+        assert!(
+            !wanted.iter().any(|w| declared.iter().any(|d| d == w)),
+            "redisinsight is not redis"
+        );
+
+        let declared = ["redis".to_string()];
+        assert!(wanted.iter().any(|w| declared.iter().any(|d| d == w)));
+    }
+
+    /// The two spellings of Postgres and of MySQL/MariaDB both resolve, because
+    /// a client registering the other one handles the service perfectly well.
+    #[test]
+    fn a_protocol_is_recognised_under_the_names_clients_actually_register() {
+        assert!(aliases("postgresql").contains(&"postgres"));
+        assert!(aliases("mysql").contains(&"mariadb"));
+        assert!(aliases("mongodb").contains(&"mongodb+srv"));
+    }
+
+    /// A protocol no desktop client opens produces no picker at all, rather
+    /// than one containing only the system handler — the caller keys the whole
+    /// button on this list being non-empty.
+    #[test]
+    fn a_protocol_without_desktop_clients_offers_nothing() {
+        for scheme in ["amqp", "smtp", "http", "host-port"] {
+            assert!(
+                db_clients(scheme).is_empty(),
+                "{scheme} should offer no client"
+            );
+        }
+    }
+
+    /// Every scheme this list keys on has to be one `connect` can actually
+    /// produce, or the picker is wired to a vocabulary nothing speaks.
+    #[test]
+    fn the_schemes_offered_are_ones_connect_names() {
+        use crate::connect;
+        let produced: Vec<&str> = [
+            connect::Kind::Mysql,
+            connect::Kind::Postgres,
+            connect::Kind::Mongo,
+            connect::Kind::Redis,
+            connect::Kind::Memcached,
+            connect::Kind::Amqp,
+            connect::Kind::Http,
+            connect::Kind::HostPort,
+            connect::Kind::Smtp,
+        ]
+        .into_iter()
+        .map(connect::scheme_of)
+        .collect();
+
+        for scheme in ["mysql", "postgresql", "mongodb", "redis"] {
+            assert!(
+                produced.contains(&scheme),
+                "{scheme} is not a scheme connect::scheme_of returns"
+            );
+            assert!(!db_clients(scheme).is_empty());
+        }
+    }
+
+    /// The system handler is always there and always first, so a machine with
+    /// no client installed still has something to click.
+    #[test]
+    fn the_system_handler_heads_every_non_empty_list() {
+        for scheme in ["mysql", "postgresql", "mongodb", "redis"] {
+            let list = db_clients(scheme);
+            assert_eq!(list[0].id, "", "{scheme}: the system handler comes first");
+            assert!(list[0].available);
+            assert!(list[0].default, "and is what an unset preference means");
+        }
+    }
+
+    /// Read against the machine rather than against the table: whatever is
+    /// installed here must agree with what `resolve_db_client` will launch.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_offered_client_is_one_that_can_be_launched() {
+        for scheme in ["mysql", "postgresql", "mongodb", "redis"] {
+            for app in db_clients(scheme).into_iter().filter(|a| a.available) {
+                if app.id.is_empty() {
+                    continue; // the system handler has no bundle
+                }
+                assert!(
+                    resolve_db_client(&app.id).is_some(),
+                    "{} is offered for {scheme} but resolves to nothing",
+                    app.id
+                );
+            }
+        }
     }
 
     #[test]

@@ -1251,7 +1251,7 @@ gerekmiyor — o yüzden `HttpSource` mevcut handle üzerinde blokluyor, ve bunu
 bir runtime iş parçacığında yapmak panikler. `market_refresh` ile
 `market_install` bütün işi `spawn_blocking` içinde koşturuyor.
 
-### Faz 6 — Gömülü şablonların kaldırılması
+### Faz 6 — Gömülü şablonların kaldırılması · **tamamlandı**
 
 `skeleton/core/templates/services/` silinir. `DYNAMIC_SERVICES`, `RENDERED`,
 `connect.rs`'in `Spec` tablosu, `EMBEDDED`'ın servis yarısı silinir.
@@ -1278,14 +1278,23 @@ bu bir taviz değil: katalogsuz StackVo hâlâ bir ters vekil, bir sertifika
 otoritesi ve bir proje koşturucusu, ve geçilemeyen bir ilk açılış ekranı
 insanların uygulamayı kapattığı ekrandır.
 
-**Kalan tek ön koşul bir karar, kod değil.** `.env`'den render eden dalı silmek,
-göç etmemiş her çalışma alanının servislerini durdurmak demek. Göç artık mümkün
-ve geri alınabilir (Faz 2 + `.env.pre-market.bak` + Market sayfasındaki panel);
-eksik olan, göçü **reddeden** kullanıcıya ne olacağı. `docs/durum.md` §5'in
-altıncı maddesi, üç seçeneğin bedeliyle birlikte.
+**O karar verildi: ADR 0016, zorunlu göç, bir kapının arkasında.**
+`MigrationGate`, `RequirementsGate`/`CatalogueGate`/`BootstrapGate` deseninin
+dördüncüsü — katalogtan sonra, bootstrap'tan önce. Planı yazmadan önce
+gösteriyor, `.env`'i yedekliyor, ve atlanabiliyor; öteki tarafta servissiz bir
+uygulama var, eski yığın değil. `.env` dalı ve 25 şablon silindi; göç etmemiş
+bir çalışma alanı `render_generated`'dan adıyla bir hata alıyor.
 
-**Çıkış:** `rg 'SERVICE_[A-Z_]+_(ENABLE|VERSION)' src-tauri/src/` yalnız göç
-kodunda isabet veriyor; `skeleton/` altında hiçbir servis şablonu kalmıyor;
+Kararın asıl gerekçesi iki yolun **iki farklı katalog** bilmesiydi: Solr ve
+ClickHouse paket olarak gelince `services: ["solr"]` yazan bir proje doğru bir
+beyana yanlış bir uyarı almaya başladı, ve o uyarı gömülü liste durdukça
+düzeltilemiyordu. `docs/durum.md` §1'de S-16 kaydı, §6'da ADR 0016.
+
+**Çıkış** — dördünden üçü indi: `skeleton/` altında hiçbir servis şablonu
+kalmıyor (25 dizin, 128 KB silindi; `skeleton/` beş dosya);
+`rg 'SERVICE_[A-Z_]+_(ENABLE|VERSION)' src-tauri/src/` yalnız göç kodunda ve
+`config::EMBEDDED`'da isabet veriyor — o tablo göçün okuduğu şey ve
+`docs/durum.md` §3'te 36. madde olarak duruyor;
 binary boyutu ölçülüp raporlanıyor (ADR 0011'in ölçülebilir tek getirisi);
 temiz kurulum uçtan uca çalışıyor; ağsız temiz kurulum kapıyı gösteriyor ve
 çökmüyor.

@@ -10,6 +10,7 @@ import {
   formToSpec,
   isIncompatible,
   specsDiffer,
+  LANG_DEFAULTS,
 } from '@/lib/manifest';
 
 /**
@@ -64,6 +65,64 @@ describe('formToSpec', () => {
     // The PHP-only keys are forbidden alongside a node block by the schema.
     expect(node.server).toBeUndefined();
     expect(node.document_root).toBeUndefined();
+  });
+
+  /**
+   * J-2, and the assertion the field's design rests on: an unset picker must
+   * not become `"npm"`.
+   *
+   * Every node manifest on disk was written before this field existed. If the
+   * blank entry serialised as a value, the first save of an unrelated setting
+   * would enable Corepack in that project's image — a different build for
+   * something that asked for nothing.
+   */
+  it('omits package_manager entirely when nothing was chosen', () => {
+    const spec = formToSpec({ ...blankForm(), name: 'app', runtime: 'node', nodeVersion: '22' });
+    expect(spec.node).toBeDefined();
+    expect('package_manager' in spec.node).toBe(false);
+  });
+
+  it('writes package_manager in the file spelling when one was chosen', () => {
+    const spec = formToSpec({
+      ...blankForm(),
+      name: 'app',
+      runtime: 'node',
+      nodeVersion: '22',
+      packageManager: 'pnpm',
+    });
+    expect(spec.node.package_manager).toBe('pnpm');
+    expect(spec.node.packageManager).toBeUndefined();
+  });
+
+  /**
+   * J-1. Bun and Deno write their own block, not a node one — the same W-02
+   * rule the test above states, extended to the two runtimes most likely to be
+   * mistaken for node.
+   */
+  it('gives bun and deno a block of their own rather than a node block', () => {
+    for (const runtime of ['bun', 'deno']) {
+      const spec = formToSpec({
+        ...blankForm(),
+        name: 'app',
+        runtime,
+        langVersion: LANG_DEFAULTS[runtime].version,
+        langStart: LANG_DEFAULTS[runtime].start,
+        langPort: LANG_DEFAULTS[runtime].port,
+      });
+      expect(spec[runtime], runtime).toBeDefined();
+      expect(spec.node, runtime).toBeUndefined();
+      expect(spec.php, runtime).toBeUndefined();
+      expect(spec[runtime].start).toBe(LANG_DEFAULTS[runtime].start);
+    }
+  });
+
+  /**
+   * denoland/deno publishes no major or minor tag, so a shortened default
+   * would name an image that does not exist. The Rust side holds the same
+   * claim; this holds the copy the form seeds from.
+   */
+  it('seeds deno with a full patch version, because there is no other tag', () => {
+    expect(LANG_DEFAULTS.deno.version.split('.')).toHaveLength(3);
   });
 
   it('writes document_root in the file spelling, not the manifest reader’s', () => {

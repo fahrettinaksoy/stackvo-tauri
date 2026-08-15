@@ -44,7 +44,9 @@ watch(() => props.name, load, { immediate: true });
     <template v-else-if="tunnel?.running">
       <v-alert v-if="tunnel.url" type="success" variant="tonal" class="mb-3">
         <div class="d-flex align-center ga-2 flex-wrap">
-          <a class="field-link" @click="api.openInBrowser(tunnel.url)">{{ tunnel.url }}</a>
+          <button type="button" class="field-link" @click="api.openInBrowser(tunnel.url)">
+            {{ tunnel.url }}
+          </button>
           <v-btn
             icon
             :aria-label="t('a11y.copy')"

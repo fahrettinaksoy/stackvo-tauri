@@ -121,3 +121,10 @@ if (typeof SVGElement !== 'undefined' && !SVGElement.prototype.getTotalLength) {
   SVGElement.prototype.getTotalLength = () => 0;
   SVGElement.prototype.getPointAtLength = () => ({ x: 0, y: 0 });
 }
+
+// jsdom performs no layout, so it implements no scrolling either — the method
+// is simply absent, and a component that keeps its current row in view calls it
+// on every arrow key. Inert like the rest: there is no viewport to scroll.
+if (typeof globalThis.Element !== 'undefined' && !globalThis.Element.prototype.scrollIntoView) {
+  globalThis.Element.prototype.scrollIntoView = function () {};
+}

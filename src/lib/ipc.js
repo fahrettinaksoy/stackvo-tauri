@@ -149,6 +149,13 @@ export const api = {
   // than no button.
   marketStatus: () => call('market_status'),
   marketRefresh: (location) => call('market_refresh', { location }),
+  // C-1. Authoring a package rather than only installing one. The workspace
+  // owns the path; these name a service and a version.
+  packageScaffold: (category, service, version, image) =>
+    call('package_scaffold', { category, service, version, image }),
+  packageLint: (category, service, version) => call('package_lint', { category, service, version }),
+  packageSeal: (category, service, version) => call('package_seal', { category, service, version }),
+
   marketCatalog: () => call('market_catalog'),
   marketInstall: (service, version) => call('market_install', { service, version }),
   marketUninstall: (service, version) => call('market_uninstall', { service, version }),
@@ -224,6 +231,34 @@ export const api = {
   // purpose. projects_list already carries domainConfigured, and services_list
   // already carries required/optional/unmetDependencies — a second round trip
   // for the same facts is a way for the two to disagree.
+  dbInstances: () => call('db_instances'),
+  // I-2. Which projects nothing has asked for, and stopping them. The sweep
+  // returns names because a background action that surprises somebody has to
+  // be able to say exactly what it did.
+  projectsIdle: () => call('projects_idle'),
+  projectsSuspendIdle: () => call('projects_suspend_idle'),
+
+  // G-4. Moving one instance's data into another. Planned first because the
+  // target is emptied, which is a sentence somebody has to read.
+  dbMovePlan: (from, to) => call('db_move_plan', { from, to }),
+  dbMoveApply: (from, to) => call('db_move_apply', { from, to }),
+
+  // E-4. Names pointed at something StackVo did not start. Saved whole: the
+  // list is a handful of pairs in one table, and three commands over one small
+  // document is three ways for it and the screen to disagree.
+  routesList: () => call('routes_list'),
+  routesSave: (routes) => call('routes_save', { routes }),
+
+  // E-1. A responder for this machine's development names — one suffix,
+  // refusing everything else. The resolver file is a separate call because it
+  // asks for a password and changes how the whole machine resolves names,
+  // which is the same separation `hostsPlan`/`hostsApply` has below.
+  dnsStatus: () => call('dns_status'),
+  dnsStart: () => call('dns_start'),
+  dnsStop: () => call('dns_stop'),
+  dnsResolverInstall: () => call('dns_resolver_install'),
+  dnsResolverRemove: () => call('dns_resolver_remove'),
+
   /** Computes the change without elevating, so the UI can show a diff first. */
   hostsPlan: (add = [], remove = []) => call('hosts_plan', { add, remove }),
   hostsApply: (add = [], remove = []) => call('hosts_apply', { add, remove }),
@@ -274,7 +309,49 @@ export const api = {
    * Two addresses come back: the host one and the container one. The password
    * is bullets until `reveal` — the same act `envReveal` is.
    */
+  /**
+   * F-1: what the database was asked, and what it was asked repeatedly.
+   *
+   * `supported: false` is a normal answer, not a failure — only MySQL and
+   * MariaDB keep a log this can switch on without changing the image.
+   */
+  /**
+   * F-2: dumps and queries on one axis.
+   *
+   * `service` is optional — without it this is the dumps alone. Queries carry
+   * no request and that is deliberate, not missing: see the Rust module.
+   */
+  requestTimeline: (project, service = null) => call('request_timeline', { project, service }),
+  /**
+   * F-3: the same profile as a call tree, for the flame view.
+   *
+   * Separate from `profilerRead` because the tree is thousands of nodes and the
+   * table is sixty rows — a pane that opens on the table should not carry the
+   * graph across to ignore it.
+   */
+  profilerTree: (name, id) => call('profiler_tree', { name, id }),
+  queryLog: (service) => call('query_log', { service }),
+  /** Start or stop recording. Stopping also clears what was collected. */
+  queryLogRecord: (service, recording) => call('query_log_record', { service, recording }),
+  /** Throw away the session so far, without stopping. */
+  queryLogClear: (service) => call('query_log_clear', { service }),
   serviceConnection: (service, reveal = false) => call('service_connection', { service, reveal }),
+  /**
+   * Which desktop clients on this machine open this service's kind of address.
+   *
+   * Empty for most services and that is the answer, not a failure — the button
+   * is keyed on this list having something in it.
+   */
+  serviceDbClients: (service) => call('service_db_clients', { service }),
+  /**
+   * Hand the host address to one of them. The empty id means the system handler.
+   *
+   * The string that goes across carries the real password, because one with
+   * bullets in it fails to connect — so this is the same deliberate act
+   * `envReveal` is, and it is recorded like one.
+   */
+  serviceOpenInClient: (service, client = '') =>
+    call('service_open_in_client', { service, client }),
 
   // --- Xdebug ---------------------------------------------------------------
   // Three answers, not one: asked for in the manifest, compiled into the image,
@@ -315,6 +392,13 @@ export const api = {
   releasePlan: (name, tag = null) => call('release_plan', { name, tag }),
   /** Builds, then runs the result and asks whether it leaked an .env. */
   releaseBuild: (name, tag = null) => call('release_build', { name, tag }),
+  // H-1. Getting the built image somewhere, and something to run it with.
+  // Planned first because the refusals — unverified image, no registry host —
+  // are the whole reason the push is safe.
+  releasePushPlan: (name, tag = null) => call('release_push_plan', { name, tag }),
+  releasePush: (name, tag = null) => call('release_push', { name, tag }),
+  releaseRecipe: (name, tag = null) => call('release_recipe', { name, tag }),
+
   releaseSave: (name, path, tag = null) => call('release_save', { name, tag, path }),
   /** Read a bundle back in on a machine that may have no registry at all. */
   releaseLoad: (path) => call('release_load', { path }),
@@ -419,6 +503,33 @@ export const api = {
     call('project_adopt', { name, spec, overrides }),
   projectManifestRead: (name) => call('project_manifest_read', { name }),
   projectManifestWrite: (name, manifest) => call('project_manifest_write', { name, manifest }),
+
+  // B-2. `stackvo.local.json` — this machine's overrides for a committed
+  // manifest. Text, not an object: the file is typed by hand and a struct
+  // round-trip would reformat it.
+  projectLocalRead: (name) => call('project_local_read', { name }),
+  projectLocalWrite: (name, text) => call('project_local_write', { name, text }),
+
+  // B-3. What a project's lifecycle hooks would run, and the approval for the
+  // ones that touch this machine. The digest goes back with the approval on
+  // purpose — it is a receipt for the list that was on screen.
+  projectHooksPlan: (name) => call('project_hooks_plan', { name }),
+  projectHooksApprove: (name, digest) => call('project_hooks_approve', { name, digest }),
+  projectHooksRevoke: (name) => call('project_hooks_revoke', { name }),
+  /**
+   * Also answer on a name other devices on this network can resolve.
+   *
+   * Writes the intent only — the hostname is derived from this machine's
+   * address every time it is asked for, so `lanStatus` is what says what it
+   * currently is, and regenerating is still what puts it in the router.
+   */
+  projectLanShare: (name, enabled) => call('project_lan_share', { name, enabled }),
+  /**
+   * The address a phone on the same Wi-Fi would use, and the two ways there
+   * isn't one: no network, or a public address, which is refused rather than
+   * published.
+   */
+  lanStatus: () => call('lan_status'),
   /** What the repository declares, what this machine gives it, and the diff. */
   projectRequirements: (name) => call('project_requirements', { name }),
   /** Enable the declared services that are not on yet. Writes `.env` only. */

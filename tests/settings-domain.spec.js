@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mount } from '@vue/test-utils';
+import { mount, flushPromises } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
@@ -333,5 +333,172 @@ describe('what a save still needs', () => {
     ).toBe(false);
 
     wrapper.unmount();
+  });
+});
+
+/**
+ * The DNS pane (E-1).
+ *
+ * Three things here are only visible at this layer, and each is the kind that
+ * looks fine and is wrong: that the two switches are two separate acts, that a
+ * platform with no per-suffix mechanism gets a sentence rather than a dead
+ * toggle, and that the file's contents are shown *before* the password prompt
+ * that writes them.
+ */
+describe('the DNS pane', () => {
+  const DnsPane = () => import('@/components/settings/DnsPane.vue');
+
+  const STATUS = {
+    support: 'resolver',
+    suffix: 'stackvo.loc',
+    port: 15353,
+    listening: false,
+    resolverFile: '/etc/resolver/loc',
+    resolverConfigured: false,
+    instruction: 'nameserver 127.0.0.1\nport 15353\n',
+  };
+
+  async function open(over = {}) {
+    replies.dnsStatus = { ...STATUS, ...over };
+    const component = (await DnsPane()).default;
+    const wrapper = mount(
+      { components: { DnsPane: component }, template: '<v-app><DnsPane /></v-app>' },
+      { global: { plugins: [createPinia(), vuetify, i18n] } }
+    );
+    await flushPromises();
+    return wrapper;
+  }
+
+  const switches = (wrapper) => wrapper.findAll('input[type="checkbox"]');
+
+  it('offers the responder and the resolver as two separate switches', async () => {
+    const wrapper = await open();
+    expect(switches(wrapper)).toHaveLength(2);
+  });
+
+  /** The password prompt must not arrive from a switch labelled "turn on". */
+  it('starting the responder does not touch the machine resolver', async () => {
+    const wrapper = await open();
+    replies.dnsStart = { ...STATUS, listening: true };
+
+    await switches(wrapper)[0].setValue(true);
+    await flushPromises();
+
+    expect(calls.map((c) => c[0])).toContain('dnsStart');
+    expect(calls.map((c) => c[0])).not.toContain('dnsResolverInstall');
+  });
+
+  /** What it writes, before it writes it. */
+  it('shows the file contents beside the switch that installs them', async () => {
+    const wrapper = await open();
+    expect(wrapper.text()).toContain('nameserver 127.0.0.1');
+    expect(wrapper.text()).toContain('/etc/resolver/loc');
+  });
+
+  /**
+   * A platform with no per-suffix mechanism gets a sentence. A toggle that
+   * quietly does nothing is worse than an explanation.
+   */
+  it('draws no switches at all where the platform has no mechanism', async () => {
+    const wrapper = await open({ support: 'unsupported', resolverFile: undefined });
+    expect(switches(wrapper)).toHaveLength(0);
+    expect(wrapper.text()).toContain(i18n.global.t('dns.unsupported'));
+  });
+
+  /** Linux has a line only the user can place, so it is printed, not offered. */
+  it('prints the line to place where there is no file this app can write', async () => {
+    const wrapper = await open({
+      support: 'manual',
+      resolverFile: undefined,
+      instruction: 'server=/loc/127.0.0.1#15353',
+    });
+    expect(switches(wrapper)).toHaveLength(1);
+    expect(wrapper.text()).toContain('server=/loc/127.0.0.1#15353');
+  });
+});
+
+/**
+ * Custom routes (E-4).
+ *
+ * The notes are the feature, so they are what is asserted. Each one stands for
+ * a failure that is otherwise completely silent: a 502 from `localhost`, an
+ * ignored path, a certificate the browser refuses. A pane that applied them
+ * quietly would look identical and be worth much less.
+ */
+describe('the custom routes pane', () => {
+  const RoutesPane = () => import('@/components/settings/RoutesPane.vue');
+
+  async function open(list) {
+    replies.routesList = list;
+    const component = (await RoutesPane()).default;
+    const wrapper = mount(
+      { components: { RoutesPane: component }, template: '<v-app><RoutesPane /></v-app>' },
+      { global: { plugins: [createPinia(), vuetify, i18n] } }
+    );
+    await flushPromises();
+    return wrapper;
+  }
+
+  it('shows what the user typed, not what the proxy was given', async () => {
+    const wrapper = await open([
+      {
+        domain: 'api.loc',
+        target: 'http://host.docker.internal:3000',
+        rewrittenFrom: 'http://localhost:3000',
+        enabled: true,
+        notes: ["localhost means the proxy's own container, not this machine"],
+      },
+    ]);
+
+    const targets = wrapper.findAll('input').map((i) => i.element.value);
+    expect(targets, 'an editor showing the rewrite would rewrite the rewrite').toContain(
+      'http://localhost:3000'
+    );
+  });
+
+  it('prints the note beside the row it belongs to', async () => {
+    const wrapper = await open([
+      {
+        domain: 'api.loc',
+        target: 'http://host.docker.internal:3000',
+        rewrittenFrom: 'http://localhost:3000',
+        enabled: true,
+        notes: ['sending it to host.docker.internal instead'],
+      },
+    ]);
+    expect(wrapper.text()).toContain('host.docker.internal');
+  });
+
+  /** A route the renderer skipped must be visible, or the screen lies. */
+  it('shows a route that no longer normalises as an error rather than hiding it', async () => {
+    const wrapper = await open([
+      {
+        domain: 'api.loc',
+        target: 'tcp://nope',
+        enabled: true,
+        notes: [],
+        error: '"tcp" is not a scheme the proxy speaks',
+      },
+    ]);
+    expect(wrapper.text()).toContain('not a scheme the proxy speaks');
+  });
+
+  it('sends the whole list on save', async () => {
+    const wrapper = await open([]);
+    replies.routesSave = [];
+
+    const add = wrapper.findAll('button').find((b) => b.text() === i18n.global.t('routes.add'));
+    await add.trigger('click');
+    await wrapper.findAll('input[type="text"]')[0].setValue('api.loc');
+    await flushPromises();
+
+    const save = wrapper.findAll('button').find((b) => b.text() === i18n.global.t('routes.save'));
+    await save.trigger('click');
+    await flushPromises();
+
+    const sent = calls.find((c) => c[0] === 'routesSave');
+    expect(sent[1]).toEqual([
+      { domain: 'api.loc', target: 'http://localhost:3000', enabled: true },
+    ]);
   });
 });

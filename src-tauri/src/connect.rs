@@ -68,233 +68,6 @@ pub enum Kind {
     Smtp,
 }
 
-/// One service's shape, resolved from `.env` and the engine.
-struct Spec {
-    service: &'static str,
-    kind: Kind,
-    /// The port inside the container — the second half of the template's
-    /// `ports:` mapping, which no `.env` key can move.
-    container_port: u16,
-    /// Keys the published host port may be under, in the order they are
-    /// honoured. Two spellings because the tree has two: six services use
-    /// `SERVICE_<ID>_HOST_PORT` and the rest `HOST_PORT_<ID>`, which is the
-    /// inconsistency `contracts/env.schema.json` records under `servicePattern`
-    /// and `config.rs` aliases three of.
-    port_keys: &'static [&'static str],
-    user_key: Option<&'static str>,
-    /// Used when `user_key` is unset or empty — the account the image itself
-    /// creates. Mirrors `db.rs`'s `default_user` for the four engines both
-    /// modules know about.
-    default_user: Option<&'static str>,
-    password_key: Option<&'static str>,
-    database_key: Option<&'static str>,
-    /// Mirrors the `| default(...)` in the service's compose template, which is
-    /// where the value lives when `.env` says nothing — the images create this
-    /// database on first boot whether or not anyone configured it.
-    default_database: Option<&'static str>,
-}
-
-/// Every service with a connection string, and what it is made of.
-///
-/// A table rather than a `match` per question so that adding a service is one
-/// row and not five edits, and so the tests below can walk it.
-const SPECS: &[Spec] = &[
-    Spec {
-        service: "mysql",
-        kind: Kind::Mysql,
-        container_port: 3306,
-        port_keys: &["SERVICE_MYSQL_HOST_PORT", "HOST_PORT_MYSQL"],
-        user_key: None,
-        default_user: Some("root"),
-        password_key: Some("SERVICE_MYSQL_ROOT_PASSWORD"),
-        database_key: Some("SERVICE_MYSQL_DATABASE"),
-        default_database: Some("stackvo"),
-    },
-    Spec {
-        service: "mariadb",
-        kind: Kind::Mysql,
-        container_port: 3306,
-        port_keys: &["SERVICE_MARIADB_HOST_PORT", "HOST_PORT_MARIADB"],
-        user_key: None,
-        default_user: Some("root"),
-        password_key: Some("SERVICE_MARIADB_ROOT_PASSWORD"),
-        database_key: Some("SERVICE_MARIADB_DATABASE"),
-        default_database: Some("stackvo"),
-    },
-    Spec {
-        service: "postgres",
-        kind: Kind::Postgres,
-        container_port: 5432,
-        port_keys: &["SERVICE_POSTGRES_HOST_PORT", "HOST_PORT_POSTGRES"],
-        user_key: Some("SERVICE_POSTGRES_USER"),
-        default_user: Some("postgres"),
-        password_key: Some("SERVICE_POSTGRES_PASSWORD"),
-        database_key: Some("SERVICE_POSTGRES_DB"),
-        default_database: Some("stackvo"),
-    },
-    Spec {
-        service: "mongo",
-        kind: Kind::Mongo,
-        container_port: 27017,
-        port_keys: &["SERVICE_MONGO_HOST_PORT", "HOST_PORT_MONGO"],
-        user_key: Some("SERVICE_MONGO_INITDB_ROOT_USERNAME"),
-        default_user: Some("root"),
-        password_key: Some("SERVICE_MONGO_INITDB_ROOT_PASSWORD"),
-        database_key: Some("SERVICE_MONGO_DATABASE"),
-        default_database: Some("stackvo"),
-    },
-    Spec {
-        service: "redis",
-        kind: Kind::Redis,
-        container_port: 6379,
-        port_keys: &["SERVICE_REDIS_HOST_PORT", "HOST_PORT_REDIS"],
-        user_key: None,
-        default_user: None,
-        // Deliberately none, and `SERVICE_REDIS_PASSWORD` exists. The shipped
-        // `redis.conf` template leaves `requirepass` commented out, so the key
-        // configures nothing — putting it in the URI would produce a string
-        // that fails against a server with no password set, which is worse
-        // than omitting a password the server does not want.
-        password_key: None,
-        database_key: None,
-        default_database: None,
-    },
-    Spec {
-        service: "valkey",
-        kind: Kind::Redis,
-        // 6379 inside, whatever the host publishes outside — and the host
-        // default is 6381 precisely so both can run. The container port is the
-        // half no `.env` key moves, which is why this number is not 6381.
-        container_port: 6379,
-        port_keys: &["SERVICE_VALKEY_HOST_PORT", "HOST_PORT_VALKEY"],
-        user_key: None,
-        default_user: None,
-        // As Redis, and for the same reason: the shipped `valkey.conf` leaves
-        // `requirepass` out entirely.
-        password_key: None,
-        database_key: None,
-        default_database: None,
-    },
-    Spec {
-        service: "memcached",
-        kind: Kind::Memcached,
-        container_port: 11211,
-        port_keys: &["SERVICE_MEMCACHED_HOST_PORT", "HOST_PORT_MEMCACHED"],
-        user_key: None,
-        default_user: None,
-        password_key: None,
-        database_key: None,
-        default_database: None,
-    },
-    Spec {
-        service: "rabbitmq",
-        kind: Kind::Amqp,
-        container_port: 5672,
-        port_keys: &["SERVICE_RABBITMQ_HOST_PORT", "HOST_PORT_RABBITMQ"],
-        user_key: Some("SERVICE_RABBITMQ_DEFAULT_USER"),
-        default_user: Some("guest"),
-        password_key: Some("SERVICE_RABBITMQ_DEFAULT_PASS"),
-        database_key: None,
-        default_database: None,
-    },
-    Spec {
-        service: "elasticsearch",
-        kind: Kind::Http,
-        container_port: 9200,
-        port_keys: &["SERVICE_ELASTICSEARCH_HOST_PORT", "HOST_PORT_ELASTICSEARCH"],
-        // The template sets `xpack.security.enabled` from `ELASTIC_SECURITY`,
-        // which defaults to false — so the shipped cluster takes no credentials
-        // and a URI carrying them would be rejected rather than ignored.
-        user_key: None,
-        default_user: None,
-        password_key: None,
-        database_key: None,
-        default_database: None,
-    },
-    // The three services whose credential is a header, not a userinfo field.
-    //
-    // Meilisearch wants `Authorization: Bearer <master key>`, Typesense wants
-    // `X-TYPESENSE-API-KEY`, and an S3 client wants an access key and a secret
-    // key alongside an endpoint — none of the three is a `user:password@` and
-    // encoding one as if it were produces a string that parses, is copied, and
-    // is refused. So the URI is the address alone and the key stays where it
-    // already is: in the credentials block below it, masked, with `env_reveal`
-    // as the way to see it.
-    Spec {
-        service: "meilisearch",
-        kind: Kind::Http,
-        container_port: 7700,
-        port_keys: &["SERVICE_MEILISEARCH_HOST_PORT", "HOST_PORT_MEILISEARCH"],
-        user_key: None,
-        default_user: None,
-        password_key: None,
-        database_key: None,
-        default_database: None,
-    },
-    Spec {
-        service: "typesense",
-        kind: Kind::Http,
-        container_port: 8108,
-        port_keys: &["SERVICE_TYPESENSE_HOST_PORT", "HOST_PORT_TYPESENSE"],
-        user_key: None,
-        default_user: None,
-        password_key: None,
-        database_key: None,
-        default_database: None,
-    },
-    Spec {
-        service: "minio",
-        // The S3 API and not the console. The console is a browser destination
-        // and its address is the domain the sheet shows a row above; an SDK
-        // pointed at 9001 gets HTML back.
-        kind: Kind::Http,
-        container_port: 9000,
-        port_keys: &["SERVICE_MINIO_HOST_PORT", "HOST_PORT_MINIO"],
-        user_key: None,
-        default_user: None,
-        password_key: None,
-        database_key: None,
-        default_database: None,
-    },
-    Spec {
-        service: "cassandra",
-        kind: Kind::HostPort,
-        container_port: 9042,
-        port_keys: &["SERVICE_CASSANDRA_HOST_PORT", "HOST_PORT_CASSANDRA"],
-        user_key: None,
-        default_user: None,
-        password_key: None,
-        database_key: None,
-        default_database: None,
-    },
-    Spec {
-        service: "mailpit",
-        kind: Kind::Smtp,
-        container_port: 1025,
-        port_keys: &["SERVICE_MAILPIT_SMTP_HOST_PORT", "HOST_PORT_MAILPIT_SMTP"],
-        user_key: None,
-        default_user: None,
-        password_key: None,
-        database_key: None,
-        default_database: None,
-    },
-    Spec {
-        service: "mailhog",
-        kind: Kind::Smtp,
-        container_port: 1025,
-        port_keys: &["SERVICE_MAILHOG_SMTP_HOST_PORT", "HOST_PORT_MAILHOG_SMTP"],
-        user_key: None,
-        default_user: None,
-        password_key: None,
-        database_key: None,
-        default_database: None,
-    },
-];
-
-fn spec_for(service: &str) -> Option<&'static Spec> {
-    SPECS.iter().find(|spec| spec.service == service)
-}
-
 /// The scheme this kind writes, as the package contract spells it.
 ///
 /// `uri` above builds the whole string and is the only thing that should; this
@@ -314,56 +87,6 @@ pub fn scheme_of(kind: Kind) -> &'static str {
         Kind::Smtp => "smtp",
         Kind::Memcached | Kind::HostPort => "host-port",
     }
-}
-
-/// One service's connection shape, readable from outside this module.
-///
-/// [`SPECS`] stays private — it is a table with a lifetime and a `Kind`, and
-/// widening it would invite a second caller to reimplement `uri`. This is the
-/// data half only, and it exists for one reason: `examples/build_packages.rs`
-/// writes these values into service package manifests, and a generator that
-/// *restated* them would be a second copy of decisions that took measurement to
-/// get right. That Mongo authenticates against `admin`, that Redis has no
-/// password key because the shipped `redis.conf` leaves `requirepass`
-/// commented out, that MinIO's address is the S3 API and not the console —
-/// each of those is a comment above a row up there, and each would be silently
-/// dropped by a hand-written second table.
-#[derive(Debug, Clone, Copy)]
-pub struct Shape {
-    pub service: &'static str,
-    pub scheme: &'static str,
-    pub container_port: u16,
-    /// Both spellings, in the order they are honoured. The package format
-    /// replaces this pair with one allocated port, so a converter needs to see
-    /// what it is replacing.
-    pub port_keys: &'static [&'static str],
-    pub user_key: Option<&'static str>,
-    pub default_user: Option<&'static str>,
-    pub password_key: Option<&'static str>,
-    pub database_key: Option<&'static str>,
-    pub default_database: Option<&'static str>,
-}
-
-/// Every service that has a connection string, in table order.
-///
-/// Services absent from this list are not omissions — an admin UI is opened in
-/// a browser and its address is a domain, so `connection` in its manifest is
-/// `null` rather than a string nobody can use.
-pub fn shapes() -> Vec<Shape> {
-    SPECS
-        .iter()
-        .map(|spec| Shape {
-            service: spec.service,
-            scheme: scheme_of(spec.kind),
-            container_port: spec.container_port,
-            port_keys: spec.port_keys,
-            user_key: spec.user_key,
-            default_user: spec.default_user,
-            password_key: spec.password_key,
-            database_key: spec.database_key,
-            default_database: spec.default_database,
-        })
-        .collect()
 }
 
 /// One address, and the string built from it.
@@ -465,11 +188,6 @@ pub fn uri(
         Kind::Smtp => format!("smtp://{host}:{port}"),
         Kind::Memcached | Kind::HostPort => format!("{host}:{port}"),
     }
-}
-
-/// A `.env` value that is set and not blank.
-fn value<'a>(env: &'a Env, key: Option<&str>) -> Option<&'a str> {
-    env.get(key?).filter(|v| !v.is_empty())
 }
 
 // ------------------------------------------------------------------- I/O
@@ -651,77 +369,16 @@ async fn instance_of(root: &Path, id: &str, reveal: bool) -> Result<Option<Conne
 
 /// Everything one service is reachable at, or `None` when it is not the kind of
 /// service anybody connects to with a string.
+///
+/// One source. This used to be a switch — the instance table when there was
+/// one, `.env` and a compiled-in table of twenty-five connection shapes when
+/// there was not — and ADR 0016 removed the second half everywhere else. It is
+/// removed here too: a workspace with no table cannot render a stack, so it has
+/// no running service to ask about, and the `.env` branch was unreachable code
+/// carrying a second copy of what every package manifest now declares in its
+/// own `connection` block.
 pub async fn of(root: &Path, service: &str, reveal: bool) -> Result<Option<Connection>> {
-    if crate::instances::path(root).exists() {
-        return instance_of(root, service, reveal).await;
-    }
-
-    let Some(spec) = spec_for(service) else {
-        return Ok(None);
-    };
-
-    let env = Env::load(root)?;
-
-    let user = value(&env, spec.user_key)
-        .map(str::to_string)
-        .or_else(|| spec.default_user.map(str::to_string));
-    let secret = value(&env, spec.password_key).map(str::to_string);
-    let database = value(&env, spec.database_key)
-        .map(str::to_string)
-        .or_else(|| spec.default_database.map(str::to_string));
-
-    // A user with no password is not authentication anyone asked for: every
-    // engine here that names an account also ships one. Dropping it keeps the
-    // URI from claiming a login that would be refused.
-    let user = secret.as_ref().and(user);
-
-    let rendered = secret.as_ref().map(|password| {
-        if reveal {
-            encode(password)
-        } else {
-            MASK.to_string()
-        }
-    });
-    let rendered_user = user.as_deref().map(encode);
-
-    let build = |host: &str, port: u16| Endpoint {
-        uri: uri(
-            spec.kind,
-            host,
-            port,
-            rendered_user.as_deref(),
-            rendered.as_deref(),
-            database.as_deref(),
-        ),
-        host: host.to_string(),
-        port,
-    };
-
-    // The configured port, for when the engine has nothing to say. First key
-    // wins, so a checkout carrying the older spelling keeps the port it has.
-    let configured = spec
-        .port_keys
-        .iter()
-        .find_map(|key| env.get(key).and_then(|v| v.parse::<u16>().ok()))
-        .unwrap_or(spec.container_port);
-
-    let from_host = match published(service, spec.container_port).await {
-        Published::Port(port) => Some(build("127.0.0.1", port)),
-        Published::Unknown => Some(build("127.0.0.1", configured)),
-        Published::Nothing => None,
-    };
-
-    Ok(Some(Connection {
-        service: service.to_string(),
-        kind: spec.kind,
-        from_host,
-        from_container: build(
-            &format!("{}{service}", crate::engine::CONTAINER_PREFIX),
-            spec.container_port,
-        ),
-        masked: secret.is_some() && !reveal,
-        password_key: spec.password_key.map(str::to_string),
-    }))
+    instance_of(root, service, reveal).await
 }
 
 #[cfg(test)]
@@ -893,138 +550,59 @@ mod tests {
         );
     }
 
-    /// The admin UIs are opened in a browser and the sheet shows their domain a
-    /// row above. A `mysql://` string for phpMyAdmin would be a third address
-    /// for a thing that has two.
-    #[test]
-    fn only_services_you_connect_to_with_a_string_have_one() {
-        assert!(spec_for("mongo").is_some());
-        assert!(spec_for("mailpit").is_some());
-        assert!(spec_for("mongo-express").is_none());
-        assert!(spec_for("phpmyadmin").is_none());
-        assert!(spec_for("traefik").is_none());
-    }
-
-    /// The public view is the private table, not a copy of it.
-    ///
-    /// `shapes()` exists so the package generator can read these rows instead
-    /// of restating them. A field that stopped being copied across — or a row
-    /// that stopped appearing — would not fail anything else: the generator
-    /// would write a manifest that is merely *wrong*, and the first sign would
-    /// be a connection string that does not connect, in a package, on somebody
-    /// else's machine.
-    #[test]
-    fn the_public_shapes_carry_every_row_and_every_field() {
-        let shapes = shapes();
-        assert_eq!(shapes.len(), SPECS.len());
-
-        for (shape, spec) in shapes.iter().zip(SPECS.iter()) {
-            assert_eq!(shape.service, spec.service);
-            assert_eq!(shape.container_port, spec.container_port);
-            assert_eq!(shape.port_keys, spec.port_keys);
-            assert_eq!(shape.user_key, spec.user_key);
-            assert_eq!(shape.default_user, spec.default_user);
-            assert_eq!(shape.password_key, spec.password_key);
-            assert_eq!(shape.database_key, spec.database_key);
-            assert_eq!(shape.default_database, spec.default_database);
-            assert_eq!(shape.scheme, scheme_of(spec.kind));
-        }
-    }
-
     /// Every kind names a scheme, and the three that produce no URI say so with
     /// a name rather than a blank.
     #[test]
     fn the_scheme_names_match_the_strings_uri_builds() {
-        for spec in SPECS {
-            let scheme = scheme_of(spec.kind);
-            assert!(!scheme.is_empty(), "{} has no scheme name", spec.service);
-
-            let built = uri(spec.kind, "h", 1, None, None, None);
-            if scheme == "host-port" {
-                assert!(
-                    !built.contains("://"),
-                    "{} claims host-port but builds a URI: {built}",
-                    spec.service
-                );
-            } else {
-                assert!(
-                    built.starts_with(&format!("{scheme}://")),
-                    "{} claims scheme {scheme} but builds {built}",
-                    spec.service
-                );
-            }
+        // Over the kinds rather than over a table of services: the table is
+        // gone (the packages declare their own `connection` block), and what
+        // is left to check is that every kind this module can produce names a
+        // scheme, including the three that build no URI at all — they say
+        // `host-port` rather than an empty string, so a manifest field is never
+        // sometimes blank.
+        for kind in [
+            Kind::Mysql,
+            Kind::Postgres,
+            Kind::Mongo,
+            Kind::Redis,
+            Kind::Memcached,
+            Kind::Amqp,
+            Kind::Http,
+            Kind::HostPort,
+            Kind::Smtp,
+        ] {
+            assert!(!scheme_of(kind).is_empty(), "{kind:?} has no scheme name");
         }
-    }
-
-    /// Every row names the port its own template publishes. A wrong number here
-    /// is a connection string that looks right and reaches nothing.
-    #[test]
-    fn each_spec_carries_the_port_inside_its_container() {
-        let expected = [
-            ("mysql", 3306u16),
-            ("mariadb", 3306),
-            ("postgres", 5432),
-            ("mongo", 27017),
-            ("redis", 6379),
-            // Valkey's, and deliberately the same number: it is Redis's port
-            // inside a container of its own, and only the published one differs.
-            ("valkey", 6379),
-            ("memcached", 11211),
-            ("rabbitmq", 5672),
-            ("elasticsearch", 9200),
-            ("meilisearch", 7700),
-            ("typesense", 8108),
-            // The S3 API. 9001 is the console, which is not a connection string.
-            ("minio", 9000),
-            ("cassandra", 9042),
-            ("mailpit", 1025),
-            ("mailhog", 1025),
-        ];
-
-        assert_eq!(
-            expected.len(),
-            SPECS.len(),
-            "a service was added or removed"
-        );
-        for (service, port) in expected {
-            let spec = spec_for(service).expect("in the table");
-            assert_eq!(spec.container_port, port, "{service}");
-        }
-    }
-
-    /// Both spellings, current first. A checkout that carries the older key
-    /// keeps the port it has — the same rule `config.rs`'s alias table applies,
-    /// and the reason `HOST_PORT_MONGO` is read at all.
-    #[test]
-    fn the_port_is_looked_for_under_both_spellings() {
-        for spec in SPECS {
-            assert_eq!(spec.port_keys.len(), 2, "{}", spec.service);
-            assert!(
-                spec.port_keys[0].starts_with("SERVICE_"),
-                "{} does not try the current spelling first",
-                spec.service
-            );
-            assert!(
-                spec.port_keys[1].starts_with("HOST_PORT_"),
-                "{} does not fall back to the older spelling",
-                spec.service
-            );
-        }
+        assert_eq!(scheme_of(Kind::Memcached), "host-port");
+        assert_eq!(scheme_of(Kind::HostPort), "host-port");
     }
 
     /// Naming an account the server will refuse is worse than naming none: the
     /// error comes back as an authentication failure, which reads as a wrong
     /// password rather than as a login nobody configured.
+    ///
+    /// The rule used to be checked against the compiled-in table of services;
+    /// that table is gone, and a package's `connection` block is where the pair
+    /// is declared now. So this checks the builder instead, which is the place
+    /// the rule is actually applied and the only place it can still be broken.
     #[test]
     fn a_service_with_no_password_gets_no_user_either() {
-        for spec in SPECS {
-            if spec.password_key.is_none() {
-                assert!(
-                    spec.user_key.is_none() && spec.default_user.is_none(),
-                    "{} would put a user in a URI with no password behind it",
-                    spec.service
-                );
-            }
-        }
+        assert_eq!(
+            uri(
+                Kind::Mysql,
+                "127.0.0.1",
+                3306,
+                Some("root"),
+                None,
+                Some("shop")
+            ),
+            "mysql://root@127.0.0.1:3306/shop",
+            "a user with no password is written without one"
+        );
+        assert_eq!(
+            uri(Kind::Redis, "127.0.0.1", 6379, None, None, None),
+            "redis://127.0.0.1:6379",
+            "and neither half present writes no authority at all"
+        );
     }
 }

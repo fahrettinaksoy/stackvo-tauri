@@ -5,6 +5,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { api } from '@/lib/ipc';
 import { bytes } from '@/lib/format';
 import { useMarket } from '@/composables/useMarket';
+import PackageAuthorDialog from '@/components/PackageAuthorDialog.vue';
 import { useInventoryStore } from '@/stores/inventory';
 import PageLayout from '@/components/PageLayout.vue';
 import ErrorAlert from '@/components/ErrorAlert.vue';
@@ -29,6 +30,12 @@ import ServiceDetailSheet from '@/components/ServiceDetailSheet.vue';
 
 const { t, locale } = useI18n();
 const market = useMarket();
+
+/**
+ * C-1. Beside the source picker, because both answer "where do packages come
+ * from" — one points at somebody else's, one writes your own.
+ */
+const authorOpen = ref(false);
 
 /**
  * The Services page's rows, so the detail sheet can be opened from here too.
@@ -322,6 +329,15 @@ const supportColour = (support) =>
          twice — so the row cost a strip of chrome and bought nothing, and the
          two cards under it started a row lower than they had to. -->
     <template #top-append>
+      <v-btn
+        variant="text"
+        prepend-icon="mdi-package-variant-plus"
+        class="mr-2"
+        @click="authorOpen = true"
+      >
+        {{ t('authoring.title') }}
+      </v-btn>
+
       <!-- A menu rather than a picker, because a source is an address or a
            folder and this offered only the second. -->
       <v-menu v-model="sourceOpen" :close-on-content-click="false" location="bottom end">
@@ -906,9 +922,14 @@ const supportColour = (support) =>
                        console was a question the table could not answer. -->
                   <td class="font-mono text-caption">
                     <template v-if="Object.keys(instance.ports ?? {}).length">
-                      <div v-for="(port, handle) in instance.ports" :key="handle">
-                        {{ handle }}: {{ port }}
-                      </div>
+                      <!-- Along the row rather than stacked down it. A service
+                           with two ports — RabbitMQ's broker and its management
+                           UI — was the one row in the table twice the height of
+                           the others, which reads as the row being special
+                           rather than as it having one more number. -->
+                      <span v-for="(port, handle, i) in instance.ports" :key="handle">
+                        <span v-if="i" class="text-disabled"> · </span>{{ handle }}: {{ port }}
+                      </span>
                     </template>
                     <template v-else>—</template>
                   </td>
@@ -1147,6 +1168,8 @@ const supportColour = (support) =>
       :model-value="!!detailTarget"
       @update:model-value="detailTarget = $event ? detailTarget : null"
     />
+
+    <PackageAuthorDialog v-model="authorOpen" />
   </PageLayout>
 </template>
 
@@ -1200,6 +1223,17 @@ const supportColour = (support) =>
 }
 .instances-table :deep(table) {
   min-width: 720px;
+}
+
+/* One row, one line — the table already has somewhere for the width to go.
+   `stackvo-mongo-express-1-0-2` broke across two lines, the instance beside it
+   dropped its chip onto a second, and three column headings wrapped as well,
+   so rows stood at three different heights and the eye lost the row it was
+   reading. The panel scrolls sideways by design; making the cells take the
+   width they need is what gives it something to scroll. */
+.instances-table :deep(th),
+.instances-table :deep(td) {
+  white-space: nowrap;
 }
 
 /* Each card keeps its own scroll rather than growing the page. A viewport
@@ -1271,6 +1305,15 @@ const supportColour = (support) =>
     flex: 1 1 auto;
     min-height: 0;
     max-height: none;
+  }
+  /* The scroll box is the only thing in the column that grows.
+     Vuetify's `.v-input` is `flex: 1 1 auto`, which is right in the row it was
+     written for and means "grow taller" here — so with the tree collapsed the
+     search field split the leftover height with it and stood at twice its own
+     size, a 40px input in an 80px box with the label adrift in the middle of
+     it. It is a control, not a pane: it keeps the height it asks for. */
+  .market-col :deep(.group-body) > .v-input {
+    flex: 0 0 auto;
   }
 }
 

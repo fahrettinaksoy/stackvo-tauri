@@ -203,6 +203,52 @@ pub const CLONE_ENV: [(&str, &str); 2] = [
     ),
 ];
 
+/// Whether git would ignore this path, as far as git itself is concerned.
+///
+/// B-2 rests entirely on `stackvo.local.json` not being committed — that is the
+/// whole difference between "my machine's settings" and "the team's settings",
+/// and it is not something this app can enforce, because the ignore rules are
+/// the user's file in the user's repository. What it can do is *measure* it and
+/// say so, which is the same posture as everywhere else here: the person has a
+/// working git, and this asks it a question rather than reproducing its rules.
+///
+/// Three answers, not two. `None` means git could not answer — no git, not a
+/// repository, or a command that failed — and that is genuinely different from
+/// "not ignored": a project directory that is not under version control has
+/// nothing to leak into anybody's clone, so warning about it would be noise.
+///
+/// `git check-ignore` exits 0 when the path *is* ignored and 1 when it is not,
+/// which is why the exit code is read rather than the output. `--no-index` so
+/// the answer is about the ignore rules and not about a file that happens to be
+/// tracked already — a file that was committed once is not ignored, and that is
+/// exactly the case worth reporting.
+pub fn is_ignored(path: &std::path::Path) -> Option<bool> {
+    if !available() {
+        return None;
+    }
+    let dir = path.parent()?;
+
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .arg("check-ignore")
+        .arg("--no-index")
+        .arg("--quiet")
+        .arg("--")
+        .arg(path)
+        .output()
+        .ok()?;
+
+    match output.status.code() {
+        Some(0) => Some(true),
+        Some(1) => Some(false),
+        // 128 is git's "fatal" — not a repository, most often. Anything else is
+        // a git this code does not understand, and guessing would be worse than
+        // saying nothing.
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2,6 +2,7 @@
 import { onMounted, ref, toRef, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRelease } from '@/composables/useRelease';
+import { api } from '@/lib/ipc';
 import ErrorAlert from '@/components/ErrorAlert.vue';
 
 /**
@@ -49,6 +50,47 @@ async function loadFrom() {
   loaded.value = await loadBundle(() =>
     choose({ multiple: false, filters: [{ name: 'Docker image', extensions: ['tar'] }] })
   );
+}
+
+/**
+ * Pushing it, and something to run it with (H-1).
+ *
+ * The push plan is fetched after a successful build rather than offered
+ * alongside the save button, because the two refusals it carries — an
+ * unverified image, and a tag that names no registry — are the whole reason
+ * pushing is safe, and both are sentences somebody has to read before there is
+ * a button worth pressing.
+ */
+const pushPlan = ref(null);
+const pushing = ref(false);
+const recipe = ref('');
+
+async function planPush() {
+  pushPlan.value = null;
+  try {
+    pushPlan.value = await api.releasePushPlan(props.name, tag.value || null);
+  } catch (e) {
+    error.value = e;
+  }
+}
+
+async function push() {
+  pushing.value = true;
+  try {
+    pushPlan.value = await api.releasePush(props.name, tag.value || null);
+  } catch (e) {
+    error.value = e;
+  } finally {
+    pushing.value = false;
+  }
+}
+
+async function showRecipe() {
+  try {
+    recipe.value = await api.releaseRecipe(props.name, tag.value || null);
+  } catch (e) {
+    error.value = e;
+  }
 }
 </script>
 
@@ -157,6 +199,71 @@ async function loadFrom() {
         >
           {{ t('release.save') }}
         </v-btn>
+
+        <!-- PUSH ------------------------------------------------------- -->
+        <template v-if="result.verification.clean">
+          <v-divider class="my-4" />
+          <div class="text-caption text-medium-emphasis mb-2">{{ t('release.pushExplain') }}</div>
+
+          <div class="d-flex ga-2 mb-2">
+            <v-btn
+              size="small"
+              variant="text"
+              prepend-icon="mdi-cloud-search-outline"
+              :disabled="!!busy || pushing"
+              @click="planPush"
+            >
+              {{ t('release.pushCheck') }}
+            </v-btn>
+            <v-btn
+              size="small"
+              color="primary"
+              variant="flat"
+              prepend-icon="mdi-cloud-upload-outline"
+              :disabled="!pushPlan?.possible || pushing"
+              :loading="pushing"
+              @click="push"
+            >
+              {{ t('release.push') }}
+            </v-btn>
+            <v-spacer />
+            <v-btn
+              size="small"
+              variant="text"
+              prepend-icon="mdi-file-document-outline"
+              @click="showRecipe"
+            >
+              {{ t('release.recipe') }}
+            </v-btn>
+          </div>
+
+          <!-- The refusal, in full. It names which check failed, and that is
+               the sentence that stops an .env reaching a registry. -->
+          <v-alert
+            v-if="pushPlan && !pushPlan.possible"
+            type="error"
+            variant="tonal"
+            density="compact"
+            class="mb-2"
+          >
+            <div class="text-caption">{{ pushPlan.refused }}</div>
+          </v-alert>
+          <v-alert
+            v-else-if="pushPlan?.warnings?.length"
+            type="warning"
+            variant="tonal"
+            density="compact"
+            class="mb-2"
+          >
+            <div v-for="(note, i) in pushPlan.warnings" :key="i" class="text-caption">
+              {{ note }}
+            </div>
+          </v-alert>
+
+          <!-- Shown, not written. Where a deployment recipe belongs is the
+               user's decision, so it is text they can copy. -->
+          <pre v-if="recipe" class="snippet mt-2">{{ recipe }}</pre>
+        </template>
       </template>
     </template>
 

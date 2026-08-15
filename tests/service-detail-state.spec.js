@@ -32,6 +32,10 @@ const api = vi.hoisted(() => ({
   mailMessages: vi.fn(),
   dbTargets: vi.fn(),
   dbSnapshots: vi.fn(),
+  // G-4's three.
+  dbInstances: vi.fn(),
+  dbMovePlan: vi.fn(),
+  dbMoveApply: vi.fn(),
   terminalOpenExternal: vi.fn(),
   serviceReveal: vi.fn(),
   openInBrowser: vi.fn(),
@@ -350,5 +354,99 @@ describe('the runtime rows', () => {
 
     expect(wrapper.text()).not.toContain('Restarts');
     expect(wrapper.text()).not.toContain('Exit code');
+  });
+});
+
+/**
+ * Moving one instance's data into another (G-4).
+ *
+ * The plan is the feature, so the assertions are about it being *readable
+ * before the button is worth pressing*: a refused pair says why rather than
+ * being absent from the list, and the sentence about the target being replaced
+ * is on screen without anybody pressing anything.
+ */
+describe('moving a database', () => {
+  const MYSQL = {
+    ...KIBANA,
+    id: 'mysql-8-0',
+    containerName: 'stackvo-mysql-8-0',
+    url: null,
+  };
+
+  const instances = [
+    { id: 'mysql-8-0', service: 'mysql', version: '8.0', running: true },
+    { id: 'mysql-8-4', service: 'mysql', version: '8.4', running: true },
+    { id: 'postgres-16', service: 'postgres', version: '16', running: false },
+  ];
+
+  beforeEach(() => {
+    api.dbInstances.mockResolvedValue(instances);
+  });
+
+  /**
+   * Read off the select's items rather than the rendered text: Vuetify paints
+   * the options only once the menu opens, and what is *offered* is the claim —
+   * not what a closed dropdown happens to have drawn.
+   */
+  const offered = (wrapper) => wrapper.findComponent({ name: 'VSelect' }).props('items');
+
+  /** Listing only the compatible ones would leave "missing or impossible?" */
+  it('offers every other instance, including the ones a move would refuse', async () => {
+    const wrapper = mountSheet(MYSQL);
+    await flushPromises();
+
+    const values = offered(wrapper).map((item) => item.value);
+    expect(values).toContain('mysql-8-4');
+    expect(values, 'a Postgres target must be offered and refused, not hidden').toContain(
+      'postgres-16'
+    );
+    expect(values, 'the source must not be a target').not.toContain('mysql-8-0');
+  });
+
+  it('marks an instance that is not running', async () => {
+    const wrapper = mountSheet(MYSQL);
+    await flushPromises();
+
+    const stopped = offered(wrapper).find((item) => item.value === 'postgres-16');
+    expect(stopped.title).toContain(i18n.global.t('system.stopped'));
+  });
+
+  /** The plan runs on choosing, not on pressing. */
+  it('asks for the plan as soon as a target is chosen', async () => {
+    api.dbMovePlan.mockResolvedValue({
+      from: 'mysql-8-0',
+      to: 'mysql-8-4',
+      possible: true,
+      warnings: ['everything in mysql-8-4 will be replaced'],
+    });
+    const wrapper = mountSheet(MYSQL);
+    await flushPromises();
+
+    const select = wrapper.findComponent({ name: 'VSelect' });
+    await select.setValue('mysql-8-4');
+    await flushPromises();
+
+    expect(api.dbMovePlan).toHaveBeenCalledWith('mysql-8-0', 'mysql-8-4');
+    expect(wrapper.text()).toContain('will be replaced');
+  });
+
+  it('shows a refusal with its reason and keeps the button disabled', async () => {
+    api.dbMovePlan.mockResolvedValue({
+      from: 'mysql-8-0',
+      to: 'postgres-16',
+      possible: false,
+      refused: 'a mysql dump is not postgres input',
+      warnings: [],
+    });
+    const wrapper = mountSheet(MYSQL);
+    await flushPromises();
+
+    const select = wrapper.findComponent({ name: 'VSelect' });
+    await select.setValue('postgres-16');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('is not postgres input');
+    const move = wrapper.findAll('button').find((b) => b.text() === i18n.global.t('dbMove.move'));
+    expect(move.attributes('disabled')).toBeDefined();
   });
 });

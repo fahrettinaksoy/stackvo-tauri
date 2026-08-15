@@ -259,6 +259,48 @@ async function loadConnection(service, reveal = false) {
 }
 
 /**
+ * The desktop clients on this machine that open this service's kind of address.
+ *
+ * Empty is the normal answer and the button is hidden for it — most services
+ * have no connection string at all, and AMQP or SMTP has one no database client
+ * takes. The list is fetched rather than derived from the URI's scheme, because
+ * whether a client handles a scheme is a fact about that client: Redis Insight
+ * is installed on the machine this was written on and registers only
+ * `redisinsight`, so it is not offered for `redis://` and the button would have
+ * launched an app that ignores the address it was given.
+ */
+const dbClients = ref([]);
+
+async function loadDbClients(service) {
+  if (!service) {
+    dbClients.value = [];
+    return;
+  }
+  try {
+    dbClients.value = await api.serviceDbClients(service.id);
+  } catch {
+    // A picker that cannot be built is a picker that is not shown; the copy
+    // button beside it still works and is what this replaces.
+    dbClients.value = [];
+  }
+}
+
+/**
+ * Hand the address over.
+ *
+ * The password crosses in the string, because one with bullets in it does not
+ * connect — the same distinction `copyUri` makes between reading a secret and
+ * using one, and this is the second.
+ */
+async function openInClient(client) {
+  try {
+    await api.serviceOpenInClient(props.service.id, client ?? '');
+  } catch (e) {
+    error.value = e;
+  }
+}
+
+/**
  * Copy the string that works, while the screen keeps showing bullets.
  *
  * A masked URI on the clipboard is a string that fails to connect, so this
@@ -552,6 +594,79 @@ const serviceSnapshots = computed(() =>
   snapshots.value.filter((s) => s.service === props.service?.id)
 );
 
+/**
+ * Moving this instance's data into another one (G-4).
+ *
+ * The plan is fetched the moment a target is chosen, not when the button is
+ * pressed. The whole point of the plan is the sentence "everything in X will be
+ * replaced" and the refusal for a pair that cannot work — both of which have to
+ * be readable *before* the decision, not reported after it.
+ */
+const moveTarget = ref(null);
+const movePlan = ref(null);
+const moveBusy = ref(false);
+
+/**
+ * Every other database instance, which is the only set that can be a target.
+ *
+ * Every one of them, not only the compatible ones. A dropdown that silently
+ * omitted Postgres from a MySQL sheet would leave somebody wondering whether it
+ * is missing or impossible; listing it and having the plan say why is the
+ * answer to both.
+ */
+const dbInstances = ref([]);
+const moveTargets = computed(() =>
+  asList(dbInstances.value)
+    .filter((row) => row.id !== props.service?.id)
+    .map((row) => ({
+      value: row.id,
+      title: `${row.id}${row.running ? '' : ' · ' + t('system.stopped')}`,
+    }))
+);
+
+async function loadInstances() {
+  try {
+    dbInstances.value = asList(await api.dbInstances());
+  } catch {
+    // A workspace with no instance table has none, which is not a failure
+    // worth a red panel in a sheet about something else.
+    dbInstances.value = [];
+  }
+}
+
+async function planMove() {
+  movePlan.value = null;
+  if (!moveTarget.value) return;
+  try {
+    movePlan.value = await api.dbMovePlan(props.service.id, moveTarget.value);
+  } catch (e) {
+    error.value = e;
+  }
+}
+
+async function applyMove() {
+  if (!movePlan.value?.possible) return;
+  const { confirm } = await import('@tauri-apps/plugin-dialog');
+  // Named, like every other destructive confirm in this sheet: "are you sure"
+  // without saying what is replaced is a dialog people learn to click through.
+  const ok = await confirm(t('dbMove.confirm', { to: moveTarget.value }), {
+    title: t('dbMove.title'),
+    kind: 'warning',
+  });
+  if (!ok) return;
+
+  moveBusy.value = true;
+  error.value = null;
+  try {
+    const moved = await api.dbMoveApply(props.service.id, moveTarget.value);
+    dbResult.value = t('dbMove.done', { bytes: moved.bytes, to: moved.to });
+  } catch (e) {
+    error.value = e;
+  } finally {
+    moveBusy.value = false;
+  }
+}
+
 async function loadSnapshots() {
   try {
     snapshots.value = asList(await api.dbSnapshots());
@@ -650,17 +765,23 @@ watch(
     // A revealed password does not follow the sheet to the next service.
     connection.value = null;
     connectionRevealed.value = false;
+    dbClients.value = [];
     stats.value = null;
     startClock();
     load(props.service);
     loadStats(props.service);
     loadConnection(props.service);
+    loadDbClients(props.service);
     loadMail();
     api.dbTargets().then(
       (targets) => (dbTargets.value = targets),
       () => (dbTargets.value = [])
     );
     loadSnapshots();
+    loadInstances();
+    // A target chosen for the previous service is meaningless for this one.
+    moveTarget.value = null;
+    movePlan.value = null;
   },
   { immediate: true }
 );
@@ -1043,6 +1164,38 @@ onUnmounted(() => {
               </v-icon>
               <v-tooltip activator="parent">{{ t('app.copy') }}</v-tooltip>
             </v-btn>
+
+            <!-- Only on the host row. The container address is a name on a
+                 Docker network, so a client on this desktop cannot resolve it —
+                 offering to open it would rebuild the exact confusion the two
+                 rows exist to prevent. -->
+            <v-menu v-if="endpoint.key === 'host' && dbClients.length">
+              <template #activator="{ props: menu }">
+                <v-btn
+                  v-bind="menu"
+                  icon
+                  size="x-small"
+                  variant="text"
+                  :aria-label="t('servicesView.openInClient')"
+                >
+                  <v-icon size="small">mdi-open-in-app</v-icon>
+                  <v-tooltip activator="parent">{{ t('servicesView.openInClient') }}</v-tooltip>
+                </v-btn>
+              </template>
+              <v-list density="compact">
+                <!-- Greyed rather than hidden, the same rule the editor picker
+                     follows: an absent row reads as "this app has never heard
+                     of TablePlus", which is a different statement. -->
+                <v-list-item
+                  v-for="client in dbClients"
+                  :key="client.id || 'system'"
+                  :disabled="!client.available"
+                  :prepend-icon="client.icon"
+                  :title="client.name"
+                  @click="openInClient(client.id)"
+                />
+              </v-list>
+            </v-menu>
           </div>
         </div>
 
@@ -1212,6 +1365,59 @@ onUnmounted(() => {
             </template>
           </v-list-item>
         </v-list>
+      </template>
+
+      <!-- Moving data into another instance (G-4) ------------------------ -->
+      <template v-if="moveTargets.length">
+        <div class="sheet-group">{{ t('dbMove.title') }}</div>
+        <p class="text-caption text-medium-emphasis mb-2">{{ t('dbMove.explain') }}</p>
+
+        <div class="d-flex align-center ga-2 mb-2">
+          <v-select
+            v-model="moveTarget"
+            :items="moveTargets"
+            :label="t('dbMove.target')"
+            density="compact"
+            variant="outlined"
+            hide-details
+            style="max-width: 260px"
+            @update:model-value="planMove"
+          />
+          <v-btn
+            size="small"
+            color="warning"
+            variant="flat"
+            :disabled="!movePlan?.possible || moveBusy"
+            :loading="moveBusy"
+            @click="applyMove"
+          >
+            {{ t('dbMove.move') }}
+          </v-btn>
+        </div>
+
+        <!-- The refusal and the warnings, before the button is worth pressing.
+             A pair that cannot work says so with its reason rather than being
+             absent from the list. -->
+        <v-alert
+          v-if="movePlan && !movePlan.possible"
+          type="error"
+          variant="tonal"
+          density="compact"
+          class="mb-2"
+        >
+          <div class="text-caption">{{ movePlan.refused }}</div>
+        </v-alert>
+        <v-alert
+          v-else-if="movePlan?.warnings?.length"
+          type="warning"
+          variant="tonal"
+          density="compact"
+          class="mb-2"
+        >
+          <div v-for="(note, i) in movePlan.warnings" :key="i" class="text-caption">
+            {{ note }}
+          </div>
+        </v-alert>
       </template>
 
       <!-- Logs and mounts ----------------------------------------------- -->

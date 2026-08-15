@@ -7,7 +7,7 @@
 //! A missing template does not crash, it just renders a shorter file, and the
 //! only way to notice is to check that the output is actually complete.
 
-use stackvo_desktop_lib::{commands, skeleton, workspace};
+use stackvo_desktop_lib::{commands, instances, skeleton, workspace};
 
 /// Installs into a fresh temp directory and renders. No `STACKVO_ROOT`, no
 /// sibling checkout, nothing on disk but what `install` put there.
@@ -68,13 +68,26 @@ fn an_empty_folder_becomes_a_working_workspace() {
         "a fresh workspace should carry no overrides"
     );
 
+    // An empty instance table, because a workspace without one is refused
+    // rather than rendered (ADR 0016) — this test is about a fresh workspace
+    // needing no files copied into it, not about what a service renders to.
+    instances::Table::default()
+        .save(&dir)
+        .expect("an empty instance table");
+
     let (files, skipped) = commands::render_generated(&dir).expect("render");
     assert!(
         skipped.is_empty(),
         "a fresh workspace should have nothing to skip, got {skipped:?}"
     );
+    // Was 10. A fresh workspace with an empty table renders the compose base,
+    // the Traefik pair, the projects file and the (empty) services file — the
+    // five that exist regardless of what is installed. The other five used to
+    // be service configs rendered from templates inside the binary, and ADR
+    // 0016 removed those; they come from package manifests now, per instance,
+    // and an empty table has none.
     assert!(
-        files.len() >= 10,
+        files.len() >= 5,
         "expected a full render, got {} file(s)",
         files.len()
     );
@@ -114,15 +127,21 @@ fn an_empty_folder_becomes_a_working_workspace() {
         projects.content
     );
 
-    // The templates still all resolve from the binary, which is what this file
-    // is about — switched off is not the same as missing, and the proof is
-    // that the volumes they declare are still harvested.
-    for volume in ["stackvo-mysql-data", "stackvo-redis-data"] {
-        assert!(
-            compose.content.contains(volume),
-            "{volume} missing — a template did not resolve from the binary"
-        );
-    }
+    // This used to prove that every service template still resolved from the
+    // binary, by looking for the volumes they declared. There are no service
+    // templates in the binary (ADR 0016), so the property this file is about —
+    // a fresh workspace needs nothing copied into it — is proved by the render
+    // above succeeding at all, with a `core/compose/base.yml` that resolved
+    // from the embedded skeleton and nothing on disk.
+    let base = files
+        .iter()
+        .find(|f| f.path.ends_with("stackvo.yml"))
+        .expect("the compose base should be rendered");
+    assert!(
+        base.content.contains("stackvo-net"),
+        "the compose base did not resolve from the binary:\n{}",
+        base.content
+    );
 
     // The retired web UI must not come back, whatever the settings say.
     assert!(
@@ -197,6 +216,11 @@ fn the_project_tree_can_live_outside_the_app_directory() {
         r#"{"name":"api","domain":"api.stackvo.loc","runtime":"node","node":{"version":"20","port":3000}}"#,
     )
     .unwrap();
+
+    // See the note in the test above: no table means no render (ADR 0016).
+    instances::Table::default()
+        .save(&app)
+        .expect("an empty instance table");
 
     let (files, skipped) = commands::render_generated(&app).expect("render");
     assert!(skipped.is_empty(), "{skipped:?}");

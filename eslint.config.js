@@ -82,9 +82,32 @@ export default [
         // Node 17+, and the honest way to build a fixture a test then mutates
         // without the mutation leaking into the next test.
         structuredClone: 'readonly',
+        // Resizing the window is the only way to ask Vuetify's display for a
+        // different breakpoint, and it listens for one of these.
+        Event: 'readonly',
+        // And the only way to drive a keyboard-driven control is to send it a
+        // key. A palette whose arrows and Enter are its whole point cannot be
+        // tested by clicking.
+        KeyboardEvent: 'readonly',
       },
     },
   },
 
   skipFormatting,
+
+  {
+    // `tests/e2e/**` runs in Node, but the bodies passed to `page.evaluate`
+    // are serialised and run inside the browser — so they legitimately name
+    // globals this process does not have. Scoped to the browser suite rather
+    // than granted to every test, because the point of the narrow list above
+    // is that a unit test cannot quietly assume a browser.
+    files: ['tests/e2e/**/*.js'],
+    languageOptions: {
+      globals: {
+        window: 'readonly',
+        document: 'readonly',
+        getComputedStyle: 'readonly',
+      },
+    },
+  },
 ];

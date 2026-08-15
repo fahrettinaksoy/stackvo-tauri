@@ -143,8 +143,38 @@ pub struct MailMessage {
     /// Whatever the server said, unparsed — the UI formats dates in the user's
     /// locale and the two servers disagree on the field, not the format.
     pub date: Option<String>,
+    /// The same instant as seconds since the epoch, when it could be read.
+    ///
+    /// `date` above is deliberately whatever the server said — the UI formats
+    /// it in the user's locale — and that string cannot be put on an axis
+    /// beside a dump and a query. This is the parsed half, and it is `None`
+    /// rather than zero when parsing fails: on a timeline 1970 is not a missing
+    /// value, it is a wrong one, and it drags the whole axis with it.
+    ///
+    /// Two formats, because the two catchers disagree: Mailpit answers RFC 3339
+    /// (`2026-08-15T13:53:36.807Z`, measured), MailHog carries the message's own
+    /// RFC 2822 `Date` header.
+    pub at: Option<f64>,
     pub snippet: Option<String>,
     pub read: bool,
+}
+
+/// A mail date as seconds since the epoch, whichever spelling it arrived in.
+///
+/// RFC 3339 first because Mailpit is the default catcher and answers it;
+/// RFC 2822 second because MailHog hands back the message's own `Date` header.
+/// Neither is guessed at — a string that parses as neither returns `None`, and
+/// the caller leaves it off the axis rather than placing it at the epoch.
+pub fn epoch_of(date: &str) -> Option<f64> {
+    use time::format_description::well_known::{Rfc2822, Rfc3339};
+    use time::OffsetDateTime;
+
+    let text = date.trim();
+    let parsed = OffsetDateTime::parse(text, &Rfc3339)
+        .or_else(|_| OffsetDateTime::parse(text, &Rfc2822))
+        .ok()?;
+
+    Some(parsed.unix_timestamp() as f64 + f64::from(parsed.nanosecond()) / 1e9)
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -308,6 +338,10 @@ pub fn parse_list(kind: Kind, body: &Value) -> Vec<MailMessage> {
                     .unwrap_or_default(),
                 subject: mailhog_header(item, "Subject").unwrap_or_default(),
                 date: mailhog_header(item, "Date").or_else(|| string_at(item, &["Created"])),
+                at: mailhog_header(item, "Date")
+                    .or_else(|| string_at(item, &["Created"]))
+                    .as_deref()
+                    .and_then(epoch_of),
                 // MailHog has no snippet; inventing one from the raw body would
                 // mean rendering MIME boundaries as preview text.
                 snippet: None,
@@ -331,6 +365,7 @@ pub fn parse_list(kind: Kind, body: &Value) -> Vec<MailMessage> {
                 reply_to: mailpit_addresses(item, "ReplyTo"),
                 subject: string_at(item, &["Subject"]).unwrap_or_default(),
                 date: string_at(item, &["Created"]),
+                at: string_at(item, &["Created"]).as_deref().and_then(epoch_of),
                 snippet: string_at(item, &["Snippet"]).filter(|s| !s.is_empty()),
                 read: item.get("Read").and_then(|v| v.as_bool()).unwrap_or(false),
             },
@@ -843,6 +878,40 @@ pub async fn delete(root: &Path, id: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// Both catchers, and neither guessed at.
+    ///
+    /// Mailpit answers RFC 3339 — measured, `2026-08-15T13:53:36.807Z` — and
+    /// MailHog hands back the message's own RFC 2822 `Date` header. A string
+    /// that is neither returns `None`, and the timeline leaves it off rather
+    /// than placing it at the epoch.
+    #[test]
+    fn a_date_is_read_in_either_catchers_spelling() {
+        // Mailpit. Milliseconds survive, because a timeline of one page load is
+        // interesting below the second.
+        let rfc3339 = epoch_of("2026-08-15T13:53:36.807Z").expect("RFC 3339");
+        assert!((rfc3339 - 1_786_802_016.807).abs() < 0.01, "{rfc3339}");
+
+        // MailHog. Same instant, other spelling, with an offset rather than Z.
+        let rfc2822 = epoch_of("Sat, 15 Aug 2026 13:53:36 +0000").expect("RFC 2822");
+        assert!((rfc2822 - 1_786_802_016.0).abs() < 1.0, "{rfc2822}");
+
+        // And an offset is honoured rather than ignored — the same wall clock
+        // three hours east is a different instant.
+        let east = epoch_of("Sat, 15 Aug 2026 16:53:36 +0300").expect("RFC 2822 offset");
+        assert!((east - rfc2822).abs() < 1.0, "{east} vs {rfc2822}");
+    }
+
+    #[test]
+    fn a_date_in_no_spelling_anybody_knows_is_none() {
+        assert_eq!(epoch_of("yesterday"), None);
+        assert_eq!(epoch_of(""), None);
+        assert_eq!(
+            epoch_of("2026-08-15"),
+            None,
+            "a bare date is not an instant"
+        );
+    }
+
     use super::*;
 
     /// A real MailHog v2 payload, trimmed. Its shape is the whole reason this
