@@ -50,6 +50,14 @@ pub enum Needs {
     Composer,
     PackageJson,
     WpConfig,
+    /// `bin/console` in the project root — Symfony.
+    BinConsole,
+    /// `manage.py` — Django, and nothing else, puts one at the root.
+    ManagePy,
+    /// `bin/rails` — Rails rather than merely Ruby.
+    BinRails,
+    /// `Gemfile` — any Ruby project, which is all `bundle install` needs.
+    Gemfile,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -182,6 +190,142 @@ pub const CATALOG: &[Spec] = &[
         interactive: false,
         about: "Installed plugins and their status.",
     },
+    // ---------------------------------------------------------- Symfony
+    //
+    // M-9. Laravel and WordPress had a row here from the start and the other
+    // three frameworks this app scaffolds did not, which made "quick commands"
+    // read as "Laravel commands". Each of the rows below is the same shape as
+    // the ones above — a fixed id, an argv, and a marker file that only that
+    // framework writes — so none of it touches the rule that the webview names
+    // an id and never a program.
+    Spec {
+        id: "symfony-cache-clear",
+        display: "php bin/console cache:clear",
+        argv: &["php", "bin/console", "cache:clear", "--no-interaction"],
+        needs: Needs::BinConsole,
+        interactive: false,
+        // Symfony's cache holds the compiled container, and a service added to
+        // a YAML file is invisible until this runs. It is the `optimize:clear`
+        // of this framework and the first thing anybody types.
+        about: "Rebuild the compiled container and cached config.",
+    },
+    Spec {
+        id: "symfony-router",
+        display: "php bin/console debug:router",
+        argv: &["php", "bin/console", "debug:router"],
+        needs: Needs::BinConsole,
+        interactive: false,
+        about: "Every registered route.",
+    },
+    Spec {
+        id: "symfony-migrate",
+        display: "php bin/console doctrine:migrations:migrate",
+        argv: &[
+            "php",
+            "bin/console",
+            "doctrine:migrations:migrate",
+            "--no-interaction",
+            "--allow-no-migration",
+        ],
+        needs: Needs::BinConsole,
+        interactive: false,
+        // `--allow-no-migration` because Doctrine exits non-zero when there is
+        // nothing to run, which an operation console reports as a failure —
+        // "already up to date" is not an error anybody wants a red line for.
+        about: "Run pending Doctrine migrations.",
+    },
+    Spec {
+        id: "symfony-migrate-status",
+        display: "php bin/console doctrine:migrations:status",
+        argv: &["php", "bin/console", "doctrine:migrations:status"],
+        needs: Needs::BinConsole,
+        interactive: false,
+        about: "Which Doctrine migrations have run.",
+    },
+    // ---------------------------------------------------------- Django
+    Spec {
+        id: "django-migrate",
+        display: "python manage.py migrate",
+        argv: &["python", "manage.py", "migrate", "--noinput"],
+        needs: Needs::ManagePy,
+        interactive: false,
+        about: "Apply pending migrations.",
+    },
+    Spec {
+        id: "django-migrate-status",
+        display: "python manage.py showmigrations",
+        argv: &["python", "manage.py", "showmigrations"],
+        needs: Needs::ManagePy,
+        interactive: false,
+        about: "Which migrations have run.",
+    },
+    Spec {
+        id: "django-collectstatic",
+        display: "python manage.py collectstatic",
+        argv: &["python", "manage.py", "collectstatic", "--noinput"],
+        needs: Needs::ManagePy,
+        interactive: false,
+        // `--noinput` answers the "this will overwrite existing files" prompt,
+        // which is a hang rather than a question with nobody at the console.
+        about: "Gather static files into the served directory.",
+    },
+    Spec {
+        id: "django-shell",
+        display: "python manage.py shell",
+        argv: &["python", "manage.py", "shell"],
+        needs: Needs::ManagePy,
+        interactive: true,
+        about: "A REPL with the application booted.",
+    },
+    // ---------------------------------------------------------- Rails
+    //
+    // Run through `bundle exec` rather than as `bin/rails`, which is what the
+    // marker file is: a binstub is only executable if its permission bit
+    // survived the checkout, and `docker exec … bin/rails` on one that lost it
+    // is a permission error rather than a missing framework. `bundle exec`
+    // needs the gem, not the bit.
+    Spec {
+        id: "rails-migrate",
+        display: "bundle exec rails db:migrate",
+        argv: &["bundle", "exec", "rails", "db:migrate"],
+        needs: Needs::BinRails,
+        interactive: false,
+        about: "Run pending migrations.",
+    },
+    Spec {
+        id: "rails-migrate-status",
+        display: "bundle exec rails db:migrate:status",
+        argv: &["bundle", "exec", "rails", "db:migrate:status"],
+        needs: Needs::BinRails,
+        interactive: false,
+        about: "Which migrations have run.",
+    },
+    Spec {
+        id: "rails-routes",
+        display: "bundle exec rails routes",
+        argv: &["bundle", "exec", "rails", "routes"],
+        needs: Needs::BinRails,
+        interactive: false,
+        about: "Every registered route.",
+    },
+    Spec {
+        id: "rails-console",
+        display: "bundle exec rails console",
+        argv: &["bundle", "exec", "rails", "console"],
+        needs: Needs::BinRails,
+        interactive: true,
+        about: "A REPL with the application booted.",
+    },
+    Spec {
+        id: "bundle-install",
+        display: "bundle install",
+        argv: &["bundle", "install"],
+        needs: Needs::Gemfile,
+        interactive: false,
+        // The one Ruby row that asks for a `Gemfile` and no more: installing
+        // from a lock file is what every Ruby project does, Rails or not.
+        about: "Install Ruby dependencies from the lock file.",
+    },
 ];
 
 /// One command as the UI sees it.
@@ -205,6 +349,10 @@ impl Needs {
             Needs::Composer => "composer.json",
             Needs::PackageJson => "package.json",
             Needs::WpConfig => "wp-config.php",
+            Needs::BinConsole => "bin/console",
+            Needs::ManagePy => "manage.py",
+            Needs::BinRails => "bin/rails",
+            Needs::Gemfile => "Gemfile",
         }
     }
 
@@ -214,6 +362,10 @@ impl Needs {
             Needs::Composer => print.composer_json,
             Needs::PackageJson => print.package_json,
             Needs::WpConfig => print.wp_config,
+            Needs::BinConsole => print.bin_console,
+            Needs::ManagePy => print.manage_py,
+            Needs::BinRails => print.bin_rails,
+            Needs::Gemfile => print.gemfile,
         }
     }
 }
@@ -353,12 +505,20 @@ mod tests {
     /// console — without `--force` the command hangs on a question nobody sees.
     #[test]
     fn non_interactive_commands_carry_their_no_prompt_flag() {
-        for id in ["migrate", "composer-install", "composer-dump"] {
+        for id in [
+            "migrate",
+            "composer-install",
+            "composer-dump",
+            "symfony-cache-clear",
+            "symfony-migrate",
+            "django-migrate",
+            "django-collectstatic",
+        ] {
             let spec = resolve(id).unwrap();
             assert!(
                 spec.argv
                     .iter()
-                    .any(|a| *a == "--force" || *a == "--no-interaction"),
+                    .any(|a| *a == "--force" || *a == "--no-interaction" || *a == "--noinput"),
                 "{id} can stop for a prompt inside the console"
             );
         }
@@ -367,10 +527,99 @@ mod tests {
     /// Data loss is not a button next to `cache:clear`.
     #[test]
     fn destructive_commands_are_not_in_the_catalog() {
-        for banned in ["migrate:fresh", "migrate:reset", "db:wipe", "update"] {
+        for banned in [
+            "migrate:fresh",
+            "migrate:reset",
+            "db:wipe",
+            "update",
+            // The same rule read across the frameworks M-9 added: each of these
+            // drops the developer's data, and each is one word away from the
+            // safe row sitting next to it.
+            "db:drop",
+            "db:reset",
+            "doctrine:schema:drop",
+            "doctrine:database:drop",
+            "flush",
+        ] {
             assert!(
                 !CATALOG.iter().any(|s| s.argv.contains(&banned)),
                 "{banned} is on offer"
+            );
+        }
+    }
+
+    /// M-9. Each framework's rows appear on its own marker and on no other's —
+    /// the failure this prevents is a Symfony button on a Laravel project,
+    /// which fails as `Could not open input file: bin/console` after the click.
+    #[test]
+    fn each_framework_is_offered_on_its_own_marker() {
+        let ids = |print: &Fingerprint| -> Vec<String> {
+            available(print).iter().map(|c| c.id.clone()).collect()
+        };
+
+        let symfony = Fingerprint {
+            composer_json: true,
+            bin_console: true,
+            ..Default::default()
+        };
+        let offered = ids(&symfony);
+        assert!(offered.contains(&"symfony-cache-clear".to_string()));
+        assert!(offered.contains(&"composer-install".to_string()));
+        assert!(!offered.contains(&"migrate".to_string()));
+
+        let django = Fingerprint {
+            manage_py: true,
+            python_deps: true,
+            ..Default::default()
+        };
+        let offered = ids(&django);
+        assert!(offered.contains(&"django-migrate".to_string()));
+        assert!(offered.contains(&"django-shell".to_string()));
+        assert!(!offered.contains(&"symfony-router".to_string()));
+
+        let rails = Fingerprint {
+            gemfile: true,
+            bin_rails: true,
+            ..Default::default()
+        };
+        let offered = ids(&rails);
+        assert!(offered.contains(&"rails-migrate".to_string()));
+        assert!(offered.contains(&"bundle-install".to_string()));
+
+        // A Gemfile is Sinatra and Jekyll as often as it is Rails, so the
+        // framework rows must not follow it — `rails: command not found` is
+        // the outcome this marker split exists to prevent.
+        let sinatra = Fingerprint {
+            gemfile: true,
+            ..Default::default()
+        };
+        assert_eq!(ids(&sinatra), ["bundle-install"]);
+    }
+
+    /// Every row a person can click either says what it is running or is
+    /// pointed at a framework that is definitely there. A `display` that has
+    /// drifted from `argv` is a button that runs something other than its
+    /// label, which is the one failure nobody can debug from the screen.
+    #[test]
+    fn the_label_is_what_runs() {
+        for spec in CATALOG {
+            let shown: Vec<&str> = spec.display.split_whitespace().collect();
+            let run: Vec<&str> = spec.argv.to_vec();
+            assert_eq!(
+                shown,
+                run[..shown.len().min(run.len())].to_vec(),
+                "{} shows {:?} and runs {:?}",
+                spec.id,
+                spec.display,
+                spec.argv
+            );
+            // Flags may be hidden — `--force`, `--noinput` — but nothing else.
+            assert!(
+                run[shown.len().min(run.len())..]
+                    .iter()
+                    .all(|a| a.starts_with("--")),
+                "{} runs arguments its label does not show",
+                spec.id
             );
         }
     }

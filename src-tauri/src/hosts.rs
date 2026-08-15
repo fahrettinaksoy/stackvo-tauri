@@ -355,31 +355,15 @@ fn elevated_copy(from: &Path, to: &Path) -> crate::error::Result<bool> {
     .map_err(|e| e.with_hint(crate::hints::HOSTS_NOT_REPLACED))
 }
 
+/// The polkit half used to be written out here, exit codes and all, and there
+/// is now a second caller — `dns::install` writes a resolver drop-in the same
+/// way. Two copies of "126 means the dialog was dismissed" is one copy too
+/// many, so the pkexec call moved to `elevate::run` beside the macOS one and
+/// this is the same three facts it always was.
 #[cfg(target_os = "linux")]
 fn elevated_copy(from: &Path, to: &Path) -> crate::error::Result<bool> {
-    use crate::error::{Code, Error};
-
-    // pkexec shows the polkit dialog. sudo would need a terminal we do not have.
-    let output = std::process::Command::new("pkexec")
-        .args(["cp", &from.display().to_string(), &to.display().to_string()])
-        .output()
-        .map_err(|e| {
-            Error::new(
-                Code::PermissionDenied,
-                format!("pkexec is unavailable: {e}"),
-            )
-            .with_hint(crate::hints::INSTALL_POLKIT)
-        })?;
-
-    // 126/127 are polkit's "dismissed" and "not authorised" exits.
-    match output.status.code() {
-        Some(0) => Ok(true),
-        Some(126) | Some(127) => Ok(false),
-        _ => Err(Error::new(
-            Code::PermissionDenied,
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        )),
-    }
+    crate::elevate::run(&["cp", &from.display().to_string(), &to.display().to_string()])
+        .map_err(|e| e.with_hint(crate::hints::HOSTS_NOT_REPLACED))
 }
 
 #[cfg(target_os = "windows")]

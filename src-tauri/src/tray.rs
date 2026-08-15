@@ -22,6 +22,15 @@ pub const MENU_QUIT: &str = "quit";
 /// handler can recover which one was clicked without a second lookup table.
 pub const MENU_PROJECT: &str = "project:";
 
+/// Prefix for the entries that start or stop a project **without opening the
+/// window** (M-8).
+///
+/// This is what turns the tray from a launcher into a surface. Every other id
+/// here raises the window and hands the click to the front end; these do the
+/// thing and stay out of the way, which is the whole point of a tray-only mode
+/// — one that could only ever say "open the app" is a shortcut, not a mode.
+pub const MENU_TOGGLE: &str = "toggle:";
+
 /// Prefix for the pages. The router's own route name follows it, so the front
 /// end can push it straight through without a second table mapping menu ids to
 /// pages — one that would have to be kept in step with the router by hand.
@@ -154,6 +163,9 @@ pub const LABEL_KEYS: &[&str] = &[
     "containers",
     "more",
     "runningSummary",
+    "control",
+    "startProject",
+    "stopProject",
     // The macOS menu bar, which `menu::Labels` already said belonged here:
     // "the translations live in the frontend's locale files, and a second copy
     // in Rust is a second thing to keep in step." `lib.rs` kept one anyway.
@@ -242,6 +254,8 @@ fn tr(locale: &str, key: &str) -> String {
         ("running", false) => "Running",
         ("stopped", true) => "Durdu",
         ("stopped", false) => "Stopped",
+        ("control", true) => "Başlat / durdur",
+        ("control", false) => "Start / stop",
         ("noProjects", true) => "Proje yok",
         ("noProjects", false) => "No projects",
         ("navProjects", true) => "Projeler",
@@ -308,6 +322,29 @@ fn running_summary(locale: &str, running: usize, total: usize) -> String {
         format!("{running}/{total} proje çalışıyor")
     } else {
         format!("{running}/{total} projects running")
+    }
+}
+
+/// `Start shop` / `Stop shop`.
+///
+/// The verb is in the label rather than implied by the project's state,
+/// because this row is one level down from the coloured dot that carries the
+/// state — and a row that says only `shop` in a menu called "Start / stop" is
+/// a coin toss with somebody's running container.
+fn toggle_label(locale: &str, name: &str, running: bool) -> String {
+    let key = if running {
+        "stopProject"
+    } else {
+        "startProject"
+    };
+    if let Some(template) = fed(key) {
+        return template.replace("{name}", name);
+    }
+    match (running, locale.starts_with("tr")) {
+        (true, true) => format!("{name}: durdur"),
+        (true, false) => format!("Stop {name}"),
+        (false, true) => format!("{name}: başlat"),
+        (false, false) => format!("Start {name}"),
     }
 }
 
@@ -406,6 +443,34 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>, snap: &Snapshot) -> tauri::Result<
             )?));
         }
 
+        // One submenu holding the verbs, rather than a verb on every row
+        // (M-8). The top-level rows above stay exactly what they were — a
+        // coloured dot and a name — because "is my stack up" is a glance, and
+        // a menu that put `Start`/`Stop` beside every project would double the
+        // width of the answer to ask a question nobody asked yet.
+        if !snap.projects.is_empty() {
+            let mut controls: Vec<Box<dyn tauri::menu::IsMenuItem<R>>> = Vec::new();
+            for (name, running) in snap.projects.iter().take(MAX_PROJECTS) {
+                controls.push(Box::new(IconMenuItem::with_id(
+                    app,
+                    format!("{MENU_TOGGLE}{name}"),
+                    toggle_label(&lang, name, *running),
+                    true,
+                    Some(dot(if *running { GREEN } else { GREY })),
+                    None::<&str>,
+                )?));
+            }
+            let refs: Vec<&dyn tauri::menu::IsMenuItem<R>> =
+                controls.iter().map(|i| i.as_ref()).collect();
+            items.push(Box::new(tauri::menu::Submenu::with_id_and_items(
+                app,
+                "control",
+                tr(&lang, "control"),
+                true,
+                &refs,
+            )?));
+        }
+
         if snap.projects.len() > MAX_PROJECTS {
             items.push(Box::new(MenuItem::with_id(
                 app,
@@ -484,7 +549,15 @@ pub fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
             // Navigation lives there — the route table and the guard that
             // waits for the workspace are both its, and duplicating either
             // here would be a second answer to "can this page open yet".
-            if let Some(name) = id.strip_prefix(MENU_PROJECT) {
+            // Start or stop, and deliberately WITHOUT raising the window
+            // (M-8). Hiding a window does not destroy its webview, so the
+            // front end is alive to handle this — which means the tray runs
+            // the same store action the button in the window runs, rather than
+            // a second implementation of "start a project" that would sooner
+            // or later disagree with it about hooks.
+            if let Some(name) = id.strip_prefix(MENU_TOGGLE) {
+                let _ = app.emit("tray:toggle_project", name.to_string());
+            } else if let Some(name) = id.strip_prefix(MENU_PROJECT) {
                 show_window(app);
                 let _ = app.emit("tray:open_project", name.to_string());
             } else if let Some(route) = id.strip_prefix(MENU_NAV) {
@@ -713,6 +786,19 @@ mod tests {
         for fixed in [MENU_SHOW, MENU_QUIT, MENU_STATUS] {
             assert!(fixed.strip_prefix(MENU_PROJECT).is_none(), "{fixed}");
             assert!(fixed.strip_prefix(MENU_NAV).is_none(), "{fixed}");
+            assert!(fixed.strip_prefix(MENU_TOGGLE).is_none(), "{fixed}");
+        }
+
+        // M-8's prefix against the other two. `toggle:shop` read as a project
+        // would raise the window and open a project called `oggle:shop`; read
+        // as a page it would push a route that does not exist. Both are silent.
+        for (a, b) in [
+            (MENU_TOGGLE, MENU_PROJECT),
+            (MENU_TOGGLE, MENU_NAV),
+            (MENU_PROJECT, MENU_TOGGLE),
+            (MENU_NAV, MENU_TOGGLE),
+        ] {
+            assert!(a.strip_prefix(b).is_none(), "{a} reads as {b}");
         }
 
         // The two prefixes must not read as each other, or a page click would

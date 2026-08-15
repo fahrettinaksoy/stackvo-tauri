@@ -78,7 +78,20 @@ pub struct Error {
     /// frontend falls back to `hint`, which is exactly what it did for all of
     /// them before.
     pub hint_key: Option<&'static str>,
-    pub details: Option<serde_json::Value>,
+    /// Boxed, and the reason is a lint with a real cost behind it.
+    ///
+    /// `serde_json::Value` is built with `preserve_order` (see `Cargo.toml`:
+    /// it is what stops this app alphabetising configuration files it does not
+    /// own), and an `IndexMap` is wider than the `BTreeMap` it replaces. That
+    /// took `Error` past 128 bytes, and `Error` is the `Err` of every `Result`
+    /// in this crate — `clippy::result_large_err` then fired **303 times**,
+    /// which is a build that does not pass `-D warnings`.
+    ///
+    /// One indirection on the failure path costs nothing anybody can measure:
+    /// `details` is set by a handful of call sites and read once, on the way to
+    /// a screen. The alternative was allowing the lint crate-wide, which would
+    /// have switched off a warning about every large `Err` this code ever grows.
+    pub details: Option<Box<serde_json::Value>>,
 }
 
 impl Error {
@@ -108,7 +121,7 @@ impl Error {
     }
 
     pub fn with_details(mut self, details: serde_json::Value) -> Self {
-        self.details = Some(details);
+        self.details = Some(Box::new(details));
         self
     }
 

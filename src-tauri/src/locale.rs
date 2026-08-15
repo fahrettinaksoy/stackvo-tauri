@@ -143,6 +143,210 @@ pub fn resolve(stored: Option<&str>) -> &'static str {
         .unwrap_or(SUPPORTED[0])
 }
 
+// ------------------------------------------------------- language packs
+
+/// A language this app was not shipped with (M-7).
+///
+/// ## Why a file and not a third `locales/*.js`
+///
+/// "The app speaks N languages" is not a code problem, and until now it was
+/// one: adding a third meant a new source file, a new entry in `SUPPORTED`
+/// here, a new branch in the tray's fallback table and a rebuild. Nobody who
+/// can actually translate this app can do any of that, which is why the item
+/// sat on the list as "~2,000 strings" — the strings were never the blocker,
+/// the rebuild was.
+///
+/// A pack is one JSON file with the same shape as `src/i18n/locales/en.js`,
+/// dropped in the app's config directory. It is discovered at startup and
+/// listed beside the two built-in languages.
+///
+/// ## Partial packs are the normal case, and they work
+///
+/// vue-i18n falls back to English key by key, so a pack that covers half the
+/// app renders half in that language and half in English. That is deliberately
+/// not treated as an error: the alternative is refusing a pack until it is
+/// complete, which means nobody can ever start one. What the settings pane does
+/// instead is **say how much of it is translated**, so a half-finished pack
+/// looks half-finished rather than broken.
+///
+/// ## What is not here
+///
+/// No machine translation, and no seeding a new pack with English strings
+/// silently relabelled as another language. A missing string that falls back to
+/// English is honest; a fabricated one is a sentence somebody has to find and
+/// disbelieve.
+pub const PACK_DIR: &str = "locales";
+
+/// Where packs live: `<config>/locales/`.
+pub fn packs_dir() -> Option<std::path::PathBuf> {
+    crate::appdir::config().map(|dir| dir.join(PACK_DIR))
+}
+
+/// A tag that can be a file name and a BCP 47 language.
+///
+/// Checked because the tag becomes a path segment. `../../etc/passwd` as a
+/// locale is not a language somebody speaks, and a pack directory is a place
+/// this app writes into.
+pub fn is_valid_tag(tag: &str) -> bool {
+    let mut parts = tag.split('-');
+    let Some(language) = parts.next() else {
+        return false;
+    };
+    if !(2..=3).contains(&language.len()) || !language.chars().all(|c| c.is_ascii_lowercase()) {
+        return false;
+    }
+    match parts.next() {
+        None => true,
+        Some(region) => {
+            parts.next().is_none()
+                && (2..=8).contains(&region.len())
+                && region.chars().all(|c| c.is_ascii_alphanumeric())
+        }
+    }
+}
+
+/// One installed pack, as the settings pane lists it.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Pack {
+    pub tag: String,
+    /// What to call it in the picker. From the pack's own `language.label`, or
+    /// the tag when it does not say — a pack has to name itself, because this
+    /// app cannot hold a name for a language it has never heard of.
+    pub label: String,
+    pub path: String,
+    /// How many leaf strings it carries. The share of the app it covers is the
+    /// front end's arithmetic — it is the side that holds the English catalogue.
+    pub strings: usize,
+    /// Set when the file is on disk and unreadable as JSON, so a typo in a
+    /// hand-edited pack is reported rather than silently ignored.
+    pub broken: Option<String>,
+}
+
+fn count_strings(value: &serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::String(_) => 1,
+        serde_json::Value::Object(map) => map.values().map(count_strings).sum(),
+        _ => 0,
+    }
+}
+
+/// Every pack on this machine, in tag order.
+pub fn packs() -> Vec<Pack> {
+    let Some(dir) = packs_dir() else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(tag) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        // A file called `../evil.json` cannot exist, but one called `English
+        // (draft).json` can, and it is not a language tag.
+        if !is_valid_tag(tag) {
+            continue;
+        }
+
+        let (label, strings, broken) = match std::fs::read_to_string(&path)
+            .ok()
+            .map(|text| serde_json::from_str::<serde_json::Value>(&text))
+        {
+            Some(Ok(value)) => (
+                value
+                    .get("language")
+                    .and_then(|l| l.get("label"))
+                    .and_then(|l| l.as_str())
+                    .unwrap_or(tag)
+                    .to_string(),
+                count_strings(&value),
+                None,
+            ),
+            Some(Err(e)) => (tag.to_string(), 0, Some(e.to_string())),
+            None => (tag.to_string(), 0, Some("could not be read".to_string())),
+        };
+
+        out.push(Pack {
+            tag: tag.to_string(),
+            label,
+            path: path.display().to_string(),
+            strings,
+            broken,
+        });
+    }
+    out.sort_by(|a, b| a.tag.cmp(&b.tag));
+    out
+}
+
+/// One pack's messages.
+pub fn read_pack(tag: &str) -> crate::error::Result<serde_json::Value> {
+    use crate::error::{Code, Error};
+    if !is_valid_tag(tag) {
+        return Err(Error::new(
+            Code::InvalidInput,
+            format!("\"{tag}\" is not a language tag"),
+        ));
+    }
+    let path = packs_dir()
+        .ok_or_else(|| Error::new(Code::IoError, "no config directory"))?
+        .join(format!("{tag}.json"));
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| Error::io(format!("reading {}", path.display()), e))?;
+    serde_json::from_str(&text).map_err(|e| {
+        Error::new(
+            Code::InvalidInput,
+            format!("{} is not valid JSON: {e}", path.display()),
+        )
+    })
+}
+
+/// Write a pack, creating the directory the first time.
+pub fn write_pack(tag: &str, messages: &serde_json::Value) -> crate::error::Result<String> {
+    use crate::error::{Code, Error};
+    if !is_valid_tag(tag) {
+        return Err(Error::new(
+            Code::InvalidInput,
+            format!("\"{tag}\" is not a language tag"),
+        ));
+    }
+    let dir = packs_dir().ok_or_else(|| Error::new(Code::IoError, "no config directory"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| Error::io(format!("making {}", dir.display()), e))?;
+
+    let path = dir.join(format!("{tag}.json"));
+    let text = serde_json::to_string_pretty(messages)
+        .map_err(|e| Error::new(Code::IoError, format!("serialising the pack: {e}")))?;
+    crate::atomic::write(&path, &format!("{text}\n"))?;
+    Ok(path.display().to_string())
+}
+
+/// Remove a pack. Removing one that is not there is success — the caller is
+/// asking for it to be gone, and it is.
+pub fn delete_pack(tag: &str) -> crate::error::Result<()> {
+    use crate::error::{Code, Error};
+    if !is_valid_tag(tag) {
+        return Err(Error::new(
+            Code::InvalidInput,
+            format!("\"{tag}\" is not a language tag"),
+        ));
+    }
+    let Some(dir) = packs_dir() else {
+        return Ok(());
+    };
+    let path = dir.join(format!("{tag}.json"));
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::io(format!("removing {}", path.display()), e)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,6 +366,42 @@ mod tests {
         for raw in ["de", "pt-BR", "fr_FR.UTF-8", "", "   ", "C", "POSIX"] {
             assert_eq!(normalise(raw), None, "{raw} was accepted");
         }
+    }
+
+    /// The tag becomes a file name in a directory this app writes into.
+    #[test]
+    fn a_pack_tag_is_a_language_and_not_a_path() {
+        for good in ["de", "fr", "pt-BR", "zh-Hans", "nb", "fil"] {
+            assert!(is_valid_tag(good), "{good} was refused");
+        }
+        for bad in [
+            "",
+            "e",
+            "english",
+            "../etc/passwd",
+            "de/../..",
+            "DE",
+            "de-",
+            "de-DE-x",
+            "de_DE",
+            ".",
+            "..",
+        ] {
+            assert!(!is_valid_tag(bad), "{bad} was accepted");
+        }
+    }
+
+    /// The count is of leaf strings, not of keys: a pack's progress is how many
+    /// sentences it has, and counting objects would make a deeply nested but
+    /// empty file look like progress.
+    #[test]
+    fn a_pack_is_measured_in_sentences() {
+        let value: serde_json::Value = serde_json::from_str(
+            r#"{"language":{"label":"Deutsch"},"app":{"title":"StackVo","sub":{"a":"x","b":"y"}},"n":3}"#,
+        )
+        .unwrap();
+        // label, title, a, b — the number is not a string.
+        assert_eq!(count_strings(&value), 4);
     }
 
     #[test]

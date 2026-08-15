@@ -956,6 +956,31 @@ pub struct ServerExtras {
 }
 
 impl ServerExtras {
+    /// A copy with one server's block extended (M-6).
+    ///
+    /// The workspace's directives stay first and the appended ones follow, so a
+    /// per-project switch adds to what somebody wrote rather than arguing with
+    /// it — and the servers with no configuration file get nothing, which is
+    /// the same boundary the fields above describe.
+    pub fn with_appended(&self, server: &str, directives: &str) -> Self {
+        let extend = |current: &str| {
+            if current.trim().is_empty() {
+                directives.to_string()
+            } else {
+                format!("{current}\n{directives}")
+            }
+        };
+
+        let mut out = self.clone();
+        match server {
+            "nginx" => out.nginx = extend(&self.nginx),
+            "caddy" => out.caddy = extend(&self.caddy),
+            "frankenphp" => out.frankenphp = extend(&self.frankenphp),
+            _ => {}
+        }
+        out
+    }
+
     pub fn load(root: &std::path::Path, env: &crate::config::Env) -> Self {
         Self {
             nginx: server_extra(root, "nginx", env),
@@ -1558,7 +1583,6 @@ pub fn render_traefik_config(opts: &TraefikOptions) -> String {
         }
         out.push_str("  websecure:\n    address: \":443\"\n");
     }
-
 
     out
 }

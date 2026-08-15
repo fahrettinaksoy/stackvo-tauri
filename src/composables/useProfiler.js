@@ -24,6 +24,17 @@ export function useProfiler(name) {
    */
   const tree = ref(null);
   const treeBusy = ref(false);
+  /**
+   * The flame graph for an open **trace** (F-3).
+   *
+   * Separate from `tree` rather than the same ref with a flag, because the two
+   * are different claims about the same picture: `tree` is cachegrind's summed
+   * edges — one box per callee however many callers it had — and this is folded
+   * stacks, where a function called from two places is two boxes with their own
+   * widths. Rendering one under the other's caption is exactly the confusion
+   * F-3 was amber for.
+   */
+  const flame = ref(null);
   const openId = ref('');
   const error = ref(null);
 
@@ -104,8 +115,11 @@ export function useProfiler(name) {
     try {
       report.value = await api.profilerRead(name.value, file.id);
       // A tree belonging to the profile that was open a moment ago is worse
-      // than none: it renders, and it is about a different request.
+      // than none: it renders, and it is about a different request. The flame
+      // graph goes for the same reason and one stronger — it is not even the
+      // same kind of picture.
       tree.value = null;
+      flame.value = null;
       openId.value = file.id;
       return report.value;
     } catch (e) {
@@ -126,6 +140,7 @@ export function useProfiler(name) {
       // The open report belongs to a file that no longer exists.
       if (openId.value === file.id) {
         report.value = null;
+        flame.value = null;
         openId.value = '';
       }
       await load(runtime);
@@ -144,12 +159,40 @@ export function useProfiler(name) {
     try {
       await api.profilerClear(name.value);
       report.value = null;
+      flame.value = null;
+      tree.value = null;
       openId.value = '';
       await load(runtime);
       return true;
     } catch (e) {
       error.value = e;
       return false;
+    } finally {
+      busy.value = '';
+    }
+  }
+
+  /**
+   * Open a trace: the flame graph, and no cost table.
+   *
+   * A trace has no per-function aggregate to tabulate — that is what the
+   * profile is for — so the pane shows the graph alone rather than an empty
+   * table beside it.
+   */
+  async function openTrace(file) {
+    busy.value = file.id;
+    error.value = null;
+    report.value = null;
+    tree.value = null;
+    flame.value = null;
+    try {
+      flame.value = await api.profilerFlame(name.value, file.id);
+      openId.value = file.id;
+      return flame.value;
+    } catch (e) {
+      error.value = e;
+      openId.value = '';
+      return null;
     } finally {
       busy.value = '';
     }
@@ -175,6 +218,8 @@ export function useProfiler(name) {
     tree,
     treeBusy,
     loadTree,
+    flame,
+    openTrace,
     openId,
     busy,
     error,

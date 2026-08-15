@@ -339,23 +339,38 @@ describe('what a save still needs', () => {
 /**
  * The DNS pane (E-1).
  *
- * Three things here are only visible at this layer, and each is the kind that
+ * Four things here are only visible at this layer, and each is the kind that
  * looks fine and is wrong: that the two switches are two separate acts, that a
- * platform with no per-suffix mechanism gets a sentence rather than a dead
- * toggle, and that the file's contents are shown *before* the password prompt
- * that writes them.
+ * machine with no recognisable mechanism gets a sentence rather than a dead
+ * toggle, that the change is shown *before* the password prompt that applies
+ * it, and that "the file is written" is never presented as "this works" — the
+ * measurement is a separate button with four separate answers.
  */
 describe('the DNS pane', () => {
   const DnsPane = () => import('@/components/settings/DnsPane.vue');
 
   const STATUS = {
-    support: 'resolver',
+    mechanism: 'resolver',
+    writable: true,
     suffix: 'stackvo.loc',
+    tld: 'loc',
     port: 15353,
     listening: false,
-    resolverFile: '/etc/resolver/loc',
-    resolverConfigured: false,
+    tcp: false,
+    file: '/etc/resolver/loc',
+    configured: false,
     instruction: 'nameserver 127.0.0.1\nport 15353\n',
+    stale: [],
+    broken: false,
+  };
+
+  const CHECK = {
+    name: 'stackvo-dns-check.loc',
+    udp: { ok: true, detail: '127.0.0.1:15353 answered 127.0.0.1' },
+    tcp: { ok: true, detail: '127.0.0.1:15353 answered 127.0.0.1' },
+    system: { ok: false, detail: 'stackvo-dns-check.loc does not resolve here' },
+    public: { ok: true, detail: 'example.com still resolves' },
+    ok: false,
   };
 
   async function open(over = {}) {
@@ -371,7 +386,7 @@ describe('the DNS pane', () => {
 
   const switches = (wrapper) => wrapper.findAll('input[type="checkbox"]');
 
-  it('offers the responder and the resolver as two separate switches', async () => {
+  it('offers the responder and the machine resolver as two separate switches', async () => {
     const wrapper = await open();
     expect(switches(wrapper)).toHaveLength(2);
   });
@@ -379,7 +394,7 @@ describe('the DNS pane', () => {
   /** The password prompt must not arrive from a switch labelled "turn on". */
   it('starting the responder does not touch the machine resolver', async () => {
     const wrapper = await open();
-    replies.dnsStart = { ...STATUS, listening: true };
+    replies.dnsStart = { ...STATUS, listening: true, tcp: true };
 
     await switches(wrapper)[0].setValue(true);
     await flushPromises();
@@ -388,32 +403,143 @@ describe('the DNS pane', () => {
     expect(calls.map((c) => c[0])).not.toContain('dnsResolverInstall');
   });
 
-  /** What it writes, before it writes it. */
-  it('shows the file contents beside the switch that installs them', async () => {
+  /** What it writes, before it writes it — and what it reloads afterwards. */
+  it('shows the change beside the switch that applies it', async () => {
     const wrapper = await open();
     expect(wrapper.text()).toContain('nameserver 127.0.0.1');
     expect(wrapper.text()).toContain('/etc/resolver/loc');
   });
 
   /**
-   * A platform with no per-suffix mechanism gets a sentence. A toggle that
-   * quietly does nothing is worse than an explanation.
+   * The mechanism is named, because "writes a file" and "writes
+   * /etc/NetworkManager/dnsmasq.d/stackvo.conf and reloads NetworkManager" are
+   * different amounts of information to consent to.
    */
-  it('draws no switches at all where the platform has no mechanism', async () => {
-    const wrapper = await open({ support: 'unsupported', resolverFile: undefined });
-    expect(switches(wrapper)).toHaveLength(0);
-    expect(wrapper.text()).toContain(i18n.global.t('dns.unsupported'));
+  it('names the mechanism and the command it runs afterwards', async () => {
+    const wrapper = await open({
+      mechanism: 'network-manager',
+      file: '/etc/NetworkManager/dnsmasq.d/stackvo.conf',
+      instruction: 'server=/loc/127.0.0.1#15353\n',
+      reload: 'systemctl reload NetworkManager',
+    });
+
+    expect(wrapper.text()).toContain(i18n.global.t('dns.mechanisms.network-manager'));
+    expect(wrapper.text()).toContain('/etc/NetworkManager/dnsmasq.d/stackvo.conf');
+    expect(wrapper.text()).toContain('systemctl reload NetworkManager');
   });
 
-  /** Linux has a line only the user can place, so it is printed, not offered. */
-  it('prints the line to place where there is no file this app can write', async () => {
+  /**
+   * A machine with nothing recognisable in front of its resolver gets the line
+   * and no switch. A toggle that quietly does nothing is worse than an
+   * explanation — and guessing at a file to write is worse than both.
+   */
+  it('prints the line to place where nothing recognisable resolves names', async () => {
     const wrapper = await open({
-      support: 'manual',
-      resolverFile: undefined,
-      instruction: 'server=/loc/127.0.0.1#15353',
+      mechanism: 'manual',
+      writable: false,
+      file: undefined,
+      instruction: 'server=/loc/127.0.0.1#15353\n',
     });
+
+    // One switch: the responder. The machine half is a sentence.
     expect(switches(wrapper)).toHaveLength(1);
     expect(wrapper.text()).toContain('server=/loc/127.0.0.1#15353');
+    expect(wrapper.text()).toContain(i18n.global.t('dns.manual'));
+  });
+
+  /**
+   * The mechanism exists and no password prompt does — Linux without a polkit
+   * agent. Offering the switch would be offering something that fails on press.
+   */
+  it('shows the command instead of a switch where nothing can ask for a password', async () => {
+    const wrapper = await open({
+      mechanism: 'systemd-resolved',
+      writable: false,
+      file: '/etc/systemd/resolved.conf.d/stackvo.conf',
+      instruction: '[Resolve]\nDNS=127.0.0.1:15353\nDomains=~loc\n',
+    });
+
+    expect(switches(wrapper)).toHaveLength(1);
+    expect(wrapper.text()).toContain('Domains=~loc');
+    expect(wrapper.text()).toContain('/etc/systemd/resolved.conf.d/stackvo.conf');
+  });
+
+  /**
+   * The pair that can come apart. A responder bound on UDP and not TCP works
+   * for almost everything and fails a retry, which is worth one sentence and
+   * is not worth reporting as "off".
+   */
+  it('says so when only half the responder is bound', async () => {
+    const wrapper = await open({ listening: true, tcp: false });
+    expect(wrapper.text()).toContain(i18n.global.t('dns.udpOnly', { port: 15353 }));
+
+    const both = await open({ listening: true, tcp: true });
+    expect(both.text()).not.toContain(i18n.global.t('dns.udpOnly', { port: 15353 }));
+  });
+
+  /**
+   * The state where everything else on screen looks healthy and nothing
+   * resolves: the machine asks a responder that is not there. It is a whole
+   * alert rather than a caption because it is the only one of these that is
+   * breaking something right now.
+   */
+  it('says so when the machine asks a responder that is not answering', async () => {
+    const wrapper = await open({ listening: false, configured: true, broken: true });
+    expect(wrapper.find('[data-test="dns-broken"]').exists()).toBe(true);
+
+    const healthy = await open({ listening: true, tcp: true, configured: true, broken: false });
+    expect(healthy.find('[data-test="dns-broken"]').exists()).toBe(false);
+  });
+
+  /**
+   * A resolver file left behind by a suffix change does not sit there
+   * harmlessly — it points at a responder that now refuses that TLD, so those
+   * names stop going upstream and start being refused locally.
+   */
+  it('names the files a suffix change left behind', async () => {
+    const wrapper = await open({ stale: ['/etc/resolver/loc'] });
+    const alert = wrapper.find('[data-test="dns-stale"]');
+    expect(alert.exists()).toBe(true);
+    expect(alert.text()).toContain('/etc/resolver/loc');
+  });
+
+  /**
+   * Somebody else's file at the same path — dnsmasq, Valet, a colleague's
+   * script. Said before the switch is pressed: a file discovered to be gone
+   * afterwards is not a warning, it is an apology.
+   */
+  it('warns about a file it would replace, before replacing it', async () => {
+    const wrapper = await open({
+      foreign: '/etc/resolver/loc: nameserver 127.0.0.1',
+    });
+    const line = wrapper.find('[data-test="dns-foreign"]');
+    expect(line.exists()).toBe(true);
+    expect(line.text()).toContain('/etc/resolver/loc');
+
+    const clean = await open();
+    expect(clean.find('[data-test="dns-foreign"]').exists()).toBe(false);
+  });
+
+  /**
+   * The measurement is the point of the button: the responder answering its own
+   * probe and the machine resolving a name are different questions, and this
+   * fixture is exactly the case where the first passes and the second does not.
+   */
+  it('reports each probe separately rather than one verdict', async () => {
+    const wrapper = await open({ listening: true, tcp: true, configured: true });
+    replies.dnsCheck = CHECK;
+
+    await wrapper.find('button').trigger('click');
+    await flushPromises();
+
+    const probes = wrapper.find('[data-test="dns-probes"]');
+    expect(probes.exists()).toBe(true);
+    expect(probes.text()).toContain(i18n.global.t('dns.probes.system'));
+    expect(probes.text()).toContain('does not resolve here');
+    // The half that passed is still shown as passing: which one failed is the
+    // whole of what tells somebody what to fix.
+    expect(probes.text()).toContain('127.0.0.1:15353 answered 127.0.0.1');
+    expect(probes.findAll('.mdi-alert-circle-outline')).toHaveLength(1);
   });
 });
 

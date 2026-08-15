@@ -304,29 +304,53 @@ pub fn supports(kind: Kind) -> bool {
 /// oplog, which is every write twice.
 const MONGO_SYSTEM_DBS: [&str; 3] = ["admin", "config", "local"];
 
+/// The database whose profiling flag *is* the session.
+///
+/// `admin` rather than one this app creates: a development tool that leaves a
+/// database behind in somebody's Mongo to remember a checkbox is a tool that
+/// has to be trusted to clean up. This one is already there, is already skipped
+/// when reading, and its flag is the same thing the server would report anyway.
+const MONGO_SESSION_DB: &str = "admin";
+
 /// The JavaScript that switches profiling on for every user database.
 ///
 /// One `--eval`, not one per database: each is a `docker exec` and a shell
 /// round-trip, and a workspace with six databases would pay six of them for a
 /// button press.
 ///
-/// ## The limit this carries, measured rather than reasoned about
+/// ## Two limits this used to carry, and how each was closed
 ///
-/// Profiling is per database and is set on the databases that **exist when the
-/// switch is pressed**. A database created afterwards is not profiled, and on a
-/// server with none at all — a freshly started Mongo lists only `admin`,
-/// `config` and `local` — the switch turns on nothing and honestly reports
-/// itself as off.
+/// Profiling in Mongo is **per database**, so this used to set it on the
+/// databases that existed when the switch was pressed — and a freshly started
+/// Mongo lists only `admin`, `config` and `local`. Measured against the running
+/// stack rather than reasoned about: the switch turned on nothing, `status` then
+/// honestly reported off, and on screen that is a toggle that bounces back.
+/// Worse, the everyday case is the one it missed — an application creates its
+/// database on the first write, which is *after* somebody presses record.
 ///
-/// The alternative is the server's own `--profile 2`, which is a start-up
-/// argument: it would cover everything including databases that do not exist
-/// yet, and cost a container recreate every time somebody wanted to look. For a
-/// thing you switch on for a minute, that is the wrong trade — and the failure
-/// mode of this one is visible (the switch says off) rather than silent.
+/// So there are two changes, and neither of them is the server's own
+/// `--profile 2` (a start-up argument, and a container recreate every time
+/// somebody wants to look at a page):
+///
+/// * **`admin` carries the session.** Profiling it is what makes "on" a fact
+///   the server holds rather than one this app would have to remember, so the
+///   switch stays on with no user database in sight. Its own statements are
+///   still skipped when reading — see [`MONGO_SYSTEM_DBS`] — so what it records
+///   is never shown to anybody.
+/// * **Reading re-applies it.** Every read, while the session is on, switches
+///   profiling on for any user database that has appeared since. The window
+///   that remains is one refresh wide, and it is the honest one: statements
+///   made against a database in the instant it was created cannot be recorded
+///   by a profiler that is per database.
 fn mongo_enable_js() -> String {
     format!(
-        "db.adminCommand({{listDatabases:1}}).databases         .map(d=>d.name).filter(n=>!{skip}.includes(n))         .forEach(n=>db.getSiblingDB(n).setProfilingLevel(2));print('ok')",
-        skip = mongo_skip_list()
+        "const skip={skip};\
+         db.adminCommand({{listDatabases:1}}).databases.map(d=>d.name)\
+           .filter(n=>!skip.includes(n))\
+           .forEach(n=>db.getSiblingDB(n).setProfilingLevel(2));\
+         db.getSiblingDB('{marker}').setProfilingLevel(2);print('ok')",
+        skip = mongo_skip_list(),
+        marker = MONGO_SESSION_DB
     )
 }
 
@@ -338,16 +362,27 @@ fn mongo_enable_js() -> String {
 /// Mongo refuses to drop it otherwise.
 fn mongo_disable_js() -> String {
     format!(
-        "db.adminCommand({{listDatabases:1}}).databases         .map(d=>d.name).filter(n=>!{skip}.includes(n))         .forEach(n=>{{const d=db.getSiblingDB(n);d.setProfilingLevel(0);         try{{d.system.profile.drop()}}catch(e){{}}}});print('ok')",
-        skip = mongo_skip_list()
+        "const skip={skip};\
+         const off=n=>{{const d=db.getSiblingDB(n);d.setProfilingLevel(0);\
+           try{{d.system.profile.drop()}}catch(e){{}}}};\
+         db.adminCommand({{listDatabases:1}}).databases.map(d=>d.name)\
+           .filter(n=>!skip.includes(n)).forEach(off);\
+         off('{marker}');print('ok')",
+        skip = mongo_skip_list(),
+        marker = MONGO_SESSION_DB
     )
 }
 
 /// Is it on anywhere? One database being profiled is the session being on.
 fn mongo_status_js() -> String {
     format!(
-        "print(db.adminCommand({{listDatabases:1}}).databases         .map(d=>d.name).filter(n=>!{skip}.includes(n))         .some(n=>db.getSiblingDB(n).getProfilingStatus().was>0))",
-        skip = mongo_skip_list()
+        "const skip={skip};\
+         print(db.getSiblingDB('{marker}').getProfilingStatus().was>0 ||\
+           db.adminCommand({{listDatabases:1}}).databases.map(d=>d.name)\
+             .filter(n=>!skip.includes(n))\
+             .some(n=>db.getSiblingDB(n).getProfilingStatus().was>0))",
+        skip = mongo_skip_list(),
+        marker = MONGO_SESSION_DB
     )
 }
 
@@ -357,8 +392,19 @@ fn mongo_status_js() -> String {
 /// other source on the timeline reports, divided to seconds on the way out.
 fn mongo_read_js(limit: usize) -> String {
     format!(
-        "db.adminCommand({{listDatabases:1}}).databases         .map(d=>d.name).filter(n=>!{skip}.includes(n))         .flatMap(n=>db.getSiblingDB(n).system.profile.find({{}})         .sort({{ts:-1}}).limit({limit}).toArray())         .forEach(r=>print(JSON.stringify({{         at:r.ts?r.ts.getTime()/1000:0,ns:r.ns||'',op:r.op||'',         command:r.command||{{}}}})))",
-        skip = mongo_skip_list()
+        "const skip={skip};\
+         const on=db.getSiblingDB('{marker}').getProfilingStatus().was>0;\
+         const names=db.adminCommand({{listDatabases:1}}).databases.map(d=>d.name)\
+           .filter(n=>!skip.includes(n));\
+         if(on){{names.forEach(n=>{{const d=db.getSiblingDB(n);\
+           if(d.getProfilingStatus().was===0)d.setProfilingLevel(2)}})}}\
+         names.flatMap(n=>db.getSiblingDB(n).system.profile.find({{}})\
+           .sort({{ts:-1}}).limit({limit}).toArray())\
+           .forEach(r=>print(JSON.stringify({{\
+             at:r.ts?r.ts.getTime()/1000:0,ns:r.ns||'',op:r.op||'',\
+             command:r.command||{{}}}})))",
+        skip = mongo_skip_list(),
+        marker = MONGO_SESSION_DB
     )
 }
 
@@ -437,16 +483,16 @@ pub fn mongo_parse(text: &str) -> Vec<Entry> {
             if at <= 0.0 {
                 return None;
             }
-            let command = row.get("command")?;
+            let command = without_envelope(row.get("command")?);
             let ns = row.get("ns").and_then(|v| v.as_str()).unwrap_or("");
 
-            let sql = format!("{ns} {}", compact(command));
+            let sql = format!("{ns} {}", compact(&command));
             if is_own_mongo_traffic(&sql) {
                 return None;
             }
             Some(Entry {
                 at,
-                shape: format!("{ns} {}", mongo_shape(command)),
+                shape: format!("{ns} {}", mongo_shape(&command)),
                 sql,
             })
         })
@@ -456,6 +502,45 @@ pub fn mongo_parse(text: &str) -> Vec<Entry> {
 /// The command as one line, values and all.
 fn compact(command: &serde_json::Value) -> String {
     serde_json::to_string(command).unwrap_or_else(|_| "{}".into())
+}
+
+/// The keys a driver adds that are about the *connection*, not the question.
+///
+/// `mongo_shape` skipped four of these so that two runs of one query would not
+/// count as two shapes. What nobody looked at until the profiler was run
+/// against a live Mongo is the other half — the text on screen, which kept all
+/// of them: every entry was around five hundred characters of `$clusterTime`,
+/// a `signature.hash`, an `lsid` and a `$readPreference`, with the `find` and
+/// the `filter` somewhere in the middle. A query log nobody can read at a
+/// glance is a query log that does not do its job.
+///
+/// One list rather than two, used by both, so a key that is noise in the shape
+/// cannot still be noise on the screen.
+const MONGO_ENVELOPE: [&str; 8] = [
+    "lsid",
+    "$db",
+    "$clusterTime",
+    "$readPreference",
+    "$audit",
+    "signature",
+    "txnNumber",
+    "apiVersion",
+];
+
+/// The command with the driver's bookkeeping taken out, recursively.
+fn without_envelope(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => serde_json::Value::Object(
+            map.iter()
+                .filter(|(key, _)| !MONGO_ENVELOPE.contains(&key.as_str()))
+                .map(|(key, inner)| (key.clone(), without_envelope(inner)))
+                .collect(),
+        ),
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(without_envelope).collect())
+        }
+        other => other.clone(),
+    }
 }
 
 /// The command with its values replaced by their key names.
@@ -470,10 +555,10 @@ fn mongo_shape(value: &serde_json::Value) -> String {
             let mut parts: Vec<String> = map
                 .iter()
                 // The driver's own bookkeeping, which changes per connection
-                // and would make every statement its own shape.
-                .filter(|(key, _)| {
-                    !matches!(key.as_str(), "lsid" | "$db" | "$clusterTime" | "txnNumber")
-                })
+                // and would make every statement its own shape. Filtered here
+                // as well as in `without_envelope` because `mongo_shape` is
+                // public surface and a caller may hand it a raw command.
+                .filter(|(key, _)| !MONGO_ENVELOPE.contains(&key.as_str()))
                 .map(|(key, inner)| {
                     let nested = mongo_shape(inner);
                     if nested.is_empty() {
@@ -907,7 +992,6 @@ LOG:  checkpoint starting: time
         );
     }
 
-    #[test]
     /// All four, and the last two arrived by the same route: a note saying
     /// "cannot" that turned out to say "differently".
     #[test]
@@ -923,6 +1007,49 @@ LOG:  checkpoint starting: time
     }
 
     // ------------------------------------------------------------- mongo
+
+    /// A line as `mongo:8` actually writes it, captured by
+    /// `examples/querylog_probe.rs` from the live stack.
+    ///
+    /// Every unit test around it was written against a hand-typed fixture that
+    /// carried the command and nothing else, so nothing ever saw what the real
+    /// thing is mostly made of: a cluster time, a signature, a session id and a
+    /// read preference, with the question in the middle. On screen that was
+    /// five hundred characters per row.
+    #[test]
+    fn the_drivers_envelope_is_not_what_gets_shown() {
+        let line = r#"{"at":1786825736.418,"ns":"shop.users","op":"query","command":{"$clusterTime":{"clusterTime":{"$timestamp":"7674358091181195266"},"signature":{"hash":"jhLUQOcMoxyqaywiv4S/ozn6cB8=","keyId":{"high":1786771222,"low":6,"unsigned":false}}},"$db":"shop","$readPreference":{"mode":"primaryPreferred"},"filter":{"probe":4},"find":"users","lsid":{"id":"8077f3f5-cc4c-4949-9124-88ac2ae31bfa"}}}"#;
+
+        let entries = mongo_parse(line);
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+
+        for noise in [
+            "$clusterTime",
+            "signature",
+            "lsid",
+            "$readPreference",
+            "$db",
+        ] {
+            assert!(
+                !entry.sql.contains(noise),
+                "{noise} is still shown: {}",
+                entry.sql
+            );
+            assert!(
+                !entry.shape.contains(noise),
+                "{noise} is still in the shape"
+            );
+        }
+        // What is left is the question.
+        assert!(entry.sql.contains("\"find\":\"users\""), "{}", entry.sql);
+        assert!(
+            entry.sql.contains("\"filter\":{\"probe\":4}"),
+            "{}",
+            entry.sql
+        );
+        assert!(entry.sql.len() < 80, "still {} characters", entry.sql.len());
+    }
 
     /// A Mongo query is a document, and two lookups differing only in an `_id`
     /// are the same question — exactly as `WHERE id = 1` and `WHERE id = 2`

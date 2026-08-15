@@ -187,6 +187,48 @@ describe('the profiler', () => {
     );
   });
 
+  /**
+   * F-3. A trace is not a profile with a different name: it is read by another
+   * parser, drawn as another picture, and the one thing it must never do is
+   * leave the previous profile's table or tree on screen underneath it. Those
+   * are cachegrind's summed edges; this is folded stacks, and a reader cannot
+   * tell them apart by looking.
+   */
+  it('opening a trace shows a flame graph and clears the profile beside it', async () => {
+    replies.profilerFlame = {
+      frames: [{ name: '{main}', value: 1300, children: [], recursive: false }],
+      total: 1300,
+      records: 10,
+      stacks: 4,
+      truncated: false,
+      pruned: 0,
+      depthCapped: false,
+    };
+    const p = useProfiler(ref('shop'));
+    await p.load('php');
+    // A profile was open a moment ago.
+    p.report.value = { events: ['Time_(10ns)'], functions: [] };
+    p.tree.value = [{ name: 'old', value: 1, children: [] }];
+
+    await p.openTrace({ id: 'trace.1786825736.xt' });
+
+    expect(p.flame.value.total).toBe(1300);
+    expect(p.openId.value).toBe('trace.1786825736.xt');
+    expect(p.report.value, 'the cost table belonged to the profile').toBe(null);
+    expect(p.tree.value, 'so did the call tree').toBe(null);
+  });
+
+  /** And the other way round: opening a profile takes the flame graph away. */
+  it('opening a profile clears the flame graph', async () => {
+    replies.profilerRead = { events: ['Time_(us)'], functions: [] };
+    const p = useProfiler(ref('shop'));
+    await p.load('php');
+    p.flame.value = { frames: [], total: 1, records: 1, stacks: 1 };
+
+    await p.open(PROFILES[0]);
+    expect(p.flame.value).toBe(null);
+  });
+
   it('marks the file that is working, not every row', async () => {
     let settle;
     replies.profilerRead = () => new Promise((resolve) => (settle = resolve));

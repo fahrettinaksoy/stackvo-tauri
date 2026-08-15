@@ -38,16 +38,20 @@ pub mod imports;
 pub mod inflight;
 pub mod instances;
 pub mod lan;
+pub mod landing;
 pub mod licences;
 pub mod locale;
 pub mod logging;
 pub mod mail;
+pub mod mailrelay;
 pub mod manifest;
 pub mod market;
 pub mod mcp;
 pub mod menu;
 pub mod migrate;
+pub mod oauth;
 pub mod paths;
+pub mod perf;
 pub mod phpini;
 pub mod pkg;
 pub mod policy;
@@ -57,6 +61,7 @@ pub mod preset;
 pub mod profile;
 pub mod progress;
 pub mod pty;
+pub mod qr;
 pub mod querylog;
 pub mod quickcmd;
 pub mod release;
@@ -65,12 +70,15 @@ pub mod routes;
 pub mod runner;
 pub mod scaffold;
 pub mod secrets;
+pub mod site;
 pub mod skeleton;
 pub mod snapshot;
 pub mod stats;
 pub mod stats_store;
+pub mod stripe;
 pub mod template;
 pub mod timeline;
+pub mod trace;
 pub mod tray;
 pub mod tunnel;
 pub mod watcher;
@@ -196,6 +204,16 @@ pub fn run() {
                 watcher.retarget(&handle, root);
             }
             app.manage(watcher);
+
+            // Answer for this workspace's names, if the machine is already
+            // asking us for them (E-1).
+            //
+            // On its own thread rather than inline: the sockets bind in
+            // microseconds, but the check in front of them reads a file — and
+            // on Windows asks the NRPT, which spawns PowerShell — and none of
+            // that belongs in front of the first frame.
+            let dns_handle = handle.clone();
+            std::thread::spawn(move || commands::start_dns_if_configured(&dns_handle));
 
             // Scheduled database snapshots.
             //
@@ -377,6 +395,13 @@ pub fn run() {
             commands::env_get,
             commands::env_defaults,
             commands::tunnel_status,
+            commands::qr_encode,
+            commands::landing_status,
+            commands::oauth_callbacks,
+            commands::locale_packs,
+            commands::mail_relay_get,
+            commands::locale_pack_read,
+            commands::stripe_status,
             commands::worker_options,
             commands::worker_status,
             // Phase 2 — mutations
@@ -388,6 +413,16 @@ pub fn run() {
             commands::mail_attachment_save,
             commands::tunnel_start,
             commands::tunnel_stop,
+            commands::landing_start,
+            commands::landing_stop,
+            commands::landing_refresh,
+            commands::locale_pack_write,
+            commands::locale_pack_delete,
+            commands::mail_relay_set,
+            commands::mail_release,
+            commands::stripe_key_set,
+            commands::stripe_start,
+            commands::stripe_stop,
             commands::worker_start,
             commands::worker_stop,
             commands::project_scaffold,
@@ -448,6 +483,7 @@ pub fn run() {
             commands::dns_stop,
             commands::dns_resolver_install,
             commands::dns_resolver_remove,
+            commands::dns_check,
             commands::hosts_status,
             commands::hosts_plan,
             commands::hosts_apply,
@@ -495,8 +531,15 @@ pub fn run() {
             commands::profiler_set_mode,
             commands::profiler_read,
             commands::profiler_tree,
+            commands::profiler_flame,
             commands::profiler_delete,
             commands::profiler_clear,
+            commands::perf_status,
+            commands::perf_set,
+            commands::perf_export,
+            commands::perf_forget,
+            commands::site_settings,
+            commands::site_save,
             commands::quick_commands,
             commands::quick_command_run,
             commands::devserver_status,

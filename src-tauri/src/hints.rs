@@ -132,6 +132,30 @@ hints! {
     INSTALL_POLKIT = "installPolkit",
         "Install polkit, or edit /etc/hosts manually.";
 
+    // ------------------------------------------------------- performance layer
+    PERF_PATH_IS_RELATIVE = "perfPathIsRelative",
+        "Name a directory inside the project, like vendor or storage/framework.";
+    PERF_NOTHING_TO_SEED = "perfNothingToSeed",
+        "That directory does not exist in the project yet. Install the dependencies first, \
+         or enable it and let the tooling create it inside the container.";
+    PERF_SEED_FAILED = "perfSeedFailed",
+        "The directory could not be copied into the volume, so nothing was changed.";
+
+    // ---------------------------------------------------------------- local DNS
+    TLD_IS_ONE_LABEL = "tldIsOneLabel",
+        "A suffix ends in one label of letters, digits and hyphens — stackvo.loc.";
+    DNS_PLACE_THE_LINE_YOURSELF = "dnsPlaceTheLineYourself",
+        "Add the line shown to whatever resolves names on this machine, then reload it.";
+    DNS_START_THE_RESPONDER_FIRST = "dnsStartTheResponderFirst",
+        "Start the responder first — this would otherwise point the machine at a closed port.";
+    DNS_MACHINE_IS_NOT_ASKING_US = "dnsMachineIsNotAskingUs",
+        "The responder answers, but this machine is not asking it. Something else may sit in \
+         front of the resolver.";
+    DNS_PUBLIC_NAMES_STOPPED = "dnsPublicNamesStopped",
+        "The change took public names down with it and was undone. Nothing was left behind.";
+    DNS_PORT_ALREADY_ANSWERING = "dnsPortAlreadyAnswering",
+        "Something else on this machine is already answering on that port.";
+
     // ---------------------------------------------------------------- services
     SERVICE_MUST_BE_IN_CATALOG = "serviceMustBeInCatalog",
         "Only services listed in contracts/env.schema.json can be managed.";

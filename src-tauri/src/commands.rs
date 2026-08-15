@@ -86,17 +86,24 @@ pub struct AppState {
     pub dns: Mutex<Option<DnsResponder>>,
 }
 
-/// A running responder, and the two things needed to stop one.
+/// A running responder, and what is needed to stop one.
+///
+/// Two workers, because a resolver picks its transport and this app does not
+/// get a say: UDP is what almost everything asks over, TCP is what a retry
+/// arrives on. `tcp` records whether the second one is up, since a port can be
+/// half-taken and a screen that reports the pair as one boolean would be
+/// averaging two different truths.
 pub struct DnsResponder {
     pub suffix: String,
+    pub tcp: bool,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    worker: Option<std::thread::JoinHandle<()>>,
+    workers: Vec<std::thread::JoinHandle<()>>,
 }
 
 impl DnsResponder {
     fn stop(mut self) {
         self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        if let Some(worker) = self.worker.take() {
+        for worker in self.workers.drain(..) {
             let _ = worker.join();
         }
     }
@@ -1558,6 +1565,13 @@ pub fn env_set(
     let root = state.root()?;
     let outcome = env_writer::apply(&root, &patch);
 
+    // The suffix is the one key in this file the responder is built around, and
+    // a responder still serving the old TLD answers for names nothing renders
+    // any more and refuses the ones it does.
+    if outcome.is_ok() && patch.contains_key("DEFAULT_TLD_SUFFIX") {
+        restart_dns_if_running(&state);
+    }
+
     // The keys, never the values. `.env` is where the passwords are, and a
     // trail that carries them is one nobody can hand to anybody — the same rule
     // `logging.rs` states about payloads.
@@ -2231,7 +2245,7 @@ pub async fn routes_save(
 // ------------------------------------------------------------- DNS (E-1)
 
 /// The suffix this workspace's names end in.
-fn dns_suffix(state: &State<'_, AppState>) -> String {
+fn dns_suffix(state: &AppState) -> String {
     state
         .root()
         .ok()
@@ -2239,31 +2253,32 @@ fn dns_suffix(state: &State<'_, AppState>) -> String {
         .unwrap_or_else(|| "stackvo.loc".to_string())
 }
 
+fn dns_state(state: &AppState, suffix: &str) -> crate::dns::Status {
+    let running = recover(&state.dns);
+    let live = running.as_ref().filter(|r| r.suffix == suffix);
+    crate::dns::status(suffix, live.is_some(), live.is_some_and(|r| r.tcp))
+}
+
 /// Whether the responder is answering, and what the machine still needs.
 #[tauri::command]
 pub fn dns_status(state: State<'_, AppState>) -> Result<crate::dns::Status> {
     let suffix = dns_suffix(&state);
-    let listening = recover(&state.dns)
-        .as_ref()
-        .is_some_and(|responder| responder.suffix == suffix);
-    Ok(crate::dns::status(&suffix, listening))
+    Ok(dns_state(&state, &suffix))
 }
 
-/// Start answering, or say why the socket could not be had.
+/// Bind the sockets and serve, for a suffix that is not already being served.
 ///
 /// Idempotent for the same suffix and a restart for a different one: a
 /// workspace whose TLD changed must not leave a responder serving the old one,
 /// which would answer for names nothing renders any more and refuse the ones it
 /// does.
-#[tauri::command]
-pub fn dns_start(state: State<'_, AppState>) -> Result<crate::dns::Status> {
-    let suffix = dns_suffix(&state);
+fn start_responder(state: &AppState, suffix: &str) -> Result<()> {
     {
         let mut slot = recover(&state.dns);
         if let Some(running) = slot.take() {
             if running.suffix == suffix {
                 *slot = Some(running);
-                return Ok(crate::dns::status(&suffix, true));
+                return Ok(());
             }
             running.stop();
         }
@@ -2271,21 +2286,60 @@ pub fn dns_start(state: State<'_, AppState>) -> Result<crate::dns::Status> {
 
     let socket = crate::dns::bind()?;
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let worker = {
+    let mut workers = Vec::with_capacity(2);
+
+    workers.push({
         let stop = std::sync::Arc::clone(&stop);
-        let suffix = suffix.clone();
+        let suffix = suffix.to_string();
         std::thread::Builder::new()
             .name("stackvo-dns".into())
             .spawn(move || crate::dns::serve(socket, suffix, stop))
             .map_err(|e| Error::io("starting the DNS responder", e))?
+    });
+
+    // TCP is best effort and deliberately not fatal. Losing it costs the
+    // occasional retried query; refusing to start over it would cost the
+    // feature, and the status says which of the two happened rather than
+    // reporting a half-bound responder as running.
+    let tcp = match crate::dns::bind_tcp() {
+        Ok(listener) => {
+            let stop = std::sync::Arc::clone(&stop);
+            let suffix = suffix.to_string();
+            match std::thread::Builder::new()
+                .name("stackvo-dns-tcp".into())
+                .spawn(move || crate::dns::serve_tcp(listener, suffix, stop))
+            {
+                Ok(worker) => {
+                    workers.push(worker);
+                    true
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "the DNS responder is UDP only");
+                    false
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e.message, "the DNS responder is UDP only");
+            false
+        }
     };
 
     *recover(&state.dns) = Some(DnsResponder {
-        suffix: suffix.clone(),
+        suffix: suffix.to_string(),
+        tcp,
         stop,
-        worker: Some(worker),
+        workers,
     });
-    Ok(crate::dns::status(&suffix, true))
+    Ok(())
+}
+
+/// Start answering, or say why the socket could not be had.
+#[tauri::command]
+pub fn dns_start(state: State<'_, AppState>) -> Result<crate::dns::Status> {
+    let suffix = dns_suffix(&state);
+    start_responder(&state, &suffix)?;
+    Ok(dns_state(&state, &suffix))
 }
 
 #[tauri::command]
@@ -2294,28 +2348,93 @@ pub fn dns_stop(state: State<'_, AppState>) -> Result<crate::dns::Status> {
     if let Some(running) = recover(&state.dns).take() {
         running.stop();
     }
-    Ok(crate::dns::status(&suffix, false))
+    Ok(dns_state(&state, &suffix))
 }
 
-/// Write `/etc/resolver/<tld>`, with a password.
+/// Answer for this workspace's names at launch, when the machine already asks.
+///
+/// The gap this closes was the whole feature's worst failure: somebody switches
+/// local DNS on, quits the app, and every project domain stops resolving —
+/// because the machine is still pointed at a port nothing is bound to, and the
+/// only way back is a switch in a settings pane they have no reason to visit.
+///
+/// The condition is read off the machine rather than out of a preference file.
+/// A resolver file that names us *is* the record that this was turned on, and
+/// it cannot drift from what the machine actually does the way a second copy in
+/// a settings file would.
+pub fn start_dns_if_configured(app: &tauri::AppHandle) {
+    use tauri::Manager as _;
+
+    let state = app.state::<AppState>();
+    let suffix = dns_suffix(&state);
+    if !crate::dns::configured(&suffix) {
+        return;
+    }
+    match start_responder(&state, &suffix) {
+        Ok(()) => tracing::info!(suffix = %suffix, "answering for this workspace's names"),
+        // Not fatal and not a dialog: the machine is pointed at a port
+        // something else holds, which the DNS pane reports in words when it is
+        // opened. Failing the whole launch over it would be worse.
+        Err(e) => tracing::warn!(error = %e.message, "the DNS responder did not start"),
+    }
+}
+
+/// Follow the suffix when it changes, so the responder never serves the old one.
+///
+/// Only for a responder that is already running: this is a restart, never a
+/// start. Turning the feature on is a decision somebody makes on the DNS pane,
+/// not a side effect of editing `.env`.
+fn restart_dns_if_running(state: &AppState) {
+    let suffix = dns_suffix(state);
+    let stale = recover(&state.dns)
+        .as_ref()
+        .is_some_and(|running| running.suffix != suffix);
+    if stale {
+        let _ = start_responder(state, &suffix);
+    }
+}
+
+/// Point this machine's resolver at the responder, with a password.
 ///
 /// Separate from `dns_start` on purpose, and it is the same separation
 /// `hosts_plan`/`hosts_apply` has: one of these is a socket this app owns and
 /// the other changes how the whole machine resolves names. Folding them into
 /// one button would mean a password prompt appearing from something that reads
 /// like "turn on a feature".
+///
+/// The responder is started first, though, and that is not the same collapse:
+/// it is the precondition, not the second half. `dns::install` refuses outright
+/// when nothing is listening, because a machine pointed at a closed port is a
+/// suffix that resolves nowhere — so the choice is between starting the socket
+/// here and failing with "start the socket first" for no reason anybody
+/// benefits from.
 #[tauri::command]
 pub fn dns_resolver_install(state: State<'_, AppState>) -> Result<crate::dns::Status> {
     let suffix = dns_suffix(&state);
-    crate::dns::install_resolver(&suffix)?;
-    dns_status(state)
+    start_responder(&state, &suffix)?;
+    crate::dns::install(&suffix)?;
+    Ok(dns_state(&state, &suffix))
 }
 
 #[tauri::command]
 pub fn dns_resolver_remove(state: State<'_, AppState>) -> Result<crate::dns::Status> {
     let suffix = dns_suffix(&state);
-    crate::dns::remove_resolver(&suffix)?;
-    dns_status(state)
+    crate::dns::remove(&suffix)?;
+    Ok(dns_state(&state, &suffix))
+}
+
+/// Measure the whole path, rather than reporting the parts this app owns.
+///
+/// A responder that answers its own probe proves the encoder works. What a user
+/// needs to know is whether *this machine* resolves a name under the suffix,
+/// which is a different question with a different answer whenever the resolver
+/// file is missing, stale, or in front of something that overrides it — and it
+/// is the question `dns_status` structurally cannot answer, because reading a
+/// file back only proves the file was written.
+#[tauri::command]
+pub fn dns_check(state: State<'_, AppState>) -> Result<crate::dns::Check> {
+    let suffix = dns_suffix(&state);
+    Ok(crate::dns::check(&suffix))
 }
 
 // ---------------------------------------------------------------- hosts
@@ -2553,15 +2672,39 @@ pub(crate) struct MissingHosts {
 /// wrong here once already, in the other direction: the first version of this
 /// split blocked on every enabled service's UI too, which would have held the
 /// whole app shut over phpMyAdmin.
+///
+/// ## A name answered by DNS is not a name missing from a file
+///
+/// E-1's whole point is that a suffix can resolve without a line per project.
+/// A machine that asks the responder and gets an answer has every name under
+/// that suffix already — so counting them as missing would nag somebody about
+/// the file they just stopped needing, and, worse, hold the first-run gate shut
+/// over two names that resolve.
+///
+/// The check is two cheap local facts — is this machine pointed at us, and is
+/// anything listening — and never a lookup per domain: a name that does *not*
+/// resolve costs a resolver timeout, and this runs on the way to a screen.
 pub(crate) async fn missing_hosts_by_owner(root: &std::path::Path) -> MissingHosts {
     let core = core_domains(root);
     let is_core: std::collections::HashSet<String> =
         core.iter().map(|d| d.to_ascii_lowercase()).collect();
 
+    let suffix = crate::certs::suffix(root);
+    let answered_by_dns = crate::dns::covers(&suffix);
+    let tld = crate::dns::tld_of(&suffix).map(|tld| format!(".{tld}"));
+
     let mut out = MissingHosts::default();
     for entry in crate::hosts::status_for(&wanted_domains(root).await) {
         if entry.configured {
             continue;
+        }
+        if answered_by_dns {
+            let name = entry.domain.to_ascii_lowercase();
+            if tld.as_deref().is_some_and(|tld| {
+                name.ends_with(tld) || Some(name.as_str()) == tld.strip_prefix('.')
+            }) {
+                continue;
+            }
         }
         if is_core.contains(&entry.domain.to_ascii_lowercase()) {
             out.core.push(entry.domain);
@@ -2808,6 +2951,63 @@ pub async fn mail_messages(
 pub async fn mail_message(state: State<'_, AppState>, id: String) -> Result<mail::MailBody> {
     let root = state.root()?;
     mail::message(&root, &id).await
+}
+
+/// The relay settings, without the password (M-2).
+///
+/// `hasPassword` rather than the password: there is no command in this app that
+/// reads a stored credential back, and this is not going to be the first.
+#[tauri::command]
+pub fn mail_relay_get(state: State<'_, AppState>) -> Result<serde_json::Value> {
+    let root = state.root()?;
+    let config = crate::mailrelay::read(&root);
+    Ok(serde_json::json!({
+        "enabled": config.enabled,
+        "host": config.host,
+        "port": config.port,
+        "username": config.username,
+        "security": config.security,
+        "from": config.from,
+        "allowedRecipients": config.allowed_recipients,
+        "hasPassword": crate::secrets::read(crate::mailrelay::SECRET)
+            .ok()
+            .flatten()
+            .is_some(),
+        // Whether the keystore is reachable at all, so a machine where it is
+        // not says so rather than silently storing nothing.
+        "keystore": crate::secrets::available(),
+    }))
+}
+
+/// Save them. `password` is `null` to leave the stored one alone and an empty
+/// string to remove it — three states, because "do not touch it" and "clear
+/// it" are different intentions and a single field cannot carry both.
+#[tauri::command]
+pub async fn mail_relay_set(
+    state: State<'_, AppState>,
+    config: crate::mailrelay::Config,
+    password: Option<String>,
+) -> Result<serde_json::Value> {
+    let root = state.root()?;
+    let _busy = state.inflight.acquire("mail-relay")?;
+
+    match password.as_deref() {
+        Some("") => crate::secrets::delete(crate::mailrelay::SECRET)?,
+        Some(value) => crate::secrets::write(crate::mailrelay::SECRET, value)?,
+        None => {}
+    }
+    crate::mailrelay::write(&root, &config)?;
+    // Rendered now as well as before every compose call, so the settings pane
+    // reports a failure to write the overlay while somebody is looking at it.
+    crate::mailrelay::sync(&root);
+    mail_relay_get(state)
+}
+
+/// Send one caught message on to a real address.
+#[tauri::command]
+pub async fn mail_release(state: State<'_, AppState>, id: String, to: Vec<String>) -> Result<()> {
+    let root = state.root()?;
+    mail::release(&root, &id, &to).await
 }
 
 /// Empty the inbox.
@@ -3859,6 +4059,11 @@ pub struct ProfilerStatus {
     /// multi-megabyte file per page load.
     pub trigger: String,
     pub profiles: Vec<crate::profile::ProfileFile>,
+    /// Recorded traces (F-3). Beside the profiles rather than mixed in with
+    /// them: they are read by a different parser and answer a different
+    /// question, and a list that interleaved the two would make a person check
+    /// the file name to know which view they were about to open.
+    pub traces: Vec<crate::profile::ProfileFile>,
     /// Total bytes the profiles hold — this fills a disk fast.
     pub bytes: u64,
     pub directory: String,
@@ -3871,14 +4076,16 @@ const TRIGGER: &str = "XDEBUG_TRIGGER";
 pub async fn profiler_status(state: State<'_, AppState>, name: String) -> Result<ProfilerStatus> {
     let root = state.root()?;
     let profiles = crate::profile::list(&root, &name)?;
+    let traces = crate::trace::list(&root, &name)?;
 
     Ok(ProfilerStatus {
-        bytes: profiles.iter().map(|p| p.bytes).sum(),
+        bytes: profiles.iter().chain(traces.iter()).map(|p| p.bytes).sum(),
         directory: crate::profile::host_dir(&root, &name).display().to_string(),
         mode: xdebug::read_mode(&root, &name),
         trigger: TRIGGER.to_string(),
         xdebug: xdebug::status(&root, &name).await?,
         profiles,
+        traces,
     })
 }
 
@@ -3954,16 +4161,213 @@ pub fn profiler_tree(
     Ok(crate::profile::call_tree(&report))
 }
 
+/// One recorded trace, folded into a flame graph.
+///
+/// F-3, and the reason it can be called one. `profiler_tree` draws what
+/// cachegrind holds — summed edges, so a function called from two places is one
+/// box carrying both — and says so. A trace holds the stacks themselves, so the
+/// same function under two callers is two boxes with their own widths, which is
+/// what a flame graph means.
 #[tauri::command]
-pub fn profiler_delete(state: State<'_, AppState>, name: String, id: String) -> Result<()> {
-    crate::profile::delete(&state.root()?, &name, &id)
+pub fn profiler_flame(
+    state: State<'_, AppState>,
+    name: String,
+    id: String,
+) -> Result<crate::trace::Flame> {
+    crate::trace::read(&state.root()?, &name, &id)
 }
 
-/// Remove every recorded profile. Returns how many, and how much was freed.
+#[tauri::command]
+pub fn profiler_delete(state: State<'_, AppState>, name: String, id: String) -> Result<()> {
+    let root = state.root()?;
+    // One button on a list that holds both kinds. Which parser reads a file is
+    // this app's business, not something to make somebody choose from a menu.
+    if id.starts_with(crate::trace::PREFIX) {
+        return crate::trace::delete(&root, &name, &id);
+    }
+    crate::profile::delete(&root, &name, &id)
+}
+
+/// Remove every recorded profile **and trace**. Returns how many, and how much
+/// was freed.
+///
+/// Both, because they share a directory and a disk: a "clear" that left the
+/// traces behind would report freeing thirty megabytes while the folder still
+/// held three hundred, which is the kind of number people plan around.
 #[tauri::command]
 pub fn profiler_clear(state: State<'_, AppState>, name: String) -> Result<serde_json::Value> {
-    let (removed, freed) = crate::profile::clear(&state.root()?, &name)?;
+    let root = state.root()?;
+    let (mut removed, mut freed) = crate::profile::clear(&root, &name)?;
+
+    let dir = crate::profile::host_dir(&root, &name);
+    for file in crate::trace::list(&root, &name)? {
+        if std::fs::remove_file(dir.join(&file.id)).is_ok() {
+            removed += 1;
+            freed += file.bytes;
+        }
+    }
     Ok(serde_json::json!({ "removed": removed, "freed": freed }))
+}
+
+// ------------------------------------------------ the performance layer (I-1)
+
+/// What this project's heavy directories cost, and where they live.
+#[tauri::command]
+pub async fn perf_status(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<Vec<crate::perf::Layer>> {
+    crate::perf::status(&state.root()?, &name).await
+}
+
+/// Move one directory into a named volume, or put it back on the host.
+///
+/// The order matters and is the whole of why this is a command rather than two:
+/// **the copy happens before the setting is written**. A setting saved first and
+/// a failed copy afterwards leaves a project configured to read an empty volume
+/// — which is a site that 500s on the next request, from a switch that reported
+/// success.
+///
+/// Turning it *off* copies nothing and deletes nothing. The volume stays where
+/// it is until somebody says otherwise (`perf_forget`), because what is in it
+/// may be the only copy of a `vendor/` that took ten minutes to build.
+#[tauri::command]
+pub async fn perf_set(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    path: String,
+    enabled: bool,
+) -> Result<Vec<crate::perf::Layer>> {
+    let root = state.root()?;
+    crate::perf::checked_path(&path)?;
+    let _busy = state.inflight.acquire("perf")?;
+
+    if enabled {
+        // Seeding first, and only when the host has something to seed from: a
+        // project whose dependencies are not installed yet has nothing to lose
+        // and the tooling will fill the volume itself.
+        let source = workspace::project_dir(&root, &name)?.join(&path);
+        if source.is_dir() {
+            crate::perf::seed(&root, &name, &path).await?;
+        }
+    }
+
+    let mut config = crate::perf::read(&root, &name);
+    config.volumes.retain(|p| p != &path);
+    if enabled {
+        config.volumes.push(path.clone());
+        config.volumes.sort();
+    }
+    crate::perf::write(&root, &name, &config)?;
+
+    // So the overlay exists before the next compose call rather than being
+    // written by it, and so the reply describes a state that is real.
+    crate::perf::sync(&root);
+
+    events::emit(
+        &app,
+        "perf:changed",
+        serde_json::json!({ "project": name, "path": path, "enabled": enabled }),
+    );
+    crate::perf::status(&root, &name).await
+}
+
+/// Copy a volume back onto the host so an editor can index it.
+#[tauri::command]
+pub async fn perf_export(
+    state: State<'_, AppState>,
+    name: String,
+    path: String,
+) -> Result<serde_json::Value> {
+    let root = state.root()?;
+    let _busy = state.inflight.acquire("perf")?;
+    let bytes = crate::perf::export(&root, &name, &path).await?;
+    Ok(serde_json::json!({ "bytes": bytes }))
+}
+
+/// Delete the volume. Separate from turning the layer off, deliberately.
+#[tauri::command]
+pub async fn perf_forget(
+    state: State<'_, AppState>,
+    name: String,
+    path: String,
+) -> Result<Vec<crate::perf::Layer>> {
+    let root = state.root()?;
+    let _busy = state.inflight.acquire("perf")?;
+    crate::perf::drop_volume(&name, &path).await?;
+    crate::perf::status(&root, &name).await
+}
+
+// ------------------------------------- per-project settings (M-5, M-6, M-10)
+
+/// What this project sets for itself.
+#[tauri::command]
+pub fn site_settings(state: State<'_, AppState>, name: String) -> Result<serde_json::Value> {
+    let root = state.root()?;
+    workspace::project_dir(&root, &name)?;
+
+    let config = crate::site::read(&root, &name);
+    let server = crate::manifest::read(
+        &workspace::project_dir(&root, &name)?.join("stackvo.json"),
+        &name,
+    )
+    .ok()
+    .and_then(|m| m.server.clone())
+    .unwrap_or_else(|| "nginx".to_string());
+
+    Ok(serde_json::json!({
+        "env": config.env,
+        "directoryListing": config.directory_listing,
+        "sshAgent": config.ssh_agent,
+        // Whether the two switches can do anything here at all, so the pane
+        // says why rather than drawing a control that does nothing: Apache and
+        // Swoole have no configuration file to put a directive in, and an agent
+        // cannot be forwarded when none is running.
+        "listingSupported": crate::site::listing_directives(&server).is_some(),
+        "agentAvailable": crate::site::agent_socket().is_some(),
+        "server": server,
+    }))
+}
+
+/// Replace them. Returns the settings as they now stand.
+///
+/// Whole-document rather than per-key: it is three settings in one small file,
+/// and three commands over one document is three chances for the file and the
+/// screen to disagree about it — the same reasoning `routes_save` gives.
+#[tauri::command]
+pub async fn site_save(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    env: std::collections::BTreeMap<String, String>,
+    directory_listing: bool,
+    ssh_agent: bool,
+) -> Result<serde_json::Value> {
+    let root = state.root()?;
+    workspace::project_dir(&root, &name)?;
+    let _busy = state.inflight.acquire("site")?;
+
+    crate::site::write(
+        &root,
+        &name,
+        &crate::site::Config {
+            env,
+            directory_listing,
+            ssh_agent,
+        },
+    )?;
+
+    // The overlay carries the variables and the agent; the directory listing
+    // is in a *generated* server config, so it needs the generator rather than
+    // a compose flag. Both are done here so the reply describes a state that is
+    // real on disk.
+    crate::site::sync(&root);
+    let operation_id = events::next_operation_id("site");
+    generate(&app, &root, &operation_id, "projects").await?;
+
+    events::emit(&app, "site:changed", serde_json::json!({ "project": name }));
+    site_settings(state, name)
 }
 
 // ---------------------------------------------------------- quick commands
@@ -5138,15 +5542,15 @@ pub fn imports_scan_at(
     source: String,
     path: String,
 ) -> Result<Option<crate::imports::Install>> {
-    let source = match source.as_str() {
-        "xampp" => crate::imports::Source::Xampp,
-        "laragon" => crate::imports::Source::Laragon,
-        other => {
-            return Err(Error::new(
-                Code::InvalidInput,
-                format!("{other} is not a tool this app can read"),
-            ))
-        }
+    // Every source this module knows, not the two that were written first.
+    // MAMP and Valet were scanned at their well-known paths and **refused
+    // here**, so somebody whose MAMP is not in /Applications had no way to
+    // point at it — the exact case this command exists for.
+    let Some(source) = crate::imports::Source::from_id(&source) else {
+        return Err(Error::new(
+            Code::InvalidInput,
+            format!("{source} is not a tool this app can read"),
+        ));
     };
 
     let projects = state
@@ -6534,6 +6938,357 @@ pub async fn worker_stop(state: State<'_, AppState>, name: String, kind: String)
     Ok(())
 }
 
+// ------------------------------------------------------------------ stripe
+
+/// Every Stripe listener, and what its log says about it.
+#[tauri::command]
+pub async fn stripe_status() -> Result<Vec<crate::stripe::StripeStatus>> {
+    crate::stripe::status_all().await
+}
+
+/// Put this project's Stripe key in the OS keystore, or take it out.
+///
+/// One command for both, because "clear it" is `null` rather than a second
+/// verb — and a screen that could only add a credential is a screen people are
+/// right not to give one to.
+#[tauri::command]
+pub fn stripe_key_set(name: String, key: Option<String>) -> Result<bool> {
+    let entry = crate::stripe::secret_name(&name);
+    match key.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
+        Some(key) => {
+            // Refused here rather than by the CLI three seconds later inside a
+            // container: a publishable key is the one somebody has in a browser
+            // tab, and `pk_` in this field fails with an authentication error
+            // that says nothing about which key was pasted.
+            if key.starts_with("pk_") {
+                return Err(Error::new(
+                    Code::InvalidInput,
+                    "that is a publishable key; the listener needs a secret or restricted key",
+                ));
+            }
+            crate::secrets::write(&entry, key)?;
+            Ok(true)
+        }
+        None => {
+            crate::secrets::delete(&entry)?;
+            Ok(false)
+        }
+    }
+}
+
+/// Start the listener for one project.
+///
+/// An operation, like the tunnel: the first start pulls the Stripe image.
+#[tauri::command]
+pub async fn stripe_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    path: String,
+    events: Vec<String>,
+) -> Result<String> {
+    let _busy = state.inflight.acquire(format!("stripe:{name}"))?;
+    let root = state.root()?;
+
+    let manifest = manifest::read(
+        &workspace::project_dir(&root, &name)?.join("stackvo.json"),
+        &name,
+    )?;
+    crate::stripe::ensure_project_running(&name).await?;
+
+    let key = crate::secrets::read(&crate::stripe::secret_name(&name))?.ok_or_else(|| {
+        Error::new(
+            Code::InvalidInput,
+            "no Stripe key is stored for this project",
+        )
+    })?;
+
+    let network = Env::load(&root)
+        .ok()
+        .and_then(|env| env.get("DOCKER_DEFAULT_NETWORK").map(str::to_string))
+        .unwrap_or_else(|| "stackvo-net".to_string());
+
+    let args = crate::stripe::run_args(
+        &name,
+        crate::tunnel::internal_port(&manifest),
+        &crate::stripe::checked_path(&path)?,
+        &events,
+        &network,
+    );
+
+    // Whatever is left of a previous listener, gone before this one starts:
+    // the container is deliberately not `--rm`, so a crashed one is still
+    // holding the name — and its log, which is why it was kept.
+    let _ = engine::remove_container(&crate::stripe::container_id(&name)).await;
+
+    let operation_id = events::next_operation_id("stripe");
+    runner::run_operation(
+        &events::sink(&app),
+        runner::Operation {
+            operation_id: &operation_id,
+            subject: &name,
+            progress_event: "stripe:progress",
+            finished_event: "stripe:done",
+            program: "docker",
+            args: &args,
+            cwd: &root,
+            // The one place the key exists in this process, handed to the
+            // child rather than written into the command it streams.
+            env: &[("STRIPE_API_KEY", key.as_str())],
+        },
+    )
+    .await?;
+    Ok(operation_id)
+}
+
+/// Stop it, and remove it — see the note on `run_args`.
+#[tauri::command]
+pub async fn stripe_stop(state: State<'_, AppState>, name: String) -> Result<()> {
+    let _busy = state.inflight.acquire(format!("stripe:{name}"))?;
+    // Removed rather than stopped: the signing secret is in that container's
+    // log, and it is dead the moment the listener is, so leaving it behind
+    // would leave a stale secret on screen for the next person to paste.
+    engine::remove_container(&crate::stripe::container_id(&name)).await
+}
+
+// ------------------------------------------------------------------- oauth
+
+/// The redirect URI to register with an identity provider (M-12).
+///
+/// Both addresses, because there are two and the choice between them is a fact
+/// about the provider: a redirect URI is a browser redirect rather than a
+/// fetch, so `https://shop.loc/auth/callback` works for the flow — what varies
+/// is whether the provider will accept the string at registration time.
+///
+/// The tunnel is read live rather than taken from the caller: a quick tunnel's
+/// URL changes on every start, and a callback URL registered from a stale one
+/// fails at the last step of a flow with an error that names neither side.
+#[tauri::command]
+pub async fn oauth_callbacks(
+    state: State<'_, AppState>,
+    name: String,
+    path: String,
+) -> Result<crate::oauth::Callbacks> {
+    let root = state.root()?;
+    let checked = crate::oauth::checked_path(&path)?;
+
+    let manifest = manifest::read(
+        &workspace::project_dir(&root, &name)?.join("stackvo.json"),
+        &name,
+    )?;
+
+    let public = crate::tunnel::status_all()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .find(|t| t.project == name)
+        .and_then(|t| t.url)
+        .map(|url| crate::oauth::join(&url, &checked));
+
+    Ok(crate::oauth::Callbacks {
+        local: manifest
+            .domain
+            .as_ref()
+            .map(|domain| crate::oauth::join(&format!("https://{domain}"), &checked)),
+        public,
+        path: checked,
+        providers: crate::oauth::PROVIDERS,
+    })
+}
+
+// ----------------------------------------------------------------- landing
+
+/// What the page would list, and whether anything is serving it.
+///
+/// M-4. The address is the workspace suffix itself — the name `core_domains`
+/// already writes into the hosts file and `certs::required_domains` already
+/// covers, and which until now answered with Traefik's 404.
+async fn landing_entries(
+    root: &std::path::Path,
+) -> (Vec<crate::landing::Entry>, Vec<crate::landing::Entry>) {
+    let projects: Vec<crate::landing::Entry> = list_projects(root)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|p| {
+            // A project with no domain has nothing to link to. It is left off
+            // rather than listed as an unclickable row: this page is a set of
+            // links, and a row that does nothing is a bug report waiting.
+            let domain = p.domain?;
+            Some(crate::landing::Entry {
+                name: p.name,
+                url: format!("https://{domain}"),
+                note: (!p.manifest_valid).then(|| "This project's manifest has errors.".into()),
+                running: p.running,
+            })
+        })
+        .collect();
+
+    let mut services = Vec::new();
+    if let Ok(env) = Env::load(root) {
+        let tld = env
+            .get("DEFAULT_TLD_SUFFIX")
+            .unwrap_or("stackvo.loc")
+            .to_string();
+        let running: std::collections::HashSet<String> = engine::stackvo_containers()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(_, c)| c.running)
+            .map(|(id, _)| id)
+            .collect();
+        for (id, _) in env_schema().service_catalog() {
+            let Some(url) = env.service_url(&id) else {
+                continue;
+            };
+            services.push(crate::landing::Entry {
+                name: id.clone(),
+                url: format!("https://{url}.{tld}"),
+                note: None,
+                running: running.contains(&id),
+            });
+        }
+    }
+
+    (projects, services)
+}
+
+fn landing_url(root: &std::path::Path) -> String {
+    let suffix = Env::load(root)
+        .ok()
+        .and_then(|env| env.get("DEFAULT_TLD_SUFFIX").map(str::to_string))
+        .unwrap_or_else(|| "stackvo.loc".to_string());
+    format!("https://{suffix}")
+}
+
+/// Whether the page is being served, and what it would say.
+#[tauri::command]
+pub async fn landing_status(state: State<'_, AppState>) -> Result<crate::landing::Status> {
+    let root = state.root()?;
+    let (projects, services) = landing_entries(&root).await;
+
+    let container = format!("stackvo-{}", crate::landing::ID);
+    let running = engine::stackvo_containers()
+        .await
+        .unwrap_or_default()
+        .get(crate::landing::ID)
+        .map(|c| c.running)
+        .unwrap_or(false);
+
+    // Read off the file rather than remembered: an app restart, a hand-edited
+    // page and a workspace copied from another machine all stay truthful.
+    let rendered = std::fs::metadata(crate::landing::document_root(&root).join("index.html"))
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| crate::audit::rfc3339_of(d.as_secs() as i64));
+
+    Ok(crate::landing::Status {
+        running,
+        container,
+        url: landing_url(&root),
+        rendered,
+        projects: projects.len(),
+        services: services.len(),
+    })
+}
+
+/// Write the page again from what the workspace holds right now.
+///
+/// Separate from starting it, because the two are different questions: the
+/// container serves whatever file is there, and after starting a project the
+/// page is stale without anything having stopped.
+#[tauri::command]
+pub async fn landing_refresh(state: State<'_, AppState>) -> Result<crate::landing::Status> {
+    let root = state.root()?;
+    let _busy = state.inflight.acquire("landing")?;
+
+    let (projects, services) = landing_entries(&root).await;
+    let suffix = landing_url(&root)
+        .trim_start_matches("https://")
+        .to_string();
+    let html =
+        crate::landing::render_html(&suffix, &crate::audit::now_rfc3339(), &projects, &services);
+    crate::landing::write(&root, &html)?;
+
+    landing_status(state).await
+}
+
+/// Start the sidecar that serves it.
+///
+/// An operation rather than a mutation: the first start pulls nginx, which
+/// belongs in the operation console rather than behind a frozen button.
+#[tauri::command]
+pub async fn landing_start(app: AppHandle, state: State<'_, AppState>) -> Result<String> {
+    let root = state.root()?;
+    let _busy = state.inflight.acquire("landing")?;
+
+    // Written before the container starts, so the first request never lands on
+    // an empty directory — nginx answers 403 for one, which reads as a broken
+    // proxy rather than as a page that has not been written yet.
+    let (projects, services) = landing_entries(&root).await;
+    let suffix = landing_url(&root)
+        .trim_start_matches("https://")
+        .to_string();
+    crate::landing::write(
+        &root,
+        &crate::landing::render_html(&suffix, &crate::audit::now_rfc3339(), &projects, &services),
+    )?;
+
+    let network = Env::load(&root)
+        .ok()
+        .and_then(|env| env.get("DOCKER_DEFAULT_NETWORK").map(str::to_string))
+        .unwrap_or_else(|| "stackvo-net".to_string());
+    let args = crate::landing::run_args(
+        &crate::landing::document_root(&root).display().to_string(),
+        &suffix,
+        &network,
+    );
+
+    let operation_id = events::next_operation_id("landing");
+    runner::run_operation(
+        &events::sink(&app),
+        runner::Operation {
+            operation_id: &operation_id,
+            subject: "landing",
+            progress_event: "landing:progress",
+            finished_event: "landing:done",
+            program: "docker",
+            args: &args,
+            cwd: &root,
+            env: &[],
+        },
+    )
+    .await?;
+    Ok(operation_id)
+}
+
+/// Stop it. `--rm` means stopping is removal, so nothing is left behind
+/// answering on the name after the page is switched off.
+#[tauri::command]
+pub async fn landing_stop(state: State<'_, AppState>) -> Result<()> {
+    let _busy = state.inflight.acquire("landing")?;
+    engine::stop_container(crate::landing::ID).await
+}
+
+// ---------------------------------------------------------------------- qr
+
+/// A QR code for a URL this app handed out.
+///
+/// M-3. Both addresses meant for another device — the LAN name and the public
+/// tunnel — are long enough that typing one on a phone is where people give up
+/// and reach for the desktop browser's device emulation instead.
+///
+/// Takes any text rather than a project name: the two callers already hold the
+/// URL they are showing, and asking for it again on the Rust side would be a
+/// second place for the two to disagree about which address is on screen. The
+/// encoder does no network access and touches no file, so there is nothing to
+/// authorise beyond the length it refuses.
+#[tauri::command]
+pub fn qr_encode(text: String) -> Result<crate::qr::Symbol> {
+    crate::qr::encode(&text)
+}
+
 // ------------------------------------------------------------------ tunnel
 
 /// Every tunnel sidecar and its assigned public URL, where one exists yet.
@@ -7248,6 +8003,17 @@ pub fn preferred_locale() -> String {
     let stored = prefs_get()
         .ok()
         .and_then(|p| p.get("locale").and_then(|v| v.as_str()).map(str::to_string));
+
+    // A chosen language pack outranks the resolver (M-7). `locale::resolve`
+    // only ever answers a language this binary was built with, which is right
+    // for the tray's first second and wrong here: without this, somebody who
+    // picked a pack is told "en" on every launch and the window resets itself
+    // to English one frame after painting their language.
+    if let Some(tag) = stored.as_deref() {
+        if crate::locale::packs().iter().any(|p| p.tag == tag) {
+            return tag.to_string();
+        }
+    }
     crate::locale::resolve(stored.as_deref()).to_string()
 }
 
@@ -7260,6 +8026,42 @@ pub fn preferred_locale() -> String {
 #[tauri::command]
 pub fn locale_get() -> String {
     preferred_locale()
+}
+
+/// Every language pack installed on this machine (M-7).
+///
+/// Adding a language stops being a code change: a pack is one JSON file in the
+/// app's config directory with the same shape as the shipped catalogue, and
+/// this is how the settings pane finds it. A pack that does not parse is
+/// **listed with its error** rather than skipped — a hand-edited file with a
+/// trailing comma that simply vanishes from the picker is the worst failure
+/// this could have.
+#[tauri::command]
+pub fn locale_packs() -> Vec<crate::locale::Pack> {
+    crate::locale::packs()
+}
+
+/// One pack's messages, for the front end to merge over English.
+#[tauri::command]
+pub fn locale_pack_read(tag: String) -> Result<serde_json::Value> {
+    crate::locale::read_pack(&tag)
+}
+
+/// Write a pack. Used by the settings pane's "start a translation", which
+/// sends the English catalogue as the starting point.
+///
+/// The front end supplies the messages because the front end is where the
+/// catalogue lives — asking Rust to produce a template would mean a second
+/// copy of every string in this app, which is the duplication `trayLabels`
+/// already exists to undo.
+#[tauri::command]
+pub fn locale_pack_write(tag: String, messages: serde_json::Value) -> Result<String> {
+    crate::locale::write_pack(&tag, &messages)
+}
+
+#[tauri::command]
+pub fn locale_pack_delete(tag: String) -> Result<()> {
+    crate::locale::delete_pack(&tag)
 }
 
 /// Re-label the tray after a language change, so the setting takes effect
@@ -7935,6 +8737,20 @@ pub fn render_generated(root: &std::path::Path) -> Result<Rendered> {
 
             // nginx.conf / supervisord.conf / Caddyfile per server; apache,
             // swoole and node correctly contribute nothing here.
+            //
+            // M-6. The workspace's own directives, plus this project's
+            // directory-listing switch appended to them. Appended rather than
+            // merged: the workspace file is the user's and comes first, and a
+            // switch that silently overrode a directive somebody wrote by hand
+            // would be a setting arguing with a file.
+            let extras =
+                match crate::site::listing_directives(m.server.as_deref().unwrap_or("nginx")) {
+                    Some(directives) if crate::site::read(root, name).directory_listing => {
+                        extras.with_appended(m.server.as_deref().unwrap_or("nginx"), directives)
+                    }
+                    _ => extras.clone(),
+                };
+
             for (file, content) in generator::render_project_config_files_with(&m, &limits, &extras)
             {
                 files.push(GenFile {

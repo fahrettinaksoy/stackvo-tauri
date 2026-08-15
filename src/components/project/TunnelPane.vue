@@ -5,6 +5,7 @@ import { api } from '@/lib/ipc';
 import { useCopyTick } from '@/composables/useCopyTick';
 import { useTunnel } from '@/composables/useTunnel';
 import ErrorAlert from '@/components/ErrorAlert.vue';
+import QrCode from '@/components/QrCode.vue';
 
 /**
  * The public URL this project can be reached at while it is running.
@@ -63,7 +64,16 @@ watch(() => props.name, load, { immediate: true });
           </v-btn>
         </div>
       </v-alert>
-      <div v-else class="d-flex align-center ga-3">
+
+      <!-- The URL is four random words from Cloudflare and it is opened on a
+           phone as often as on this machine — a webhook sender is not the only
+           thing anybody points at a tunnel. -->
+      <div v-if="tunnel.url" class="d-flex align-start ga-3 mb-3">
+        <QrCode :text="tunnel.url" :size="152" />
+        <div class="text-caption text-medium-emphasis pt-1">{{ t('tunnel.scan') }}</div>
+      </div>
+
+      <div v-if="!tunnel.url" class="d-flex align-center ga-3">
         <v-progress-circular indeterminate size="18" width="2" color="primary" />
         <span class="text-caption text-medium-emphasis">{{ t('tunnel.connecting') }}</span>
         <v-spacer />

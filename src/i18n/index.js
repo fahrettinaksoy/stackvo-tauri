@@ -54,6 +54,70 @@ export const i18n = createI18n({
   },
 });
 
+/**
+ * Load every language pack on this machine and register it (M-7).
+ *
+ * A pack is one JSON file in the app's config directory with the same shape as
+ * `locales/en.js`. Adding a language is therefore a file somebody drops in,
+ * not a source change and a rebuild — which is what "the app speaks N
+ * languages" is supposed to mean, and what it did not mean while the language
+ * set was a constant in three places.
+ *
+ * ## Merged over English, not used alone
+ *
+ * `fallbackLocale: 'en'` would already cover a missing key, but Vuetify's own
+ * strings live under `$vuetify` and a pack has no reason to carry them. So each
+ * pack is registered as English with the pack's own strings on top: an
+ * untranslated screen is in English rather than showing raw keys, and the
+ * library's labels are never the pack's problem.
+ *
+ * ## A broken pack is reported, not skipped
+ *
+ * A hand-edited file with a trailing comma that simply vanishes from the
+ * picker is the worst failure this could have. `locale_packs` lists it with its
+ * parse error and the settings pane says so; this function leaves it
+ * unregistered, which is the only safe thing to do with a file that did not
+ * parse.
+ *
+ * @returns {Promise<string[]>} the tags that were registered.
+ */
+export async function loadLocalePacks() {
+  const { api } = await import('@/lib/ipc');
+  let packs = [];
+  try {
+    packs = (await api.localePacks()) ?? [];
+  } catch {
+    return [];
+  }
+
+  const base = i18n.global.getLocaleMessage('en');
+  const loaded = [];
+  for (const pack of packs) {
+    if (pack.broken) continue;
+    try {
+      const messages = await api.localePackRead(pack.tag);
+      i18n.global.setLocaleMessage(pack.tag, deepMerge(base, messages));
+      loaded.push(pack.tag);
+    } catch {
+      // Listed as broken by the pane that lists it; nothing to add here.
+    }
+  }
+  return loaded;
+}
+
+/** Plain objects merged deeply; anything else in the pack wins outright. */
+function deepMerge(base, over) {
+  if (!over || typeof over !== 'object' || Array.isArray(over)) return over ?? base;
+  const out = { ...base };
+  for (const [key, value] of Object.entries(over)) {
+    out[key] =
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? deepMerge(base?.[key] ?? {}, value)
+        : value;
+  }
+  return out;
+}
+
 export async function setLocale(locale) {
   i18n.global.locale.value = locale;
   localStorage.setItem(STORAGE_KEY, locale);
@@ -88,7 +152,11 @@ export async function syncLocale() {
   const { api } = await import('@/lib/ipc');
   const resolved = await api.localeGet().catch(() => null);
 
-  if (resolved === 'tr' || resolved === 'en') {
+  // A pack tag is accepted as well as the two built-in languages: Rust's
+  // `resolve` only ever answers a shipped one, but the stored preference may
+  // be a pack, and localStorage is what paints the first frame.
+  const known = i18n.global.availableLocales;
+  if (resolved && known.includes(resolved)) {
     localStorage.setItem(STORAGE_KEY, resolved);
     if (i18n.global.locale.value !== resolved) i18n.global.locale.value = resolved;
   }

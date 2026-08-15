@@ -122,17 +122,208 @@ pub fn run(argv: &[&str]) -> Result<bool> {
     ))
 }
 
-/// No equivalent that a windowed app can rely on.
+/// Run a program as root through polkit.
 ///
-/// `pkexec` is the closest thing and it is not always installed or running;
-/// callers fall back to telling the user what to run themselves, which is
-/// honest and does not hang.
-#[cfg(not(target_os = "macos"))]
+/// `pkexec` puts up the polkit dialog, which is the Linux equivalent of the
+/// authentication panel: a prompt the *desktop* owns, not one a child process
+/// tries to read from a terminal this app does not have. It is not always
+/// installed, and [`available`] is how a caller finds that out before offering
+/// a button that cannot work.
+///
+/// The exit codes are polkit's own: 126 is "the dialog was dismissed" and 127
+/// is "not authorised", and both are answers rather than faults — the same
+/// `Ok(false)` the macOS branch returns when somebody presses Cancel.
+#[cfg(target_os = "linux")]
+pub fn run(argv: &[&str]) -> Result<bool> {
+    if argv.is_empty() {
+        return Err(Error::new(
+            Code::InvalidInput,
+            "an elevated command needs a program to run",
+        ));
+    }
+
+    let output = std::process::Command::new("pkexec")
+        .args(argv)
+        .output()
+        .map_err(|e| {
+            Error::new(
+                Code::PermissionDenied,
+                format!("pkexec is unavailable: {e}"),
+            )
+            .with_hint(crate::hints::INSTALL_POLKIT)
+        })?;
+
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(126) | Some(127) => Ok(false),
+        _ => Err(Error::new(
+            Code::PermissionDenied,
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        )),
+    }
+}
+
+/// Windows has no `argv` of the shape this app's callers build — every one of
+/// them names a POSIX tool. What it has instead is [`run_powershell`].
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn run(_argv: &[&str]) -> Result<bool> {
     Err(Error::new(
         Code::Unsupported,
         "This platform has no way for a windowed app to ask for administrator rights.",
     ))
+}
+
+/// Run a PowerShell script as an administrator, through the UAC prompt.
+///
+/// ## Why the script is base64 and not a command line
+///
+/// `Start-Process -ArgumentList` joins its arguments with spaces and leaves the
+/// quoting to whoever wrote them, which is the same trap the macOS branch above
+/// was rewritten to escape — except worse, because there are three parsers in
+/// the path: PowerShell's, `CreateProcess`'s, and the receiving PowerShell's.
+/// `-EncodedCommand` has none of that. UTF-16 base64 contains letters, digits,
+/// `+`, `/` and `=`, so there is no character left for any of the three to read
+/// as syntax, and the script arrives as the bytes that went in.
+///
+/// A dismissed UAC prompt throws in the *outer* shell rather than returning an
+/// exit code, so cancellation is read from the message. It is `Ok(false)` here
+/// for the same reason it is on macOS: nothing was changed, so nothing needs
+/// reporting as broken.
+#[cfg(windows)]
+pub fn run_powershell(script: &str) -> Result<bool> {
+    if script.trim().is_empty() {
+        return Err(Error::new(
+            Code::InvalidInput,
+            "an elevated command needs a script to run",
+        ));
+    }
+
+    let encoded = base64_utf16(script);
+    let outer = format!(
+        "$ErrorActionPreference = 'Stop'; \
+         $p = Start-Process powershell \
+           -ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','{encoded}' \
+           -Verb RunAs -Wait -WindowStyle Hidden -PassThru; \
+         exit $p.ExitCode"
+    );
+
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &outer])
+        .output()
+        .map_err(|e| Error::io("running powershell", e))?;
+
+    if output.status.success() {
+        return Ok(true);
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("canceled") || stderr.contains("cancelled") {
+        return Ok(false);
+    }
+
+    Err(Error::new(
+        Code::PermissionDenied,
+        format!("Elevation failed: {}", stderr.trim()),
+    ))
+}
+
+/// Can this machine put up an authentication prompt at all?
+///
+/// Asked before a switch is drawn rather than after it is pressed. On Linux the
+/// answer is genuinely "sometimes": a machine with no polkit agent has no way
+/// for a windowed app to ask, and the honest offer there is a command the user
+/// runs themselves.
+pub fn available() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        true
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::env::var_os("PATH")
+            .map(|path| std::env::split_paths(&path).any(|dir| dir.join("pkexec").exists()))
+            .unwrap_or(false)
+    }
+    #[cfg(windows)]
+    {
+        true
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        false
+    }
+}
+
+/// UTF-16LE, then base64 — what PowerShell's `-EncodedCommand` expects.
+///
+/// Written out rather than pulled in: this is the only base64 in the app, and a
+/// dependency's worth of encoder for one call site is a dependency to audit,
+/// license and update for twenty lines. It is compiled everywhere and tested
+/// everywhere even though only Windows calls it, because an encoder that is
+/// only exercised on the platform nobody develops on is one that is wrong for a
+/// release.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn base64_utf16(script: &str) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    let bytes: Vec<u8> = script
+        .encode_utf16()
+        .flat_map(|unit| unit.to_le_bytes())
+        .collect();
+
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            chunk.get(1).copied().unwrap_or(0),
+            chunk.get(2).copied().unwrap_or(0),
+        ];
+        let n = u32::from(b[0]) << 16 | u32::from(b[1]) << 8 | u32::from(b[2]);
+        out.push(ALPHABET[(n >> 18 & 63) as usize] as char);
+        out.push(ALPHABET[(n >> 12 & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(n >> 6 & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+#[cfg(test)]
+mod encoding_tests {
+    use super::base64_utf16;
+
+    /// The expected values are what `[Convert]::ToBase64String(
+    /// [Text.Encoding]::Unicode.GetBytes($s))` produces — PowerShell's own
+    /// definition of the thing this has to match.
+    #[test]
+    fn a_script_encodes_the_way_powershell_decodes_it() {
+        assert_eq!(base64_utf16(""), "");
+        assert_eq!(base64_utf16("A"), "QQA=");
+        assert_eq!(base64_utf16("AB"), "QQBCAA==");
+        assert_eq!(base64_utf16("ABC"), "QQBCAEMA");
+        assert_eq!(
+            base64_utf16("ipconfig /flushdns"),
+            "aQBwAGMAbwBuAGYAaQBnACAALwBmAGwAdQBzAGgAZABuAHMA"
+        );
+    }
+
+    /// Nothing in the output can be read as syntax by any of the three parsers
+    /// between here and the elevated shell. That is the whole reason for it.
+    #[test]
+    fn the_encoding_has_no_character_a_shell_could_read() {
+        let hostile = "Add-DnsClientNrptRule -Namespace '.loc'; & { rm -rf \"$HOME\" } `id`";
+        let encoded = base64_utf16(hostile);
+        assert!(encoded
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='));
+    }
 }
 
 #[cfg(all(test, target_os = "macos"))]

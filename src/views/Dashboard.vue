@@ -7,6 +7,7 @@ import { useMetricsStore } from '@/stores/metrics';
 import { useInventoryStore } from '@/stores/inventory';
 import PageLayout from '@/components/PageLayout.vue';
 import HostsDialog from '@/components/HostsDialog.vue';
+import LandingCard from '@/components/LandingCard.vue';
 import { api, asList } from '@/lib/ipc';
 import { bytes, bytesPerSecond, percent } from '@/lib/format';
 
@@ -299,6 +300,15 @@ onMounted(() => {
               </div>
             </v-card-text>
           </v-card>
+        </v-col>
+      </v-row>
+
+      <!-- One page listing every site, on the name the stack already claims
+           (M-4). Here rather than in settings: it is an address somebody
+           opens, not a preference. -->
+      <v-row class="dash-row">
+        <v-col cols="12">
+          <LandingCard />
         </v-col>
       </v-row>
 

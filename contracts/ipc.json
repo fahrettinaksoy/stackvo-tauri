@@ -49,7 +49,7 @@
       },
       "returns": "string",
       "why": "Writes the `stackvo` MCP entry into one client's configuration file, so registering the server is a click rather than hand-edited JSON. Returns the path written.",
-      "notes": "Reads the file, inserts one key and writes it back — never renders from a template, so every other server and every unknown key survives. Takes a `.stackvo-backup` beside the file first, and writes atomically. `allowWrites` adds `--allow-writes`, which grants that assistant stack_down and project_stop as well as the read tools; it is passed from the UI and defaults to off there. Writes `STACKVO_ROOT` into the entry's env when a workspace is selected. Errors: NOT_FOUND when stackvo-mcp is not on this machine, INVALID_INPUT for an unknown client or a file that is not plain JSON, CONFLICT when the servers key holds something that is not an object. Audited as `agent_install`."
+      "notes": "Reads the file, inserts one key and writes it back — never renders from a template, so every other server and every unknown key survives. Takes a `.stackvo-backup` beside the file first, and writes atomically. `allowWrites` adds `--allow-writes`, which grants that assistant stack_down and project_stop as well as the read tools; it is passed from the UI and defaults to off there. Writes `STACKVO_ROOT` into the entry's env when a workspace is selected. Errors: NOT_FOUND when stackvo-mcp is not on this machine, INVALID_INPUT for an unknown client or a file that is not plain JSON, CONFLICT when the servers key holds something that is not an object. Audited as `agent_install`. Codex is TOML and is edited with toml_edit so comments, key order and quoting survive; the JSON clients keep their own indentation and key order for the same reason. Zed's path is not documented by Zed and differs between ~/.config/zed and ~/Library/Application Support/Zed, so both are looked for and whichever exists is written."
     },
     "agents_remove": {
       "new": true,
@@ -67,7 +67,7 @@
       "args": {},
       "returns": "{ binary: string | null, source: 'sibling' | 'build' | 'path' | null, root: string | null, clients: Array<{ id: string, label: string, path: string, present: boolean, exists: boolean, parseable: boolean, command: string | null, current: boolean }> }",
       "why": "The README asked the reader to find their assistant's configuration file, work out its shape and paste a JSON block into it with a path they had to supply themselves. Competitive review K-1 — every rival with an MCP server installs itself. This is the read half: which clients are on this machine, which already point at the server, and whether the binary exists to point at.",
-      "notes": "Reads only, and works with no workspace selected — the answer is about the machine, not the stack, and hiding the pane until a folder is chosen would hide it exactly during setup. `binary` is null when stackvo-mcp cannot be found, and then agents_install refuses rather than registering a path that does not exist; `source` says which copy was found. `parseable` false means the file is JSON with comments (VS Code's format), which is reported rather than rewritten — stripping comments would delete the user's own notes. See src-tauri/src/agents.rs."
+      "notes": "Reads only, and works with no workspace selected — the answer is about the machine, not the stack, and hiding the pane until a folder is chosen would hide it exactly during setup. `binary` is null when stackvo-mcp cannot be found, and then agents_install refuses rather than registering a path that does not exist; `source` says which copy was found. `parseable` false means the file cannot be edited by its own parser — JSON with comments (VS Code's format), or TOML that is halfway through being edited — which is reported rather than rewritten, because stripping comments would delete the user's own notes. Eight clients: six JSON, plus Codex whose file is TOML and Zed whose map is called `context_servers`. IMPLEMENTORS: a client's file MUST come back in its own shape — key order and indentation included. Measured against real files with examples/agent_config_probe.rs, which round-trips an install and an uninstall and compares byte for byte. See src-tauri/src/agents.rs."
     },
     "app_log_open": {
       "new": true,
@@ -715,7 +715,14 @@
       "kind": "mutation",
       "args": {},
       "returns": "DnsStatus",
-      "why": "Turning it off has to be as easy as turning it on."
+      "why": "Turning it off has to be as easy as turning it on. MUST undo the reload as well as the file — a drop-in removed from a dnsmasq nobody told is a machine still asking a port that may be gone."
+    },
+    "dns_check": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "DnsCheck",
+      "why": "dns_status reads files and sockets this app owns, which cannot answer the only question a user has: does THIS MACHINE resolve a name under the suffix. Reading back a resolver file proves a write happened. So this asks the responder over UDP and TCP, asks the machine through getaddrinfo, and asks whether public names still resolve — four answers because the repair for each is different."
     },
     "hosts_status": {
       "new": true,
@@ -732,20 +739,20 @@
       "new": true,
       "kind": "query",
       "args": {},
-      "returns": "Array<{ source: 'xampp' | 'laragon', path: string, sites: Array<{ name: string, path: string, domain: string | null, bytes: number, partial: boolean, detected: Detected, taken: boolean }> }>",
+      "returns": "Array<{ source: 'xampp' | 'laragon' | 'mamp' | 'valet' | 'sail', path: string, sites: Array<{ name: string, path: string, domain: string | null, bytes: number, partial: boolean, detected: Detected, taken: boolean, services?: string[] }> }>",
       "why": "Competitive review §L. XAMPP has been frozen on PHP 8.2 since 2023 and lost its add-on ecosystem in September 2025; Laragon went commercial in 2025 and was forked. Those are the two largest installed bases in the category and every rival is courting them — EnvKit imports Laragon in bulk, ForgeKit lists six sources. StackVo could read neither.",
-      "notes": "Reads only, and works with no workspace selected. `taken` says a directory of that name is already under projects/, so the list can say so before anything is clicked. `bytes` is measured because importing copies, and a size caps out at 20,000 entries with `partial: true` rather than walking a node_modules to the last byte on a page that lists eleven sites. XAMPP's own dashboard directories are excluded. Laragon's per-site vhost supplies `domain`; XAMPP serves by path and has no name to read, so it is null and adoption asks. See src-tauri/src/imports.rs."
+      "notes": "Reads only, and works with no workspace selected. `taken` says a directory of that name is already under projects/, so the list can say so before anything is clicked. `bytes` is measured because importing copies, and a size caps out at 20,000 entries with `partial: true` rather than walking a node_modules to the last byte on a page that lists eleven sites. XAMPP's own dashboard directories are excluded. Laragon's per-site vhost supplies `domain`; XAMPP serves by path and has no name to read, so it is null and adoption asks. See src-tauri/src/imports.rs. Five tools, in three shapes. XAMPP, Laragon and MAMP keep one directory of sites. Valet keeps none — it PARKS directories (every child is a site) and LINKS individual ones as symlinks — so it is read from its own config.json, tld included. Sail is not an installation at all: it is a composer package inside a project, identified by a docker-compose.yml that names laravel/sail, which is why it never appears in this scan and is reachable only through imports_scan_at. `services` is populated for Sail alone, from the compose file's own service list mapped onto this app's catalogue (pgsql→postgres, mongodb→mongo); a service with no counterpart is left out rather than substituted, and every other source leaves the field empty because their sites do not state what they need."
     },
     "imports_scan_at": {
       "new": true,
       "kind": "query",
       "args": {
-        "source": "string",
+        "source": "'xampp' | 'laragon' | 'mamp' | 'valet' | 'sail'",
         "path": "string"
       },
       "returns": "Install | null",
       "why": "The same, for an installation somewhere this app did not think to look — the well-known paths are installer defaults and people move things.",
-      "notes": "null when the directory holds no htdocs (XAMPP) or www (Laragon), which is the honest answer for 'that is not one of those'. INVALID_INPUT for a source name that is not xampp or laragon."
+      "notes": "null when the directory holds no htdocs (XAMPP) or www (Laragon), which is the honest answer for 'that is not one of those'. INVALID_INPUT for a source name that is not xampp or laragon. MUST accept every source imports.rs can read. It accepted two of the five, so somebody whose MAMP was not in /Applications — or who wanted a Valet or Sail project, neither of which a scan can find — was told the tool was not one this app can read. For Sail the path may be the project OR a directory holding several: both are what somebody means by pointing at it."
     },
     "imports_take": {
       "new": true,
@@ -936,6 +943,45 @@
       "why": "The window and the tray have to open in the same language, and neither could read the machine's on its own. The tray fell back to $LANG, which a Finder-launched app does not have; the window fell back to navigator.language, which in a WKWebView answers from the bundle's localised resources — this app ships none. Both defaulted to English on a Turkish machine.",
       "notes": "Resolution order lives in `locale.rs` and is one order for both surfaces: the choice in preferences.json, then the OS (AppleLanguages/AppleLocale on macOS, HKCU Control Panel\\International on Windows, LC_ALL/LC_MESSAGES/LANG elsewhere), then English. Only ever returns a language the app has strings for — a near miss like pt-BR resolving to a half-translated UI is worse than an honest English one. The front end must NOT write the answer back to preferences.json: that would turn a detection into a stored choice and freeze the first machine's language for ever."
     },
+    "locale_packs": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "Array<{ tag: string, label: string, path: string, strings: number, broken: string | null }>",
+      "why": "The language set used to be a constant in three places — locale.rs, i18n/index.js and the tray's fallback table — so a third language meant a source change and a rebuild. Nobody who can actually translate this app can do any of that, which is why M-7 sat on the list as '~2,000 strings': the strings were never the blocker, the rebuild was.",
+      "notes": "A pack that does not parse is LISTED WITH ITS ERROR rather than skipped — a hand-edited file with a trailing comma that simply vanishes from the picker is the worst failure this could have. A pack names itself through `language.label`, because this app cannot hold a name for a language it has never heard of. The tag is validated as a BCP 47 language rather than accepted, because it becomes a file name in a directory this app writes into. M-7. Adding a language stops being a code change: a pack is one JSON file in the app's config directory with the same shape as the shipped catalogue. The front end merges it over English and registers it, so an untranslated screen is in English rather than showing raw keys, and vue-i18n's per-key fallback makes a partial pack a working pack — which is what makes starting one possible at all. NO machine translation and no seeding a new pack with English silently relabelled: a missing string that falls back to English is honest, a fabricated one is a sentence somebody has to find and disbelieve."
+    },
+    "locale_pack_read": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "tag": "string"
+      },
+      "returns": "object",
+      "why": "The messages, for the front end to merge over English.",
+      "notes": "INVALID_INPUT for a tag that is not a language tag, and for a file that is not JSON. Measured with examples/locale_pack_probe.rs, which writes a pack into the real config directory, lists it, reads it back, breaks it on purpose to check the error is reported, and removes it."
+    },
+    "locale_pack_write": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "tag": "string",
+        "messages": "object"
+      },
+      "returns": "string (path)",
+      "why": "How 'start a translation' works: the front end sends the English catalogue as the starting point.",
+      "notes": "The messages come from the front end because the front end is where the catalogue lives — asking Rust to produce a template would mean a second copy of every string in this app, which is the duplication trayLabels already exists to undo. Written atomically. M-7. Adding a language stops being a code change: a pack is one JSON file in the app's config directory with the same shape as the shipped catalogue. The front end merges it over English and registers it, so an untranslated screen is in English rather than showing raw keys, and vue-i18n's per-key fallback makes a partial pack a working pack — which is what makes starting one possible at all. NO machine translation and no seeding a new pack with English silently relabelled: a missing string that falls back to English is honest, a fabricated one is a sentence somebody has to find and disbelieve."
+    },
+    "locale_pack_delete": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "tag": "string"
+      },
+      "returns": "void",
+      "why": "A language somebody installed has to be removable.",
+      "notes": "Removing one that is not there is success — the caller is asking for it to be gone, and it is."
+    },
     "logs_info": {
       "new": true,
       "kind": "query",
@@ -1008,6 +1054,36 @@
       },
       "returns": "MailMessage[]",
       "notes": "Both wire formats are normalised in Rust. They agree on almost nothing: MailHog spells an address as `{Mailbox, Domain}` and buries the subject in a header array, Mailpit uses `{Name, Address}` and a field. Reading either as the other yields an inbox of blank rows that still look like messages."
+    },
+    "mail_relay_get": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "{ enabled: boolean, host: string, port: number, username: string, security: 'starttls' | 'tls' | 'none', from: string, allowedRecipients: string[], hasPassword: boolean, keystore: boolean }",
+      "why": "M-2. The catcher catches everything, which is right, and it is not the whole job: the message somebody actually needs to check is the one that renders differently in Outlook, or the invoice a colleague has to look at — both of which mean THIS ONE MESSAGE, TO A REAL ADDRESS. Every rival calls that release and StackVo could not do it. Deliberately not the other shape: pointing the application at a real SMTP server would send the forty password resets a test suite generates in an hour to whatever addresses the fixtures happen to contain.",
+      "notes": "Never returns the password: `hasPassword` is a boolean, and there is no command in this app that reads a stored credential back. `keystore` says whether the OS store is reachable at all, so a machine where it is not says so rather than silently storing nothing. Mailpit does the relaying and reads its settings from its own environment; this app reaches that environment through a COMPOSE OVERLAY, the same mechanism site.rs and perf.rs use — so the service package is untouched, nothing is re-sealed, and a workspace that has never configured a relay renders exactly the bytes it did before. The catcher's compose service is found BY IMAGE (`axllent/mailpit`), not by name: the key is `mailpit` on a .env workspace and `mailpit-1-30` on one that moved to the instance table. The password is in the OS keystore and the settings file carries no value; it IS written into generated/, which is the same partial answer ADR 0010 states for service passwords and is said out loud rather than implied. `allowedRecipients` is a regular expression to Mailpit, so each entry's dots are escaped — unescaped, `me@test.com` would also permit `me@testxcom`, which is an address somebody could own. A value containing a line break is REFUSED, because a newline ends a YAML scalar and everything after it is read as configuration somebody else wrote."
+    },
+    "mail_relay_set": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "config": "RelayConfig",
+        "password": "string | null"
+      },
+      "returns": "RelayStatus",
+      "why": "Somewhere to put the relay, once somebody has been told a release was refused.",
+      "notes": "`password` has three states and they are all different intentions: `null` leaves the stored one alone, `''` removes it, anything else replaces it. A relay that is switched ON must have a host, a port and a sender address — a provider rejects a From it does not own, and the error comes back as a number. The overlay is rendered immediately as well as before every compose call, so a failure to write it is reported while somebody is looking at the pane. Mailpit does the relaying and reads its settings from its own environment; this app reaches that environment through a COMPOSE OVERLAY, the same mechanism site.rs and perf.rs use — so the service package is untouched, nothing is re-sealed, and a workspace that has never configured a relay renders exactly the bytes it did before. The catcher's compose service is found BY IMAGE (`axllent/mailpit`), not by name: the key is `mailpit` on a .env workspace and `mailpit-1-30` on one that moved to the instance table. The password is in the OS keystore and the settings file carries no value; it IS written into generated/, which is the same partial answer ADR 0010 states for service passwords and is said out loud rather than implied. `allowedRecipients` is a regular expression to Mailpit, so each entry's dots are escaped — unescaped, `me@test.com` would also permit `me@testxcom`, which is an address somebody could own. A value containing a line break is REFUSED, because a newline ends a YAML scalar and everything after it is read as configuration somebody else wrote."
+    },
+    "mail_release": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "id": "string",
+        "to": "string[]"
+      },
+      "returns": "void",
+      "why": "The whole point of M-2: one caught message, sent on to a real person.",
+      "notes": "Mailpit only. MailHog has no equivalent and that is REPORTED rather than worked around — releasing by opening our own SMTP connection would make this app a mail sender, with a TLS stack and a credential in this process, to add a feature to a catcher somebody has already replaced. Mailpit's own refusal sentence is carried through unchanged when no relay is configured: a generic \"release failed\" sends somebody looking at their SMTP provider for a setting that is missing here. The recipient is typed by the user rather than taken from the message's own To — the reason to release is that somebody ELSE has to see it, and re-sending to the fixture address is the one thing that is never useful."
     },
     "mail_search": {
       "new": true,
@@ -1544,6 +1620,16 @@
       "why": "F-3. `profiler_read` answers where the time went — a table of the costliest functions — and cannot answer what called that, which is the question a flame view exists for. The parser was already reading caller→callee edges to attribute inclusive cost and was discarding the caller.",
       "notes": "A call TREE, not strictly a flame graph, and the difference is stated rather than glossed: a flame graph is built from sampled stacks, so a box's width is how often that exact path appeared. Cachegrind holds no stacks — it holds edges summed over every place A called B. A function called from two places is one box here with the total, two boxes there. What a branch means is 'reaching B through A cost this much in total', which is answerable and is the question people bring to a profile; 'this path was taken this often' is not, and no arrangement of the edges recovers it. Separate from profiler_read because the tree is thousands of nodes and the table is sixty rows. Recursion stops at the first repeat on the path and the frame is kept and marked. See src-tauri/src/profile.rs."
     },
+    "profiler_flame": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "name": "string",
+        "id": "string"
+      },
+      "returns": "Flame",
+      "why": "F-3, and the reason the word flame graph can now be used. profiler_tree draws what cachegrind holds — the SUMMED cost of \"A called B\" over every place A called B — so a function reached from two callers is one box carrying both, and no arrangement of those edges recovers which caller was expensive. An Xdebug trace holds every entry and exit with its depth, which is a stack: folding those gives one box per distinct path, with its own measured width. MUST be a separate command from profiler_tree rather than a flag on it, because the two are different claims about the same picture and a reader cannot tell them apart by looking."
+    },
     "query_log": {
       "new": true,
       "kind": "query",
@@ -1592,6 +1678,53 @@
       "returns": "LanStatus",
       "why": "The screen has to be able to say three different things: here is the address a phone can use, this machine has no address to offer, and the name baked into the compose file is from a network this laptop is no longer on.",
       "notes": "`address` is null both when there is no network and when the address is public — the second is a refusal, because handing out `shop.<public-ip>.sslip.io` would publish a development site under a name anybody can resolve. `stale` reads the rendered compose file rather than recomputing: the question is whether what was written still matches what would be written. The certificate is the local CA's and the visiting device does not trust it, so its browser warns; that is a missing trust anchor on a device this app cannot reach, not a fault it can fix. See src-tauri/src/lan.rs."
+    },
+    "oauth_callbacks": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "name": "string",
+        "path": "string"
+      },
+      "returns": "{ path: string, local: string | null, public: string | null, providers: Array<{ id: string, label: string, accepts: 'any' | 'publiconly', note: string }> }",
+      "why": "M-12, which sat on the list as 'an OAuth callback for .loc' and was not defined enough to build. Reading what the providers require settles it: a redirect URI is a BROWSER REDIRECT, not a fetch — the provider sends a 302 and never resolves the hostname — so https://shop.loc/auth/callback works for the flow, because the browser is on this machine, the name is in this machine's hosts file and the certificate is issued by a CA it trusts. What varies is whether the provider will accept the string at REGISTRATION time, and that is a per-provider rule that is invisible at their console.",
+      "notes": "Implements no OAuth: no client, no token exchange, and no store for a secret — the application being developed does all of that, and an app that held somebody's client secret to be helpful would be one more place for it to leak from. Returns two strings and the rule for choosing between them. The tunnel URL is read live inside the command rather than passed in, because a quick tunnel's address changes on every start and a callback registered from a stale one fails at the last step of a flow with an error naming neither side. `path` is normalised — leading slash added, duplicate slashes collapsed — and a query string or fragment is REFUSED rather than stripped: most providers compare the registered URI to the redirect exactly. See src-tauri/src/oauth.rs."
+    },
+    "landing_status": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "{ running: boolean, container: string, url: string, rendered: string | null, projects: number, services: number }",
+      "why": "M-4. Every rival in the category ships one and it is the address people bookmark. StackVo has had the NAME for it since the beginning with nothing answering on it: core_domains already writes the bare suffix into the hosts file and certs::required_domains already issues for it, so opening https://<suffix> got Traefik's own 404 — a name the app went out of its way to make resolve, serving nothing.",
+      "notes": "`rendered` is read off the file's own timestamp rather than remembered, so an app restart, a hand-edited page and a workspace copied from another machine all stay truthful. A project with no domain is left OFF the page rather than listed as an unclickable row. A sidecar in the shape tunnel_start already established: one `docker run` on the stack network with Traefik labels, --rm so stopping is removal. The generated compose file is deliberately untouched — it is compared byte for byte against the Bash generator's output, and a service only this app knows about would break that comparison for a page. nginx:alpine rather than the alpine:3 this app already pulls, because Alpine's busybox is built WITHOUT the httpd applet (measured: `httpd: applet not found`). The page is one static file with no scripts, no fonts and no requests of its own — a landing page that needs the network to render is blank exactly when something is wrong — and every name on it is HTML-escaped, because a project is a directory and a directory can be called `R&D`. Measured end to end with examples/landing_probe.rs: the container is started against the live stack, https://stackvo.loc is requested with the system trust store and no --insecure, and the bytes that come back are compared with the bytes that were written; the container and the scratch directory are removed either way."
+    },
+    "landing_refresh": {
+      "new": true,
+      "kind": "mutation",
+      "args": {},
+      "returns": "LandingStatus",
+      "why": "The sidecar serves a FILE, so starting a project after the page was written leaves it stale with nothing having stopped. Rewriting is therefore a different action from serving, and one button doing both would restart a container to update a list.",
+      "notes": "Writes atomically into generated/landing/index.html and returns the fresh status. Safe to call while the container is running: nginx serves whatever is on disk at request time and the mount is read-only from its side."
+    },
+    "landing_start": {
+      "new": true,
+      "kind": "operation",
+      "args": {},
+      "returns": "OperationId",
+      "emits": [
+        "landing:progress",
+        "landing:done"
+      ],
+      "why": "An operation rather than a mutation: the first start pulls nginx, which belongs in the operation console rather than behind a frozen button.",
+      "notes": "Renders the page BEFORE starting the container — nginx answers 403 for an empty directory, which reads as a broken proxy rather than as a page that has not been written yet. A sidecar in the shape tunnel_start already established: one `docker run` on the stack network with Traefik labels, --rm so stopping is removal. The generated compose file is deliberately untouched — it is compared byte for byte against the Bash generator's output, and a service only this app knows about would break that comparison for a page. nginx:alpine rather than the alpine:3 this app already pulls, because Alpine's busybox is built WITHOUT the httpd applet (measured: `httpd: applet not found`). The page is one static file with no scripts, no fonts and no requests of its own — a landing page that needs the network to render is blank exactly when something is wrong — and every name on it is HTML-escaped, because a project is a directory and a directory can be called `R&D`. Measured end to end with examples/landing_probe.rs: the container is started against the live stack, https://stackvo.loc is requested with the system trust store and no --insecure, and the bytes that come back are compared with the bytes that were written; the container and the scratch directory are removed either way."
+    },
+    "landing_stop": {
+      "new": true,
+      "kind": "mutation",
+      "args": {},
+      "returns": "void",
+      "why": "Turning it off has to be as easy as turning it on.",
+      "notes": "`--rm` means stopping is removal, so nothing is left answering on the name after the page is switched off."
     },
     "project_register": {
       "new": true,
@@ -1768,7 +1901,7 @@
       },
       "returns": "QuickCommand[]",
       "why": "P3-19 was \"a tinker quick action — the PTY exists, so it is nearly free\". It is, and on its own it is also one button. What is worth building is the set it belongs to: artisan tinker, artisan migrate, composer install, npm install, wp shell. Each of those today means opening a terminal, remembering the container name and typing `docker exec -it stackvo-<project> …`.",
-      "notes": "Offered only when the marker file exists — driven off the same Fingerprint adoption uses, so \"does this project have artisan\" is answered in one place. Offering a command the project cannot run is worse than omitting it: the failure arrives as `artisan: not found` in an operation console, which reads as a broken app rather than as a button that never applied. `because` names the file the offer is based on. Deliberately ABSENT: migrate:fresh, migrate:reset, db:wipe and composer update — the first three drop the user's data behind a button four characters from the safe one, and the last rewrites a lock file. Those are things to type deliberately in the terminal that is one click away."
+      "notes": "Offered only when the marker file exists — driven off the same Fingerprint adoption uses, so \"does this project have artisan\" is answered in one place. Offering a command the project cannot run is worse than omitting it: the failure arrives as `artisan: not found` in an operation console, which reads as a broken app rather than as a button that never applied. `because` names the file the offer is based on. Deliberately ABSENT: migrate:fresh, migrate:reset, db:wipe and composer update — the first three drop the user's data behind a button four characters from the safe one, and the last rewrites a lock file. Those are things to type deliberately in the terminal that is one click away. M-9 adds the four frameworks this app scaffolds and did not offer a row for: Symfony (bin/console), Django (manage.py), Rails and plain Ruby. Each is the same shape — a fixed id, an argv and a marker file only that framework writes. Rails is detected on `bin/rails` rather than on a Gemfile, which is Sinatra and Jekyll as often as it is Rails, and it runs through `bundle exec` rather than the binstub: a binstub is only executable if its permission bit survived the checkout, and `bundle exec` needs the gem rather than the bit. Doctrine's migrate carries --allow-no-migration because it exits non-zero with nothing to run, which the console would draw as a failed operation. This is NOT the B-4 unlock: B-4 is a command the WORKSPACE declares, and every row here is still compiled in."
     },
     "release_build": {
       "new": true,
@@ -2141,6 +2274,122 @@
       "returns": "XdebugStatus",
       "why": "Step debugging is the thing Docker makes hardest and the thing a PHP developer needs most. `xdebug` was already in the extension catalog with per-version pecl pins, so it could be compiled in by hand-editing stackvo.json — and then it still would not connect, because nothing set xdebug.mode or told it which host the IDE is on. This reports all three layers separately: listed in the manifest, present in the built image, and live in the running container.",
       "notes": "`active` is read from the running container's environment rather than assumed from the manifest. The two disagree in a case users hit: `stackvo up` from the CLI does not layer the overlay this app writes, so it recreates the container without the Xdebug environment and debugging stops working with nothing on screen to explain it."
+    },
+    "perf_export": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string",
+        "path": "string"
+      },
+      "returns": "{ bytes: number }",
+      "why": "The price of the feature, paid explicitly: the container reads its dependencies from a volume an editor cannot see, so autocomplete needs a copy on the host. It is a SNAPSHOT and the screen says so — the container keeps writing to the volume and this copy does not follow. Replaces the host directory rather than merging into it: a half-updated vendor/ is worse for an index than an old one, because nothing about it says which half is which."
+    },
+    "perf_forget": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string",
+        "path": "string"
+      },
+      "returns": "PerfLayer[]",
+      "why": "Deletes the volume. Its own act and never part of turning the layer off — a checkbox that throws away thirty thousand files as a side effect is one nobody should trust."
+    },
+    "perf_set": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string",
+        "path": "string",
+        "enabled": "bool"
+      },
+      "returns": "PerfLayer[]",
+      "why": "MUST seed the volume from the host copy BEFORE writing the setting, and MUST fail without writing it if that copy fails. A fresh named volume is empty — Docker seeds one from the image only where the image has content there, and no PHP image ships a vendor/ — so a setting saved first and a copy that failed afterwards is a site that 500s on the next request from a switch that reported success. Turning it OFF copies nothing and deletes nothing: the volume may hold the only copy of a vendor/ that took ten minutes to build. MUST refuse a path that is not relative to the project — the value becomes a container path AND part of a volume name, and it arrives from a JSON file that may have come with a git clone."
+    },
+    "perf_status": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "name": "string"
+      },
+      "returns": "PerfLayer[]",
+      "why": "I-1. A bind mount costs 2-3x a named volume on metadata and writes, which is the measured reason a Docker workflow feels slow on macOS and Windows. This lists the directories worth moving off the host filesystem for one project, whether each is currently in a volume, how big that volume is, and whether the host still has a copy for an editor to index. Suggestions describe the project in front of them — vendor for PHP, storage/framework and bootstrap/cache when it is a Laravel, node_modules when there is a package.json — and are never applied on their own."
+    },
+    "qr_encode": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "text": "string"
+      },
+      "returns": "{ version: number, size: number, rows: string[], text: string }",
+      "why": "M-3. Two features hand out an address whose whole point is that it is opened on ANOTHER device — the LAN name from lan_status and the public URL from tunnel_status — and both are long, both contain either a dashed IP address or four random Cloudflare words, and the only way to get one onto a phone was to type it. That is the moment somebody gives up and uses the desktop browser's device emulation instead, which is not the same thing and is exactly the class of bug it fails to show.",
+      "notes": "Byte mode, error-correction level M, versions 1-10 — 213 bytes, against a tunnel URL of about sixty. Written here rather than taken as a dependency because a QR code is a closed specification with published vectors: it cannot acquire new cases later, so the usual argument for a maintained dependency does not apply. It is NOT verified by its author's own expectations: examples/qr_probe.rs hands each symbol to macOS's own CIDetector — the decoder behind the camera — and passes a row only when the text read back is byte-identical. That measurement found the one real bug: the first format-information copy was written along row 8 instead of down column 8, and every other check passed while no decoder on earth would read the result. Returns the module matrix as one string per row rather than a picture, so the caller draws it; the front end renders an SVG with a four-module quiet zone, black on white whatever the theme is, because scanners expect dark modules on a light ground and the failure mode of an inverted code is a phone that simply sits there. INVALID_INPUT for empty text or more than a version 10 symbol holds — never a truncated symbol, which is indistinguishable from a complete one until somebody scans it. See src-tauri/src/qr.rs."
+    },
+    "site_save": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string",
+        "env": "Record<string,string>",
+        "directoryListing": "bool",
+        "sshAgent": "bool"
+      },
+      "returns": "same as site_settings",
+      "why": "Whole document rather than per key: three settings in one small file, and three commands over one document is three chances for it and the screen to disagree - the same reasoning routes_save gives. MUST refuse a key that is not a POSIX variable name and a value carrying a line break: the overlay is YAML, where a newline in a scalar ends it and everything after is read as configuration somebody else wrote. Regenerates, because the directory listing lands in a GENERATED server config while the variables and the agent land in a compose overlay - two different paths for one save."
+    },
+    "stripe_status": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "Array<{ project: string, running: boolean, container: string, signingSecret: string | null, hasKey: boolean, failure: string | null }>",
+      "why": "M-11. Testing a payment flow means Stripe reaching the application, and shop.loc does not exist on the internet.",
+      "notes": "`signingSecret` and `failure` are read from the container's log on every call rather than cached, so an app restart or a crashed listener stays truthful. `hasKey` is a boolean and there is no command that reads a key back — the pane can replace it or clear it and never display it. MEASURED with examples/stripe_probe.rs against the real image and a deliberately invalid key: the image runs, the arguments are accepted, and the CLI's 401 comes back through the log reader. NOT measured, and stated rather than implied: that a real event reaches the application, which needs an account. `stripe listen` opens an OUTBOUND connection, so nothing has to be reachable from the internet — which is why this is not the tunnel with a different label: a quick tunnel's URL changes on every start, so the endpoint has to be re-registered in the dashboard each time and the signing secret changes with it. The API key is kept in the OS keystore by secrets.rs, one entry per project (two accounts must not share one, or one account's events are forwarded into the other's application, which looks like it is working). It reaches the container through `-e STRIPE_API_KEY` and never as an argument: argv is visible in `docker inspect`, in the host process list and in this app's own operation console, which streams the command it ran. The sidecar deliberately does NOT use `--rm`, unlike the tunnel's: an invalid key makes the CLI print its complaint and exit, and a removed container takes the log with it — so the pane showed no listener, no error and no reason for the single most likely failure this feature has. Found by examples/stripe_probe.rs, which also caught itself reporting success on Docker's own \"No such container\" message."
+    },
+    "stripe_key_set": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string",
+        "key": "string | null"
+      },
+      "returns": "boolean (whether a key is now stored)",
+      "why": "A credential needs somewhere to go that is not a file in the workspace, and this app already decided where that is.",
+      "notes": "One command for both directions: `null` clears it, because a screen that could only ADD a credential is one people are right not to give one to. A key beginning `pk_` is refused here rather than by the CLI three seconds later inside a container — a publishable key is the one somebody has open in a browser tab, and it fails with an authentication error that says nothing about which key was pasted."
+    },
+    "stripe_start": {
+      "new": true,
+      "kind": "operation",
+      "args": {
+        "name": "string",
+        "path": "string",
+        "events": "string[]"
+      },
+      "returns": "OperationId",
+      "emits": [
+        "stripe:progress",
+        "stripe:done"
+      ],
+      "why": "An operation because the first start pulls the Stripe image.",
+      "notes": "Refuses when the project container is not running: the CLI would otherwise accept the events, fail to deliver each one and report the failures back to Stripe, filling the dashboard with delivery errors for a project that was simply not started. Removes any previous listener before starting — the container is not `--rm`, so a crashed one still holds the name. An empty `events` list means every event, which is the CLI's own default and the right one for \"does anything arrive at all\". `path` is a path inside the application and a URL is refused. `stripe listen` opens an OUTBOUND connection, so nothing has to be reachable from the internet — which is why this is not the tunnel with a different label: a quick tunnel's URL changes on every start, so the endpoint has to be re-registered in the dashboard each time and the signing secret changes with it. The API key is kept in the OS keystore by secrets.rs, one entry per project (two accounts must not share one, or one account's events are forwarded into the other's application, which looks like it is working). It reaches the container through `-e STRIPE_API_KEY` and never as an argument: argv is visible in `docker inspect`, in the host process list and in this app's own operation console, which streams the command it ran. The sidecar deliberately does NOT use `--rm`, unlike the tunnel's: an invalid key makes the CLI print its complaint and exit, and a removed container takes the log with it — so the pane showed no listener, no error and no reason for the single most likely failure this feature has. Found by examples/stripe_probe.rs, which also caught itself reporting success on Docker's own \"No such container\" message."
+    },
+    "stripe_stop": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string"
+      },
+      "returns": "void",
+      "why": "Turning it off has to be as easy as turning it on.",
+      "notes": "Removes rather than stops: the signing secret is in that container's log and it is dead the moment the listener is, so leaving it behind would leave a stale secret on screen for the next person to paste."
+    },
+    "site_settings": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "name": "string"
+      },
+      "returns": "{ env: Record<string,string>, directoryListing: bool, sshAgent: bool, listingSupported: bool, agentAvailable: bool, server: string }",
+      "why": "M-5, M-6 and M-10 in one document, because they are one kind of thing: a per-project setting the generator cannot read from the manifest (project.schema.json is additionalProperties:false and frozen), kept in .stackvo/site.json so it travels with the project. listingSupported and agentAvailable are answered by the machine rather than assumed by the screen: Apache and Swoole have no configuration file for a directory index, and an agent cannot be forwarded when none is running - a control drawn for either would do nothing."
     }
   },
   "events": {
@@ -2574,6 +2823,34 @@
       "payload": "SubjectEvent",
       "emittedDynamically": true,
       "notes": "The instance id rides in the `service` field. A fourth shape of event would be a fourth thing every listener has to know about, for no information it does not already have."
+    },
+    "perf:changed": {
+      "payload": "{ project: string, path: string, enabled: bool }",
+      "why": "A layer moved. The container is still reading the old arrangement until it is recreated, which is the same 'written to disk, not to the container' state xdebug:changed reports."
+    },
+    "site:changed": {
+      "payload": "{ project: string }",
+      "why": "A per-project setting was written. The container is still the old one until it is recreated, which is the same state xdebug:changed and perf:changed report."
+    },
+    "landing:progress": {
+      "new": true,
+      "payload": "{ operationId: string, line: string }",
+      "why": "The image pull, streamed — the same console every other long-running thing in this app reports into."
+    },
+    "landing:done": {
+      "new": true,
+      "payload": "{ operationId: string, ok: boolean }",
+      "why": "The sidecar is up, or it is not."
+    },
+    "stripe:progress": {
+      "new": true,
+      "payload": "{ operationId: string, line: string }",
+      "why": "The image pull, streamed into the operation console."
+    },
+    "stripe:done": {
+      "new": true,
+      "payload": "{ operationId: string, ok: boolean }",
+      "why": "The listener is up, or it is not — what it then says about the key is read from its log."
     }
   },
   "types": {
@@ -2752,6 +3029,16 @@
       "bashOutputPath": "string",
       "matchesBashOutput": "bool"
     },
+    "Flame": {
+      "frames": "Frame[] — folded stacks; a function under two callers is two frames",
+      "total": "number — microseconds accounted for, which is the width of the root row",
+      "records": "number — entry and exit records read",
+      "stacks": "number — distinct stacks the file held",
+      "truncated": "bool — the file was longer than the reader's ceiling; this is the start of the request",
+      "pruned": "number — paths too thin to draw, dropped and counted rather than silently missing",
+      "depthCapped": "bool — the stack went deeper than 64 frames",
+      "note": "F-3. Microseconds always, computed by this app from the trace's own timestamps — unlike a cachegrind report, whose unit is whatever the file declares and MUST be read from it. A trace costs far more than a profile to record (two lines per function call, hundreds of megabytes for one request), which is why the mode is trigger-started like profiling and why the tree is pruned before it crosses this boundary."
+    },
     "Doctor": {
       "preflight": "Preflight",
       "ports": [
@@ -2765,6 +3052,7 @@
         }
       ],
       "hostsMissing": "string[]",
+      "dns": "{ suffix: string, port: number }? — null in every ordinary state, INCLUDING the feature being off. Set only when the machine's resolver points at a local responder that is not answering: the one DNS failure nothing else on screen reports, where the app, the containers and the proxy all look healthy and every project domain fails to resolve.",
       "generated": {
         "state": "'ok'|'warn'|'fail'|'unknown'",
         "detail": "string?"
@@ -3150,12 +3438,13 @@
     },
     "ProfilerStatus": {
       "xdebug": "XdebugStatus",
-      "mode": "'debug'|'profile'",
+      "mode": "'debug'|'profile'|'trace'",
       "trigger": "string (XDEBUG_TRIGGER)",
       "profiles": "ProfileFile[]",
-      "bytes": "number",
+      "traces": "ProfileFile[] — read by profiler_flame, not profiler_read",
+      "bytes": "number — profiles AND traces; they share a directory and a disk",
       "directory": "string",
-      "note": "Layered on XdebugStatus rather than duplicating it: the extension has to be compiled in for either mode, so `needsRebuild` and `active` mean exactly what they already meant."
+      "note": "Layered on XdebugStatus rather than duplicating it: the extension has to be compiled in for any mode, so `needsRebuild` and `active` mean exactly what they already meant. `mode` is one value and not a set because the three want different start triggers — stepping connects on the next request, profiling and tracing wait for a trigger so an idle stack does not fill a disk. `trace` is the third and closes F-3: it writes stacks, which is what a flame graph is built from, where a profile writes summed edges. The two lists are separate because they open different views. IMPLEMENTORS: xdebug.output_dir MUST exist before either mode records — Xdebug does not create it and writes nothing, silently, when it is missing."
     },
     "ProgressEvent": {
       "operation_id": "string",
@@ -3377,14 +3666,34 @@
       "note": "C-1. A manifest states the sha256 of every file the package ships and pkg::verify checks them on every read, so editing a compose fragment leaves a package that refuses to load with a message about bytes rather than about the line somebody just edited. That bookkeeping — not the JSON — is what made authoring a package impractical. `resealed` is what sealing changed (or would change, from a lint); `problems` is what it refused. A report with problems means NOTHING was written: sealing is bookkeeping, not a way past the validator."
     },
     "DnsStatus": {
-      "support": "string — resolver | manual | unsupported",
+      "mechanism": "string — resolver | network-manager | dnsmasq | systemd-resolved | nrpt | manual",
+      "writable": "bool — whether this app can apply the change itself, or only report it",
       "suffix": "string",
+      "tld": "string — the last label, which is what a resolver is pointed at",
       "port": "number",
-      "listening": "bool",
-      "resolverFile": "string? — /etc/resolver/<tld>, where the platform has one",
-      "resolverConfigured": "bool",
+      "listening": "bool — UDP",
+      "tcp": "bool — the second socket, reported separately because a port can be half-taken",
+      "file": "string? — the file this mechanism writes, where it has one",
+      "configured": "bool — whether this machine currently asks us for the suffix",
       "instruction": "string — the file this app would write, or the line the user must place",
-      "note": "E-1. The responder answers ONE suffix and refuses everything else — it never forwards, has no upstream and holds no cache, because an open forwarder on a machine is a thing that can be pointed at and a development tool has no business becoming the resolver for anything it did not create. `listening` is read from whether the socket is bound rather than from a preference: a setting saying yes over a port something else took would be a screen that lies. `support` is three answers because the platforms give three — macOS has /etc/resolver, Linux needs a line in whatever is in front of resolv.conf, and Windows has no per-suffix mechanism at all and keeps /etc/hosts."
+      "reload": "string? — what is reloaded after the write, spelled out rather than done quietly",
+      "foreign": "string? — a file already at that path that is not ours, and what it says",
+      "stale": "string[] — resolver files this app wrote for a suffix the workspace has since left",
+      "broken": "bool — the machine asks us and nothing answers, which is the state where every name under the suffix fails",
+      "note": "E-1. The responder answers ONE suffix and refuses everything else — it never forwards, has no upstream and holds no cache, because an open forwarder on a machine is a thing that can be pointed at and a development tool has no business becoming the resolver for anything it did not create. `listening` is read from whether the socket is bound rather than from a preference: a setting saying yes over a port something else took would be a screen that lies. `mechanism` is detected rather than derived from the platform — on Linux WHICH file to write is a question about the machine (NetworkManager's dnsmasq, a standalone dnsmasq, systemd-resolved), and a guessed path is worse than no feature because it rearranges name resolution on a machine this app was wrong about. `manual` is the honest answer when none of them is found. `foreign` MUST be reported before the switch is pressed and the file MUST be copied aside rather than replaced — /etc/resolver/test is a path dnsmasq, Valet or a colleague's script may own, and taking a suffix away from another tool with no way back is not a thing to discover afterwards. `stale` exists because macOS's mechanism is one file PER SUFFIX: changing DEFAULT_TLD_SUFFIX leaves the old file pointing at a responder that now REFUSES that TLD, which is worse than never having written it — before, those names went upstream and failed honestly. `broken` is asked of the socket rather than of this process's own flag: a responder whose thread died and one in another copy of the app are both cases where the flag and the machine disagree, and the machine is right."
+    },
+    "DnsCheck": {
+      "name": "string — the probe name, under the suffix and in no hosts file",
+      "udp": "DnsProbe — asked the responder directly",
+      "tcp": "DnsProbe — asked the responder over TCP",
+      "system": "DnsProbe — asked this machine, the way a browser would",
+      "public": "DnsProbe — whether the rest of the internet still resolves",
+      "ok": "bool — udp and system together, which is the pair that means 'this works'",
+      "note": "Four probes rather than one verdict because the repair differs: a responder that does not answer is this app's fault, a machine that does not ask it is the resolver file's, and public names failing matters more than the feature does. `public` is informational on its own — an offline machine fails it — and is only ever decisive as a before/after comparison inside dns_resolver_install, which undoes its own change when public names stop resolving."
+    },
+    "DnsProbe": {
+      "ok": "bool",
+      "detail": "string — what came back, in words, for a screen that has to explain a failure"
     },
     "UserRoute": {
       "domain": "string",
@@ -3437,6 +3746,31 @@
       "seconds": "number? — since the last request; absent when the log has never mentioned this router",
       "suspendable": "bool",
       "note": "I-2. Container CPU is not the signal and neither is the network counter: php-fpm sits near zero whether it is serving or asleep, and network moves for health checks and DNS — one mistake stops something in use, the other never stops anything. The honest answer is the proxy's, which wrote down when it last routed to each router. A project the log has NEVER mentioned is not suspendable: that is the state of a stack that just came up, and stopping everything the first time somebody enables this would be the worst possible introduction to it."
+    },
+    "PerfLayer": {
+      "path": "string — project-relative directory",
+      "enabled": "bool — whether the setting says it lives in a volume",
+      "volume": "string — the named volume, stackvo-cache-<project>--<path>",
+      "exists": "bool — whether that volume exists on the engine",
+      "bytes": "number? — what it holds, when the engine can say",
+      "onHost": "bool — whether the host still has a copy, which is what an editor indexes",
+      "hostFiles": "number? — files in the host copy, counted up to a cap",
+      "note": "I-1. Measured with examples/perf_layer_bench.rs on the machine this shipped from: vendor in a volume is 3.8x on a framework boot and does NOTHING for writes; storage/framework is what buys the writes, at 2.8x. That is why this is a list of directories rather than one 'make it fast' switch — the win depends on which directory moves, and a single switch would be a guess about somebody's project. NOT a synchronising layer: nothing on the host writes these directories, so nothing needs reconciling. A bidirectional sync (Mutagen's job) is deliberately not built here — see src-tauri/src/perf.rs for why a worse copy of it would be a liability rather than a feature."
+    },
+    "Install": {
+      "source": "'xampp' | 'laragon' | 'mamp' | 'valet' | 'sail'",
+      "path": "string — the installation root, or for Valet/Sail the directory that was pointed at",
+      "sites": "Array<{ name: string, path: string, domain: string | null, bytes: number, partial: boolean, detected: Detected, taken: boolean, services?: string[] }>",
+      "note": "L. `domain` is what the OTHER tool serves the site at, when the other tool says so: Laragon writes a vhost with a ServerName, Valet derives one from its own tld, and a Sail project's .env may carry an APP_URL. XAMPP and MAMP have nothing to read, so it is null and adoption asks. Sail's localhost defaults are treated as no domain rather than imported as one."
+    },
+    "SiteSettings": {
+      "env": "Record<string,string> - set on the project's container, never written into the application's own .env",
+      "directoryListing": "bool - autoindex for nginx, file_server browse for Caddy",
+      "sshAgent": "bool - forward the host's SSH agent into the container",
+      "listingSupported": "bool - false for Apache and Swoole, which have no configuration file",
+      "agentAvailable": "bool - false when no agent is running on this machine",
+      "server": "string - named so the pane can say which server cannot list a directory",
+      "note": "M-10's socket is NOT $SSH_AUTH_SOCK. On macOS and Windows the daemon runs in a VM where the host's path means nothing, and Docker Desktop publishes the agent at /run/host-services/ssh-auth.sock instead; on Linux the daemon is the host and the real socket is the answer. Measured: a container with the Desktop path mounted answers 'ssh-add -l' with \"The agent has no identities\" - the agent replying - where an unforwarded one says it could not open a connection. Forwarding is off by default and per project, because anything in that container can sign with every key in the agent for as long as it is up."
     }
   },
   "coverage": {

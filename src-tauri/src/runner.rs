@@ -364,6 +364,29 @@ pub fn compose_base_args(root: &Path) -> Vec<String> {
         args.push("-f".to_string());
         args.push(crate::phpini::overlay_path(root).display().to_string());
     }
+    // The performance layer (I-1): named volumes over the directories a bind
+    // mount is slowest at. Third and last for the same reason as the other two
+    // — its `volumes:` merge onto the generated service rather than over it —
+    // and independent of them, so a fault here cannot take Xdebug's projects
+    // down with it.
+    if crate::perf::sync(root) {
+        args.push("-f".to_string());
+        args.push(crate::perf::overlay_path(root).display().to_string());
+    }
+    // Per-project environment variables and the SSH agent (M-5, M-10). Fourth
+    // and independent for the same reason as the three above it.
+    if crate::site::sync(root) {
+        args.push("-f".to_string());
+        args.push(crate::site::overlay_path(root).display().to_string());
+    }
+    // The mail relay (M-2): the catcher's own environment, so one caught
+    // message can be released to a real address. Fifth and independent — a
+    // fault here must not stop a project starting, and a workspace that has
+    // never configured a relay renders no file at all.
+    if crate::mailrelay::sync(root) {
+        args.push("-f".to_string());
+        args.push(crate::mailrelay::overlay_path(root).display().to_string());
+    }
     // Three mounts, for every PHP project, whether or not anyone has switched
     // capture on. That is the point of it: the mounts are the part that needs a
     // container, so they go in once and the switch afterwards is a file

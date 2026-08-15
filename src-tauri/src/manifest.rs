@@ -1330,9 +1330,7 @@ mod tests {
 
     #[test]
     fn a_spec_is_judged_on_the_bytes_it_would_become() {
-        // Exactly what the New Project sheet sends. Serialised as a `Value` its
-        // keys come out sorted — `extensions` before `version` — which used to
-        // trip W-01 and disable the Create button on a perfectly valid project.
+        // Exactly what the New Project sheet sends.
         let spec = serde_json::json!({
             "name": "aksoyca",
             "domain": "aksoyca.loc",
@@ -1341,14 +1339,40 @@ mod tests {
             "document_root": "public",
             "php": { "version": "8.4", "extensions": ["bcmath", "mbstring", "pdo_mysql"] }
         });
+
+        // W-01 is about *bytes*: a key after `extensions` breaks the Bash
+        // parser, so the rule fires on this ordering however it was produced.
+        // This literal is what `serde_json::to_string_pretty` used to make of
+        // the spec above, because `Value` sorted its keys — which disabled the
+        // Create button on a perfectly valid project.
+        let sorted = r#"{
+  "domain": "aksoyca.loc",
+  "name": "aksoyca",
+  "php": { "extensions": ["bcmath"], "version": "8.4" }
+}"#;
         assert!(
-            serde_json::to_string_pretty(&spec)
-                .map(|raw| normalize(&spec, &raw, "aksoyca"))
-                .unwrap()
+            normalize(&serde_json::from_str(sorted).unwrap(), sorted, "aksoyca")
                 .errors
                 .iter()
                 .any(|e| e.code == "W-01"),
-            "the sorted-key serialisation is what made this a bug"
+            "the rule this bug ran into still fires on that ordering"
+        );
+
+        // The ordering itself can no longer be produced here: `serde_json` is
+        // built with `preserve_order` (see Cargo.toml — it is there so that
+        // rewriting somebody's assistant configuration does not alphabetise it),
+        // so a `Value` now serialises in the order it was built.
+        let round_trip = serde_json::to_string_pretty(&spec).unwrap();
+        assert!(
+            round_trip.find("\"version\"").unwrap() < round_trip.find("\"extensions\"").unwrap(),
+            "keys came back sorted: {round_trip}"
+        );
+        assert!(
+            normalize(&spec, &round_trip, "aksoyca")
+                .errors
+                .iter()
+                .all(|e| e.code != "W-01"),
+            "the sorted-key serialisation was the whole of this bug"
         );
 
         let m = normalize_spec(&spec, "aksoyca");

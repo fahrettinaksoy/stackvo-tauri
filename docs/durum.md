@@ -86,35 +86,99 @@ ve artık reddedilmiyor.
 
 ### E — Ağ
 
-| # | Madde | Durum | Nasıl bakıldı |
-| --- | --- | :-: | --- |
-| E-1 | Gerçek yerel DNS sunucusu | 🟡 | **macOS'ta tam** (`dns.rs` + `/etc/resolver/<tld>`), gerçek `dig` ile ölçüldü. Linux'ta yazılacak satır **gösteriliyor**, yazılmıyor: resolv.conf'un önünde ne olduğu dağıtıma bağlı. Windows'ta sonek başına mekanizma **yok** ve bu bir eksik değil, platformun kendisi |
+**E-1, E-2 ve E-4 çıktı.** E-2'nin joker yarısı E-1'in arkasındaydı ve sonek
+eşleşmesinden bedavaya düştü — `a.b.shop.loc` de `shop.loc` de cevap alıyor.
 
-**E-2 ve E-4 çıktı.** E-2'nin joker yarısı E-1'in arkasındaydı ve sonek eşleşmesinden
-bedavaya düştü — `a.b.shop.loc` de `shop.loc` de cevap alıyor.
+E-1'in kalan yarısı "hangi dosyaya yazılacağı" sorusuydu ve cevabı tahmin etmek
+değil **sormak** oldu: Linux'ta NetworkManager'ın dnsmasq'ı, makinenin kendi
+dnsmasq'ı, systemd-resolved — bu sırayla aranıyor, hiçbiri bulunamazsa hiçbir şey
+yazılmıyor ve satır gösteriliyor. Windows'ta mekanizma **var**: NRPT bir ad
+uzayı ile bir sunucu alıyor, yalnız o soneke uygulanıyor. Önceki turun "Windows'ta
+sonek başına mekanizma yok" cümlesi, platform hakkında değil, ne arandığı
+hakkında bir cümleymiş.
 
-Kalan iş Linux'un yarısı ve tek adım değil: hangi dosyaya yazılacağı
-(`dnsmasq.d`, NetworkManager, systemd-resolved) kullanıcının dağıtımına ait bir
-soru, ve yanlış tahmin edilen bir dosya yolu, çalışmayan bir özellikten daha
-kötü — makinenin ad çözümlemesini bozar.
+Bunu, çalıştırmadan doğrulanamayacak bir dağıtıma yazmayı kabul edilebilir yapan
+şey ölçüm: değişiklik uygulandıktan sonra **makinenin kendi çözümleyicisine**
+soruluyor — sonek altındaki bir ad loopback dönmeli, ve değişiklikten önce çözülen
+genel bir ad hâlâ çözülmeli. Biri düşerse değişiklik **geri alınıyor**. Yazılan
+dosyayı geri okumak, yalnız yazmanın olduğunu kanıtlar.
+
+Aynı sınıftan iki şey daha kapandı, ikisi de "yazdık ve unuttuk" hatası:
+`/etc/resolver/test` dnsmasq'ın, Valet'in ya da bir meslektaşın betiğinin olabilir
+— üzerine yazmak bir soneki başka bir araçtan geri dönüşsüz almak demek; artık
+önce kenara kopyalanıyor, kapatınca geri konuyor. Ve sonek değişince eski dosya
+kalıyordu: `.loc` artık **reddediliyordu**, yani yukarı gidip dürüstçe düşmek
+yerine bu makinede kesiliyordu. İkisi de panelde yazıyor.
+
+Doktor sayfasına da tek satır eklendi ve yalnız tek bir durumda görünüyor:
+makine bizi soruyor, port başkasında, hiçbir ad çözülmüyor — uygulama,
+konteynerler ve proxy sapasağlam görünürken. Bunu bildiren başka hiçbir şey
+yoktu.
+
+Yolda bulunan ve ilk turun kaçırdığı hata: her REFUSED ve her NODATA, gövdesinde
+soru taşımadan başlığında "bir soru" diyordu. `dig` bunu okunan satırın bir üstünde
+söylüyordu — *"Message parser reports malformed message packet"* — ve probe yalnız
+`status:` satırına bakıyordu. Hoşgörülü bir araç yine de okur; bir stub çözümleyici
+gönderdiği soruyla eşleşmeyeni atar, ve atılan bir cevap hızlı bir hata değil, beş
+saniyelik bir zaman aşımıdır. NODATA yolu istisna da değil: her Chrome ve Safari
+sayfa yüklemesi adresten önce bir HTTPS kaydı (tip 65) soruyor.
 
 ### F — Gözlemlenebilirlik: en büyük ürün boşluğu
 
-| # | Madde | Durum | Nasıl bakıldı |
-| --- | --- | :-: | --- |
-| F-3 | Flame graph | 🟡 | `profile::call_tree` + `FlameView`; parser çağrı kenarlarını **zaten okuyordu ve atıyordu**. Tam bir flame graph değil bir **çağrı ağacı**, ve fark CHANGELOG'da yazılı — cachegrind yığın tutmuyor |
+**F-3 çıktı ve tabloyu daha iyi çizerek çıkmadı.** Flame graph yığınlardan
+kurulur — her ölçüm kendi yolunu taşır, yani iki yerden çağrılan bir fonksiyon
+kendi genişlikleriyle iki kutudur — cachegrind ise *kenar* tutuyor: "A, B'yi
+çağırdı"nın her yerdeki toplamı. `profile::call_tree` bunu kendi yorumunda
+söylüyordu ve ekran dürüstçe "çağrı ağacı" diyordu. Dosyada olmayan bilgi
+düzenlemeyle geri gelmez; girdinin değişmesi gerekiyordu.
 
-Herd Pro, Lerd ve EnvKit'in üçü de aynı şeyi satıyor ve F-1 üçünün de en çok
-anılan özelliği. **Bu satır "container içinde bir toplayıcı gerektiriyor"
-diyordu ve yanlıştı** — en azından bu yığının en çok çalıştırdığı iki veritabanı
-için. MySQL ve MariaDB'nin toplayıcısı zaten var: kendi genel sorgu günlükleri,
-bir **tabloya** yönlendirilip iki `SET GLOBAL` ile çalışma anında açılabiliyor.
-Ajan yok, imaj değişmiyor, restart yok, kimsenin uygulamasına kod girmiyor.
+Xdebug'ın diğer türü zaten var: `xdebug.mode=trace` + `trace_format=1` her
+fonksiyon **girişi ve çıkışı** için derinlikli, zaman damgalı bir satır yazıyor.
+Aradaki boşlukları o anki yığına yazmak, her ayrı yol için "bu yol yığında ne
+kadar durdu"yu veriyor — flame graph'ın genişliği tam olarak budur. Üçüncü bir
+Xdebug kipi (`trace`), onay kutusu değil: farklı dosya, farklı ayrıştırıcı,
+kaydetmesi çok daha pahalı.
+
+Çalışan yığında ölçüldü (`examples/trace_probe.rs`): iki farklı üstten çağrılan
+`slow()`, 60ms ve 10ms istenmişken **62.089µs ve 11.167µs olarak iki ayrı kutu**
+döndü. Cachegrind'in söyleyemediği cümle bu.
+
+**Yolda bulunan üç kırık — üçü de çalıştırarak, okuyarak değil:**
+
+* **Profil alma hiç dosya yazmamış.** `xdebug.output_dir` ilk günden
+  `/var/log/xdebug` diyor ve o dizini bağlamanın iki tarafında da kimse
+  oluşturmuyordu. Xdebug var olmayan dizine sessizce yazmıyor: profil aç, tetikle,
+  liste boş — hiçbir yerde hata yok. Artık her compose çağrısından önce
+  oluşturuluyor.
+* **MariaDB 12'de konuşacak istemci yokmuş.** MariaDB 11 `mysql*` sembolik
+  bağlarını kaldırdı, 12 onlarsız geliyor; `mariadb:12` konteynerinde `mariadb`
+  ve `mariadb-dump` var, `mysql` yok — uygulamanın her veritabanı özelliği ise
+  ondan `mysql` istiyordu. Dökme, geri yükleme, anlık görüntü, taşıma ve sorgu
+  günlüğü; hepsi, katalogdaki bir servis üzerinde. Birim testleri boyunca geçti,
+  çünkü onlar argüman *listesini* denetliyor ve liste, adını verdiği program için
+  doğruydu. Artık hangisinin olduğunu konteynerin kendisi seçiyor.
+* **Mongo sorgu günlüğü taze bir veritabanında hiçbir şey kaydetmiyordu, kaydedince
+  de okunmuyordu.** Profil Mongo'da veritabanı başına ve düğmeye basıldığı anda var
+  olanlara uygulanıyordu — yeni başlamış bir konteynerde hiç yok, yani anahtar
+  hiçbir şeyi açmıyor ve dürüstçe "kapalı" diyordu; üstelik günlük durum (uygulama
+  ilk yazmada veritabanını oluşturur) tam da kaçırılan durumdu. Oturumu artık
+  `admin` taşıyor ve her okuma, o sırada beliren veritabanlarını da açıyor.
+  Kaydedileni ise ham gösteriyordu: satır başına beş yüz karakter `$clusterTime`,
+  imza, oturum kimliği ve okuma tercihi, `find` ile `filter` ortada bir yerde.
+  Sürücü zarfı artık hem gösterilenden hem şekilden çıkarılıyor — tek liste, ki
+  birinde gürültü olan bir anahtar diğerinde kalmasın.
+
+`examples/querylog_probe.rs` son üçünü bulan ve bulunmuş tutan şey: ayakta olan
+her veritabanına karşı kaydı açıyor, geri geldiğinde tanıyabileceği bir soru
+soruyor — F-1'in var olma sebebi olan N+1 şekli dahil — oturumu okuyor ve her
+veritabanını bulduğu hâle geri bırakıyor.
+
+**Ölçülmeyen tek yarım Postgres:** bu çalışma alanında kurulu değil. Probe onu
+atlıyor ve atladığını yazıyor; kuruluysa aynı komut ölçer.
 
 F-6 bu bölümün *uygulama* yarısıydı ve kapandı: bir konteynerin sağlıklı olup
 olmadığı, neden durduğu (137 = bellek), kaç kez yeniden başladığı ve ne kadar
-yediği artık ekranda. Kalan beş madde **uygulamanın içine** bir toplayıcı
-koymayı gerektiriyor ve ayrı bir tur.
+yediği artık ekranda.
 
 ### G — Veritabanları
 
@@ -145,9 +209,41 @@ kopyası olurdu — reçete zaten imajın tam adını yazıyor.
 
 ### I — Performans: Docker eleştirilerinin doğru olanı
 
-| # | Madde | Durum | Nasıl bakıldı |
-| --- | --- | :-: | --- |
-| I-1 | Bind-mount performans katmanı | 🟡 | **Ölçüm indi** (`examples/mount_bench.rs`). Cevap belli: `:cached`/`:delegated` **atıl**, `bind`→`volume` mesafesi metadata ve yazmada **2–3 kat**. Kalan iş bir senkron katman ve `mutagen` hâlâ sıfır isabet |
+**I-1 çıktı.** Kalan iş "bir senkron katman" diye yazılıydı ve yazılan o olmadı —
+çünkü ölçüm, kazancın nerede olduğunu söyleyince tasarım değişti.
+
+`mount_bench` genel soruyu cevaplamıştı: `:cached`/`:delegated` **atıl**,
+bind→volume mesafesi metadata ve yazmada **2–3 kat**. Yeni ölçüm
+(`examples/perf_layer_bench.rs`, bu makinede, 8.000 dosyalık bir `vendor/` ile)
+özelliğin cevaplaması gereken daha dar soruyu soruyor — "kaynağım editörün
+gördüğü yerde kalırken ne kadar hızlanır":
+
+| | bind | vendor birimde | + storage/framework |
+|---|---|---|---|
+| boot (framework açılışı) | 1,47s | 0,39s — **3,8×** | 0,40s |
+| stat (ağaç yürüyüşü) | 0,42s | 0,39s | 0,34s |
+| write (istek başına yazma) | 1,14s | 1,21s — **yok** | 0,41s — **2,8×** |
+
+İki satır tasarımı belirledi: `vendor` açılışı alıyor ve yazmaya **hiçbir şey**
+yapmıyor; yazmayı alan `storage/framework`. Yani "hızlandır" diye tek bir anahtar,
+kazancın nereden geldiğini gizlerdi ve taşıdığı dizinler birinin projesi hakkında
+bir tahmin olurdu. Bu yüzden özellik bir dizin listesi.
+
+**Mutagen paketlenmedi ve uygulama içine çift yönlü senkron yazılmadı.** İkisinin
+de gerekçesi `src-tauri/src/perf.rs` başlığında: biri üç platform için ikinci bir
+ikili, diğeri yarım yapıldığında sesizce birinin dosyasını kaybeden bir sınıf
+problem. Senkrona gerek de kalmıyor: bu dizinleri host'ta kimse yazmıyor.
+
+Bedeli ekranda yazıyor — editör `vendor/`'ı artık göremez — ve `perf_export` onu
+tek tıkla host'a geri kopyalıyor (anlık görüntü olduğu söylenerek). İki uçurum da
+kapalı: taze bir birim **boş** başlar, o yüzden `perf_set` **önce** host kopyasını
+içeri alıyor ve kopyalama düşerse ayarı hiç yazmıyor; birimi silmek ise anahtarın
+yan etkisi değil, ayrı bir eylem.
+
+Çalışan Docker'a karşı doğrulandı: compose ikinci dosyanın `volumes:` listesini
+**ekliyor** (ezmiyor), ve birim bind'i alt yolda gölgeliyor — konteyner birimi
+görüyor, host kopyası olduğu yerde kalıyor, konteynerin yazdığı host'a hiç
+gitmiyor.
 
 **I-2 çıktı** (`idle.rs`). Sinyal konteyner CPU'su değil — php-fpm hizmet
 verirken de uyurken de sıfıra yakın, ağ sayaçları da sağlık kontrolü ve DNS için
@@ -163,17 +259,39 @@ tanıtımı olurdu. **İstek üzerine uyandırma yok** ve nedeni yazılı: uyand
 konteyner başlarken bağlantıyı açık tutabilen bir bileşen ister; istek yolundaki
 tek şey Traefik ve o bunu yapamıyor.
 
-**Listedeki en sonuç doğurucu madde.** Diğer her boşluk bir özelliğe mal oluyor;
-bu *argümana* mal oluyor: macOS ve Windows'ta bind-mount edilmiş kaynak kod,
-insanların Docker tabanlı bir iş akışını bırakmasının en yaygın tek nedeni. DDEV
-Mutagen'i paketleyip varsayılan açıyor. Burada Herd'dekinin 4 katı süren bir test
-suite'ine "tekrarlanabilirlik" cevap değildir.
-
 ### K — AI katmanı
 
-| # | Madde | Durum | Nasıl bakıldı |
-| --- | --- | :-: | --- |
-| K-1 | Codex (TOML), Zed | ⬜ | bilerek dışarıda; iki dosya biçimi daha, ikisi de bu uygulamanın yazmadığı bir şemaya. Gerekçe `agents.rs`'in başında |
+**K-1 çıktı.** İki istemci eksikti ve ikisinin de gerekçesi `agents.rs`'in
+başında yazılıydı; ikisi de o gerekçeyi ortadan kaldırarak kapandı.
+
+**Codex** TOML kullanıyor ve birinin yorumlarını, anahtar sırasını, tırnak
+stilini koruyarak TOML düzenlemek `toml_edit` istiyordu — bu depoda bir bağımlılık
+ölçülen bir karardır. Ölçüldü: `toml_edit` ve `toml_writer` Tauri'nin kendi grafiği
+üzerinden **zaten `Cargo.lock`'ta ve `NOTICE.md`'de**, yani kilit dosyası iki kenar
+kazanıyor, sıfır paket. Şema da hatırlanmadı: bu makinedeki gerçek
+`~/.codex/config.toml` `[mcp_servers.node_repl]` bloğunu `command`, `args`,
+`startup_timeout_sec` ve iç içe bir `env` tablosuyla tutuyor, OpenAI'nin kendi
+tanı belgesi de aynı bloğu belgeliyor.
+
+**Zed** çalışan bir kopyaya karşı doğrulanamadığı için yoktu; hâlâ kurulu değil,
+o yüzden şema Zed'in güncel yayımlanmış belgesinden alındı: düz
+`"context_servers": { "<ad>": { "command": "…", "args": [], "env": {} } }`,
+`source` anahtarı yok. Yolu ise belgede hiç yazmıyor ve Zed bazı şeyleri
+`~/.config/zed`, bazılarını `~/Library/Application Support/Zed` altında tutuyor —
+bu yüzden **ikisine de bakılıyor**; birini seçmek makinelerin yarısında sessizce
+yanlış dosyayı yazmak olurdu.
+
+**Ölçüm bir de eskiyi buldu.** `examples/agent_config_probe.rs` modülü bu
+makinedeki **gerçek** dosyalara karşı çalıştırıyor: kopyaya kaydı yazıyor, geri
+alıyor ve sonucu orijinalle **byte byte** karşılaştırıyor. Yeni TOML yolu ilk
+denemede birebir geldi; JSON yolunun dördü gelmedi — çünkü `serde_json::Map`
+`preserve_order` olmadan bir BTreeMap ve dosyayı **alfabetik sıraya** diziyordu,
+üstelik girintiyi de kendi iki boşluğuna çeviriyordu. 58 KB'lık bir
+`~/.claude.json`'ı tek bir kayıt eklemek için baştan sona değiştirmek, modülün
+"dosyada olan her şey yerinde kalır" sözünün tam tersi. İkisi de kapandı: sıra
+korunuyor (yine sıfır yeni paket — `indexmap` zaten oradaydı) ve dosya kendi
+girintisiyle geri yazılıyor. Şimdi beş dosyanın beşi de birebir dönüyor; tek fark,
+bilerek geride bırakılan boş `mcpServers` haritası.
 
 **K-2 çıktı** (`agentctx.rs`). `agents.rs` host'taki asistanlara `stackvo-mcp`'yi
 tanıtıyor; **konteynerin içinde** koşan bir agent için hiçbir şey yapmıyordu ve
@@ -196,29 +314,112 @@ bir komutu adlandıran araç build'i kırıyor. Bu gerçek bir farklılaştırı
 
 ### L — Onboarding
 
-| # | Madde | Durum |
-| --- | --- | :-: |
-| L | MAMP, Sail, Valet | ⬜ |
+**L çıktı.** Beş araç, üç ayrı şekil — ve satır zaten yarı yanlıştı: MAMP ile
+Valet `imports.rs`'te yazılıydı ama **"kendim göstereyim" yolu onları
+reddediyordu**. `imports_scan_at` beşten ikisini tanıyordu ve ekran da aynı ikisini
+sunuyordu, yani MAMP'ı `/Applications` dışında olan birine "bu, uygulamanın
+okuyabildiği bir araç değil" deniyordu. Taramanın hiç bulamayacağı iki araç
+(Valet ve Sail) için ise o yol tek yoldu.
 
-### M — Küçük maddeler, her biri ucuz
+Üç şekil:
 
-| # | Madde | Durum |
-| --- | --- | :-: |
-| M-1 | Proje grupları / favoriler | ⬜ |
-| M-2 | Mail *gönderme* / relay | ⬜ |
-| M-3 | Paylaşım URL'sinde QR kod | ⬜ |
-| M-4 | Her siteyi listeleyen açılış sayfası | ⬜ |
-| M-5 | Proje başına ortam değişkenleri | ⬜ |
-| M-6 | Proje başına dizin listeleme anahtarı | ⬜ |
-| M-7 | Arayüz dilleri (şu an 2) | ⬜ |
-| M-8 | Alternatif yüzeyler (TUI, tray-only, PWA) | ⬜ |
-| M-9 | Framework geçiş komutları (`ddev drush`) | ⬜ |
-| M-10 | SSH agent'ının container'a iletilmesi | ⬜ |
-| M-11 | Stripe webhook dinleyicisi | ⬜ |
-| M-12 | `.loc` için OAuth callback yönlendirme | ⬜ |
+* **XAMPP, Laragon, MAMP** — tek bir site dizini. Laragon ayrıca site başına bir
+  vhost yazıyor, adı oradan okunuyor.
+* **Valet** — site dizini yok: dizin *park* ediyor (her çocuğu bir site) ve tek
+  tek *link* ediyor (`Sites/` altında sembolik bağ). İkisi de, tld'si de kendi
+  `config.json`'ından okunuyor.
+* **Sail** — kurulum bile değil: her projenin *içinde* bir composer paketi.
+  Tanıtıcısı `laravel/sail` adını geçen bir `docker-compose.yml`. Bu yüzden
+  `well_known()` onun için hiçbir şey önermiyor — `~/Code` bir gelenek, makine
+  hakkında bir olgu değil — ve gösterilen yol proje de olabilir, birkaç projeyi
+  tutan klasör de.
 
-M-7 artık bir kod değişikliği değil: tray ve menü etiketleri `tray_relabel`
-üzerinden frontend'den besleniyor, yani üçüncü dil bir locale dosyası.
+Sail aynı zamanda **ne gerektiğini söyleyen tek kaynak**: compose dosyası mysql,
+redis, meilisearch gibi servisleri sayıyor. Bunlar bu uygulamanın kataloğuna
+eşleniyor (`pgsql`→`postgres`, `mongodb`→`mongo`), karşılığı olmayan sessizce
+*atılıyor* — yerine benzeri konmuyor — ve içe aktarma neyi açması gerektiğini
+söyleyebiliyor.
+
+Ölçüldü (`examples/import_probe.rs`): beş aracın kendi dizin düzeni geçici bir
+dizinde kuruluyor ve sevk edilen tarayıcı üzerinden geçiriliyor — XAMPP kendi
+`dashboard`'ını atlıyor, Laragon'un vhost'undan `crm.test` çıkıyor, Valet'in park
+edilmiş ve link edilmiş siteleri birlikte geliyor, Sail'in `pgsql`'i `postgres`
+oluyor. Bu ölçüm bir hatayı da bulmuştu: Sail'in şablonu **dört boşluk** girintili
+ve parser iki boşluğa sabitlenmişti — hiçbir servis bulunmuyordu.
+
+### M — Küçük maddeler: on biri çıktı, biri iki parçaya ayrıldı
+
+Önceki turda dördü teslim edilmiş, sekizi için "ucuz etiketi tutmuyordu"
+denmişti. Doğruydu: ucuz değillerdi. Bu turda **maliyetleri ödendi** ve on ikisi
+de tek tek ölçüldü.
+
+| # | Madde | Durum | Nasıl |
+| --- | --- | :-: | --- |
+| M-1 | Proje favorileri | ✅ | `useFavourites` + yıldız sütunu. Tercih dosyasında, manifestoda değil: favori kişiye ait, `stackvo.json` ise commit ediliyor |
+| M-2 | Mail gönderme / relay | ✅ | Mailpit'in **release** ucu + compose overlay. Yakalayıcı her şeyi yakalamaya devam ediyor; yalnızca elle iletilen mesaj çıkıyor |
+| M-3 | Paylaşım URL'sinde QR | ✅ | Kendi kodlayıcısı. **macOS'un kendi çözücüsüne** okutuldu: yedi metnin yedisi bayt bayt aynı geri geldi |
+| M-4 | Her siteyi listeleyen açılış sayfası | ✅ | Yığının **zaten sahiplendiği** ada bir sidecar. Canlı yığında ölçüldü: `https://stackvo.loc` yazılan sayfayı döndü |
+| M-5 | Proje başına ortam değişkenleri | ✅ | `.stackvo/site.json` → compose overlay. Uygulamanın kendi `.env`'ine yazılmıyor; o dosya framework'ün |
+| M-6 | Proje başına dizin listeleme | ✅ | nginx `autoindex`, Caddy `file_server browse`. Apache ve Swoole yapamıyor ve ekran bunu **söylüyor** |
+| M-7 | Arayüz dilleri | ✅ | **Dil paketi**: config dizinine bırakılan bir JSON. Dil eklemek artık kod değişikliği değil |
+| M-8 | Alternatif yüzeyler | ◐ | Tepsi artık **pencereyi açmadan** proje başlatıp durduruyor. TUI, §5'teki A-1 kararına bağlı; PWA'nın dayanacağı HTTP yüzeyi yok |
+| M-9 | Framework komutları | ✅ | Symfony, Django, Rails ve Ruby. **B-4 kilidi değil**: her satır hâlâ derlemeye gömülü |
+| M-10 | SSH agent'ının container'a iletilmesi | ✅ | Ölçüldü: konteynerden `ssh-add -l` ajana ulaşıyor |
+| M-11 | Stripe webhook dinleyicisi | ✅ | Gerçek imajla ölçüldü — hesabın gerektirdiği yere kadar, ve o çizgi yazılı |
+| M-12 | `.loc` için OAuth callback | ✅ | Tanımı okununca küçüldü: **yönlendirme tarayıcıya gidiyor**, sağlayıcı adresi çözmüyor |
+
+**M-2 servis paketine dokunmuyor.** Mailpit ayarlarını kendi ortamından okuyor;
+bu uygulama oraya `site.rs` ve `perf.rs`'in kullandığı **compose overlay** ile
+uzanıyor — paket yeniden mühürlenmiyor, relay ayarlamamış bir çalışma alanı
+öncekiyle aynı baytları üretiyor. Yakalayıcının compose anahtarı **imajından**
+bulunuyor (`axllent/mailpit`): `.env` alanında `mailpit`, instance tablosuna
+geçmiş olanda `mailpit-1-30`. İzinli alıcı listesi Mailpit'e bir düzenli ifade
+olarak gidiyor, o yüzden noktalar kaçırılıyor — kaçırılmasa `me@test.com`,
+`me@testxcom`'a da izin verirdi ve o birinin sahip olabileceği bir adres.
+
+**M-3'ün asıl bulgusu ölçümün kendisi.** Birim testleri geçiyordu: alan
+aritmetiği, yayımlanmış Reed-Solomon örneği, biçim ve sürüm dizeleri, çerçeve.
+Sonra macOS **hiçbirini okuyamadı** — format bilgisinin ilk kopyası 8. sütun
+yerine 8. satıra yazılmıştı, yani doğrunun devriği. Maskeyi o alan söylüyor,
+dolayısıyla geri kalan her şeyin doğru olması hiçbir şeye yaramıyordu. Kendi
+beklentisine karşı sınanan bir kodlayıcı, yazarıyla hemfikir olan bir kodlayıcı.
+
+**M-4 yeni bir ad istemedi.** `core_domains` çıplak son eki zaten `/etc/hosts`'a
+yazıyor, `certs::required_domains` zaten onun için sertifika üretiyor — ve o
+adres Traefik'in 404'ünü döndürüyordu. Yani madde "yeni konteyner + DNS +
+sertifika" değil, "yığının zaten sahiplendiği ada cevap veren bir konteyner"
+çıktı. `nginx:alpine`, çünkü Alpine'ın busybox'ı `httpd` applet'i olmadan
+derlenmiş — okunarak değil çalıştırılarak bulundu: `httpd: applet not found`.
+
+**M-7'de çeviri yapılmadı ve bu bilerek.** Engel hiçbir zaman 2.000 dize
+değildi; **yeniden derleme** idi. Dil kümesi üç yerde sabitti, dolayısıyla bu
+uygulamayı gerçekten çevirebilecek kişi hiçbirine dokunamıyordu. Artık bir dil,
+config dizinine bırakılan bir dosya. Eksik dizeler İngilizce görünüyor — vue-i18n
+anahtar bazında geri düşüyor — ve ayarlar ekranı **ne kadarının çevrildiğini
+yazıyor**. Makine çevirisi yok: geri düşen bir dize dürüst, uydurulmuş bir dize
+birinin bulup inanmaması gereken bir cümle.
+
+**M-11'in ölçümü kendi hatasını buldu.** İlk hâli tünelin sidecar'ını kopyalayıp
+`--rm` kullanıyordu. Geçersiz anahtar CLI'ı çıkarıyor, `--rm` konteyneri
+**log'uyla birlikte** siliyor, `status_all` hiçbir şey bulamıyor — bu özelliğin
+en olası hatası için panel ne dinleyici ne hata ne de sebep gösteriyordu. Probe
+de bunu bir süre başarı sandı, çünkü Docker'ın kendi "No such container" mesajı
+"Error" ile başlıyor.
+
+**M-8 ikiye ayrıldı ve yarısı zaten vardı.** `closeBehaviour: tray` ve
+`startMinimized` yıllardır orada; eksik olan tepsinin **bir şey yapabilmesi**
+idi — her satır pencereyi öne getiriyordu, yani tepsi bir yüzey değil kısayoldu.
+Artık başlat/durdur pencereyi açmadan çalışıyor ve bildirim gönderiyor. Renkli
+nokta üst seviyede kaldı: "yığın ayakta mı" bir bakış sorusu ve her satıra fiil
+koymak cevabın enini iki katına çıkarırdı. TUI ikinci bir yüzey (§5, A-1); PWA
+için dayanacak bir HTTP yüzeyi yok.
+
+**M-9, B-4'ün kilidi değil.** B-4 *çalışma alanının* beyan ettiği komut; buradaki
+her satır hâlâ derlemeye gömülü ve webview yalnızca bir id gönderiyor. Rails
+`Gemfile` ile değil `bin/rails` ile bulunuyor — Gemfile en az Rails kadar sık
+Sinatra ve Jekyll demek — ve `bundle exec` ile çalışıyor: binstub yalnızca
+çalıştırma biti checkout'tan sağ çıktıysa çalışır, `bundle exec` ise bite değil
+gem'e bakar.
 
 ### N — Sahada yalnız Lerd'de olan
 
@@ -772,13 +973,13 @@ Mekanik olarak sayılabilenler koda karşı tutuluyor:
 
 | | Sayı | Nasıl sayıldı |
 |---|---|---|
-| Toplam IPC komutu | **213** | `contracts/ipc.json` → `commands` (210 Rust + 3 `frontend-plugin`) |
-| Bunlardan `#[tauri::command]` olarak yazılmış | **209** | `commands.rs`, `#[cfg(test)]` dışı |
-| Frontend kaynak dosyası | **120** | `src/**/*.{js,vue}`, spec dosyaları hariç |
+| Toplam IPC komutu | **238** | `contracts/ipc.json` → `commands` (235 Rust + 3 `frontend-plugin`) |
+| Bunlardan `#[tauri::command]` olarak yazılmış | **234** | `commands.rs`, `#[cfg(test)]` dışı |
+| Frontend kaynak dosyası | **128** | `src/**/*.{js,vue}`, spec dosyaları hariç |
 | Bunlardan `@tauri-apps` kullanan | **20** | aynı küme içinde metin taraması |
 | **Veri katmanının geçtiği fonksiyon** | **1** (`src/lib/ipc.js` → `call()`) | `invoke(` `ipc.js` dışında **0** yerde geçiyor |
-| `ipc.js` sarmalayıcısı | **206** | `api` nesnesinin üye sayısı |
-| Rust kaynağı | **81 modül, 63.206 satır** | `src-tauri/src/*.rs` |
+| `ipc.js` sarmalayıcısı | **231** | `api` nesnesinin üye sayısı |
+| Rust kaynağı | **89 modül, 71.847 satır** | `src-tauri/src/*.rs` |
 
 Elle sınıflandırma, kapıya dahil değil — yöntemi yazılı ki bir sonraki okuyucu
 yeniden üretebilsin:

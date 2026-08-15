@@ -33,6 +33,8 @@ import tr from '@/i18n/locales/tr.js';
 const vuetify = createVuetify({ components, directives });
 
 const replies = {};
+/** What the page asked for, so a test can assert the payload as well as the call. */
+const calls = [];
 
 vi.mock('@/lib/ipc', () => ({
   StackvoError: class extends Error {},
@@ -41,10 +43,13 @@ vi.mock('@/lib/ipc', () => ({
   api: new Proxy(
     {},
     {
-      get: (_t, name) => () => {
-        const reply = replies[name];
-        return typeof reply === 'function' ? reply() : Promise.resolve(reply);
-      },
+      get:
+        (_t, name) =>
+        (...args) => {
+          calls.push([String(name), ...args]);
+          const reply = replies[name];
+          return typeof reply === 'function' ? reply(...args) : Promise.resolve(reply);
+        },
     }
   ),
 }));
@@ -245,5 +250,58 @@ describe('unmanaged code, behind the overflow button', () => {
 
     expect(overlays()).toContain(en.unmanaged.none);
     wrapper.unmount();
+  });
+});
+
+/**
+ * Favourites (M-1).
+ *
+ * The composable rather than the page: what matters is the two rules the
+ * feature is built on, and both are invisible from a mounted table. A favourite
+ * is a **preference** — writing one into `stackvo.json` would put "Ali likes
+ * this project" in a teammate's diff — and starring **sorts** rather than
+ * filters, so the list can never become a mode somebody is stuck in.
+ */
+describe('favourites', () => {
+  it('reads the list from preferences and writes the whole array back', async () => {
+    const { useFavourites } = await import('@/composables/useFavourites');
+    replies.prefsGet = { favourites: ['blog'], theme: 'dark' };
+    replies.prefsSet = {};
+
+    const favourites = useFavourites();
+    await favourites.load();
+    expect(favourites.isFavourite('blog')).toBe(true);
+    expect(favourites.isFavourite('shop')).toBe(false);
+
+    await favourites.toggle('shop');
+    const [, patch] = calls.findLast(([name]) => name === 'prefsSet');
+    expect(patch, 'the list is the value, not a patch of it').toEqual({
+      favourites: ['blog', 'shop'],
+    });
+    // `prefs_set` merges shallowly, so nothing else in the file is named.
+    expect(Object.keys(patch)).toEqual(['favourites']);
+  });
+
+  it('sorts the starred to the top and hides nothing', async () => {
+    const { useFavourites } = await import('@/composables/useFavourites');
+    replies.prefsGet = { favourites: ['zeta'] };
+    const favourites = useFavourites();
+    await favourites.load();
+
+    const projects = [{ name: 'alpha' }, { name: 'zeta' }, { name: 'beta' }];
+    const sorted = favourites.sorted(projects);
+
+    expect(sorted.map((p) => p.name)).toEqual(['zeta', 'alpha', 'beta']);
+    expect(sorted, 'nothing is filtered out').toHaveLength(projects.length);
+  });
+
+  /** A hand-edited preferences file can hold anything. */
+  it('ignores entries that are not names', async () => {
+    const { useFavourites } = await import('@/composables/useFavourites');
+    replies.prefsGet = { favourites: ['shop', 3, null, { name: 'x' }] };
+    const favourites = useFavourites();
+    await favourites.load();
+
+    expect(favourites.names.value).toEqual(['shop']);
   });
 });

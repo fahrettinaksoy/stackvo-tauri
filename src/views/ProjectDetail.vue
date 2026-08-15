@@ -14,6 +14,8 @@ import QueryLogPane from '@/components/project/QueryLogPane.vue';
 import TimelinePane from '@/components/project/TimelinePane.vue';
 import DevServerPane from '@/components/project/DevServerPane.vue';
 import LogsPane from '@/components/project/LogsPane.vue';
+import PerfPane from '@/components/project/PerfPane.vue';
+import SitePane from '@/components/project/SitePane.vue';
 import PhpIniPane from '@/components/project/PhpIniPane.vue';
 import ManifestPane from '@/components/project/ManifestPane.vue';
 import LocalOverridePane from '@/components/project/LocalOverridePane.vue';
@@ -22,6 +24,8 @@ import RequirementsPane from '@/components/project/RequirementsPane.vue';
 import OverviewPane from '@/components/project/OverviewPane.vue';
 import ProfilerPane from '@/components/project/ProfilerPane.vue';
 import TunnelPane from '@/components/project/TunnelPane.vue';
+import OAuthPane from '@/components/project/OAuthPane.vue';
+import StripePane from '@/components/project/StripePane.vue';
 import LanPane from '@/components/project/LanPane.vue';
 import WorkersPane from '@/components/project/WorkersPane.vue';
 import TerminalPane from '@/components/project/TerminalPane.vue';
@@ -773,6 +777,15 @@ onUnmounted(() => {
              and changes nothing. -->
         <template v-if="shows('runtime')">
           <PhpIniPane :name="name" :runtime="project?.runtime" />
+          <!-- I-1. Here rather than in its own tab because it is the same kind
+               of thing as the two panes above it: a setting that reaches the
+               container through a compose overlay this app layers, not through
+               the manifest. -->
+          <PerfPane :name="name" :runtime="project?.runtime" @apply="applyToContainer" />
+          <!-- M-5, M-6, M-10. The same kind of thing as the panes above:
+               settings that reach the container through a compose overlay or a
+               generated server config, not through the manifest. -->
+          <SitePane :name="name" :runtime="project?.runtime" @apply="applyToContainer" />
         </template>
 
         <!-- CONTAINER ----------------------------------------------------- -->
@@ -786,6 +799,16 @@ onUnmounted(() => {
                different costs: one publishes to the internet and needs a
                sidecar, the other reaches only this network and needs neither. -->
           <LanPane :name="name" @changed="load" />
+          <!-- Third in the same section because it is the same question asked
+               by a provider's console: which of these two addresses do I
+               register. It needs neither the tunnel nor the container to be
+               up — the answer is a string either way. -->
+          <OAuthPane :name="name" />
+          <!-- Stripe's own listener rather than the tunnel: a quick tunnel's
+               URL changes on every start, so the endpoint has to be
+               re-registered each time and the signing secret changes with
+               it. `stripe listen` connects outbound instead. -->
+          <StripePane :name="name" :running="running" />
         </template>
 
         <!-- WORKERS --------------------------------------------------------- -->

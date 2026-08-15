@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { mount } from '@vue/test-utils';
+import { mount, flushPromises } from '@vue/test-utils';
 import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
@@ -42,6 +42,7 @@ const { usePhpIni, PHP_INI_FIELDS } = await import('@/composables/usePhpIni');
 const { i18n } = await import('@/i18n');
 const DevServerPane = (await import('@/components/project/DevServerPane.vue')).default;
 const PhpIniPane = (await import('@/components/project/PhpIniPane.vue')).default;
+const PerfPane = (await import('@/components/project/PerfPane.vue')).default;
 
 const vuetify = createVuetify({ components, directives });
 const ref = (value) => ({ value });
@@ -286,5 +287,111 @@ describe('the panes', () => {
     await wrapper.vm.$nextTick();
 
     expect(calls).toEqual([]);
+  });
+});
+
+/**
+ * The performance layer (I-1).
+ *
+ * Three things here are only true at this layer and each is the kind that looks
+ * fine and is wrong: that turning a layer on is a *seed then save* the backend
+ * owns (so the pane must not report it done on its own), that the price — an
+ * editor that can no longer see the directory — is stated on the row rather
+ * than discovered, and that deleting the volume is never the switch's side
+ * effect.
+ */
+describe('the performance layer', () => {
+  const LAYERS = [
+    {
+      path: 'vendor',
+      enabled: false,
+      volume: 'stackvo-cache-shop--vendor',
+      exists: false,
+      onHost: true,
+      hostFiles: 8000,
+    },
+    {
+      path: 'storage/framework',
+      enabled: true,
+      volume: 'stackvo-cache-shop--storage-framework',
+      exists: true,
+      bytes: 1024 * 1024,
+      onHost: true,
+      hostFiles: 12,
+    },
+  ];
+
+  async function open(layers = LAYERS, runtime = 'php') {
+    replies.perfStatus = layers;
+    const wrapper = mount(
+      {
+        components: { PerfPane },
+        template: '<v-app><PerfPane name="shop" :runtime="rt" /></v-app>',
+        data: () => ({ rt: runtime }),
+      },
+      { global: { plugins: [vuetify, i18n] } }
+    );
+    await flushPromises();
+    return wrapper;
+  }
+
+  it('lists a row per directory with what it currently is', async () => {
+    const wrapper = await open();
+    const rows = wrapper.findAll('[data-test="perf-layer"]');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].text()).toContain('vendor');
+    expect(rows[0].text()).toContain('8000');
+    expect(rows[1].text()).toContain('stackvo-cache-shop--storage-framework');
+  });
+
+  /**
+   * The price is on the row that charges it. An editor going quiet three days
+   * later, with nothing on screen connecting it to a switch, is the failure
+   * this sentence exists to prevent.
+   */
+  it('says the editor can no longer see a directory that moved', async () => {
+    const wrapper = await open();
+    const rows = wrapper.findAll('[data-test="perf-layer"]');
+    expect(rows[0].text()).not.toContain(i18n.global.t('perf.editorCannotSee'));
+    expect(rows[1].text()).toContain(i18n.global.t('perf.editorCannotSee'));
+  });
+
+  /**
+   * The container is still reading the old arrangement until it is recreated,
+   * so the pane asks for that rather than leaving somebody to wonder why
+   * nothing got faster.
+   */
+  it('asks for the container to be recreated after a change', async () => {
+    const wrapper = await open();
+    replies.perfSet = LAYERS;
+
+    await wrapper.findAll('input[type="checkbox"]')[0].setValue(true);
+    await flushPromises();
+
+    expect(calls.some(([n]) => n === 'perfSet')).toBe(true);
+    expect(
+      wrapper.findComponent(PerfPane).emitted('apply'),
+      'the container has to be recreated'
+    ).toBeTruthy();
+  });
+
+  /** Deleting thirty thousand files is never a side effect of a checkbox. */
+  it('offers to delete a volume only when nothing is using it', async () => {
+    const wrapper = await open();
+    const rows = wrapper.findAll('[data-test="perf-layer"]');
+    // vendor: off, and no volume yet — nothing to delete.
+    expect(rows[0].text()).not.toContain(i18n.global.t('perf.forget'));
+    // storage/framework: on — the switch turns it off, it does not delete.
+    expect(rows[1].text()).not.toContain(i18n.global.t('perf.forget'));
+
+    const stale = await open([{ ...LAYERS[0], enabled: false, exists: true, bytes: 500 }]);
+    expect(stale.text()).toContain(i18n.global.t('perf.forget'));
+  });
+
+  /** A Go project has neither a vendor nor a node_modules to move. */
+  it('draws nothing for a runtime it does not apply to', async () => {
+    const wrapper = await open(LAYERS, 'go');
+    expect(wrapper.findAll('[data-test="perf-layer"]')).toHaveLength(0);
+    expect(calls.some(([n]) => n === 'perfStatus')).toBe(false);
   });
 });
