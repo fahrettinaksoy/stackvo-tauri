@@ -214,6 +214,15 @@ hints! {
         "Choose a browser in Settings → External applications.";
     CHOOSE_AN_EDITOR = "chooseAnEditor",
         "Choose an editor in Settings, or open the folder manually.";
+    MIGRATE_THE_WORKSPACE = "migrateTheWorkspace",
+        "Move this workspace's services out of .env — the app offers it on the next launch, \
+         and the Market page offers the same move. It is reversible.";
+    SERVICE_PUBLISHES_NOTHING = "servicePublishesNothing",
+        "Start the service, or check that it publishes a port — a container reachable only \
+         on the Docker network has no address a client on this machine can use.";
+    CHOOSE_A_DB_CLIENT = "chooseADbClient",
+        "Install a client that opens this kind of address, or copy the connection string \
+         and paste it in yourself.";
     WAIT_FOR_OPERATION = "waitForOperation",
         "Wait for it to finish, or watch the operation console for progress.";
     QUICK_COMMANDS_ARE_FIXED = "quickCommandsAreFixed",

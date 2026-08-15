@@ -308,22 +308,6 @@ fn parse_netstat(out: &str) -> HashMap<u16, Listener> {
     map
 }
 
-/// Resolve a Windows pid to an image name. One spawn per unique pid, and only
-/// for ports that are actually in conflict — never for the whole table.
-#[cfg(target_os = "windows")]
-pub async fn process_name(pid: u32) -> Option<String> {
-    let out = capture(
-        "tasklist",
-        &["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"],
-    )
-    .await?;
-    out.trim()
-        .strip_prefix('"')?
-        .split('"')
-        .next()
-        .map(str::to_string)
-}
-
 /// The docker backend answers for every published port, so its name alone
 /// says "a container" without saying whose. Those get upgraded to a container
 /// name when the engine can be asked.
@@ -709,7 +693,8 @@ pub fn drop_extension(root: &Path, subject: &str, extension: &str) -> crate::err
 
     let dir = crate::workspace::project_dir(root, subject)?;
     let file = dir.join("stackvo.json");
-    let mut manifest = crate::manifest::read(&file, subject)?;
+    // Committed: an extension is removed from it and it is written back.
+    let mut manifest = crate::manifest::read_committed(&file, subject)?;
 
     let Some(php) = manifest.php.as_mut() else {
         return Err(Error::new(

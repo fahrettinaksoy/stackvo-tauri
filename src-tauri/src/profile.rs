@@ -111,6 +111,25 @@ pub struct Report {
     pub function_count: usize,
     /// True when the file was longer than `MAX_BYTES` and the tail was not read.
     pub truncated: bool,
+    /// Who called whom, and what it cost — the half of the file the top-N table
+    /// throws away.
+    ///
+    /// F-3. A cost table answers "where did the time go"; it cannot answer
+    /// "what called that", which is the question a flame graph exists for. The
+    /// parser was already reading these edges — it needs them to attribute an
+    /// inclusive cost to a callee — and was discarding the caller.
+    pub edges: Vec<Edge>,
+}
+
+/// One caller→callee relationship, summed over every place it occurs.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Edge {
+    pub caller: String,
+    pub callee: String,
+    /// The callee's inclusive cost *when reached from this caller*.
+    pub inclusive_time: u64,
+    pub calls: u64,
 }
 
 /// Gzip's magic bytes. Xdebug 3.4 compresses by default.
@@ -199,6 +218,8 @@ pub fn parse<R: BufRead>(reader: R, limit: u64) -> Result<Report> {
     let mut current_fn: Option<u32> = None;
     // The callee a `calls=` line just announced, awaiting its cost line.
     let mut pending_callee: Option<(u32, u64)> = None;
+    // Caller→callee, summed. Keyed by id pair because names resolve later.
+    let mut edges: HashMap<(u32, u32), (u64, u64)> = HashMap::new();
 
     let mut read: u64 = 0;
 
@@ -227,6 +248,15 @@ pub fn parse<R: BufRead>(reader: R, limit: u64) -> Result<Report> {
                 let acc = totals.entry(callee).or_default();
                 acc.inclusive_time += time;
                 acc.calls += count;
+                // The edge, which is what the top-N table has never kept. Only
+                // when a caller is in scope: a `calls=` before any `fn=` is a
+                // malformed file, and inventing a root for it would put a
+                // fabricated node at the top of the tree.
+                if let Some(caller) = current_fn {
+                    let slot = edges.entry((caller, callee)).or_default();
+                    slot.0 += time;
+                    slot.1 += count;
+                }
                 continue;
             }
 
@@ -318,7 +348,192 @@ pub fn parse<R: BufRead>(reader: R, limit: u64) -> Result<Report> {
     functions.truncate(TOP_N);
     report.functions = functions;
 
+    // Resolved here for the reason the functions are: an id is not a name until
+    // the whole file has been read. Sorted heaviest first so a caller's most
+    // expensive branch is the first child a tree walk meets, and capped —
+    // `EDGE_LIMIT` is the note on that constant.
+    let mut resolved: Vec<Edge> = edges
+        .into_iter()
+        .map(|((caller, callee), (time, calls))| Edge {
+            caller: names
+                .get(&caller)
+                .cloned()
+                .unwrap_or_else(|| format!("#{caller}")),
+            callee: names
+                .get(&callee)
+                .cloned()
+                .unwrap_or_else(|| format!("#{callee}")),
+            inclusive_time: time,
+            calls,
+        })
+        .collect();
+    resolved.sort_by(|a, b| {
+        b.inclusive_time
+            .cmp(&a.inclusive_time)
+            .then_with(|| a.caller.cmp(&b.caller))
+            .then_with(|| a.callee.cmp(&b.callee))
+    });
+    resolved.truncate(EDGE_LIMIT);
+    report.edges = resolved;
+
     Ok(report)
+}
+
+/// How many caller→callee edges a report carries.
+///
+/// A real profile of a framework request holds tens of thousands, and the graph
+/// is what a flame view walks — so this is not a display cap like `TOP_N`, it is
+/// what crosses the boundary. Two thousand is enough to reach every branch that
+/// costs anything: the edges are sorted heaviest first, so what falls off the
+/// end is the tail that would render as a line one pixel wide.
+pub const EDGE_LIMIT: usize = 2_000;
+
+// ------------------------------------------------------- the call tree (F-3)
+
+/// One box in the flame view.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Frame {
+    pub name: String,
+    /// The cost of this branch, in the file's own time unit.
+    pub value: u64,
+    pub children: Vec<Frame>,
+    /// True when this function is already on the path above it — the recursion
+    /// stopped here rather than the branch having no cost.
+    pub recursive: bool,
+}
+
+/// How deep a branch is walked before it is cut.
+///
+/// A framework request nests forty or fifty deep in normal operation, so this
+/// is generous rather than tight. It exists because the thing being walked is a
+/// **graph**, not a tree: mutual recursion is a cycle, and a walk with no floor
+/// would not return.
+pub const MAX_DEPTH: usize = 64;
+
+/// Turn the call graph into a tree a flame view can draw.
+///
+/// ## Why this is a call tree and not, strictly, a flame graph
+///
+/// A flame graph is built from sampled **stacks**: each sample is a full path
+/// from the root, so the width of a box is the number of samples in which that
+/// exact path appeared. Cachegrind holds no stacks. It holds *edges* — the
+/// summed cost of "A called B", over every place in the program A called B —
+/// and the two are not the same information. If A is called from two places, a
+/// flame graph shows two boxes with their own widths; this shows one, with the
+/// total.
+///
+/// So a branch here means "reaching B through A cost this much in total",
+/// which is the question people actually bring to a profile, and it is
+/// answerable from what Xdebug wrote. What is not answerable is "this specific
+/// path was taken this often", and no amount of arranging the edges recovers
+/// it. The screen calls this a call tree for that reason.
+///
+/// ## Recursion
+///
+/// A function already on the path above is not descended into: the cost has
+/// been counted once at its first appearance, and following the cycle would add
+/// it again on every lap. The frame is kept and marked, because a recursive
+/// call is a fact about the program worth seeing rather than an edge to hide.
+pub fn call_tree(report: &Report) -> Vec<Frame> {
+    use std::collections::{BTreeSet, HashMap};
+
+    let mut children: HashMap<&str, Vec<&Edge>> = HashMap::new();
+    let mut called: BTreeSet<&str> = BTreeSet::new();
+    for edge in &report.edges {
+        children.entry(edge.caller.as_str()).or_default().push(edge);
+        called.insert(edge.callee.as_str());
+    }
+
+    // A root is a function nothing calls. `{main}` is the usual one, but a
+    // truncated file or an edge cap can leave several — showing all of them is
+    // more honest than picking one and hiding the rest.
+    let mut roots: Vec<&str> = children
+        .keys()
+        .copied()
+        .filter(|name| !called.contains(name))
+        .collect();
+    roots.sort();
+
+    // Nothing is a root when every caller is also a callee, which means the
+    // edges that would have named one fell off `EDGE_LIMIT` or the file was
+    // truncated. Falling back to the heaviest caller keeps the view useful and
+    // does not pretend: the branch it draws is real, it is simply not the whole
+    // program.
+    if roots.is_empty() {
+        if let Some(edge) = report.edges.first() {
+            roots.push(edge.caller.as_str());
+        }
+    }
+
+    let mut path: Vec<&str> = Vec::new();
+    roots
+        .into_iter()
+        .map(|root| {
+            let value = children
+                .get(root)
+                .map(|list| list.iter().map(|e| e.inclusive_time).sum())
+                .unwrap_or(0);
+            frame_of(root, value, &children, &mut path, 0)
+        })
+        .collect()
+}
+
+/// One frame and everything under it.
+///
+/// The lifetime is spelled out rather than elided so `path` can hold borrows of
+/// the same strings the edge map does — a stack, pushed and popped, rather than
+/// a set cloned per branch: the depth is bounded and the width is not, so
+/// cloning would be a copy per edge.
+fn frame_of<'a>(
+    name: &'a str,
+    value: u64,
+    children: &std::collections::HashMap<&'a str, Vec<&'a Edge>>,
+    path: &mut Vec<&'a str>,
+    depth: usize,
+) -> Frame {
+    if path.contains(&name) {
+        return Frame {
+            name: name.to_string(),
+            value,
+            children: Vec::new(),
+            recursive: true,
+        };
+    }
+    if depth >= MAX_DEPTH {
+        return Frame {
+            name: name.to_string(),
+            value,
+            children: Vec::new(),
+            recursive: false,
+        };
+    }
+
+    path.push(name);
+    let kids = children
+        .get(name)
+        .map(|list| {
+            list.iter()
+                .map(|edge| {
+                    frame_of(
+                        edge.callee.as_str(),
+                        edge.inclusive_time,
+                        children,
+                        path,
+                        depth + 1,
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    path.pop();
+
+    Frame {
+        name: name.to_string(),
+        value,
+        children: kids,
+        recursive: false,
+    }
 }
 
 // ------------------------------------------------------------------- I/O
@@ -464,6 +679,137 @@ pub fn clear(root: &std::path::Path, name: &str) -> Result<(usize, u64)> {
 
 #[cfg(test)]
 mod tests {
+    // ------------------------------------------------- the call tree (F-3)
+
+    fn edge(caller: &str, callee: &str, time: u64) -> Edge {
+        Edge {
+            caller: caller.into(),
+            callee: callee.into(),
+            inclusive_time: time,
+            calls: 1,
+        }
+    }
+
+    fn report_with(edges: Vec<Edge>) -> Report {
+        Report {
+            edges,
+            ..Default::default()
+        }
+    }
+
+    /// The shape the whole feature is for: a root, its callees, and theirs.
+    #[test]
+    fn the_tree_hangs_off_the_function_nothing_calls() {
+        let tree = call_tree(&report_with(vec![
+            edge("{main}", "handle", 100),
+            edge("handle", "query", 60),
+            edge("handle", "render", 30),
+        ]));
+
+        assert_eq!(tree.len(), 1, "one root: {tree:?}");
+        assert_eq!(tree[0].name, "{main}");
+        assert_eq!(tree[0].value, 100);
+
+        let top: Vec<&str> = tree[0].children.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(top, vec!["handle"], "the root calls one thing");
+
+        let under: Vec<&str> = tree[0].children[0]
+            .children
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert_eq!(under, vec!["query", "render"], "heaviest branch first");
+        assert_eq!(tree[0].children[0].children[0].value, 60);
+    }
+
+    /// A cycle must not be walked forever, and the frame that closes it is
+    /// kept — a recursive call is a fact about the program, not an edge to
+    /// hide.
+    #[test]
+    fn recursion_stops_and_says_that_it_did() {
+        let tree = call_tree(&report_with(vec![
+            edge("{main}", "walk", 100),
+            edge("walk", "walk", 90),
+        ]));
+
+        let walk = &tree[0].children[0];
+        assert_eq!(walk.name, "walk");
+        let again = &walk.children[0];
+        assert_eq!(again.name, "walk");
+        assert!(again.recursive, "the second appearance is marked");
+        assert!(again.children.is_empty(), "and is not descended into");
+    }
+
+    /// Mutual recursion is the case a `HashSet` of seen names would get wrong
+    /// in the other direction — it would refuse to show a function twice on two
+    /// different branches. The stack is per path, so this terminates and the
+    /// two branches are independent.
+    #[test]
+    fn mutual_recursion_terminates() {
+        let tree = call_tree(&report_with(vec![
+            edge("{main}", "a", 100),
+            edge("a", "b", 90),
+            edge("b", "a", 80),
+        ]));
+        // Reaching this at all is the assertion; a cycle without the path check
+        // would not return.
+        assert_eq!(tree[0].children[0].children[0].children[0].name, "a");
+        assert!(tree[0].children[0].children[0].children[0].recursive);
+    }
+
+    /// A file whose root edge fell off the cap still draws something, and what
+    /// it draws is real — see the comment in `call_tree`.
+    #[test]
+    fn a_graph_with_no_root_falls_back_to_its_heaviest_caller() {
+        let tree = call_tree(&report_with(vec![edge("a", "b", 50), edge("b", "a", 40)]));
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree[0].name, "a", "the heaviest edge names the fallback");
+    }
+
+    /// Two entry points is a real state — a truncated file, or an edge cap —
+    /// and showing one of them would hide the other.
+    #[test]
+    fn several_roots_are_all_shown() {
+        let tree = call_tree(&report_with(vec![
+            edge("{main}", "a", 10),
+            edge("worker", "b", 20),
+        ]));
+        let roots: Vec<&str> = tree.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(roots, vec!["worker", "{main}"], "sorted, both present");
+    }
+
+    #[test]
+    fn a_profile_with_no_edges_produces_no_tree() {
+        assert!(call_tree(&report_with(vec![])).is_empty());
+    }
+
+    /// The parser keeps the caller, which it used to throw away.
+    #[test]
+    fn parsing_records_who_called_whom() {
+        let file = "\
+version: 1
+creator: xdebug 3.4.0
+cmd: /shop
+events: Time Memory
+
+fl=(1) /app/index.php
+fn=(1) {main}
+5 10 5
+cfn=(2) handle
+calls=1 0 0
+12 90 20
+
+fl=(1)
+fn=(2) handle
+20 90 20
+";
+        let report = parse(std::io::Cursor::new(file), MAX_BYTES).unwrap();
+        assert_eq!(report.edges.len(), 1, "{:?}", report.edges);
+        assert_eq!(report.edges[0].caller, "{main}");
+        assert_eq!(report.edges[0].callee, "handle");
+        assert_eq!(report.edges[0].inclusive_time, 90);
+    }
+
     use super::*;
 
     /// Real Xdebug output, not a hand-written approximation.

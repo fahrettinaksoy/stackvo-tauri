@@ -68,6 +68,41 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: npm run bundle:budget
 
+      # The front end in a real engine (§3 #12). Ubuntu only, for the reason the
+      # steps above are: the assertions are about layout and roles, not about an
+      # OS, and a browser download on three runners is three minutes for one
+      # answer.
+      #
+      # `--with-deps` because a bare `playwright install` on a CI image gets a
+      # browser that cannot start: the shared libraries are the half that is
+      # missing there and present on a developer's machine, which is exactly the
+      # kind of difference that makes a suite pass locally and fail in CI.
+      #
+      # Chromium only. Not a claim that the app is a Chromium app — it is not,
+      # it runs in WKWebView, WebView2 and WebKitGTK — but a claim about what
+      # these tests measure: a scrollable region without focus, a button with no
+      # accessible name and a page that overflows its viewport are engine
+      # -independent, and the one browser that reproduces them is enough.
+      - name: Install the browser
+        if: matrix.os == 'ubuntu-latest'
+        run: npx playwright install --with-deps chromium
+
+      - name: Test the front end in a browser
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run test:e2e
+
+      # Kept only when something failed: a screenshot and a trace are what turn
+      # "it fails in CI" into a thing somebody can look at.
+      - name: Keep the browser report
+        if: failure() && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
       # Everything below runs on all three platforms, so the cfg-gated code is
       # actually compiled somewhere rather than only written.
       - name: Check the Rust core

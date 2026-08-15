@@ -132,9 +132,37 @@ const nodeVersions = computed(
 );
 
 const isLang = computed(() => LANG_RUNTIMES.includes(form.value.runtime));
-const langVersions = computed(
-  () => props.catalog?.runtimes?.find((r) => r.id === form.value.runtime)?.versions ?? []
-);
+
+/**
+ * The versions offered for the chosen lang runtime.
+ *
+ * Falls back to whatever is in the field, and that fallback is load-bearing for
+ * Bun and Deno: neither has a `SUPPORTED_LANGUAGES_*_VERSIONS` key in `.env`,
+ * so the catalog serves an empty list for them. A `v-select` whose items are
+ * empty renders blank — which reads as "this project has no version" rather
+ * than "there is no list to choose from", and the value underneath is perfectly
+ * valid. Same rule `useVersionChoices` states for the settings selects.
+ */
+const langVersions = computed(() => {
+  const listed = props.catalog?.runtimes?.find((r) => r.id === form.value.runtime)?.versions ?? [];
+  if (listed.length) return listed;
+  return form.value.langVersion ? [form.value.langVersion] : [];
+});
+
+/**
+ * J-2. The blank entry heads the list and is not `npm`.
+ *
+ * It means the project never named one, which is what every node manifest on
+ * disk says and what builds the image they have always built. Naming one —
+ * including `npm` — enables Corepack, and that is the point: Corepack is what
+ * makes `"packageManager": "npm@10.2.0"` in package.json pin anything.
+ */
+const packageManagers = computed(() => [
+  { value: '', title: t('newProject.packageManagerNone') },
+  { value: 'npm', title: 'npm' },
+  { value: 'yarn', title: 'Yarn' },
+  { value: 'pnpm', title: 'pnpm' },
+]);
 
 /**
  * Seed the lang fields with the runtime's ecosystem defaults on switch — an
@@ -389,6 +417,19 @@ defineExpose({ focusName: () => nameField.value?.focus() });
         :label="t('newProject.port')"
         prepend-inner-icon="mdi-lan-connect"
         :hint="t('newProject.portHint')"
+        persistent-hint
+      />
+
+      <!-- J-2. The blank entry is not "npm" — it is "this project never asked",
+           which builds the image it has always built. Choosing one enables
+           Corepack, which is what makes a `packageManager` field in
+           package.json mean anything at all. -->
+      <v-select
+        v-model="form.packageManager"
+        :items="packageManagers"
+        :label="t('newProject.packageManager')"
+        prepend-inner-icon="mdi-package-variant"
+        :hint="t('newProject.packageManagerHint')"
         persistent-hint
       />
       <v-text-field

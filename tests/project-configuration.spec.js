@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { mount } from '@vue/test-utils';
+import { mount, flushPromises } from '@vue/test-utils';
 import { createPinia } from 'pinia';
 import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
@@ -43,6 +43,8 @@ const { useDockerfilePreview } = await import('@/composables/useDockerfilePrevie
 const { i18n } = await import('@/i18n');
 const ManifestPane = (await import('@/components/project/ManifestPane.vue')).default;
 const DockerfilePane = (await import('@/components/project/DockerfilePane.vue')).default;
+const LocalOverridePane = (await import('@/components/project/LocalOverridePane.vue')).default;
+const HooksPane = (await import('@/components/project/HooksPane.vue')).default;
 
 const vuetify = createVuetify({ components, directives });
 const ref = (value) => ({ value });
@@ -98,9 +100,7 @@ describe('the manifest editor', () => {
   /** Saving an unchanged file is a write for no reason. */
   it('cannot be saved until something has changed', async () => {
     const clean = open({ modelValue: '{}', dirty: false });
-    const save = clean
-      .findAll('button')
-      .find((b) => b.text() === i18n.global.t('detail.save'));
+    const save = clean.findAll('button').find((b) => b.text() === i18n.global.t('detail.save'));
     expect(save.attributes('disabled')).toBeDefined();
 
     const dirty = open({ modelValue: '{}', dirty: true });
@@ -195,5 +195,196 @@ describe('the Dockerfile preview', () => {
     expect(d.error.value.code).toBe('MANIFEST_INVALID');
     expect(d.loading.value).toBe(false);
     expect(d.lines.value).toEqual([]);
+  });
+});
+
+/**
+ * `stackvo.local.json`, the pane below the manifest editor (B-2).
+ *
+ * Unlike the manifest pane this one *does* own its file — nothing else in the
+ * app writes it — so it fetches, and the three things worth asserting are the
+ * three that are silent when wrong: which fields are actually in force, that a
+ * refused key is named rather than dropped, and that git's three answers are
+ * three states rather than a boolean with a default.
+ */
+describe('the machine-local override pane', () => {
+  const open = () =>
+    mount(
+      {
+        components: { LocalOverridePane },
+        template: '<v-app><LocalOverridePane name="shop" /></v-app>',
+      },
+      { global: { plugins: [createPinia(), vuetify, i18n] } }
+    );
+
+  const state = (over = {}) => ({
+    text: '{\n  "php": { "version": "8.3" }\n}\n',
+    exists: true,
+    applied: ['php.version'],
+    refused: [],
+    ignored: true,
+    ...over,
+  });
+
+  /**
+   * The hazard this pane exists to answer is a value in force that nobody
+   * remembers setting, so the fields are named rather than summarised.
+   */
+  it('names the fields in force rather than saying that some are', async () => {
+    replies.projectLocalRead = state();
+    const wrapper = open();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('php.version');
+    expect(wrapper.find('textarea').element.value).toContain('8.3');
+  });
+
+  it('names a refused key instead of dropping it', async () => {
+    replies.projectLocalRead = state({ refused: ['runtime'] });
+    const wrapper = open();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('runtime');
+  });
+
+  /**
+   * Three states, and only one is a warning: a directory that is not a git
+   * repository has nothing to leak into anybody's clone.
+   */
+  it('warns only when git says it would commit the file', async () => {
+    replies.projectLocalRead = state({ ignored: false });
+    let wrapper = open();
+    await flushPromises();
+    expect(
+      wrapper.findAll('.v-alert--variant-tonal').some((a) => a.text().includes('.gitignore'))
+    ).toBe(true);
+
+    replies.projectLocalRead = state({ ignored: null });
+    wrapper = open();
+    await flushPromises();
+    expect(wrapper.text()).not.toContain('.gitignore');
+  });
+
+  /** Removing is saving nothing — one command, so there is one state to be in. */
+  it('removes the file by saving empty text', async () => {
+    replies.projectLocalRead = state();
+    replies.projectLocalWrite = state({ text: '', exists: false, applied: [] });
+    const wrapper = open();
+    await flushPromises();
+
+    const remove = wrapper
+      .findAll('button')
+      .find((b) => b.text() === i18n.global.t('local.remove'));
+    await remove.trigger('click');
+    await flushPromises();
+
+    expect(calls.filter((c) => c[0] === 'projectLocalWrite')).toEqual([
+      ['projectLocalWrite', 'shop', ''],
+    ]);
+  });
+});
+
+/**
+ * The hooks pane (B-3).
+ *
+ * The whole point of this screen is that somebody can read the commands before
+ * they run on their machine, so the assertions are about exactly that: the
+ * commands are printed in full, host steps are marked as such, and the approval
+ * carries back the digest the plan arrived with rather than only a project name.
+ */
+describe('the hooks pane', () => {
+  const open = () =>
+    mount(
+      {
+        components: { HooksPane },
+        template: '<v-app><HooksPane name="shop" /></v-app>',
+      },
+      { global: { plugins: [createPinia(), vuetify, i18n] } }
+    );
+
+  const plan = (steps, digest = 'abc123') => [
+    { event: 'post-build', steps: [] },
+    { event: 'post-start', steps, digest },
+    { event: 'pre-stop', steps: [] },
+  ];
+
+  it('prints each command in full rather than summarising them', async () => {
+    replies.projectHooksPlan = plan([
+      { kind: 'exec', command: 'php artisan migrate --force' },
+      { kind: 'host', command: 'say up', blocked: 'needs-consent' },
+    ]);
+    const wrapper = open();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('php artisan migrate --force');
+    expect(wrapper.text()).toContain('say up');
+  });
+
+  /** Where a step runs is the whole of its risk, so it is on the row. */
+  it('marks which steps would run on this machine', async () => {
+    replies.projectHooksPlan = plan([
+      { kind: 'exec', command: 'a' },
+      { kind: 'host', command: 'b', blocked: 'needs-consent' },
+    ]);
+    const wrapper = open();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain(i18n.global.t('hooks.onThisMachine'));
+    expect(wrapper.text()).toContain(i18n.global.t('hooks.inContainer'));
+  });
+
+  /**
+   * The receipt property. Approving sends back the digest that was on screen,
+   * so a manifest that changed in between is refused by the backend.
+   */
+  it('sends the digest the plan arrived with when approving', async () => {
+    replies.projectHooksPlan = plan([{ kind: 'host', command: 'b', blocked: 'needs-consent' }]);
+    replies.projectHooksApprove = plan([{ kind: 'host', command: 'b' }]);
+    const wrapper = open();
+    await flushPromises();
+
+    const approve = wrapper
+      .findAll('button')
+      .find((b) => b.text() === i18n.global.t('hooks.approve'));
+    await approve.trigger('click');
+    await flushPromises();
+
+    expect(calls.filter((c) => c[0] === 'projectHooksApprove')).toEqual([
+      ['projectHooksApprove', 'shop', 'abc123'],
+    ]);
+    // And once approved the offer becomes a withdrawal, not a second approval.
+    expect(wrapper.text()).toContain(i18n.global.t('hooks.revoke'));
+  });
+
+  /** Container-only hooks are never gated, so there is nothing to approve. */
+  it('offers no approval when nothing would run on this machine', async () => {
+    replies.projectHooksPlan = plan([{ kind: 'exec', command: 'a' }], undefined);
+    const wrapper = open();
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain(i18n.global.t('hooks.approve'));
+    expect(wrapper.text()).toContain('a');
+  });
+
+  /**
+   * A policy block is an administrator's decision and not a question the person
+   * here can answer, so it replaces the button rather than sitting beside it.
+   */
+  it('explains a policy block instead of offering an approval it cannot honour', async () => {
+    replies.projectHooksPlan = plan([{ kind: 'host', command: 'b', blocked: 'policy-host' }]);
+    const wrapper = open();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain(i18n.global.t('hooks.policyHost'));
+    expect(wrapper.text()).not.toContain(i18n.global.t('hooks.approve'));
+  });
+
+  /** A project with no hooks gets no pane, not an empty one. */
+  it('renders nothing at all when the project declares no hooks', async () => {
+    replies.projectHooksPlan = plan([], undefined);
+    const wrapper = open();
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain(i18n.global.t('hooks.title'));
   });
 });

@@ -159,3 +159,8 @@ src-tauri/gen/schemas/
 # half goes to the terminal; neither is source.
 rust-coverage.json
 rust-coverage.txt
+
+# Playwright: browser runs leave a report and a screenshot per failure.
+/test-results/
+/playwright-report/
+/blob-report/

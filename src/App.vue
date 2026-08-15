@@ -18,8 +18,10 @@ import ErrorAlert from '@/components/ErrorAlert.vue';
 import RequirementsGate from '@/components/RequirementsGate.vue';
 import BootstrapGate from '@/components/BootstrapGate.vue';
 import CatalogueGate from '@/components/CatalogueGate.vue';
+import MigrationGate from '@/components/MigrationGate.vue';
 import NewProjectDrawer from '@/components/NewProjectDrawer.vue';
 import CloseDialog from '@/components/CloseDialog.vue';
+import CommandPalette from '@/components/CommandPalette.vue';
 
 const app = useAppStore();
 const metrics = useMetricsStore();
@@ -75,6 +77,32 @@ const needsCatalogue = computed(
 );
 
 /**
+ * The handover from `.env` to the instance table (ADR 0016).
+ *
+ * After the catalogue and before the bootstrap, and both halves of that
+ * position are load-bearing. It needs the catalogue, because a migration
+ * resolves each enabled service to a *package* and a machine with none cannot
+ * plan one. It comes before the bootstrap, because bootstrap renders the stack
+ * and this decides what the stack is made of.
+ *
+ * The `.env` branch of the renderer no longer exists, so this is the one screen
+ * of the four that a workspace cannot get a working stack past. It can still be
+ * left — see the component — and what is on the other side is the app with no
+ * services, which is a reverse proxy, a certificate authority and a project
+ * runner.
+ */
+const migrationDone = ref(false);
+const needsMigration = computed(
+  () =>
+    !gated.value &&
+    !needsCatalogue.value &&
+    !app.booting &&
+    !!app.workspace &&
+    app.workspace.migrationPending === true &&
+    !migrationDone.value
+);
+
+/**
  * Whether the stack still has to be assembled before the app is worth showing.
  *
  * `bootstrapDone` is a session flag rather than a second read of the workspace:
@@ -86,6 +114,7 @@ const needsBootstrap = computed(
   () =>
     !gated.value &&
     !needsCatalogue.value &&
+    !needsMigration.value &&
     !app.booting &&
     !!app.workspace &&
     !app.workspace.bootstrapped &&
@@ -99,7 +128,9 @@ const needsBootstrap = computed(
  * the rails list projects nobody can open, so every control in them would be
  * disabled or misleading.
  */
-const chromeHidden = computed(() => gated.value || needsCatalogue.value || needsBootstrap.value);
+const chromeHidden = computed(
+  () => gated.value || needsCatalogue.value || needsMigration.value || needsBootstrap.value
+);
 
 /**
  * Which of the two left drawers is expanded, if either.
@@ -221,6 +252,52 @@ function onFocus() {
   appearance.refreshSystemAccent();
 }
 
+/**
+ * The command palette, and where its shortcut lives (A-2).
+ *
+ * ## Window-scoped, not an operating-system shortcut
+ *
+ * Tauri can register a real global accelerator, and that would be the wrong
+ * thing: it takes ⌘K away from every other application on the machine — the
+ * editor's jump-to-file, the browser's search bar — for a palette that can only
+ * act on the window in front of you anyway. A `keydown` on `window` is
+ * available exactly when the app is, which is the whole of what this needs.
+ *
+ * ## It fires from inside text fields on purpose
+ *
+ * ⌘K is not a text-editing key and every tool that has a palette opens it from
+ * anywhere; a shortcut that stopped working because the cursor was in the
+ * project search box would be the one case a user reaches for it hardest.
+ *
+ * ## Never while a gate is up
+ *
+ * Same reason the app bar and both rails are hidden: every command acts on a
+ * workspace or a daemon that is the thing missing, so the palette would list a
+ * screenful of actions that cannot run. `chromeHidden` already answers this
+ * question for the rest of the shell.
+ */
+const paletteOpen = ref(false);
+
+/**
+ * The shortcut, written the way this machine's keyboard has it.
+ *
+ * A shortcut nobody is told about is not a second way in, which is the whole of
+ * what A-2 was about — so it is on a button in the bar, with its keys printed
+ * on it. `⌘K` on a Mac and `Ctrl+K` everywhere else: showing the wrong one is
+ * worse than showing none, because the reader will try it.
+ */
+const paletteKeys = computed(() =>
+  /mac/i.test(navigator.platform || navigator.userAgent) ? '⌘K' : 'Ctrl+K'
+);
+
+function onKeydown(event) {
+  if (event.key?.toLowerCase() !== 'k') return;
+  if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+  if (chromeHidden.value || isAboutWindow.value) return;
+  event.preventDefault();
+  paletteOpen.value = !paletteOpen.value;
+}
+
 let enginePoll = null;
 
 /**
@@ -300,11 +377,17 @@ onMounted(async () => {
   window.addEventListener('focus', onFocus);
 });
 
+// Outside `onMounted`'s awaits: the shortcut is the one thing that must work
+// before the boot finishes, because a slow engine check is exactly when
+// somebody starts pressing keys.
+window.addEventListener('keydown', onKeydown);
+
 onUnmounted(() => {
   // First, so anything still in flight above installs nothing further.
   disposed = true;
 
   window.removeEventListener('focus', onFocus);
+  window.removeEventListener('keydown', onKeydown);
   metrics.stop();
   ops.unbind();
   for (const off of disposers.splice(0)) off?.();
@@ -370,6 +453,19 @@ onUnmounted(() => {
 
         <v-spacer />
 
+        <!-- Labelled with its own keys rather than an icon alone: a magnifier
+             in a toolbar is read as "search this page", which is not what this
+             does. -->
+        <v-btn
+          variant="tonal"
+          elevation="0"
+          class="mr-2"
+          prepend-icon="mdi-console-line"
+          :title="t('palette.title')"
+          @click="paletteOpen = true"
+        >
+          {{ paletteKeys }}
+        </v-btn>
         <v-btn
           icon
           variant="tonal"
@@ -762,6 +858,17 @@ onUnmounted(() => {
         @skip="catalogueDone = true"
       />
 
+      <!-- ADR 0016. The `.env` branch of the renderer is gone, so a workspace
+           that still keeps its services there cannot build a stack at all —
+           this is a wall where the catalogue screen is a door. Leaving it
+           opens the app with no services, which is still a proxy, a CA and a
+           project runner; what it does not do is bring the old stack back. -->
+      <MigrationGate
+        v-else-if="needsMigration"
+        @done="migrationDone = true"
+        @skip="migrationDone = true"
+      />
+
       <BootstrapGate v-else-if="needsBootstrap" @done="bootstrapDone = true" />
 
       <router-view v-else />
@@ -780,6 +887,8 @@ onUnmounted(() => {
     <v-snackbar-queue v-model="toasts" closable location="top right" :timeout="4000" />
 
     <CloseDialog v-model="showCloseDialog" />
+
+    <CommandPalette v-model="paletteOpen" />
 
     <NewProjectDrawer v-model="app.newProjectOpen" @created="inventory.loadProjects()" />
   </v-app>

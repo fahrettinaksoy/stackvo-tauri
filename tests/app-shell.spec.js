@@ -672,3 +672,82 @@ describe('tray navigation', () => {
     expect(named.filter((n) => !declared.has(n))).toEqual([]);
   });
 });
+
+/**
+ * The shortcut is the whole of A-2's second way in, and it is wired in `App.vue`
+ * rather than in the palette — a listener owned by a component that mounts only
+ * while open cannot be what opens it. So it is only visible from here.
+ */
+describe('the command palette shortcut', () => {
+  const READY = { os: 'macos', ready: true, requirements: [] };
+
+  beforeEach(() => {
+    wrapper.unmount();
+  });
+
+  afterEach(() => {
+    ipc.preflight = null;
+    for (const key of Object.keys(calls)) delete calls[key];
+  });
+
+  /** A shell past every gate, which is the only state the palette exists in. */
+  async function ready() {
+    ipc.preflight = READY;
+    calls.workspace_get = () => ({
+      root: '/tmp/app',
+      projectsDir: '/tmp/code',
+      valid: true,
+      bootstrapped: true,
+      catalogueFetched: true,
+      migrationPending: false,
+    });
+    const shell = mountShell();
+    await flushPromises();
+    return shell;
+  }
+
+  function key(init) {
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init })
+    );
+    return flushPromises();
+  }
+
+  it('opens on the accelerator and closes on a second press', async () => {
+    const shell = await ready();
+    expect(shell.vm.paletteOpen).toBe(false);
+    expect(document.querySelector('.palette-input')).toBe(null);
+
+    await key({ key: 'k', metaKey: true });
+    expect(shell.vm.paletteOpen).toBe(true);
+    expect(document.querySelector('.palette-input')).not.toBe(null);
+
+    // Asserted on the flag rather than the markup: `v-dialog` leaves the card
+    // in the document while its transition runs, so a DOM check here would be
+    // testing the animation.
+    await key({ key: 'k', metaKey: true });
+    expect(shell.vm.paletteOpen).toBe(false);
+  });
+
+  it('takes Ctrl as well as Meta, and a bare k not at all', async () => {
+    await ready();
+    await key({ key: 'k' });
+    expect(document.querySelector('.palette-input')).toBe(null);
+
+    await key({ key: 'k', ctrlKey: true });
+    expect(document.querySelector('.palette-input')).not.toBe(null);
+  });
+
+  /**
+   * Every command acts on a workspace or a daemon that is the thing the gate is
+   * up about — the same reason the toolbar and both rails are hidden there.
+   */
+  it('stays shut while a gate is up', async () => {
+    ipc.preflight = { os: 'macos', ready: false, requirements: [] };
+    mountShell();
+    await flushPromises();
+
+    await key({ key: 'k', metaKey: true });
+    expect(document.querySelector('.palette-input')).toBe(null);
+  });
+});

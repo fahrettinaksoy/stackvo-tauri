@@ -42,6 +42,30 @@
 //! it. Writing a `.dockerignore` into somebody's project to build their image
 //! would be a side effect nobody asked for.
 
+//! ## Pushing it, and the one rule that makes pushing safe (H-1)
+//!
+//! The hard half of the production bridge was the image. The easy half is
+//! getting it somewhere and having something to run it with — and the easy half
+//! has one rule that is not obvious:
+//!
+//! **An image is pushed only after it has been verified.** Everything above is
+//! about `.env` and Xdebug not reaching an image, and a push is the moment that
+//! stops being a local mistake. A registry keeps layers; deleting a tag does
+//! not remove what was in it, and on a shared registry somebody else has
+//! already pulled it. So [`push_plan`] refuses an image whose
+//! [`Verification`] is absent or not clean, and the refusal names which check
+//! failed.
+//!
+//! **A tag with no registry host is refused too.** `docker push myapp:v1` goes
+//! to Docker Hub under whatever account is logged in, which is a public
+//! registry and an accident nobody notices until somebody else does.
+//!
+//! **Credentials are not this app's business.** `docker login` is the user's,
+//! exactly as `~/.ssh/config` is in [`crate::git`]. This reports whether the
+//! registry appears in their Docker config and says to log in if it does not;
+//! reproducing a credential store here would be a second, worse copy of one
+//! that already works.
+
 use crate::error::{Code, Error, Result};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -458,6 +482,182 @@ fn loaded_tags(stdout: &str) -> Vec<String> {
         .collect()
 }
 
+// ----------------------------------------------------------- push (H-1)
+
+/// Whether an image may be pushed, and what would happen if it were.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushPlan {
+    pub tag: String,
+    /// The registry host the tag names, when it names one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
+    pub possible: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
+    /// Whether this registry appears in the user's Docker config.
+    ///
+    /// `None` when the config could not be read at all, which is not the same
+    /// as "not logged in" — a machine with no Docker config has never pushed
+    /// anything, and telling somebody they are not logged in when the answer is
+    /// unknown is a wrong instruction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authenticated: Option<bool>,
+    pub warnings: Vec<String>,
+}
+
+/// The registry a tag names, or `None` for one that would go to Docker Hub.
+///
+/// The first component is a registry only if it looks like a host — it has a
+/// dot, a colon, or is `localhost`. That is Docker's own rule, and getting it
+/// wrong in the other direction matters here: reading `team/app:v1` as the
+/// registry `team` would let a push to Docker Hub through the check that exists
+/// to catch exactly that.
+pub fn registry_of(tag: &str) -> Option<String> {
+    let (head, rest) = tag.split_once('/')?;
+    let _ = rest;
+    (head.contains('.') || head.contains(':') || head == "localhost").then(|| head.to_string())
+}
+
+/// Decide whether this image may be pushed.
+///
+/// `verification` is what [`verify`] found, and `None` means the image was
+/// never checked. Both are refusals and they are different sentences: one is
+/// "this image has an `.env` in it", the other is "nobody has looked".
+pub fn push_plan(tag: &str, verification: Option<&Verification>) -> PushPlan {
+    let mut plan = PushPlan {
+        tag: tag.to_string(),
+        registry: registry_of(tag),
+        possible: false,
+        refused: None,
+        authenticated: None,
+        warnings: Vec::new(),
+    };
+
+    if !valid_tag(tag) {
+        plan.refused = Some(format!("{tag:?} is not a valid image reference"));
+        return plan;
+    }
+
+    let Some(registry) = plan.registry.clone() else {
+        plan.refused = Some(format!(
+            "{tag} names no registry, so this would push to Docker Hub under whichever              account is logged in. Tag it registry.example.com/team/name:version"
+        ));
+        return plan;
+    };
+
+    match verification {
+        None => {
+            plan.refused = Some(
+                "this image has not been verified. A registry keeps layers — deleting a tag                  does not remove what was in it — so the check that it carries no .env and                  no debugger runs before the push, not after"
+                    .into(),
+            );
+            return plan;
+        }
+        Some(found) if !found.clean => {
+            let mut why = Vec::new();
+            if !found.env_files.is_empty() {
+                why.push(format!("it carries {}", found.env_files.join(", ")));
+            }
+            if found.xdebug_active == Some(true) {
+                why.push("Xdebug is active in it".to_string());
+            }
+            if !found.has_app {
+                why.push("it holds no application code".to_string());
+            }
+            plan.refused = Some(format!(
+                "the verification failed: {}. Pushing it would put that in a registry,                  where deleting the tag does not remove the layer",
+                if why.is_empty() {
+                    "the image did not pass its checks".to_string()
+                } else {
+                    why.join("; ")
+                }
+            ));
+            return plan;
+        }
+        Some(_) => {}
+    }
+
+    plan.authenticated = authenticated(&registry);
+    if plan.authenticated == Some(false) {
+        plan.warnings.push(format!(
+            "{registry} is not in this machine's Docker config — run `docker login {registry}`              first. StackVo does not hold registry credentials, the same way it does not hold              ssh keys"
+        ));
+    }
+
+    plan.possible = true;
+    plan
+}
+
+/// Does the user's Docker config mention this registry?
+///
+/// Read, never written. The file is the user's and holds credentials or a
+/// pointer to a helper that does; this looks for the host as a key and answers
+/// yes, no, or "could not tell".
+fn authenticated(registry: &str) -> Option<bool> {
+    let path = dirs::home_dir()?.join(".docker").join("config.json");
+    let text = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+
+    let listed = |key: &str| {
+        value
+            .get(key)
+            .and_then(|v| v.as_object())
+            .is_some_and(|map| map.contains_key(registry))
+    };
+    // `credHelpers` is per registry; `credsStore` is a single helper for every
+    // registry, so its presence means the answer lives somewhere this cannot
+    // read and "no" would be a guess.
+    if listed("auths") || listed("credHelpers") {
+        return Some(true);
+    }
+    if value.get("credsStore").and_then(|v| v.as_str()).is_some() {
+        return None;
+    }
+    Some(false)
+}
+
+/// `docker push <tag>`.
+pub fn push_argv(tag: &str) -> Vec<String> {
+    vec!["push".to_string(), tag.to_string()]
+}
+
+// --------------------------------------------------------- recipe (H-1)
+
+/// A compose file for running the built image somewhere else.
+///
+/// ## What it deliberately does not carry
+///
+/// **No values for anything secret.** The variables are named and left empty,
+/// because a recipe with credentials in it is a `.env` wearing a different
+/// extension — and this one is meant to be committed to a deployment
+/// repository, which is precisely where the `.env` problem above came from.
+///
+/// **No bind mount.** The dev compose mounts the source; that is what makes it
+/// a dev compose, and an image that already holds the code has nothing to mount.
+/// A recipe that kept the mount would run the developer's laptop path on a
+/// server.
+///
+/// **No `depends_on` for the workspace's services.** A production database is
+/// not a container this recipe starts; it is a host somebody already has, and
+/// generating a MySQL container beside the app would be this tool guessing at
+/// somebody's infrastructure.
+pub fn recipe(name: &str, tag: &str, port: u16, env_keys: &[String]) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "# Deployment recipe for {name}, generated by StackVo.\n         #\n         # This runs the image built by `release` — it holds the application code\n         # and no .env, which was verified by running it. Nothing here is a\n         # development setting: no source mount, no debugger, no database\n         # container. The database is a host you already have.\n         #\n         # The variables below are NAMED and EMPTY on purpose. Filling them in\n         # here would make this file a .env that is meant to be committed.\n         services:\n         \x20 {name}:\n         \x20   image: \"{tag}\"\n         \x20   restart: unless-stopped\n         \x20   ports:\n         \x20     - \"{port}:{port}\"\n"
+    ));
+
+    if !env_keys.is_empty() {
+        out.push_str("    environment:\n");
+        for key in env_keys {
+            out.push_str(&format!("      {key}: \"\"\n"));
+        }
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -621,5 +821,120 @@ mod tests {
         assert!(argv.contains(&"-f".to_string()));
         assert_eq!(argv.last().unwrap(), "/w/projects/shop");
         assert!(!argv.iter().any(|a| a.contains(' ')));
+    }
+
+    // ---- push (H-1) ------------------------------------------------------
+
+    fn clean() -> Verification {
+        Verification {
+            env_files: Vec::new(),
+            xdebug_active: Some(false),
+            has_app: true,
+            clean: true,
+        }
+    }
+
+    /// Docker's own rule, and the direction that matters: reading `team` as a
+    /// registry would let a push to Docker Hub through the check that exists to
+    /// catch exactly that.
+    #[test]
+    fn only_a_first_component_that_looks_like_a_host_is_a_registry() {
+        assert_eq!(registry_of("team/app:v1"), None);
+        assert_eq!(registry_of("app:v1"), None);
+        assert_eq!(
+            registry_of("registry.example.com/team/app:v1").as_deref(),
+            Some("registry.example.com")
+        );
+        assert_eq!(
+            registry_of("localhost:5000/app").as_deref(),
+            Some("localhost:5000")
+        );
+    }
+
+    #[test]
+    fn a_tag_with_no_registry_is_refused_and_the_message_says_where_it_would_go() {
+        let plan = push_plan("app:v1", Some(&clean()));
+        assert!(!plan.possible);
+        assert!(plan.refused.unwrap().contains("Docker Hub"));
+    }
+
+    /// A registry keeps layers, so the check runs before the push.
+    #[test]
+    fn an_unverified_image_is_refused() {
+        let plan = push_plan("registry.example.com/app:v1", None);
+        assert!(!plan.possible);
+        let why = plan.refused.unwrap();
+        assert!(why.contains("not been verified"), "{why}");
+    }
+
+    /// "Nobody has looked" and "we looked and it is dirty" are different
+    /// sentences, and the second has to name what was found.
+    #[test]
+    fn a_failed_verification_is_refused_with_what_was_found() {
+        let dirty = Verification {
+            env_files: vec![".env.stage".into()],
+            xdebug_active: Some(true),
+            has_app: true,
+            clean: false,
+        };
+        let why = push_plan("registry.example.com/app:v1", Some(&dirty))
+            .refused
+            .unwrap();
+        assert!(why.contains(".env.stage"), "{why}");
+        assert!(why.contains("Xdebug"), "{why}");
+    }
+
+    #[test]
+    fn a_verified_image_with_a_registry_may_be_pushed() {
+        let plan = push_plan("registry.example.com/team/app:v1", Some(&clean()));
+        assert!(plan.possible, "{:?}", plan.refused);
+        assert_eq!(plan.registry.as_deref(), Some("registry.example.com"));
+    }
+
+    #[test]
+    fn the_push_argv_is_two_words_and_neither_is_a_shell() {
+        assert_eq!(
+            push_argv("registry.example.com/app:v1"),
+            vec!["push", "registry.example.com/app:v1"]
+        );
+    }
+
+    // ---- recipe (H-1) ----------------------------------------------------
+
+    /// The two things that make a dev compose a dev compose, and the one that
+    /// makes a committed file dangerous.
+    #[test]
+    fn the_recipe_carries_no_mount_no_debugger_and_no_values() {
+        let yaml = recipe(
+            "shop",
+            "registry.example.com/shop:v1",
+            8080,
+            &["DB_HOST".into()],
+        );
+        assert!(!yaml.contains("volumes:"), "{yaml}");
+        assert!(!yaml.to_lowercase().contains("xdebug"), "{yaml}");
+        assert!(
+            yaml.contains("DB_HOST: \"\""),
+            "the value must be empty:\n{yaml}"
+        );
+    }
+
+    /// A production database is a host somebody already has, not a container
+    /// this tool invents for them.
+    #[test]
+    fn the_recipe_starts_no_database_beside_the_app() {
+        let yaml = recipe("shop", "x/shop:v1", 8080, &[]);
+        assert!(!yaml.contains("mysql"), "{yaml}");
+        assert!(!yaml.contains("depends_on"), "{yaml}");
+    }
+
+    #[test]
+    fn the_recipe_names_the_image_that_was_built() {
+        let yaml = recipe("shop", "registry.example.com/shop:v1", 3000, &[]);
+        assert!(
+            yaml.contains("image: \"registry.example.com/shop:v1\""),
+            "{yaml}"
+        );
+        assert!(yaml.contains("\"3000:3000\""), "{yaml}");
     }
 }

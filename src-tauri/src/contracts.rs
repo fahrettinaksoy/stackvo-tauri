@@ -211,44 +211,52 @@ mod tests {
     }
 
     #[test]
-    fn service_catalog_has_twenty_five_entries() {
-        // 25 templates on disk: both mail catchers ship — Mailpit as the
-        // default, MailHog kept by explicit decision for stacks that already
-        // run it. (The original count's README claims of "40+" and "14" were
-        // both wrong, C-17.) The last four are MinIO, Meilisearch, Typesense
-        // and Valkey, added together because they are the rows six competitors
-        // each ship and this one did not.
-        assert_eq!(env_schema().service_catalog().len(), 25);
+    fn the_service_catalog_has_twenty_seven_entries() {
+        // Was 25, and the number is a record rather than a rule: it counted the
+        // template directories that shipped inside the binary. (The original
+        // README claims of "40+" and "14" were both wrong, C-17.) It is 27 now
+        // — Solr and ClickHouse — and they are the first two that were never
+        // templates at all, which is what ADR 0011 was aiming at and ADR 0016
+        // finished.
+        assert_eq!(env_schema().service_catalog().len(), 27);
     }
 
-    /// The schema's catalog and the templates that ship are the same set.
+    /// The catalog is a vocabulary, and the one thing left to check is that it
+    /// is a well-formed one.
     ///
-    /// Both halves matter and they fail differently. A directory with no
-    /// catalog entry is a service nothing can switch on — `knows_service`
-    /// rejects the id, so it is dead weight in the binary with no way in. A
-    /// catalog entry with no directory is worse: the Services page offers a
-    /// row, `service_enable` writes `SERVICE_<NAME>_ENABLE=true` into the
-    /// user's `.env`, and `render_dynamic_compose` then logs a warning and
-    /// renders nothing — a service that reads as enabled and does not exist.
+    /// This used to assert the catalog and the compiled-in template directories
+    /// were the same set, in both directions, and the doc comment explained
+    /// what each direction cost. ADR 0016 removed the templates, so the anchor
+    /// is gone — and with it the constraint that made D-1 awkward: a service
+    /// could not be named here without a template behind it, which is why Solr
+    /// and ClickHouse shipped as packages and were still reported as unknown.
     ///
-    /// This is a claim `env.schema.json` now makes in prose, which in this
-    /// repository means it needs somewhere to be measured.
+    /// What can still be settled mechanically: every id is unique, spelled the
+    /// way an `.env` key can carry it, and filed under a category the package
+    /// tree also uses. `package_contract.rs` holds that last one from the other
+    /// side.
     #[test]
-    fn every_catalog_entry_has_a_template_and_the_reverse() {
-        let catalog: std::collections::BTreeSet<String> = env_schema()
-            .service_catalog()
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect();
+    fn the_service_catalog_is_a_well_formed_vocabulary() {
+        let catalog = env_schema().service_catalog();
+        assert!(catalog.len() > 20, "the catalog did not parse: {catalog:?}");
 
-        // Read from the compiled-in skeleton rather than the checkout: that is
-        // what a packaged app has, and a template present only in the working
-        // tree would pass a filesystem walk and fail on a user's machine.
-        let shipped: std::collections::BTreeSet<String> =
-            crate::skeleton::shipped_services().into_iter().collect();
-        assert!(!shipped.is_empty(), "no service templates are compiled in");
+        let mut seen = std::collections::BTreeSet::new();
+        for (id, _) in &catalog {
+            assert!(seen.insert(id.clone()), "{id} is listed twice");
+            assert!(
+                id.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+                "{id} cannot become a SERVICE_<NAME>_ENABLE key"
+            );
+        }
 
-        assert_eq!(catalog, shipped);
+        // The two that arrived as packages with no template ever existing.
+        for id in ["solr", "clickhouse"] {
+            assert!(
+                seen.contains(id),
+                "{id} is installable and unlisted, so declaring it warns wrongly"
+            );
+        }
     }
 
     #[test]

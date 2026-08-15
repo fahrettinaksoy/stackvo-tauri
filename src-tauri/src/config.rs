@@ -47,12 +47,16 @@ pub struct Env {
 /// only the default: a fresh workspace no longer ships seven lines restating
 /// what the app would have done anyway, and a `.env` line now means somebody
 /// decided something rather than that a file was copied.
-pub const EMBEDDED: [(&str, &str); 185] = [
+pub const EMBEDDED: [(&str, &str); 186] = [
     // HOST_UID and HOST_GID are deliberately absent. `template::variables`
     // fills them from getuid()/getgid() when nothing else has, and it does that
     // only for keys that are missing — embedding them pinned one machine's ids
     // into every install, so Grafana would have run as uid 501 on a Linux box
     // where the developer is 1000.
+    // I-2. Off, and off is the default that matters: a project that stops
+    // behind somebody's back and then answers 502 is worse than one that stays
+    // up, so this is asked for rather than assumed.
+    ("IDLE_SUSPEND_MINUTES", "0"),
     ("SUPPORTED_SERVERS", "nginx,apache,caddy,frankenphp,swoole"),
     ("SUPPORTED_SERVERS_DEFAULT", "nginx"),
     ("SUPPORTED_LANGUAGES", "php,python,go,ruby,rust,nodejs"),
@@ -842,12 +846,28 @@ SERVICE_REDIS_ENABLE=TRUE
     /// as "off" because the key is missing rather than because anybody chose.
     /// The version key is the same story one step later: an image tag of the
     /// empty string is `image: "minio/minio:"`, which compose rejects.
+    /// Every service that ever lived in `.env` still has its defaults there.
+    ///
+    /// Scoped to those, and the scope is the point. `EMBEDDED` exists so a
+    /// workspace created by an older StackVo keeps rendering and so the
+    /// handover has something to read; it is not a catalogue any more. A
+    /// service that arrived as a package — Solr, ClickHouse — never had an
+    /// `.env` key and must not gain one, because gaining one would mean the
+    /// app had an opinion about a service it does not ship.
+    ///
+    /// The remaining work is the other direction: `EMBEDDED`'s service half is
+    /// now legacy-only and should go once no supported workspace still needs
+    /// migrating. §3 of `docs/durum.md` carries that as an item.
     #[test]
     fn every_catalog_service_ships_an_enable_and_a_version() {
         let embedded: std::collections::BTreeSet<&str> =
             EMBEDDED.iter().map(|(key, _)| *key).collect();
 
         for (service, _) in crate::contracts::env_schema().service_catalog() {
+            // Package-native: no template, no `.env` key, nothing embedded.
+            if !embedded.contains(format!("{}ENABLE", Env::service_prefix(&service)).as_str()) {
+                continue;
+            }
             let prefix = Env::service_prefix(&service);
             for suffix in ["ENABLE", "VERSION", "VERSIONS"] {
                 let key = format!("{prefix}{suffix}");
@@ -875,7 +895,10 @@ SERVICE_REDIS_ENABLE=TRUE
 
         for (service, _) in crate::contracts::env_schema().service_catalog() {
             let prefix = Env::service_prefix(&service);
-            let version = embedded[format!("{prefix}VERSION").as_str()];
+            // See the test above: a package-native service has no `.env` half.
+            let Some(version) = embedded.get(format!("{prefix}VERSION").as_str()).copied() else {
+                continue;
+            };
             let versions = embedded[format!("{prefix}VERSIONS").as_str()];
 
             let offered: Vec<&str> = versions.split(',').map(str::trim).collect();

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { mount } from '@vue/test-utils';
+import { mount, flushPromises } from '@vue/test-utils';
 import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
@@ -214,5 +214,88 @@ describe('the pane', () => {
 
     expect(wrapper.findAll('.v-alert[type="error"]')).toHaveLength(0);
     expect(wrapper.text()).not.toContain('node_modules');
+  });
+});
+
+/**
+ * Pushing, and the refusals that make it safe (H-1).
+ *
+ * The property worth a test is that a refusal is *readable and disabling*: a
+ * pane that showed the reason and left the button live would be worse than one
+ * that showed nothing, because it would look considered.
+ */
+describe('pushing a release', () => {
+  const CLEAN = {
+    plan: PLAN,
+    verification: { clean: true, envFiles: [], xdebugActive: false, hasApp: true },
+  };
+
+  async function built() {
+    replies.releasePlan = PLAN;
+    replies.releaseBuild = CLEAN;
+    const wrapper = mount(
+      { template: '<v-app><ReleasePane name="shop" /></v-app>', components: { ReleasePane } },
+      { global: { plugins: [vuetify, i18n] } }
+    );
+    await vi.waitFor(() => expect(wrapper.find('input').exists()).toBe(true));
+
+    const build = wrapper
+      .findAll('button')
+      .find((b) => b.text() === i18n.global.t('release.build'));
+    await build.trigger('click');
+    await flushPromises();
+    return wrapper;
+  }
+
+  const button = (wrapper, key) =>
+    wrapper.findAll('button').find((b) => b.text() === i18n.global.t(key));
+
+  it('offers nothing to push until the check has been asked for', async () => {
+    const wrapper = await built();
+    expect(button(wrapper, 'release.push').attributes('disabled')).toBeDefined();
+  });
+
+  it('shows the refusal in full and keeps the button disabled', async () => {
+    const wrapper = await built();
+    replies.releasePushPlan = {
+      tag: 'shop:1.4.0',
+      possible: false,
+      refused: 'shop:1.4.0 names no registry, so this would push to Docker Hub',
+      warnings: [],
+    };
+
+    await button(wrapper, 'release.pushCheck').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('would push to Docker Hub');
+    expect(button(wrapper, 'release.push').attributes('disabled')).toBeDefined();
+  });
+
+  it('enables the push once the plan says it may happen', async () => {
+    const wrapper = await built();
+    replies.releasePushPlan = {
+      tag: 'registry.example.com/shop:1.4.0',
+      registry: 'registry.example.com',
+      possible: true,
+      authenticated: true,
+      warnings: [],
+    };
+
+    await button(wrapper, 'release.pushCheck').trigger('click');
+    await flushPromises();
+
+    expect(button(wrapper, 'release.push').attributes('disabled')).toBeUndefined();
+  });
+
+  /** The recipe is shown, not written: where it belongs is the user's call. */
+  it('shows the recipe rather than saving it anywhere', async () => {
+    const wrapper = await built();
+    replies.releaseRecipe = 'services:\n  shop:\n    image: "registry.example.com/shop:1.4.0"\n';
+
+    await button(wrapper, 'release.recipe').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('registry.example.com/shop:1.4.0');
+    expect(calls.some((c) => c[0] === 'releaseSave')).toBe(false);
   });
 });

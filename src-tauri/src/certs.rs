@@ -243,25 +243,6 @@ pub fn parse_pem(bytes: &[u8]) -> Result<CertFacts> {
     })
 }
 
-/// The CA's subject common name — mkcert writes `mkcert <user>@<host> (<Name>)`.
-///
-/// Used to look the CA up in a trust-store listing. Matching on the common name
-/// rather than a fingerprint is deliberate: the listings the platforms print
-/// (`security find-certificate`, `certutil -store`) render fingerprints in
-/// different formats and some not at all, whereas every one of them prints the
-/// subject.
-pub fn ca_common_name(pem: &[u8]) -> Option<String> {
-    let (_, pem) = x509_parser::pem::parse_x509_pem(pem).ok()?;
-    let cert = pem.parse_x509().ok()?;
-    let name = cert
-        .subject()
-        .iter_common_name()
-        .next()
-        .and_then(|cn| cn.as_str().ok())
-        .map(str::to_string);
-    name
-}
-
 /// Is our CA in the listing the platform just printed?
 ///
 /// Kept separate from the command that produces the listing so the matching is
@@ -557,6 +538,18 @@ pub fn project_domains(root: &Path) -> Vec<String> {
             // come through as they are written: `required_domains` keeps them
             // and mkcert issues `*.shop.loc` as a SAN.
             out.extend(manifest.aliases);
+
+            // The LAN name is a subject on the same terms, and it is the one
+            // that matters most: the device meeting this certificate has never
+            // seen the local CA, so it is already going to warn. A certificate
+            // that also failed to cover the name would put a second, different
+            // warning in front of somebody who has just been told to expect the
+            // first — and the two are indistinguishable on a phone.
+            if manifest.lan_share {
+                if let Some(ip) = crate::lan::address() {
+                    out.push(crate::lan::domain_for(name, ip));
+                }
+            }
         }
     }
 
@@ -961,6 +954,27 @@ fn unreadable_ca_hint(reason: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// The LAN name is a subject like any other, and the one it is worst to
+    /// miss.
+    ///
+    /// The device meeting this certificate has never seen the local CA, so it
+    /// is already going to warn. A certificate that also failed to cover the
+    /// name would put a *second*, different warning in front of somebody who
+    /// has just been told to expect the first — and on a phone the two are
+    /// indistinguishable, so the user cannot tell "expected" from "broken".
+    ///
+    /// The shape is checked rather than the address: this runs on whatever
+    /// machine the suite runs on, and `lan.rs` owns the derivation.
+    #[test]
+    fn a_lan_name_reaches_the_certificate() {
+        let host = crate::lan::domain_for("shop", std::net::Ipv4Addr::new(192, 168, 1, 5));
+        let (required, rejected) =
+            required_domains("stackvo.loc", &["shop.loc".to_string(), host.clone()]);
+
+        assert!(required.contains(&host), "{required:?}");
+        assert!(rejected.is_empty(), "{rejected:?}");
+    }
+
     /// A project may name a wildcard, and the certificate has to carry it.
     ///
     /// `required_domains` used to validate every project domain with
@@ -1292,6 +1306,5 @@ mod tests {
     #[test]
     fn garbage_is_not_mistaken_for_a_certificate() {
         assert!(parse_pem(b"not a certificate").is_err());
-        assert!(ca_common_name(b"not a certificate").is_none());
     }
 }

@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n';
 import { bytes } from '@/lib/format';
 import { useOperationsStore } from '@/stores/operations';
 import { useProfiler } from '@/composables/useProfiler';
+import FlameView from '@/components/FlameView.vue';
 import ErrorAlert from '@/components/ErrorAlert.vue';
 
 /**
@@ -27,6 +28,9 @@ const ops = useOperationsStore();
 const {
   status,
   report,
+  tree,
+  treeBusy,
+  loadTree,
   openId,
   busy,
   error,
@@ -190,6 +194,26 @@ watch(
             })
           }}
         </div>
+        <!-- F-3. The table says where the time went; this says what called it.
+             Behind a button rather than open, because the tree is thousands of
+             nodes and most visits to this pane want the top of the table. -->
+        <div class="d-flex align-center ga-2 mb-2">
+          <v-btn
+            size="small"
+            variant="tonal"
+            prepend-icon="mdi-fire"
+            :loading="treeBusy"
+            @click="loadTree"
+          >
+            {{ t('profiler.flame') }}
+          </v-btn>
+          <span class="text-caption text-medium-emphasis">{{ t('profiler.flameHint') }}</span>
+        </div>
+
+        <FlameView v-if="tree" :frames="tree" :format="cost" class="mb-3">
+          <template #empty>{{ t('profiler.noTree') }}</template>
+        </FlameView>
+
         <v-alert
           v-if="report.truncated"
           type="warning"

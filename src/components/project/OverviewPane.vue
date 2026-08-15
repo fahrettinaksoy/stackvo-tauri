@@ -53,13 +53,14 @@ const httpsUrl = computed(() => (props.project?.domain ? `https://${props.projec
       <v-col cols="12" md="4">
         <div class="field">
           <span class="field-key">{{ t('projectsView.colDomain') }}</span>
-          <a
+          <button
             v-if="httpUrl"
+            type="button"
             class="field-link"
             @click="project.domainConfigured && api.openInBrowser(httpsUrl)"
           >
             {{ project.domain }}
-          </a>
+          </button>
           <span v-else class="field-val">—</span>
         </div>
         <!-- Beside the domain, because that is what they extend. A wildcard is
@@ -105,12 +106,14 @@ const httpsUrl = computed(() => (props.project?.domain ? `https://${props.projec
         </div>
         <div class="field">
           <span class="field-key">{{ t('projectDetail.accessHttp') }}</span>
-          <a
+          <button
             v-if="httpUrl"
+            type="button"
             class="field-link"
             @click="project.domainConfigured && api.openInBrowser(httpUrl)"
-            >{{ httpUrl }}</a
           >
+            {{ httpUrl }}
+          </button>
           <span v-else class="field-val">—</span>
         </div>
       </v-col>
@@ -166,12 +169,14 @@ const httpsUrl = computed(() => (props.project?.domain ? `https://${props.projec
         </div>
         <div class="field">
           <span class="field-key">{{ t('projectDetail.accessHttps') }}</span>
-          <a
+          <button
             v-if="httpsUrl"
+            type="button"
             class="field-link"
             @click="project.domainConfigured && api.openInBrowser(httpsUrl)"
-            >{{ httpsUrl }}</a
           >
+            {{ httpsUrl }}
+          </button>
           <span v-else class="field-val">—</span>
         </div>
       </v-col>

@@ -1,9 +1,11 @@
+pub mod agentctx;
 pub mod agents;
 pub mod appdir;
 pub mod applog;
 pub mod apps;
 pub mod atomic;
 pub mod audit;
+pub mod authoring;
 pub mod certs;
 pub mod commands;
 pub mod compose_policy;
@@ -13,10 +15,12 @@ pub mod contracts;
 pub mod crash;
 pub mod daemon;
 pub mod db;
+pub mod dbmove;
 pub mod debugbridge;
 pub mod detect;
 pub mod devserver;
 pub mod diagnostics;
+pub mod dns;
 pub mod doctor;
 pub mod elevate;
 pub mod engine;
@@ -27,10 +31,13 @@ pub mod generator;
 pub mod git;
 pub mod handover;
 pub mod hints;
+pub mod hooks;
 pub mod hosts;
+pub mod idle;
 pub mod imports;
 pub mod inflight;
 pub mod instances;
+pub mod lan;
 pub mod licences;
 pub mod locale;
 pub mod logging;
@@ -50,9 +57,11 @@ pub mod preset;
 pub mod profile;
 pub mod progress;
 pub mod pty;
+pub mod querylog;
 pub mod quickcmd;
 pub mod release;
 pub mod render;
+pub mod routes;
 pub mod runner;
 pub mod scaffold;
 pub mod secrets;
@@ -61,6 +70,7 @@ pub mod snapshot;
 pub mod stats;
 pub mod stats_store;
 pub mod template;
+pub mod timeline;
 pub mod tray;
 pub mod tunnel;
 pub mod watcher;
@@ -390,6 +400,9 @@ pub fn run() {
             commands::project_build,
             commands::market_status,
             commands::market_refresh,
+            commands::package_scaffold,
+            commands::package_lint,
+            commands::package_seal,
             commands::market_catalog,
             commands::market_install,
             commands::market_uninstall,
@@ -423,6 +436,18 @@ pub fn run() {
             commands::compose_up,
             commands::compose_down,
             // Phase 3 — desktop integration
+            commands::projects_idle,
+            commands::projects_suspend_idle,
+            commands::db_instances,
+            commands::db_move_plan,
+            commands::db_move_apply,
+            commands::routes_list,
+            commands::routes_save,
+            commands::dns_status,
+            commands::dns_start,
+            commands::dns_stop,
+            commands::dns_resolver_install,
+            commands::dns_resolver_remove,
             commands::hosts_status,
             commands::hosts_plan,
             commands::hosts_apply,
@@ -441,7 +466,15 @@ pub fn run() {
             commands::db_snapshot_restore,
             commands::db_snapshot_delete,
             commands::db_restore,
+            commands::lan_status,
+            commands::project_lan_share,
+            commands::request_timeline,
+            commands::query_log,
+            commands::query_log_record,
+            commands::query_log_clear,
             commands::service_connection,
+            commands::service_db_clients,
+            commands::service_open_in_client,
             commands::xdebug_status,
             commands::xdebug_set,
             commands::php_ini_status,
@@ -453,11 +486,15 @@ pub fn run() {
             commands::debug_bridge_overview,
             commands::release_plan,
             commands::release_build,
+            commands::release_push_plan,
+            commands::release_push,
+            commands::release_recipe,
             commands::release_save,
             commands::release_load,
             commands::profiler_status,
             commands::profiler_set_mode,
             commands::profiler_read,
+            commands::profiler_tree,
             commands::profiler_delete,
             commands::profiler_clear,
             commands::quick_commands,
@@ -491,6 +528,11 @@ pub fn run() {
             commands::project_adoptable,
             commands::project_adopt,
             commands::project_manifest_read,
+            commands::project_local_read,
+            commands::project_local_write,
+            commands::project_hooks_plan,
+            commands::project_hooks_approve,
+            commands::project_hooks_revoke,
             commands::project_manifest_write,
             commands::project_requirements,
             commands::project_requirements_apply,

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { createRouter, createMemoryHistory } from 'vue-router';
@@ -136,9 +137,25 @@ const PAGES = [
   // one below rather than in this list.
 ];
 
-beforeEach(() => {
+/**
+ * A window width Vuetify's `useDisplay` will believe.
+ *
+ * It reads `window.innerWidth` and updates on `resize`, so both have to happen
+ * — and before the mount, because the rails decide as their lists render.
+ */
+async function width(px) {
+  window.innerWidth = px;
+  window.dispatchEvent(new Event('resize'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+beforeEach(async () => {
   setActivePinia(createPinia());
   for (const key of Object.keys(replies)) delete replies[key];
+  // jsdom's own default is 1024, which is inside the band where the project
+  // rail keeps only its icons — so without this every case here would be
+  // asserting against a page in its narrow shape by accident.
+  await width(1400);
 });
 
 afterEach(() => {
@@ -437,6 +454,44 @@ describe('the project page', () => {
 
     expect(labels).not.toContain(en.projectDetail.debug);
     expect(labels).toContain(en.projectDetail.runtime);
+    wrapper.unmount();
+  });
+
+  /**
+   * The rail drops its labels before the pane loses its width.
+   *
+   * 240px of "Çalışma zamanı ayarları" is a third of a narrow window spent on
+   * navigation, and the entry that says the most is the first one an ellipsis
+   * eats. The labels are not hidden with CSS: they are not rendered, and the
+   * accessible name moves to `aria-label` in the same breath — a `display:
+   * none` title is absent from the accessible name too, which would leave a
+   * column of buttons called nothing.
+   */
+  it('keeps only the icons in the rail when the window is narrow', async () => {
+    seed();
+    await width(950);
+    const wrapper = await render(ProjectDetail, 'en', { name: 'shop' });
+
+    const nav = wrapper.get('.detail-nav');
+    expect(nav.classes()).toContain('detail-nav--rail');
+
+    const items = nav.findAll('.nav-item');
+    expect(items.length).toBe(7);
+    expect(nav.text()).not.toContain(en.projectDetail.runtime);
+    expect(items.map((i) => i.attributes('aria-label'))).toContain(en.projectDetail.runtime);
+    expect(items.every((i) => i.attributes('aria-label')?.trim())).toBe(true);
+
+    // The icon keeps a `.v-list-item__spacer` behind it — the 32px that used
+    // to sit between icon and label, an element rather than a margin, so it
+    // outlives the label. Left alone it holds the prepend column wider than
+    // the item and the icon hangs over the edge of its own highlight. jsdom
+    // measures nothing, so the assertion is that the rail says something.
+    expect(items[0].find('.v-list-item__spacer').exists()).toBe(true);
+    const source = readFileSync('src/views/ProjectDetail.vue', 'utf8');
+    const rail = source.slice(source.indexOf('.detail-nav--rail :deep(.v-list-item)'));
+    expect(rail).toMatch(/--v-list-prepend-gap:\s*0/);
+    expect(rail).toMatch(/grid-column:\s*1\s*\/\s*-1/);
+
     wrapper.unmount();
   });
 

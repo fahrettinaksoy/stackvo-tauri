@@ -5,18 +5,24 @@ import { useI18n } from 'vue-i18n';
 import { useContainerStats } from '@/composables/useContainerStats';
 import { useCopyTick } from '@/composables/useCopyTick';
 import { useXdebug } from '@/composables/useXdebug';
+import { useIconRail } from '@/composables/useIconRail';
 import IndicatorPane from '@/components/project/IndicatorPane.vue';
 import ContainerPane from '@/components/project/ContainerPane.vue';
 import DockerfilePane from '@/components/project/DockerfilePane.vue';
 import DumpsPane from '@/components/project/DumpsPane.vue';
+import QueryLogPane from '@/components/project/QueryLogPane.vue';
+import TimelinePane from '@/components/project/TimelinePane.vue';
 import DevServerPane from '@/components/project/DevServerPane.vue';
 import LogsPane from '@/components/project/LogsPane.vue';
 import PhpIniPane from '@/components/project/PhpIniPane.vue';
 import ManifestPane from '@/components/project/ManifestPane.vue';
+import LocalOverridePane from '@/components/project/LocalOverridePane.vue';
+import HooksPane from '@/components/project/HooksPane.vue';
 import RequirementsPane from '@/components/project/RequirementsPane.vue';
 import OverviewPane from '@/components/project/OverviewPane.vue';
 import ProfilerPane from '@/components/project/ProfilerPane.vue';
 import TunnelPane from '@/components/project/TunnelPane.vue';
+import LanPane from '@/components/project/LanPane.vue';
 import WorkersPane from '@/components/project/WorkersPane.vue';
 import TerminalPane from '@/components/project/TerminalPane.vue';
 import XdebugPane from '@/components/project/XdebugPane.vue';
@@ -136,6 +142,15 @@ const sections = computed(() => {
  * used to do that for them.
  */
 const shows = (key) => !loading.value && section.value === key;
+
+/**
+ * Icons only while the window is narrow — the reasoning is in the composable,
+ * which the settings rail shares.
+ *
+ * No lower bound, unlike Settings: this rail has no other shape to fall back
+ * to, and 240px of labels is a third of a 700px window spent on navigation.
+ */
+const railOnly = useIconRail();
 
 const running = computed(() => !!project.value?.running);
 
@@ -654,8 +669,6 @@ onUnmounted(() => {
       </v-btn>
     </v-toolbar>
 
-    <v-divider />
-
     <div class="detail-body">
       <div class="detail-content" :class="{ 'detail-content--flush': section === 'logs' }">
         <ErrorAlert :error="error" type="error" closable class="mb-4" @close="error = null" />
@@ -733,6 +746,13 @@ onUnmounted(() => {
              cannot drift between them. -->
         <template v-if="shows('debug')">
           <DumpsPane :name="name" @apply="applyToContainer" />
+          <!-- F-1. Beside the dumps because they answer the same question from
+               two ends: `dd()` says what the code thought, this says what the
+               database was actually asked. -->
+          <QueryLogPane />
+          <!-- F-2. And this puts the two on one axis, which is the thing
+               neither pane above can do on its own. -->
+          <TimelinePane :name="name" />
         </template>
 
         <!-- RELEASE -------------------------------------------------------- -->
@@ -762,6 +782,10 @@ onUnmounted(() => {
         <!-- SHARE ---------------------------------------------------------- -->
         <template v-if="shows('container')">
           <TunnelPane :name="name" :running="running" />
+          <!-- Beside the tunnel, because they answer the same question with
+               different costs: one publishes to the internet and needs a
+               sidecar, the other reaches only this network and needs neither. -->
+          <LanPane :name="name" @changed="load" />
         </template>
 
         <!-- WORKERS --------------------------------------------------------- -->
@@ -799,6 +823,18 @@ onUnmounted(() => {
           />
         </template>
 
+        <!-- Directly below the committed manifest, because the pair is the
+             point: this is what this machine does differently from it. -->
+        <template v-if="shows('configuration')">
+          <LocalOverridePane :name="name" @changed="load" />
+        </template>
+
+        <!-- Beside the manifest that declares them, because reading a hook is
+             the only way to approve one. -->
+        <template v-if="shows('configuration')">
+          <HooksPane :name="name" />
+        </template>
+
         <!-- LOGS ------------------------------------------------------------ -->
         <template v-if="shows('logs')">
           <LogsPane :project="project" :name="name" :active="section === 'logs'" />
@@ -811,17 +847,24 @@ onUnmounted(() => {
       </div>
 
       <!-- Section navigation ---------------------------------------------- -->
-      <div class="detail-nav">
+      <div class="detail-nav" :class="{ 'detail-nav--rail': railOnly }">
         <v-list nav class="bg-transparent">
           <template v-for="s in sections" :key="s.key">
             <v-divider v-if="s.divide" class="my-2" />
             <v-list-item
               :prepend-icon="s.icon"
-              :title="t(s.label)"
+              :title="railOnly ? undefined : t(s.label)"
+              :aria-label="railOnly ? t(s.label) : undefined"
               :active="section === s.key"
               class="nav-item"
               @click="section = s.key"
             >
+              <!-- The name, on hover, for as long as it is not on the row. A
+                   tooltip beside a label that is already there is noise; in
+                   place of one it is the only way to read the icon. -->
+              <v-tooltip v-if="railOnly" activator="parent" location="left">
+                {{ t(s.label) }}
+              </v-tooltip>
               <!-- Enabled but not doing anything: a breakpoint that never
                    fires looks like an IDE fault, and nothing else on screen
                    would say otherwise.
@@ -909,6 +952,40 @@ onUnmounted(() => {
   flex: 0 0 240px;
   padding: 16px 8px;
   overflow-y: auto;
+}
+
+/* Icons only, so the width is the icon's. The class comes from `railOnly`
+   rather than from a media query of its own — the labels are not hidden here,
+   they were never rendered.
+
+   Centring is the part worth saying out loud. `v-list-item` is a three-column
+   grid — prepend, content, append — and the gap after the icon is not a margin
+   but a `.v-list-item__spacer` element, 32px wide by default. With the label
+   gone that spacer stays, holding the prepend column wider than the item, so
+   the icon sits left of centre and hangs over the edge of its own highlight.
+   Zero it through the variable it reads, then let the prepend span all three
+   columns so "centre" means the item rather than the column the icon is in. */
+.detail-nav--rail {
+  flex: 0 0 64px;
+  padding-inline: 4px;
+}
+
+.detail-nav--rail :deep(.v-list-item) {
+  --v-list-prepend-gap: 0px;
+  padding-inline: 0;
+}
+
+.detail-nav--rail :deep(.v-list-item__prepend) {
+  grid-column: 1 / -1;
+  justify-content: center;
+}
+
+/* The Xdebug mark, which has no row left to sit at the end of. In the corner
+   of the icon instead, where a badge goes. */
+.detail-nav--rail :deep(.v-list-item__append) {
+  position: absolute;
+  inset-block-start: 2px;
+  inset-inline-end: 6px;
 }
 
 .nav-item {

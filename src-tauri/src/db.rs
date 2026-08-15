@@ -134,6 +134,60 @@ pub struct DbTarget {
     pub extension: String,
 }
 
+/// One database **instance**, which is what a move names (G-4).
+///
+/// Separate from [`DbTarget`] rather than a field added to it. `targets` answers
+/// "which engines can this workspace dump", one row per engine, and four callers
+/// read it that way — the dump picker, the query-log picker, the connection
+/// panel and the timeline. Making it one row per instance would give all four a
+/// list twice as long for a question none of them asked.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DbInstance {
+    pub id: String,
+    pub service: String,
+    pub version: String,
+    pub kind: Kind,
+    pub container: String,
+    pub enabled: bool,
+    pub running: bool,
+}
+
+/// Every database instance in the table, whether or not it is up.
+///
+/// Stopped ones are included and marked. A move needs both ends running and
+/// says so; a list that hid the stopped one would leave somebody wondering
+/// where the instance they just created went.
+pub async fn instances(root: &Path) -> Result<Vec<DbInstance>> {
+    let table = crate::instances::Table::load(root)?;
+    let mut out = Vec::new();
+
+    for instance in &table.instances {
+        let Some(kind) = Kind::from_service(&instance.service) else {
+            continue;
+        };
+        let container = instance.container();
+        // Asked per instance, the same way `targets` asks per service: the
+        // engine is the only thing that knows, and `enabled` is what the table
+        // wants rather than what is true.
+        let running = crate::engine::inspect(&container)
+            .await
+            .map(|d| d.running)
+            .unwrap_or(false);
+
+        out.push(DbInstance {
+            id: instance.id.clone(),
+            service: instance.service.clone(),
+            version: instance.version.clone(),
+            kind,
+            container,
+            enabled: instance.enabled,
+            running,
+        });
+    }
+    Ok(out)
+}
+
 // ------------------------------------------------------------- pure logic
 
 /// Default database users, where `.env` does not name one.
@@ -255,6 +309,73 @@ struct Settings {
     database: Option<String>,
 }
 
+/// The container this service actually runs in.
+///
+/// `stackvo-<service>` was right while every service was single-instance and
+/// named after itself. It stopped being right the moment the instance table
+/// arrived: an instance is `stackvo-mysql-9-7`, and after ADR 0016 there is no
+/// other kind of workspace. So this reads the table first and only falls back
+/// to the old shape when there is none — which today means a workspace that has
+/// not migrated, and those are refused by the renderer before they get here.
+///
+/// The same mistake `list_services` made and was fixed for: it built every
+/// container name as `stackvo-<id>`, so a migrated workspace listed
+/// twenty-five services and reported all of them stopped. Here the cost was
+/// quieter and worse — dump, restore, snapshot and the query log all ran
+/// against a container that does not exist.
+///
+/// The first instance of that service, when there are several. A workspace
+/// running MySQL 8.0 and 9.4 side by side has two, and this picks the one the
+/// table lists first rather than guessing; naming which one is a question the
+/// screens above this have to ask, and none of them ask it yet.
+pub fn container_of(root: &Path, service: &str) -> String {
+    crate::instances::Table::load(root)
+        .ok()
+        .and_then(|table| {
+            table
+                .instances
+                .iter()
+                .find(|instance| instance.service == service)
+                .map(|instance| instance.container())
+        })
+        .unwrap_or_else(|| format!("{}{service}", crate::engine::CONTAINER_PREFIX))
+}
+
+/// The same settings, for one **instance** rather than for a service.
+///
+/// `settings` resolves a service to whichever instance the table happens to
+/// list first, which was correct while a service meant one container and is
+/// exactly wrong for G-4: moving `mysql-8-0` into `mysql-8-4` has to name two
+/// containers, and both of them answer to `mysql`.
+///
+/// Credentials still come from the same place. An instance carries its own
+/// settings map, but the root password of a *migrated* instance is the one in
+/// `.env` — the handover deliberately left it there — so the per-instance value
+/// wins and `.env` is the fallback rather than the other way round.
+fn settings_for_instance(root: &Path, id: &str) -> Result<Settings> {
+    let table = crate::instances::Table::load(root)?;
+    let instance = table
+        .get(id)
+        .ok_or_else(|| Error::not_found(format!("instance {id}")))?;
+
+    let mut settings = settings(root, &instance.service)?;
+    settings.container = instance.container();
+
+    let keys = settings.kind.keys();
+    let pick = |key: Option<&str>| -> Option<String> {
+        key.and_then(|k| instance.settings.get(k))
+            .filter(|v| !v.is_empty())
+            .cloned()
+    };
+    if let Some(user) = pick(keys.user) {
+        settings.user = user;
+    }
+    if let Some(database) = pick(keys.database) {
+        settings.database = Some(database);
+    }
+    Ok(settings)
+}
+
 fn settings(root: &Path, service: &str) -> Result<Settings> {
     let kind = Kind::from_service(service).ok_or_else(|| {
         Error::new(
@@ -269,7 +390,7 @@ fn settings(root: &Path, service: &str) -> Result<Settings> {
 
     Ok(Settings {
         kind,
-        container: format!("{}{service}", crate::engine::CONTAINER_PREFIX),
+        container: container_of(root, service),
         user: keys
             .user
             .and_then(|k| env.get(k))
@@ -340,12 +461,116 @@ fn exec_args(settings: &Settings, interactive: bool) -> Vec<String> {
     args
 }
 
+/// Run SQL against one instance and hand back what it printed.
+///
+/// Here rather than in `querylog.rs` because this module owns the one thing
+/// that is delicate about reaching a database: the password crosses as a named
+/// environment variable (`-e MYSQL_PWD` with no value), so it is never on a
+/// command line where `ps` could read it. A second copy of that arrangement
+/// somewhere else is a second chance to get it wrong.
+///
+/// `-N -B`: no column headers and tab-separated, which is the format
+/// `querylog::parse_rows` reads. The statement itself is always one of this
+/// app's own constants — nothing a user typed reaches it — so there is no
+/// quoting problem to solve, and adding a parameter binding layer for four
+/// fixed statements would be machinery with no user.
+pub async fn run_sql(root: &Path, service: &str, sql: &str) -> Result<String> {
+    let settings = settings(root, service)?;
+
+    let mut args = exec_args(&settings, false);
+    match settings.kind {
+        Kind::Mysql | Kind::Mariadb => {
+            args.push("mysql".to_string());
+            args.push(format!("-u{}", settings.user));
+            args.push("-N".to_string());
+            args.push("-B".to_string());
+            args.push("-e".to_string());
+            args.push(sql.to_string());
+        }
+        // `-tA`: no header, no alignment — the same tab-free, row-per-line
+        // shape `-N -B` gives on the MySQL side, so one parser reads both.
+        Kind::Postgres => {
+            args.push("psql".to_string());
+            args.push("-U".to_string());
+            args.push(settings.user.clone());
+            args.push("-tA".to_string());
+            args.push("-c".to_string());
+            args.push(sql.to_string());
+        }
+        // Not SQL, and the name of this function is the only thing that says
+        // so — what a caller wants from all four is "run this and hand me the
+        // output", and forcing Mongo through a second function would put the
+        // password arrangement above in two places.
+        // The password is an argument here, and that is a loss this module
+        // otherwise refuses: `password_var` returns None for Mongo because
+        // there is no environment equivalent, so `ps` can see it for the life
+        // of the process. `dump` and `restore` already pay it for the same
+        // reason and the same absence — a second arrangement would not remove
+        // the exposure, only spread the knowledge of it.
+        Kind::Mongo => {
+            args.push("mongosh".to_string());
+            args.push("--quiet".to_string());
+            args.push("-u".to_string());
+            args.push(settings.user.clone());
+            if let Some(password) = &settings.password {
+                args.push("-p".to_string());
+                args.push(password.clone());
+            }
+            args.push("--eval".to_string());
+            args.push(sql.to_string());
+        }
+    }
+
+    let mut command = tokio::process::Command::new("docker");
+    command.args(&args);
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    if let (Some(var), Some(password)) = (settings.kind.password_var(), &settings.password) {
+        command.env(var, password);
+    }
+
+    let out = command
+        .output()
+        .await
+        .map_err(|e| Error::io("running docker exec", e))?;
+
+    if !out.status.success() {
+        // The client writes a password warning to stderr on every run, which is
+        // not a failure and must not be reported as the reason for one.
+        let text = String::from_utf8_lossy(&out.stderr);
+        let reason = text
+            .lines()
+            .filter(|l| !l.contains("Using a password on the command line"))
+            .filter(|l| !l.trim().is_empty())
+            .next_back()
+            .unwrap_or("the database refused the statement");
+        return Err(Error::new(Code::IoError, reason.trim().to_string()));
+    }
+
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
 /// Read the database out into `path`.
 pub async fn dump<F>(root: &Path, service: &str, path: &Path, on_line: F) -> Result<u64>
 where
     F: FnMut(String) + Send + 'static,
 {
-    let settings = settings(root, service)?;
+    dump_with(settings(root, service)?, service, path, on_line).await
+}
+
+/// The same, naming an instance rather than a service (G-4).
+pub async fn dump_instance<F>(root: &Path, id: &str, path: &Path, on_line: F) -> Result<u64>
+where
+    F: FnMut(String) + Send + 'static,
+{
+    dump_with(settings_for_instance(root, id)?, id, path, on_line).await
+}
+
+async fn dump_with<F>(settings: Settings, who: &str, path: &Path, on_line: F) -> Result<u64>
+where
+    F: FnMut(String) + Send + 'static,
+{
+    let service = who;
 
     let mut args = exec_args(&settings, false);
     args.extend(dump_args(
@@ -385,7 +610,22 @@ pub async fn restore<F>(root: &Path, service: &str, path: &Path, on_line: F) -> 
 where
     F: FnMut(String) + Send + 'static,
 {
-    let settings = settings(root, service)?;
+    restore_with(settings(root, service)?, service, path, on_line).await
+}
+
+/// The same, naming an instance rather than a service (G-4).
+pub async fn restore_instance<F>(root: &Path, id: &str, path: &Path, on_line: F) -> Result<u64>
+where
+    F: FnMut(String) + Send + 'static,
+{
+    restore_with(settings_for_instance(root, id)?, id, path, on_line).await
+}
+
+async fn restore_with<F>(settings: Settings, who: &str, path: &Path, on_line: F) -> Result<u64>
+where
+    F: FnMut(String) + Send + 'static,
+{
+    let service = who;
 
     let bytes = std::fs::metadata(path)
         .map(|m| m.len())

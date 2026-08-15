@@ -625,6 +625,98 @@
       "returns": "HostsPlan",
       "why": "Computes the exact replacement text WITHOUT elevating, so the UI can show a diff and ask first. Elevating and explaining afterwards would be the wrong order for the one operation that touches a system file."
     },
+    "projects_idle": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "IdleProject[]",
+      "why": "I-2. Reports the idle time even with the threshold off — the number is worth seeing before somebody chooses what to set it to."
+    },
+    "projects_suspend_idle": {
+      "new": true,
+      "kind": "mutation",
+      "args": {},
+      "returns": "string[] — the projects stopped",
+      "why": "Returns NAMES, not a count: this is a background action whose whole risk is being surprising, and “3 suspended” is a number somebody then has to match against a list. MUST skip a project something else holds rather than queueing behind it — a sweep that waited behind a build would stop the container the moment the build finished."
+    },
+    "db_instances": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "DbInstance[]",
+      "why": "G-4. A move names two instances, and `mysql-8-0` and `mysql-8-4` both answer to `mysql`."
+    },
+    "db_move_plan": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "from": "string",
+        "to": "string"
+      },
+      "returns": "DbMovePlan",
+      "why": "G-4. Plan-then-apply, the same shape as hosts_plan/hosts_apply, because the target is EMPTIED and that sentence has to be on screen before anybody presses anything. MUST touch no container."
+    },
+    "db_move_apply": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "from": "string",
+        "to": "string"
+      },
+      "returns": "DbMoved",
+      "why": "MUST re-check the plan rather than trusting the caller's — the plan crossed the IPC boundary and came back. MUST hold BOTH instances busy: a move reads one database and replaces another, and either being started or dumped underneath it is a torn result nobody could explain. Goes through a file rather than a pipe, and the file is KEPT on failure with its path in the error — at that moment it is the only copy of the source outside a container and the target is already replaced."
+    },
+    "routes_list": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "UserRoute[]",
+      "why": "E-4. A route the renderer skips MUST still appear here, or the screen shows a route the proxy does not have."
+    },
+    "routes_save": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "routes": "UserRoute[]"
+      },
+      "returns": "UserRoute[]",
+      "why": "Replaces the whole list and regenerates. Whole-list rather than add/remove/edit: the file is a handful of pairs in one table, and three commands over one small document is three chances for the file and the screen to disagree about order. MUST check every route before writing any, so one bad row fails the save rather than writing half of it, and MUST refuse a duplicate domain — two routers on one name is a coin toss the user cannot see."
+    },
+    "dns_status": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "DnsStatus",
+      "why": "E-1. /etc/hosts needs a password per project and cannot express a wildcard at all, which is why E-2 was left half-done."
+    },
+    "dns_start": {
+      "new": true,
+      "kind": "mutation",
+      "args": {},
+      "returns": "DnsStatus",
+      "why": "Binds 127.0.0.1 on a high port — 53 needs root at every start and does not need to, because macOS resolver files take a `port` directive. MUST be idempotent for the same suffix and MUST restart for a different one: a responder left serving the old TLD answers for names nothing renders and refuses the ones it does."
+    },
+    "dns_stop": {
+      "new": true,
+      "kind": "mutation",
+      "args": {},
+      "returns": "DnsStatus",
+      "why": "Stops and waits for the thread, so the socket is actually free afterwards."
+    },
+    "dns_resolver_install": {
+      "new": true,
+      "kind": "mutation",
+      "args": {},
+      "returns": "DnsStatus",
+      "why": "Writes /etc/resolver/<tld> with a password. Deliberately separate from dns_start, the same separation hosts_plan/hosts_apply has: one is a socket this app owns, the other changes how the whole machine resolves names, and folding them into one button would make a password prompt appear from something that reads like turning on a feature."
+    },
+    "dns_resolver_remove": {
+      "new": true,
+      "kind": "mutation",
+      "args": {},
+      "returns": "DnsStatus",
+      "why": "Turning it off has to be as easy as turning it on."
+    },
     "hosts_status": {
       "new": true,
       "kind": "query",
@@ -934,6 +1026,40 @@
       "returns": "MailStatus",
       "why": "StackVo has shipped a mail catcher all along and never showed it — reading a captured message meant leaving for a browser tab, which is exactly the round trip four competitors charge for removing.",
       "notes": "Reads both MailHog and Mailpit. The upstream template installs the unmaintained `mailhog/mailhog`; Mailpit is what the ecosystem moved to, and swapping renames a service, its .env keys, its container and its volume — a migration for every running stack. Supporting both is the same stance the app takes everywhere else: it manages a checkout, it does not dictate one. `error` is set when the container is up but its API did not answer, because that otherwise renders as an empty inbox, which is a lie."
+    },
+    "package_scaffold": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "category": "string",
+        "service": "string",
+        "version": "string",
+        "image": "string"
+      },
+      "returns": "PackageReport",
+      "why": "C-1. Writes a package that is valid on the first read — identity, manifest, fragment, hashes already correct. MUST build the path from the workspace root and checked components: the webview names a service and a version, never a directory. MUST refuse to overwrite an existing version, and MUST leave an existing package.json alone so adding 8.4 does not rewrite the identity somebody filled in for 8.0."
+    },
+    "package_lint": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "category": "string",
+        "service": "string",
+        "version": "string"
+      },
+      "returns": "PackageReport",
+      "why": "What sealing would change and what would still be wrong afterwards, with nothing written."
+    },
+    "package_seal": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "category": "string",
+        "service": "string",
+        "version": "string"
+      },
+      "returns": "PackageReport",
+      "why": "Recomputes the hashes after an edit and THEN validates — parse, manifest check, compose policy — refusing the whole operation if any fail. Writing the hashes of a fragment the policy rejects would be a tool for producing packages that install and cannot run."
     },
     "market_catalog": {
       "new": true,
@@ -1339,6 +1465,53 @@
       },
       "returns": "ProjectManifest"
     },
+    "project_local_read": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "name": "string"
+      },
+      "returns": "LocalOverride",
+      "why": "B-2. A committed manifest is what makes a checkout reproducible and is exactly why there was nowhere to say “on this machine, PHP 8.3”. Reads the overlay beside it."
+    },
+    "project_local_write": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string",
+        "text": "string"
+      },
+      "returns": "LocalOverride",
+      "why": "Text rather than a parsed object: this is a file somebody types, and a struct round-trip would reformat what they wrote. Empty text removes the file — “no overrides” and “an empty overrides file” are the same state and only one of them is something to wonder about in a directory listing. MUST reject `name` and `runtime`, and MUST validate the merged document rather than the fragment."
+    },
+    "project_hooks_plan": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "name": "string"
+      },
+      "returns": "HookPlan[] — one per event, in lifecycle order",
+      "why": "B-3. A hook is a command from a repository somebody cloned, so what would run has to be readable before it does."
+    },
+    "project_hooks_approve": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string",
+        "digest": "string"
+      },
+      "returns": "HookPlan[]",
+      "why": "Approves this project's HOST commands exactly as they are now. The digest is sent back rather than recomputed server-side, and that round trip is the point: it is a receipt for the list the person actually read. MUST refuse when the manifest changed between the screen being drawn and the button being pressed — that refusal is what makes this consent rather than a checkbox. Container steps are never gated: the container already runs the repository's code."
+    },
+    "project_hooks_revoke": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string"
+      },
+      "returns": "HookPlan[]",
+      "why": "Withdraws approval. Takes no digest — you may always revoke."
+    },
     "project_manifest_write": {
       "new": true,
       "kind": "mutation",
@@ -1348,6 +1521,77 @@
       },
       "returns": "void",
       "why": "Editing an existing project is impossible today — the UI can only create and delete. MUST honour the write rules in project.schema.json (extensions last, one runtime block)."
+    },
+    "request_timeline": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "project": "string",
+        "service": "string? (database service id; omit for dumps only)"
+      },
+      "returns": "Timeline",
+      "why": "F-2, whose note read 'dump/mail/log three separate screens, no correlation'. What the code thought it had (dd()) and what it actually asked the database for are two halves of one question, and reading them meant comparing clocks by eye across two panes.",
+      "notes": "Dumps correlate: the bridge writes the request they happened in, so several from one page load group together and the group is named. Queries do NOT — MySQL's general log records the statement and the connection and nothing about which HTTP request caused it, and guessing from adjacency would be wrong on the first concurrent request and wrong silently. They are placed by time and left ungrouped, and the screen says which is which. Attributing a query to a request needs the application to say so, which is code inside somebody's project — the thing this feature exists to avoid needing. A database that cannot be reached yields the dumps alone rather than an error. See src-tauri/src/timeline.rs."
+    },
+    "profiler_tree": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "name": "string (project)",
+        "id": "string (profile id from profiler_status)"
+      },
+      "returns": "Frame[]",
+      "why": "F-3. `profiler_read` answers where the time went — a table of the costliest functions — and cannot answer what called that, which is the question a flame view exists for. The parser was already reading caller→callee edges to attribute inclusive cost and was discarding the caller.",
+      "notes": "A call TREE, not strictly a flame graph, and the difference is stated rather than glossed: a flame graph is built from sampled stacks, so a box's width is how often that exact path appeared. Cachegrind holds no stacks — it holds edges summed over every place A called B. A function called from two places is one box here with the total, two boxes there. What a branch means is 'reaching B through A cost this much in total', which is answerable and is the question people bring to a profile; 'this path was taken this often' is not, and no arrangement of the edges recovers it. Separate from profiler_read because the tree is thousands of nodes and the table is sixty rows. Recursion stops at the first repeat on the path and the frame is kept and marked. See src-tauri/src/profile.rs."
+    },
+    "query_log": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "service": "string (database service id)"
+      },
+      "returns": "QueryLogSession",
+      "why": "F-1, and §2 called it the largest product gap: three competitors sell query logging and N+1 detection, and this stack could not say what the database had been asked. The row also said it needed a collector inside the container — for MySQL and MariaDB that is wrong, and this is why.",
+      "notes": "MySQL and MariaDB keep a general query log that can be pointed at a TABLE and switched on with two SET GLOBAL statements, at runtime, on a stock image — no agent, no rebuild, no code in the application. Verified against mysql:8.0 before it was written. Postgres logs to a stream in a format its own settings change and wants pg_stat_statements, which is a start-up extension; Mongo's profiler is per-database. Both answer supported:false rather than an error, because 'not this kind' must not read as 'something broke'. See src-tauri/src/querylog.rs."
+    },
+    "query_log_record": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "service": "string",
+        "recording": "bool"
+      },
+      "returns": "QueryLogSession",
+      "why": "The log records every statement unsampled and costs write throughput, so it is an instrument you switch on, look at, and switch off — never a default.",
+      "notes": "One command with a boolean rather than two, because the pair is one decision and the interesting failure is leaving it on. Stopping also truncates: what the log holds is statement text, and in a development database an INSERT carries the row. Nothing is written to disk by the app and nothing reaches a diagnostics bundle."
+    },
+    "query_log_clear": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "service": "string"
+      },
+      "returns": "QueryLogSession",
+      "why": "Start again from here — what somebody presses before reloading the page they are investigating. Without it every read is the whole session and the one request under study is buried."
+    },
+    "project_lan_share": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string",
+        "enabled": "bool"
+      },
+      "returns": "ProjectManifest",
+      "why": "E-3. `shop.loc` exists in exactly one place — this machine's /etc/hosts — so opening the site on a real phone has never been possible without editing a file on that phone. This writes the intent; `lan_status` derives the name.",
+      "notes": "Writes `lan_share` and nothing else. The hostname is NOT stored: sslip.io resolves an address out of the name arithmetically, so the name is computed from whatever this machine's address is at the moment it is asked for — a stored one would survive a DHCP lease and point at whichever machine took it next. Regeneration is still the caller's, exactly as it is for every other manifest change; a switch that quietly rebuilt the workspace would be doing an expensive thing behind a cheap-looking control."
+    },
+    "lan_status": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "LanStatus",
+      "why": "The screen has to be able to say three different things: here is the address a phone can use, this machine has no address to offer, and the name baked into the compose file is from a network this laptop is no longer on.",
+      "notes": "`address` is null both when there is no network and when the address is public — the second is a refusal, because handing out `shop.<public-ip>.sslip.io` would publish a development site under a name anybody can resolve. `stale` reads the rendered compose file rather than recomputing: the question is whether what was written still matches what would be written. The certificate is the local CA's and the visiting device does not trust it, so its browser warns; that is a missing trust anchor on a device this app cannot reach, not a fault it can fix. See src-tauri/src/lan.rs."
     },
     "project_register": {
       "new": true,
@@ -1561,6 +1805,36 @@
       "why": "P3-20 — what `laradock ship` does. The analysis calls it the long-horizon differentiator because the container lineage makes it possible and no native-binary competitor can follow. It is also the item with a real question inside it, answered by looking at what the images actually contain rather than by assuming.",
       "notes": "**The dev image is not a production image**, measured on this checkout: a PHP project's image holds NO application code — /var/www/html contains one file, index.nginx-debian.html, because the source arrives through a bind mount — and it has Xdebug loaded. Exporting it ships a web server with nothing to serve and a step debugger that dials out on every request. A NODE image is the opposite: its Dockerfile does COPY . . and npm install, so it already holds the code and the build. Hence two strategies: `layer` (build FROM the dev image, add the source, remove the debugger inis) and `retag` (nothing to add; rebuilding would replace a Linux node_modules with whatever the host has). `excluded` carries every ignore pattern WITH ITS REASON, because an exclusion the user cannot explain is one they work around. `warnings` names what the result will be true of — no .env, vendor as it is on disk, Xdebug's binary still present though inactive — before the build rather than after."
     },
+    "release_push_plan": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "name": "string",
+        "tag": "string?"
+      },
+      "returns": "PushPlan",
+      "why": "H-1. MUST re-run the verification rather than remember it from the build: the interval between building and pushing is exactly where somebody could retag something else onto the name."
+    },
+    "release_push": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string",
+        "tag": "string?"
+      },
+      "returns": "PushPlan",
+      "why": "MUST re-check on the way out — the plan the caller was shown crossed the IPC boundary and came back, and a check that only runs on the way out is not a check."
+    },
+    "release_recipe": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "name": "string",
+        "tag": "string?"
+      },
+      "returns": "string — a compose file",
+      "why": "A deployment recipe for the built image. Returned as TEXT, not written: where it belongs is the user's decision. MUST carry no source mount, no debugger, no database container, and variable NAMES with empty values — a recipe with credentials in it is a .env wearing a different extension, and this file is meant to be committed."
+    },
     "release_save": {
       "new": true,
       "kind": "mutation",
@@ -1629,6 +1903,27 @@
       "returns": "Connection?",
       "why": "The services sheet showed a container name, a port table and a credentials block, and left the reader to assemble a URI. The obvious assembly — `mongodb://stackvo-mongo:27017/` — cannot work from the host, because that name only resolves on the Docker network. Null for a service nobody connects to with a string.",
       "notes": "Two addresses come back, not one: `fromHost` is 127.0.0.1 and the published port, `fromContainer` is the container name and the port inside it. `fromHost` is null when a running container publishes nothing, rather than an address that would fail. The password is bullets unless `reveal` — the same act `env_reveal` is, and percent-encoded on the Rust side so a password containing `@` cannot rename the host. See src-tauri/src/connect.rs."
+    },
+    "service_db_clients": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "service": "string (service id)"
+      },
+      "returns": "App[]",
+      "why": "The picker beside `service_open_in_client` has to be built from what is on this machine, not from a list of clients somebody might have. Empty for most services, which is the answer rather than a failure: a service with no connection string has nothing to open, and an AMQP or SMTP address is not one a desktop database client takes.",
+      "notes": "Which protocols a client opens is read from the application rather than declared here — on macOS from the bundle's own CFBundleURLTypes. That is not a detail: Redis Insight declares only `redisinsight`, so a table written from the name would have offered it for `redis://` and produced a button that launches an app which ignores the address. An installed client that does not declare the scheme is omitted rather than greyed out — it is not missing, it is not applicable. The first entry is always the system handler, with the empty id. See src-tauri/src/apps.rs."
+    },
+    "service_open_in_client": {
+      "new": true,
+      "kind": "action",
+      "args": {
+        "service": "string (service id)",
+        "client": "string (id from service_db_clients; empty = the system handler)"
+      },
+      "returns": "void",
+      "why": "G-3. The correct connection string has existed since connect.rs was written and the sheet has offered to copy it since; what was missing was the step that pastes it, which everybody was doing by hand.",
+      "notes": "Always the host address — the container one is a name on a Docker network that no client on this desktop can resolve, which is the confusion connect.rs exists to remove. Refuses when the container publishes nothing rather than inventing 127.0.0.1. The URI carries the real password, because a URI with bullets in it is one that fails to connect, so this is `reveal` in the sense of env_reveal and is recorded in the audit trail as one — the service and the client, never the URI. The cost is that the secret is an argument to `open` and so visible in `ps` while that process lives; the alternative is a temporary file with the same reachability and a lifetime nobody controls. Copying the string is still there for a shared machine."
     },
     "service_dependencies": {
       "replaces": "GET /api/services/:s/dependencies",
@@ -3053,6 +3348,95 @@
       "pecl_version": "string?",
       "overlay_path": "string",
       "note": "Three layers, deliberately not collapsed into one boolean. `enabled` is what the manifest asks for; `needsRebuild` is true while the image predates that ask, because extensions are compiled in and a toggle that looked done but changed nothing would be worse than no toggle; `active` is what the running container actually carries, and is null when there is no container to read. `hostPath` and `containerPath` are the two halves of the IDE's path mapping — the mapping is the step people get wrong, and both sides are already known here."
+    },
+    "LocalOverride": {
+      "text": "string",
+      "exists": "bool",
+      "applied": "string[]",
+      "refused": "string[]",
+      "ignored": "bool?",
+      "note": "B-2. `stackvo.local.json` is this machine's overrides for a committed manifest. `applied` is the dotted paths it currently supplies and `refused` the keys it may not carry (`name`, `runtime`) — both read back from the same merge the renderer runs, so the screen cannot disagree with what actually runs. `ignored` is git's own answer to whether the file would stay out of a commit, and is null when git had no answer: no git, or not a repository, which is not the same as “not ignored”."
+    },
+    "HookPlan": {
+      "event": "string — post-build | post-start | pre-stop",
+      "steps": "HookStep[]",
+      "digest": "string? — what an approval would be recorded against; absent when the project has no host steps",
+      "note": "B-3. A plan, not a result: it says what would run for one event and what would not, before anything is spawned — the same review-then-apply shape as hosts_plan/hosts_apply and a preset import. A refused step is NAMED here rather than silently skipped at run time, because “nothing happened and nothing said why” is indistinguishable from a hook that ran and did nothing."
+    },
+    "HookStep": {
+      "kind": "string — exec | host",
+      "command": "string — display only; nothing parses it back",
+      "blocked": "string? — policy-off | policy-host | needs-consent; absent means it runs"
+    },
+    "PackageReport": {
+      "service": "string",
+      "version": "string",
+      "dir": "string",
+      "resealed": "string[] — files whose hash the manifest had wrong",
+      "problems": "string[] — everything sealing cannot fix",
+      "note": "C-1. A manifest states the sha256 of every file the package ships and pkg::verify checks them on every read, so editing a compose fragment leaves a package that refuses to load with a message about bytes rather than about the line somebody just edited. That bookkeeping — not the JSON — is what made authoring a package impractical. `resealed` is what sealing changed (or would change, from a lint); `problems` is what it refused. A report with problems means NOTHING was written: sealing is bookkeeping, not a way past the validator."
+    },
+    "DnsStatus": {
+      "support": "string — resolver | manual | unsupported",
+      "suffix": "string",
+      "port": "number",
+      "listening": "bool",
+      "resolverFile": "string? — /etc/resolver/<tld>, where the platform has one",
+      "resolverConfigured": "bool",
+      "instruction": "string — the file this app would write, or the line the user must place",
+      "note": "E-1. The responder answers ONE suffix and refuses everything else — it never forwards, has no upstream and holds no cache, because an open forwarder on a machine is a thing that can be pointed at and a development tool has no business becoming the resolver for anything it did not create. `listening` is read from whether the socket is bound rather than from a preference: a setting saying yes over a port something else took would be a screen that lies. `support` is three answers because the platforms give three — macOS has /etc/resolver, Linux needs a line in whatever is in front of resolv.conf, and Windows has no per-suffix mechanism at all and keeps /etc/hosts."
+    },
+    "UserRoute": {
+      "domain": "string",
+      "target": "string — http:// or https://, origin only",
+      "enabled": "bool",
+      "rewrittenFrom": "string? — what the user typed, when normalisation changed it",
+      "notes": "string[] — true and not errors",
+      "error": "string? — set instead of `notes` when the route no longer normalises",
+      "note": "E-4. Traefik routes every project and every catalogue service and nothing else, so a dev server somebody started by hand has no way in. The whole difficulty is one string: `http://localhost:3000` is read INSIDE Traefik's container, where localhost is Traefik — the config loads, the browser gets a 502, and nothing says why. So localhost and 127.0.0.1 are rewritten to host.docker.internal and the screen says so; refusing them would be defensible and useless, because it is the address people have. Checked on the way out rather than stored checked, so a route written today does not keep today's answer after the rule changes."
+    },
+    "DbMovePlan": {
+      "from": "string — instance id",
+      "to": "string — instance id",
+      "fromService": "string",
+      "toService": "string",
+      "fromVersion": "string",
+      "toVersion": "string",
+      "possible": "bool",
+      "refused": "string? — why not",
+      "warnings": "string[] — true and not blocking",
+      "note": "G-4. Dumping and restoring are two calls this app already had; what it did not have is an answer to “will this work”. Same engine is allowed. MySQL↔MariaDB is allowed WITH a warning — the same dump format in practice and genuinely different servers, and refusing it would refuse a thing that usually works. Crossing families is refused: a mysqldump file is not Postgres input and never becomes it, so accepting the request would empty the target and then fail on thousands of syntax errors. A downgrade is warned about because it is the direction that breaks quietly and does so partway through a restore that has already replaced the data."
+    },
+    "DbMoved": {
+      "from": "string",
+      "to": "string",
+      "bytes": "number — the size of the dump that crossed, the only number that says anything actually moved"
+    },
+    "DbInstance": {
+      "id": "string",
+      "service": "string",
+      "version": "string",
+      "kind": "string",
+      "container": "string",
+      "enabled": "bool",
+      "running": "bool",
+      "note": "Separate from DbTarget rather than a field added to it: `db_targets` answers “which engines can this workspace dump”, one row per engine, and four callers read it that way. One row per instance would give all four a list twice as long for a question none of them asked. Stopped instances are included and marked — a list that hid one would leave somebody wondering where the instance they just created went."
+    },
+    "PushPlan": {
+      "tag": "string",
+      "registry": "string? — the host the tag names",
+      "possible": "bool",
+      "refused": "string? — why not",
+      "authenticated": "bool? — whether this registry is in the user's Docker config; null means the answer could not be read, which is NOT “not logged in”",
+      "warnings": "string[]",
+      "note": "H-1. An image is pushed only after it has been verified: a registry keeps layers, deleting a tag does not remove what was in it, and on a shared registry somebody has already pulled it. A tag naming no registry is refused too — `docker push myapp:v1` goes to Docker Hub under whichever account is logged in. Credentials are not this app's business: `docker login` is the user's, exactly as ~/.ssh/config is."
+    },
+    "IdleProject": {
+      "project": "string",
+      "router": "string",
+      "seconds": "number? — since the last request; absent when the log has never mentioned this router",
+      "suspendable": "bool",
+      "note": "I-2. Container CPU is not the signal and neither is the network counter: php-fpm sits near zero whether it is serving or asleep, and network moves for health checks and DNS — one mistake stops something in use, the other never stops anything. The honest answer is the proxy's, which wrote down when it last routed to each router. A project the log has NEVER mentioned is not suspendable: that is the state of a stack that just came up, and stopping everything the first time somebody enables this would be the worst possible introduction to it."
     }
   },
   "coverage": {

@@ -60,6 +60,18 @@ async function set(enabled) {
 
       <!-- The extension is compiled in, so the manifest can be ahead of
            the image. Saying nothing here is how a toggle becomes a lie. -->
+      <!-- F-4. Switching on for the first time puts the extension in the
+           image and costs a rebuild; every time after that it moves one
+           environment variable and costs a container recreate. Without saying
+           so, the second toggle looks identical to the first and being much
+           faster reads as a fault rather than as the point. -->
+      <div v-if="!status.compiledIn" class="text-caption text-medium-emphasis mt-2">
+        {{ t('xdebug.firstTime') }}
+      </div>
+      <div v-else-if="!status.enabled" class="text-caption text-medium-emphasis mt-2">
+        {{ t('xdebug.staysInstalled') }}
+      </div>
+
       <v-alert v-if="status.needsRebuild" type="warning" variant="tonal" class="mt-3">
         <div class="text-caption">{{ t('xdebug.needsRebuild') }}</div>
       </v-alert>

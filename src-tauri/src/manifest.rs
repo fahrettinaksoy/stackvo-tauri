@@ -43,6 +43,18 @@ pub struct Finding {
 pub struct PhpConfig {
     pub version: String,
     pub extensions: Vec<String>,
+    /// Is step debugging switched *on*, as distinct from the extension being
+    /// compiled in?
+    ///
+    /// Two different things, and conflating them cost a rebuild per toggle.
+    /// `extensions` decides what the image carries; this decides what
+    /// `XDEBUG_MODE` the container starts with. Measured before the split: an
+    /// image carrying Xdebug at `mode=off` runs at the same speed as one
+    /// without it, while `mode=debug` costs about 6.7× on a call-heavy
+    /// benchmark — so the extension can stay compiled in for nothing, and
+    /// turning debugging on becomes a container recreate instead of an image
+    /// rebuild.
+    pub xdebug: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -53,13 +65,36 @@ pub struct NodeConfig {
     pub build: Option<String>,
     pub start: String,
     pub port: u16,
+    /// `npm`, `yarn` or `pnpm` — J-2, and `None` is load-bearing.
+    ///
+    /// Absent means the image is built exactly as it has always been built: no
+    /// `corepack` line, `npm install`, `npm start`. `fixtures_differential.rs`
+    /// compares the generated tree against output frozen from the Bash
+    /// generator, so a default that quietly enabled anything would fail that
+    /// comparison — correctly, because it would be a different image for every
+    /// project that never asked for one.
+    ///
+    /// Naming one turns Corepack on, and that is the whole feature. Corepack is
+    /// what makes `"packageManager": "pnpm@9.1.0"` in `package.json` mean
+    /// something: without it the field is a comment, and the image installs
+    /// with whatever version the base image happens to ship.
+    pub package_manager: Option<String>,
 }
+
+/// The package managers Corepack can pin, and what each one calls its verbs.
+///
+/// Yarn and pnpm are here because Corepack ships shims for them; Bun is not,
+/// because it is a runtime of its own in this app and not a way of installing
+/// for Node. npm is included even though the base image already has it — the
+/// point is not having the tool, it is having the *pinned version*, and that
+/// only happens through Corepack.
+pub const NODE_PACKAGE_MANAGERS: [&str; 3] = ["npm", "yarn", "pnpm"];
 
 /// The runtimes that share one config shape: a container built from the
 /// language's own image, `COPY . .`, an optional install and build step, and a
 /// start command on a port Traefik proxies to. Node predates this list and
 /// keeps its own struct for compatibility; structurally it is the same idea.
-pub const LANG_RUNTIMES: [&str; 4] = ["python", "go", "ruby", "rust"];
+pub const LANG_RUNTIMES: [&str; 6] = ["python", "go", "ruby", "rust", "bun", "deno"];
 
 /// One non-PHP, non-node runtime block — `python: { … }`, `go: { … }`, ….
 ///
@@ -112,6 +147,34 @@ pub fn lang_defaults(runtime: &str) -> Option<LangConfig> {
             start: "cargo run --release".into(),
             port: 8080,
         }),
+        // `bun install` and `bun run start` rather than the npm spellings: Bun
+        // reads the same `package.json` scripts, and using its own verbs is
+        // what makes the lockfile it writes (`bun.lock`) the one it reads back.
+        // 3000 is what `Bun.serve` listens on with nothing configured.
+        "bun" => Some(LangConfig {
+            version: "1".into(),
+            install: Some("bun install".into()),
+            build: None,
+            start: "bun run start".into(),
+            port: 3000,
+        }),
+        // The one runtime here pinned to a patch version, and not by choice:
+        // `denoland/deno` publishes no major or minor tag at all. `deno:2` and
+        // `deno:2.9` are both absent from the registry — checked, not assumed —
+        // so a manifest saying `"version": "2"` would build against an image
+        // that does not exist. Every other entry in this table can float
+        // because its publisher lets it.
+        //
+        // `deno install` with no arguments is Deno 2's "resolve what the
+        // manifest asks for", so dependencies land at build time rather than on
+        // the first request.
+        "deno" => Some(LangConfig {
+            version: "2.9.5".into(),
+            install: Some("deno install".into()),
+            build: None,
+            start: "deno task start".into(),
+            port: 8000,
+        }),
         _ => None,
     }
 }
@@ -133,6 +196,12 @@ pub struct Manifest {
     /// everywhere downstream: it reaches the certificate and the router and
     /// cannot reach `/etc/hosts`.
     pub aliases: Vec<String>,
+    /// Also answer on a name other devices on this network can resolve.
+    ///
+    /// The intent, not the name. What that name is depends on this machine's
+    /// address at the moment it is asked for, and [`crate::lan`] says at length
+    /// why writing it down would be writing down something that expires.
+    pub lan_share: bool,
     /// Catalog ids of the backing services this project needs.
     ///
     /// The half of an environment definition that travels with the repository:
@@ -150,6 +219,25 @@ pub struct Manifest {
     pub valid: bool,
     pub errors: Vec<Finding>,
     pub warnings: Vec<Finding>,
+
+    /// Commands to run when this project starts, stops or is rebuilt (B-3).
+    ///
+    /// Read here so a malformed hook is a manifest finding like everything
+    /// else, and so `read` is the one place that knows how a project is
+    /// described. What may actually run is [`crate::hooks::plan`]'s business,
+    /// not this struct's — a manifest states an intent and a policy and a
+    /// consent record decide whether it is honoured.
+    #[serde(skip_serializing_if = "crate::hooks::Hooks::is_empty")]
+    pub hooks: crate::hooks::Hooks,
+
+    /// Which fields this machine's `stackvo.local.json` supplied, dotted.
+    ///
+    /// Empty for a manifest read straight from the committed file, which is
+    /// what makes it the guard rather than only a label: [`write`] refuses a
+    /// manifest whose `local` is non-empty, so one developer's overrides
+    /// cannot be saved into the file the team shares. See [`read_effective`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub local: Vec<String>,
 }
 
 fn str_field(v: &serde_json::Value, key: &str) -> Option<String> {
@@ -160,7 +248,30 @@ fn str_field(v: &serde_json::Value, key: &str) -> Option<String> {
 ///
 /// `dir_name` is the containing directory: the contract requires `name` to
 /// match it (W-04), because `listProjects` keys containers off the directory.
+///
+/// **This is the effective manifest** — the committed file with this machine's
+/// `stackvo.local.json` laid over it (B-2). That is the default because it is
+/// what every reader that runs, renders or inspects a project wants, and there
+/// are twenty-odd of them: making the overlay the thing you opt *into* would
+/// mean twenty-odd chances to forget it, each one a machine-local setting that
+/// silently does nothing.
+///
+/// The five callers that read a manifest in order to write it back want
+/// [`read_committed`] instead, and forgetting that is not silent: [`write`]
+/// refuses a manifest carrying overrides. So the direction that costs somebody
+/// else an afternoon fails loudly, and the direction that costs nothing is the
+/// default.
 pub fn read(path: &Path, dir_name: &str) -> Result<Manifest> {
+    // `read` is given the file; the overlay is a sibling of it. A project
+    // directory is always the parent — every call site builds this path as
+    // `<dir>/stackvo.json` — and a path with no parent simply has no overlay.
+    read_effective(path, dir_name)
+}
+
+/// The committed manifest alone, with no machine-local overlay.
+///
+/// For the callers that read in order to write back. See [`read`].
+pub fn read_committed(path: &Path, dir_name: &str) -> Result<Manifest> {
     let raw = std::fs::read_to_string(path)
         .map_err(|e| Error::io(format!("reading {}", path.display()), e))?;
 
@@ -257,7 +368,9 @@ pub fn normalize(json: &serde_json::Value, raw: &str, dir_name: &str) -> Manifes
             });
             "php".to_string()
         }
-        Some(id @ ("php" | "node" | "python" | "go" | "ruby" | "rust")) => id.to_string(),
+        Some(id @ ("php" | "node" | "python" | "go" | "ruby" | "rust" | "bun" | "deno")) => {
+            id.to_string()
+        }
         Some(alias @ ("nodejs" | "js")) => {
             error(
                 "C-01",
@@ -278,7 +391,9 @@ pub fn normalize(json: &serde_json::Value, raw: &str, dir_name: &str) -> Manifes
             error(
                 "C-02",
                 "runtime",
-                format!("runtime \"{other}\" has no generator — php, node, python, go, ruby and rust are implemented"),
+                format!(
+                    "runtime \"{other}\" has no generator — php, node, python, go, ruby, rust, bun and deno are implemented"
+                ),
             );
             other.to_string()
         }
@@ -361,8 +476,30 @@ pub fn normalize(json: &serde_json::Value, raw: &str, dir_name: &str) -> Manifes
     // ---- extra hostnames --------------------------------------------------
     let aliases = read_aliases(json, domain.as_deref(), &mut warnings);
 
+    // The intent only. The name it produces is derived from whatever this
+    // machine's address is when it is asked for — see `lan.rs` for why storing
+    // it would be storing something that stops being true.
+    let lan_share = json
+        .get("lan_share")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
     // ---- declared services ------------------------------------------------
     let services = read_services(json, &mut warnings);
+
+    // ---- lifecycle hooks (B-3) --------------------------------------------
+    //
+    // Warnings, never errors. A typo in an optional convenience must not be
+    // the reason a project cannot be opened or built; the step that could not
+    // be read simply does not run, and the reason is on screen.
+    let (hooks, hook_problems) = crate::hooks::parse(json);
+    for problem in hook_problems {
+        warnings.push(Finding {
+            code: "HOOK".into(),
+            path: problem.path,
+            message: problem.message,
+        });
+    }
 
     // ---- write rules the Bash parser depends on ---------------------------
     check_extension_layout(raw, &mut errors);
@@ -374,14 +511,287 @@ pub fn normalize(json: &serde_json::Value, raw: &str, dir_name: &str) -> Manifes
         server,
         document_root: str_field(json, "document_root"),
         aliases,
+        lan_share,
         services,
         php,
         node,
         lang,
+        hooks,
         valid: errors.is_empty(),
         errors,
         warnings,
+        local: Vec::new(),
     }
+}
+
+/// The committed manifest, and the machine-local file that may sit beside it.
+pub const FILE: &str = "stackvo.json";
+pub const LOCAL_FILE: &str = "stackvo.local.json";
+
+/// Keys the local overlay may not carry, and why each one.
+///
+/// `name` keys the container, the image and the directory lookup, so a machine
+/// that renamed it locally would build one project and look for another. It is
+/// also the one field the contract cross-checks against the directory (W-04),
+/// which is a check about the repository rather than about a machine.
+///
+/// `runtime` is not a property of a machine. A repository is a PHP project or a
+/// Go one; "PHP here, Go on my laptop" describes two different programs, and
+/// every downstream decision — the image, the server, the health check — hangs
+/// off it.
+pub const LOCAL_REFUSED: [&str; 2] = ["name", "runtime"];
+
+/// Read the committed manifest with this machine's overrides laid over it.
+///
+/// B-2. `stackvo.json` is committed, which is the whole of what makes a
+/// checkout reproducible — and is also why there was nowhere to say "on *this*
+/// machine, PHP 8.3, because I am chasing a bug in it". The answer everywhere
+/// else in this space is a second file that is not committed, and this is that
+/// file.
+///
+/// ## Merged as JSON, before validation, not as fields afterwards
+///
+/// The overlay is a shallow key merge on the parsed document, with one level of
+/// nesting for the runtime blocks, and then the *result* goes through
+/// [`normalize`] exactly once. Merging normalised `Manifest`s instead would
+/// mean every rule in this file needing a second opinion about which half a
+/// value came from, and — worse — an override could not be validated at all,
+/// because validation happens on the way in and it would arrive afterwards. A
+/// local file that says `"domain": "not a domain"` fails the same check the
+/// committed one would.
+///
+/// The nested merge matters: a local file that sets only `php.version` must not
+/// drop `php.extensions`, and a whole-value overlay would.
+///
+/// ## The layout rule is checked against the committed bytes
+///
+/// W-01 is about the shape of a document a Bash parser reads, and the document
+/// that parser reads is `stackvo.json`. So `raw` stays the committed text; the
+/// local file has no layout obligations because nothing but this reads it.
+///
+/// ## Refusals are named, never dropped
+///
+/// A key in [`LOCAL_REFUSED`] produces a warning that says it was ignored. A
+/// local file that quietly does less than it says is how somebody concludes the
+/// feature is broken after changing the one field it will not take.
+pub fn read_effective(committed_path: &Path, dir_name: &str) -> Result<Manifest> {
+    let raw = std::fs::read_to_string(committed_path)
+        .map_err(|e| Error::io(format!("reading {}", committed_path.display()), e))?;
+
+    let mut json: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+        Error::new(
+            Code::InvalidManifest,
+            format!("{} is not valid JSON: {e}", committed_path.display()),
+        )
+    })?;
+
+    // A sibling of the file we were handed, rather than `<dir>/stackvo.json`
+    // rebuilt from a directory: the caller already knows which file it means,
+    // and deriving the name back would put an assumption here that only some
+    // of the twenty-odd call sites happen to satisfy.
+    let Some(local_path) = committed_path.parent().map(|dir| dir.join(LOCAL_FILE)) else {
+        return Ok(normalize(&json, &raw, dir_name));
+    };
+    if !local_path.is_file() {
+        return Ok(normalize(&json, &raw, dir_name));
+    }
+
+    let local_raw = std::fs::read_to_string(&local_path)
+        .map_err(|e| Error::io(format!("reading {}", local_path.display()), e))?;
+
+    // A broken local file is refused rather than skipped. Skipping it would run
+    // the project on the committed settings while the developer believes their
+    // override is in force, which is the one outcome worse than not having the
+    // feature.
+    let local: serde_json::Value = serde_json::from_str(&local_raw).map_err(|e| {
+        Error::new(
+            Code::InvalidManifest,
+            format!("{} is not valid JSON: {e}", local_path.display()),
+        )
+    })?;
+
+    let (applied, refused) = overlay(&mut json, &local);
+    let mut manifest = normalize(&json, &raw, dir_name);
+
+    for key in refused {
+        manifest.warnings.push(Finding {
+            code: "LOCAL_REFUSED".into(),
+            path: key.clone(),
+            message: format!(
+                "`{key}` in {LOCAL_FILE} was ignored; it describes the repository rather than this machine"
+            ),
+        });
+    }
+    manifest.local = applied;
+    Ok(manifest)
+}
+
+/// Lay `local` over `base`, returning the dotted paths applied and refused.
+///
+/// Only objects nest. An array — `aliases`, `services`, `php.extensions` — is
+/// replaced whole, because the alternative is deciding whether a local file
+/// listing one alias means "also this" or "only this", and both readings are
+/// defensible, which is exactly why neither should be guessed at.
+fn overlay(base: &mut serde_json::Value, local: &serde_json::Value) -> (Vec<String>, Vec<String>) {
+    let mut applied = Vec::new();
+    let mut refused = Vec::new();
+
+    let (Some(base_map), Some(local_map)) = (base.as_object_mut(), local.as_object()) else {
+        return (applied, refused);
+    };
+
+    for (key, value) in local_map {
+        if LOCAL_REFUSED.contains(&key.as_str()) {
+            refused.push(key.clone());
+            continue;
+        }
+
+        let nested = matches!(value, serde_json::Value::Object(_))
+            && matches!(base_map.get(key), Some(serde_json::Value::Object(_)));
+
+        if nested {
+            let slot = base_map.get_mut(key).expect("checked just above");
+            let (inner, _) = overlay(slot, value);
+            for field in inner {
+                applied.push(format!("{key}.{field}"));
+            }
+        } else {
+            base_map.insert(key.clone(), value.clone());
+            applied.push(key.clone());
+        }
+    }
+
+    (applied, refused)
+}
+
+/// What the machine-local overlay is, as the editor sees it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalOverride {
+    /// The file's text, or empty when there is no file.
+    pub text: String,
+    pub exists: bool,
+    /// Dotted paths the overlay currently supplies, from the last read.
+    pub applied: Vec<String>,
+    /// Keys present in the file that [`LOCAL_REFUSED`] rejects.
+    pub refused: Vec<String>,
+    /// Whether git would keep this file out of a commit.
+    ///
+    /// `None` means git had no answer — see [`crate::git::is_ignored`]. The
+    /// screen has three things to say here and only one of them is a warning.
+    pub ignored: Option<bool>,
+}
+
+/// Read the machine-local overlay, whether or not there is one.
+pub fn read_local(dir: &Path, dir_name: &str) -> Result<LocalOverride> {
+    let path = dir.join(LOCAL_FILE);
+    if !path.is_file() {
+        return Ok(LocalOverride {
+            text: String::new(),
+            exists: false,
+            applied: Vec::new(),
+            refused: Vec::new(),
+            ignored: None,
+        });
+    }
+
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| Error::io(format!("reading {}", path.display()), e))?;
+
+    // Read through the same path the renderer uses rather than re-deriving the
+    // two lists here. A second implementation of "what does this file do" is a
+    // second answer, and the screen would be reporting the one nothing runs on.
+    let effective = read_effective(&dir.join(FILE), dir_name)?;
+    let refused = effective
+        .warnings
+        .iter()
+        .filter(|w| w.code == "LOCAL_REFUSED")
+        .map(|w| w.path.clone())
+        .collect();
+
+    Ok(LocalOverride {
+        text,
+        exists: true,
+        applied: effective.local,
+        refused,
+        ignored: crate::git::is_ignored(&path),
+    })
+}
+
+/// Write the machine-local overlay, refusing what it may not carry.
+///
+/// A refused key is a *warning* on the way in ([`read_effective`]) and an
+/// *error* here, and the difference is deliberate: on the way in the file may
+/// predate a change and the project should still run, while here somebody is
+/// typing it now and can fix it in the second it takes to read the message.
+///
+/// Empty text deletes the file rather than writing `{}`. "No overrides" and "an
+/// empty overrides file" are the same state, and only one of them is visible in
+/// a directory listing as something to wonder about.
+pub fn write_local(dir: &Path, dir_name: &str, text: &str) -> Result<LocalOverride> {
+    let path = dir.join(LOCAL_FILE);
+
+    if text.trim().is_empty() {
+        if path.is_file() {
+            std::fs::remove_file(&path)
+                .map_err(|e| Error::io(format!("removing {}", path.display()), e))?;
+        }
+        return read_local(dir, dir_name);
+    }
+
+    let json: serde_json::Value = serde_json::from_str(text)
+        .map_err(|e| Error::new(Code::InvalidManifest, format!("{LOCAL_FILE}: {e}")))?;
+
+    let Some(map) = json.as_object() else {
+        return Err(Error::new(
+            Code::InvalidManifest,
+            format!("{LOCAL_FILE} must be a JSON object"),
+        ));
+    };
+
+    let refused: Vec<&str> = LOCAL_REFUSED
+        .iter()
+        .copied()
+        .filter(|key| map.contains_key(*key))
+        .collect();
+    if !refused.is_empty() {
+        return Err(Error::new(
+            Code::InvalidManifest,
+            format!(
+                "{LOCAL_FILE} may not set {}; those describe the repository rather than this machine",
+                refused.join(" or ")
+            ),
+        ));
+    }
+
+    // Validated as the merged document, not on its own: a local file is a
+    // fragment and would fail half the contract read alone — it has no `name`,
+    // usually no `domain`. What has to be valid is what the renderer will see.
+    let mut merged: serde_json::Value = {
+        let committed = std::fs::read_to_string(dir.join(FILE))
+            .map_err(|e| Error::io(format!("reading {}", dir.join(FILE).display()), e))?;
+        serde_json::from_str(&committed)
+            .map_err(|e| Error::new(Code::InvalidManifest, format!("{FILE}: {e}")))?
+    };
+    overlay(&mut merged, &json);
+    let check = normalize(&merged, "", dir_name);
+    if !check.valid {
+        return Err(Error::new(
+            Code::InvalidManifest,
+            format!(
+                "with {LOCAL_FILE} applied the manifest is invalid: {}",
+                check
+                    .errors
+                    .iter()
+                    .map(|e| e.message.clone())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+        ));
+    }
+
+    crate::atomic::write(&path, text)?;
+    read_local(dir, dir_name)
 }
 
 /// Whether a hostname is one `/etc/hosts` can carry.
@@ -661,6 +1071,12 @@ fn read_php(
 
     Some(PhpConfig {
         version,
+        // Absent is off, and absent is what every manifest on disk says — the
+        // field did not exist until the extension and the switch were split.
+        xdebug: block
+            .get("xdebug")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
         extensions,
     })
 }
@@ -735,7 +1151,31 @@ fn read_node(
         "22".to_string()
     });
 
-    let start = str_field(block, "start").unwrap_or_else(|| "npm start".to_string());
+    // Read before `start` and `install`, because it is what their defaults are
+    // taken from. An unknown name is a warning and falls back to absent: a
+    // typo must not cost somebody the project, and the fallback is the
+    // behaviour the project had before it named one.
+    let package_manager = str_field(block, "package_manager")
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .and_then(|value| {
+            if NODE_PACKAGE_MANAGERS.contains(&value.as_str()) {
+                Some(value)
+            } else {
+                warnings.push(Finding {
+                    code: "UNKNOWN_PACKAGE_MANAGER".into(),
+                    path: "node.package_manager".into(),
+                    message: format!(
+                        "\"{value}\" is not one Corepack can pin; expected one of {}",
+                        NODE_PACKAGE_MANAGERS.join(", ")
+                    ),
+                });
+                None
+            }
+        });
+    let pm = package_manager.as_deref().unwrap_or("npm");
+
+    let start = str_field(block, "start").unwrap_or_else(|| format!("{pm} start"));
 
     // Only flag what plausibly binds loopback: an explicit localhost, or a dev
     // server that defaults to it with no --host override.
@@ -771,10 +1211,11 @@ fn read_node(
 
     Some(NodeConfig {
         version,
-        install: str_field(block, "install").unwrap_or_else(|| "npm install".to_string()),
+        install: str_field(block, "install").unwrap_or_else(|| format!("{pm} install")),
         build: str_field(block, "build"),
         start,
         port: port.clamp(1, 65535) as u16,
+        package_manager,
     })
 }
 
@@ -1065,6 +1506,83 @@ mod tests {
         assert!(m.warnings.iter().any(|w| w.code == "BIND_LOCALHOST"));
     }
 
+    /// J-2, and the half that matters most: a project that never named a
+    /// package manager must be read exactly as it was before the field existed.
+    ///
+    /// Absent is not `npm`. If it defaulted to a value, every node manifest on
+    /// disk would start enabling Corepack in its image the next time anything
+    /// touched it — a different build for thousands of projects that asked for
+    /// nothing.
+    #[test]
+    fn a_node_project_that_names_no_package_manager_is_unchanged() {
+        let raw = r#"{
+  "name": "web",
+  "domain": "web.loc",
+  "runtime": "node",
+  "node": { "version": "22" }
+}"#;
+        let m = parse(raw, "web");
+        let node = m.node.unwrap();
+        assert_eq!(node.package_manager, None, "absent is not npm");
+        assert_eq!(node.install, "npm install");
+        assert_eq!(node.start, "npm start");
+    }
+
+    /// Naming one moves the defaults with it, so the manifest does not have to
+    /// repeat the choice three times.
+    #[test]
+    fn naming_a_package_manager_moves_the_install_and_start_defaults() {
+        let raw = r#"{
+  "name": "web",
+  "domain": "web.loc",
+  "runtime": "node",
+  "node": { "version": "22", "package_manager": "pnpm" }
+}"#;
+        let m = parse(raw, "web");
+        assert!(m.valid, "{:?}", m.errors);
+        let node = m.node.unwrap();
+        assert_eq!(node.package_manager.as_deref(), Some("pnpm"));
+        assert_eq!(node.install, "pnpm install");
+        assert_eq!(node.start, "pnpm start");
+    }
+
+    /// An explicit command still wins — the default is a convenience, not a
+    /// rule about what may be run.
+    #[test]
+    fn an_explicit_command_outranks_the_package_managers_default() {
+        let raw = r#"{
+  "name": "web",
+  "domain": "web.loc",
+  "runtime": "node",
+  "node": { "version": "22", "package_manager": "yarn", "install": "yarn install --immutable" }
+}"#;
+        let m = parse(raw, "web");
+        let node = m.node.unwrap();
+        assert_eq!(node.install, "yarn install --immutable");
+        assert_eq!(node.start, "yarn start");
+    }
+
+    /// A typo must not cost somebody the project. It warns and falls back to
+    /// absent, which is the behaviour the project had before it named one.
+    #[test]
+    fn an_unknown_package_manager_warns_and_falls_back_rather_than_failing() {
+        let raw = r#"{
+  "name": "web",
+  "domain": "web.loc",
+  "runtime": "node",
+  "node": { "version": "22", "package_manager": "pnmp" }
+}"#;
+        let m = parse(raw, "web");
+        assert!(m.valid, "a typo here must not invalidate the manifest");
+        let node = m.node.unwrap();
+        assert_eq!(node.package_manager, None);
+        assert_eq!(node.install, "npm install");
+        assert!(m
+            .warnings
+            .iter()
+            .any(|w| w.code == "UNKNOWN_PACKAGE_MANAGER"));
+    }
+
     #[test]
     fn explicit_host_flag_suppresses_the_loopback_warning() {
         let raw = r#"{
@@ -1127,6 +1645,17 @@ pub fn to_json(manifest: &Manifest) -> String {
         lines.push(format!("  \"aliases\": [\n{}\n  ]", items.join(",\n")));
     }
 
+    // Written only when true, the way `aliases` is written only when non-empty:
+    // the absent key and `false` mean the same thing, and a manifest that gains
+    // a line saying "no" for every switch this app ever adds is one nobody can
+    // read. Written at all, though, and that is the point — this round-trips
+    // through `project_manifest_write` on every form save, so a field the
+    // serialiser did not know about would be silently dropped the first time
+    // somebody edited an unrelated setting.
+    if manifest.lan_share {
+        lines.push("  \"lan_share\": true".to_string());
+    }
+
     if !manifest.services.is_empty() {
         let items: Vec<String> = manifest
             .services
@@ -1134,6 +1663,43 @@ pub fn to_json(manifest: &Manifest) -> String {
             .map(|id| format!("    {}", quote(id)))
             .collect();
         lines.push(format!("  \"services\": [\n{}\n  ]", items.join(",\n")));
+    }
+
+    // After `services` and before the runtime blocks, for the reason `aliases`
+    // is: W-01 reserves the end of the document for `php.extensions`, and a
+    // block written after it would trip the layout rule on a manifest that is
+    // otherwise fine.
+    //
+    // Written at all because of the warning above `lan_share`: this text
+    // round-trips through `project_manifest_write` on every form save, and a
+    // field the serialiser does not know about is one that disappears the first
+    // time somebody edits an unrelated setting. Hooks disappearing silently
+    // would be a project that quietly stopped migrating on start.
+    if !manifest.hooks.is_empty() {
+        let mut groups: Vec<String> = Vec::new();
+        for event in crate::hooks::Event::ALL {
+            let steps = manifest.hooks.steps(event);
+            if steps.is_empty() {
+                continue;
+            }
+            let items: Vec<String> = steps
+                .iter()
+                .map(|step| {
+                    let key = match step.kind {
+                        crate::hooks::Kind::Exec => "exec",
+                        crate::hooks::Kind::Host => "host",
+                    };
+                    let argv: Vec<String> = step.argv.iter().map(|a| quote(a)).collect();
+                    format!("      {{ {}: [{}] }}", quote(key), argv.join(", "))
+                })
+                .collect();
+            groups.push(format!(
+                "    {}: [\n{}\n    ]",
+                quote(event.key()),
+                items.join(",\n")
+            ));
+        }
+        lines.push(format!("  \"hooks\": {{\n{}\n  }}", groups.join(",\n")));
     }
 
     if let Some(lang) = &manifest.lang {
@@ -1163,6 +1729,12 @@ pub fn to_json(manifest: &Manifest) -> String {
         }
         fields.push(format!("    \"start\": {}", quote(&node.start)));
         fields.push(format!("    \"port\": {}", node.port));
+        // Only when named. Absent is not `"npm"` — it is "this project never
+        // asked", and writing a default here would turn every existing node
+        // manifest into one that enables Corepack the next time it is saved.
+        if let Some(pm) = &node.package_manager {
+            fields.push(format!("    \"package_manager\": {}", quote(pm)));
+        }
         block.push_str(&fields.join(",\n"));
         block.push_str("\n  }");
         lines.push(block);
@@ -1173,6 +1745,13 @@ pub fn to_json(manifest: &Manifest) -> String {
     if let Some(php) = &manifest.php {
         let mut block = String::from("  \"php\": {\n");
         block.push_str(&format!("    \"version\": {},\n", quote(&php.version)));
+        // Only when on. Off is the absence of the key, the way `lan_share` is:
+        // a manifest that gained a line saying "no" for every switch this app
+        // ever adds is one nobody can read. W-01 keeps `extensions` last, so
+        // this goes above it.
+        if php.xdebug {
+            block.push_str("    \"xdebug\": true,\n");
+        }
         block.push_str("    \"extensions\": [\n");
         let items: Vec<String> = php
             .extensions
@@ -1191,6 +1770,23 @@ pub fn to_json(manifest: &Manifest) -> String {
 
 /// Write a manifest to `<project_dir>/stackvo.json`, refusing anything invalid.
 pub fn write(path: &Path, manifest: &Manifest) -> Result<()> {
+    // The B-2 guard, and the reason `local` is a field rather than a return
+    // value nobody has to keep. Every other mistake around a machine-local
+    // overlay is loud — an override that fails to apply is noticed within
+    // seconds. This one is silent and lands in somebody else's checkout: read
+    // the effective manifest, edit one unrelated setting in the form, save, and
+    // this machine's PHP version is now the team's. So it is refused here,
+    // where every write goes, rather than trusted to each caller.
+    if !manifest.local.is_empty() {
+        return Err(Error::new(
+            Code::InvalidManifest,
+            format!(
+                "refusing to write a manifest carrying this machine's overrides ({}); \
+                 {LOCAL_FILE} is not committed and its values must not reach {FILE}",
+                manifest.local.join(", ")
+            ),
+        ));
+    }
     if manifest.php.is_some() && manifest.node.is_some() {
         return Err(Error::new(
             Code::InvalidManifest,
@@ -1244,9 +1840,11 @@ mod write_tests {
             server: Some("nginx".into()),
             document_root: Some("public".into()),
             aliases: vec![],
+            lan_share: false,
             services: vec![],
             php: Some(PhpConfig {
                 version: "8.4".into(),
+                xdebug: false,
                 extensions: vec!["mbstring".into(), "pdo".into(), "pdo_mysql".into()],
             }),
             node: None,
@@ -1254,6 +1852,8 @@ mod write_tests {
             valid: true,
             errors: vec![],
             warnings: vec![],
+            hooks: Default::default(),
+            local: Vec::new(),
         }
     }
 
@@ -1320,6 +1920,75 @@ mod write_tests {
         assert_eq!(back.aliases, ["api.shop.loc", "*.shop.loc"]);
     }
 
+    /// The bug this is the guard for is not in reading — it is in writing.
+    ///
+    /// Every form save on the project page goes out through
+    /// `project_manifest_write`, which round-trips the whole document through
+    /// `to_json`. A field the serialiser did not know about survives being read
+    /// perfectly well and is then dropped the first time somebody edits an
+    /// unrelated setting — so the project silently stops answering on the LAN,
+    /// with nothing on screen having said so.
+    #[test]
+    fn lan_share_survives_the_round_trip_a_form_save_puts_it_through() {
+        let mut m = php_manifest();
+        m.lan_share = true;
+        let text = to_json(&m);
+
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let back = normalize(&json, &text, "shop");
+        assert!(back.valid, "{:?}", back.errors);
+        assert!(back.lan_share, "the switch was on and came back off");
+    }
+
+    /// Off is the absence of the key, not a line saying "no". Every switch this
+    /// app ever adds writing its own `false` is a manifest nobody can read.
+    #[test]
+    fn a_project_that_does_not_share_writes_no_key_for_it() {
+        let m = php_manifest();
+        assert!(!m.lan_share);
+        assert!(!to_json(&m).contains("lan_share"));
+
+        let text = to_json(&m);
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(!normalize(&json, &text, "shop").lan_share);
+    }
+
+    /// The same trap `lan_share` fell into, for the switch F-4 added.
+    ///
+    /// Every form save round-trips the whole document through `to_json`. A
+    /// field the serialiser did not know about survives being read and is then
+    /// dropped the first time somebody edits an unrelated setting — so a
+    /// project quietly stops being debuggable with nothing on screen saying so.
+    #[test]
+    fn the_xdebug_switch_survives_the_round_trip() {
+        let mut m = php_manifest();
+        m.php.as_mut().unwrap().xdebug = true;
+        let text = to_json(&m);
+
+        // Above `extensions`, which W-01 keeps last.
+        assert!(
+            text.find("\"xdebug\": true").unwrap() < text.find("\"extensions\"").unwrap(),
+            "{text}"
+        );
+
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let back = normalize(&json, &text, "shop");
+        assert!(back.valid, "{:?}", back.errors);
+        assert!(
+            back.php.unwrap().xdebug,
+            "the switch was on and came back off"
+        );
+    }
+
+    /// Off writes no key, the way `lan_share` does — and every manifest on disk
+    /// predates the field, so absent has to mean off.
+    #[test]
+    fn a_project_with_debugging_off_writes_no_xdebug_key() {
+        let m = php_manifest();
+        assert!(!m.php.as_ref().unwrap().xdebug);
+        assert!(!to_json(&m).contains("\"xdebug\""));
+    }
+
     /// The field is optional and almost every manifest on disk predates it.
     #[test]
     fn a_manifest_without_the_key_declares_nothing_and_writes_nothing() {
@@ -1358,6 +2027,47 @@ mod write_tests {
         assert_eq!(lang.build.as_deref(), Some("go build -o /app/server ."));
         assert_eq!(lang.install, None);
         assert_eq!(lang.port, 8080);
+    }
+
+    /// J-1. Bun and Deno are lang runtimes, not a flavour of node.
+    ///
+    /// They read the same `package.json` and are built from their own images
+    /// with their own verbs, so folding them into the node block would mean one
+    /// block whose meaning depended on a sibling key.
+    #[test]
+    fn bun_and_deno_are_runtimes_of_their_own() {
+        for (runtime, start) in [("bun", "bun run start"), ("deno", "deno task start")] {
+            let json = serde_json::json!({
+                "name": "app", "domain": "app.loc", "runtime": runtime
+            });
+            let m = normalize(&json, "{}", "app");
+            assert!(m.valid, "{runtime}: {:?}", m.errors);
+            assert_eq!(m.runtime, runtime);
+            assert!(m.node.is_none(), "{runtime} must not produce a node block");
+            let lang = m
+                .lang
+                .unwrap_or_else(|| panic!("{runtime} gets a lang block"));
+            assert_eq!(lang.start, start);
+        }
+    }
+
+    /// The registry constraint, held as a test because it is the one thing here
+    /// that a reader would otherwise have to take on trust.
+    ///
+    /// `denoland/deno` publishes no major or minor tag — `deno:2` and `deno:2.9`
+    /// are both absent — so the default has to be a full patch version. If
+    /// somebody "tidies" it to `2`, every Deno project stops building against
+    /// an image that does not exist, and the error arrives at build time rather
+    /// than here.
+    #[test]
+    fn the_deno_default_is_a_full_version_because_the_publisher_ships_no_other() {
+        let deno = lang_defaults("deno").unwrap();
+        assert_eq!(
+            deno.version.split('.').count(),
+            3,
+            "denoland/deno has no major-only or minor-only tag; got {:?}",
+            deno.version
+        );
     }
 
     #[test]
@@ -1411,6 +2121,7 @@ mod write_tests {
             server: None,
             document_root: None,
             aliases: vec![],
+            lan_share: false,
             services: vec![],
             php: None,
             node: Some(NodeConfig {
@@ -1419,11 +2130,14 @@ mod write_tests {
                 build: Some("npm run build".into()),
                 start: "node server.js".into(),
                 port: 3000,
+                package_manager: None,
             }),
             lang: None,
             valid: true,
             errors: vec![],
             warnings: vec![],
+            hooks: Default::default(),
+            local: Vec::new(),
         };
         let text = to_json(&m);
         assert!(text.contains("\"runtime\": \"node\""));
@@ -1444,9 +2158,229 @@ mod write_tests {
             build: None,
             start: "npm start".into(),
             port: 3000,
+            package_manager: None,
         });
         let path = std::env::temp_dir().join("stackvo-write-test.json");
         assert!(write(&path, &m).is_err());
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// The same one-liner the reader tests use, repeated because this module
+    /// is a different `mod tests` and importing across two of them for four
+    /// lines would be worse than four lines.
+    fn read_text(raw: &str, dir: &str) -> Manifest {
+        let json: serde_json::Value = serde_json::from_str(raw).unwrap();
+        normalize(&json, raw, dir)
+    }
+
+    /// The hazard `to_json`'s own comment names: a field the serialiser does
+    /// not know about disappears the first time somebody edits an unrelated
+    /// setting. For hooks that would be a project that quietly stopped
+    /// migrating on start.
+    #[test]
+    fn hooks_survive_the_editor_round_trip() {
+        let raw = r#"{
+  "name": "shop",
+  "domain": "shop.loc",
+  "runtime": "php",
+  "document_root": "public",
+  "hooks": {
+    "post-start": [
+      { "exec": ["php", "artisan", "migrate", "--force"] },
+      { "host": ["say", "up"] }
+    ]
+  },
+  "php": {
+    "version": "8.4",
+    "extensions": ["pdo_mysql"]
+  }
+}
+"#;
+        let first = read_text(raw, "shop");
+        let again = read_text(&to_json(&first), "shop");
+
+        let steps = again.hooks.steps(crate::hooks::Event::PostStart);
+        assert_eq!(steps.len(), 2, "{}", to_json(&first));
+        assert_eq!(steps[0].argv, vec!["php", "artisan", "migrate", "--force"]);
+        assert_eq!(steps[1].kind, crate::hooks::Kind::Host);
+
+        // And the layout rule still holds: `php.extensions` is last.
+        assert!(again.valid, "{:?}", again.errors);
+    }
+
+    /// A malformed hook must not stop a project being opened or built.
+    #[test]
+    fn a_broken_hook_is_a_warning_and_the_manifest_stays_valid() {
+        let m = read_text(
+            r#"{"name":"shop","domain":"shop.loc","runtime":"php","hooks":{"post-start":[{"exec":"composer install"}]},"php":{"version":"8.4"}}"#,
+            "shop",
+        );
+        assert!(m.valid, "{:?}", m.errors);
+        assert!(
+            m.warnings.iter().any(|w| w.code == "HOOK"),
+            "{:?}",
+            m.warnings
+        );
+    }
+
+    // ---- B-2: the machine-local overlay -----------------------------------
+
+    /// A project directory with a committed manifest and, optionally, a local
+    /// one — in a fresh temp dir per test, because these read real files.
+    fn project(dir_name: &str, committed: &str, local: Option<&str>) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "stackvo-local-{dir_name}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), committed).unwrap();
+        if let Some(text) = local {
+            std::fs::write(dir.join(LOCAL_FILE), text).unwrap();
+        }
+        dir
+    }
+
+    const COMMITTED: &str = r#"{
+  "name": "shop",
+  "domain": "shop.loc",
+  "runtime": "php",
+  "document_root": "public",
+  "php": {
+    "version": "8.4",
+    "extensions": ["pdo_mysql", "redis"]
+  }
+}
+"#;
+
+    #[test]
+    fn with_no_local_file_the_committed_manifest_is_what_is_read() {
+        let dir = project("none", COMMITTED, None);
+        let m = read(&dir.join(FILE), "shop").unwrap();
+        assert_eq!(m.php.as_ref().unwrap().version, "8.4");
+        assert!(m.local.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The whole point of the feature: a version this machine wants, without
+    /// the file the team shares saying anything about it.
+    #[test]
+    fn a_local_file_overrides_the_committed_value_and_says_which() {
+        let dir = project("php", COMMITTED, Some(r#"{"php": {"version": "8.3"}}"#));
+        let m = read(&dir.join(FILE), "shop").unwrap();
+        assert_eq!(m.php.as_ref().unwrap().version, "8.3");
+        assert_eq!(m.local, vec!["php.version".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The reason the merge nests. A whole-value overlay would leave this
+    /// project with no extensions at all, which is a build that succeeds and an
+    /// application that cannot reach its database.
+    #[test]
+    fn overriding_one_field_of_a_block_keeps_the_rest_of_it() {
+        let dir = project("nest", COMMITTED, Some(r#"{"php": {"version": "8.3"}}"#));
+        let m = read(&dir.join(FILE), "shop").unwrap();
+        assert_eq!(
+            m.php.as_ref().unwrap().extensions,
+            vec!["pdo_mysql", "redis"]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An array is replaced whole, deliberately — see `overlay`.
+    #[test]
+    fn a_local_array_replaces_rather_than_appends() {
+        let dir = project("arr", COMMITTED, Some(r#"{"php": {"extensions": ["gd"]}}"#));
+        let m = read(&dir.join(FILE), "shop").unwrap();
+        assert_eq!(m.php.as_ref().unwrap().extensions, vec!["gd"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The reason the merge happens before validation rather than after: a
+    /// value from the local file is checked by the same rules, so a typo in it
+    /// is reported instead of being carried into the renderer.
+    #[test]
+    fn an_override_is_validated_the_same_way_the_committed_value_would_be() {
+        let dir = project("bad", COMMITTED, Some(r#"{"aliases": ["not a hostname"]}"#));
+        let m = read(&dir.join(FILE), "shop").unwrap();
+        assert!(
+            m.warnings.iter().any(|w| w.code == "INVALID_ALIAS"),
+            "{:?}",
+            m.warnings
+        );
+        assert!(
+            m.aliases.is_empty(),
+            "the bad alias must not reach the router"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Named, not dropped. A local file that silently ignores the one key
+    /// somebody set is how the feature gets written off as broken.
+    #[test]
+    fn a_refused_key_is_reported_rather_than_quietly_ignored() {
+        let dir = project(
+            "refused",
+            COMMITTED,
+            Some(r#"{"name": "elsewhere", "runtime": "node", "domain": "mine.loc"}"#),
+        );
+        let m = read(&dir.join(FILE), "shop").unwrap();
+        assert_eq!(m.name, "shop");
+        assert_eq!(m.runtime, "php");
+        assert_eq!(m.domain.as_deref(), Some("mine.loc"));
+
+        let refused: Vec<&str> = m
+            .warnings
+            .iter()
+            .filter(|w| w.code == "LOCAL_REFUSED")
+            .map(|w| w.path.as_str())
+            .collect();
+        assert_eq!(refused, vec!["name", "runtime"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Refused rather than skipped: running on the committed settings while the
+    /// developer believes an override is in force is worse than not having one.
+    #[test]
+    fn a_local_file_that_is_not_json_fails_the_read() {
+        let dir = project("broken", COMMITTED, Some("{ this is not json"));
+        let err = read(&dir.join(FILE), "shop").unwrap_err();
+        assert!(err.message.contains(LOCAL_FILE), "{}", err.message);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_committed_ignores_the_local_file_entirely() {
+        let dir = project(
+            "committed",
+            COMMITTED,
+            Some(r#"{"php": {"version": "8.3"}}"#),
+        );
+        let m = read_committed(&dir.join(FILE), "shop").unwrap();
+        assert_eq!(m.php.as_ref().unwrap().version, "8.4");
+        assert!(m.local.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The guard. Everything else about this feature fails loudly on its own;
+    /// this is the one path where a mistake ends up in somebody else's clone.
+    #[test]
+    fn writing_back_an_overlaid_manifest_is_refused() {
+        let dir = project("guard", COMMITTED, Some(r#"{"php": {"version": "8.3"}}"#));
+        let m = read(&dir.join(FILE), "shop").unwrap();
+        assert!(
+            !m.local.is_empty(),
+            "fixture must actually carry an override"
+        );
+
+        let err = write(&dir.join(FILE), &m).unwrap_err();
+        assert!(err.message.contains("php.version"), "{}", err.message);
+
+        // And the committed file is untouched.
+        let after = std::fs::read_to_string(dir.join(FILE)).unwrap();
+        assert!(after.contains("8.4"), "{after}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

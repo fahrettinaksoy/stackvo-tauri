@@ -335,77 +335,6 @@ pub fn read_template(root: &Path, relative: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Every service template's text, workspace-first.
-///
-/// Used by the volume harvest, which needs *all* of them rather than one by
-/// name — including services that are switched off, because that is what the
-/// Bash generator did and the volumes section is compared byte-for-byte.
-///
-/// ## One resolution rule, not two
-///
-/// This used to read the disk *instead of* the binary whenever
-/// `core/templates` existed, while `read_template` reads the disk *before* the
-/// binary, file by file. Two rules for the same question, and they disagree in
-/// a case that costs data: delete one `.tpl` from a workspace that has the
-/// directory, and the harvest stops seeing that service's volumes while every
-/// other reader still renders it from the embedded copy. The compose file then
-/// declares a service whose named volume is not in the `volumes:` section, and
-/// compose refuses the whole file.
-///
-/// So the set is the union — what the binary ships, plus anything extra the
-/// workspace added — and every member resolves through `read_template`, which
-/// is the one rule.
-pub fn all_service_templates(root: &Path) -> Vec<String> {
-    let mut paths: std::collections::BTreeSet<String> = files_of(&SKELETON)
-        .into_iter()
-        .map(|f| f.path().display().to_string())
-        .filter(|p| p.ends_with(".tpl"))
-        .collect();
-
-    // A template the workspace has and the binary does not. Nothing renders
-    // such a service — `DYNAMIC_SERVICES` is a fixed list — but its volumes
-    // were harvested before this change, and quietly dropping them would be a
-    // behaviour change nobody asked for.
-    collect_tpl_paths(root, &root.join("core/templates"), &mut paths);
-
-    paths
-        .into_iter()
-        .filter_map(|rel| read_template(root, &rel))
-        .collect()
-}
-
-/// The service directories compiled into the binary, by name.
-///
-/// From the embedded copy and not from a filesystem walk, because those two
-/// answers differ exactly where it matters: a template added to the working
-/// tree but not to a build is present for every check that reads the checkout
-/// and absent on the machine that installs the app.
-pub fn shipped_services() -> Vec<String> {
-    SKELETON
-        .get_dir("core/templates/services")
-        .into_iter()
-        .flat_map(|dir| dir.dirs())
-        .filter_map(|d| d.path().file_name()?.to_str().map(str::to_string))
-        .collect()
-}
-
-/// Every `.tpl` under `dir`, as a path relative to `root`.
-fn collect_tpl_paths(root: &Path, dir: &Path, out: &mut std::collections::BTreeSet<String>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_tpl_paths(root, &path, out);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("tpl") {
-            if let Ok(rel) = path.strip_prefix(root) {
-                out.insert(rel.display().to_string());
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,19 +346,14 @@ mod tests {
         dir
     }
 
+    /// The one template the renderer still reads from the binary.
+    ///
+    /// This used to walk `template::DYNAMIC_SERVICES` and check all twenty-five
+    /// service templates were compiled in. There are none: ADR 0016 removed the
+    /// `.env` renderer that read them, and the packages carry their own compose
+    /// fragments now.
     #[test]
     fn the_templates_the_generator_needs_are_all_compiled_in() {
-        // Not a count — the actual list the renderer reads. A template that
-        // ships in the repo but not in the binary is a service that silently
-        // stops being generated once the app is packaged.
-        for (_, path) in crate::template::DYNAMIC_SERVICES {
-            assert!(
-                SKELETON
-                    .get_file(format!("core/templates/{path}"))
-                    .is_some(),
-                "{path} is missing from the compiled-in skeleton"
-            );
-        }
         assert!(SKELETON.get_file("core/compose/base.yml").is_some());
     }
 
@@ -669,7 +593,10 @@ mod tests {
         let root = scratch("override-cycle");
         install(&root).unwrap();
 
-        const TARGET: &str = "core/templates/services/redis/docker-compose.redis.tpl";
+        // A server config rather than a service template: ADR 0016 removed the
+        // latter, and what is left to override is the compose base and the three
+        // web-server configs.
+        const TARGET: &str = "core/servers/nginx.conf";
         assert!(
             overridden(&root).is_empty(),
             "a fresh workspace owns nothing"
@@ -677,7 +604,7 @@ mod tests {
         assert!(overridable().iter().any(|p| p == TARGET));
 
         let text = materialize(&root, TARGET).unwrap();
-        assert!(text.contains("stackvo-redis"));
+        assert!(text.contains("server"));
         assert_eq!(std::fs::read_to_string(root.join(TARGET)).unwrap(), text);
         assert_eq!(overridden(&root), vec![TARGET.to_string()]);
 
@@ -699,9 +626,7 @@ mod tests {
         // Reverting twice is not an error — the caller asked for a state.
         revert(&root, TARGET).unwrap();
         // And the embedded copy is serving again.
-        assert!(read_template(&root, TARGET)
-            .unwrap()
-            .contains("stackvo-redis"));
+        assert!(read_template(&root, TARGET).unwrap().contains("server"));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -745,7 +670,9 @@ mod tests {
             std::fs::write(&target, read_template(&root, &rel).unwrap()).unwrap();
             wrote += 1;
         }
-        assert!(wrote >= 30, "expected the whole skeleton, wrote {wrote}");
+        // Was 30 — the skeleton carried twenty-five service directories then.
+        // It carries the compose base and three server configs now (ADR 0016).
+        assert!(wrote >= 4, "expected the whole skeleton, wrote {wrote}");
         assert_eq!(
             overridden(&root).len(),
             wrote,
@@ -775,43 +702,9 @@ mod tests {
 
         // Idempotent, and the render is unchanged by any of it.
         assert_eq!(prune_pristine(&root), 0);
-        assert!(read_template(
-            &root,
-            "core/templates/services/redis/docker-compose.redis.tpl"
-        )
-        .unwrap()
-        .contains("stackvo-redis"));
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    /// The bug the union in `all_service_templates` exists for.
-    #[test]
-    fn a_deleted_template_still_contributes_its_volumes() {
-        let root = scratch("harvest");
-        install(&root).unwrap();
-
-        let all = all_service_templates(&root);
-        let baseline = all.len();
-        assert!(
-            baseline >= 20,
-            "expected the whole catalogue, got {baseline}"
-        );
-
-        // Materialise one and delete it: the workspace now *has* a
-        // `core/templates` directory, which is what used to switch the harvest
-        // to disk-only and lose every template that was not in it.
-        const TARGET: &str = "core/templates/services/mysql/docker-compose.mysql.tpl";
-        materialize(&root, TARGET).unwrap();
-        std::fs::remove_file(root.join(TARGET)).unwrap();
-        assert!(root.join("core/templates").is_dir());
-
-        let after = all_service_templates(&root);
-        assert_eq!(after.len(), baseline, "the harvest lost templates");
-        assert!(
-            after.iter().any(|t| t.contains("stackvo-mysql-data")),
-            "mysql's volume is missing from the harvest"
-        );
+        assert!(read_template(&root, "core/servers/nginx.conf")
+            .unwrap()
+            .contains("server"));
 
         let _ = std::fs::remove_dir_all(&root);
     }

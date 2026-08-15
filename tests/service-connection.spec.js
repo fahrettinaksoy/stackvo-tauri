@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
@@ -20,15 +20,22 @@ const api = vi.hoisted(() => ({
   containerInspect: vi.fn(),
   containerStats: vi.fn(),
   serviceConnection: vi.fn(),
+  serviceDbClients: vi.fn(),
+  serviceOpenInClient: vi.fn(),
   mailStatus: vi.fn(),
   mailMessages: vi.fn(),
   dbTargets: vi.fn(),
+  // G-4's list, which the sheet reads on mount.
+  dbInstances: vi.fn(),
   terminalOpenExternal: vi.fn(),
   envReveal: vi.fn(),
   openInBrowser: vi.fn(),
 }));
 
-vi.mock('@/lib/ipc', () => ({ api }));
+// `asList` is the real guard, not a stub — see views-render.spec.js. The sheet
+// reads it since the instance list arrived (G-4), and a mock without it fails
+// at import rather than in an assertion.
+vi.mock('@/lib/ipc', () => ({ api, asList: (v) => (Array.isArray(v) ? v : []) }));
 vi.mock('@/lib/events', () => ({ listenAll: vi.fn(async () => () => {}) }));
 
 const vuetify = createVuetify({ components, directives });
@@ -87,6 +94,17 @@ const REVEALED = {
 };
 
 /**
+ * What `service_db_clients` answers for a Mongo service on a machine with
+ * Compass installed and DBeaver not. The system handler heads the list and has
+ * the empty id — it is the absence of a choice, not a choice.
+ */
+const CLIENTS = [
+  { id: '', name: 'System default', icon: 'mdi-open-in-app', available: true, default: true },
+  { id: 'compass', name: 'MongoDB Compass', icon: 'mdi-database', available: true, default: false },
+  { id: 'dbeaver', name: 'DBeaver', icon: 'mdi-database', available: false, default: false },
+];
+
+/**
  * Wrapped in a `v-app`, because the sheet is a `v-navigation-drawer` underneath
  * and Vuetify's layout composable throws without one. The wrapper is the
  * component under test's real surroundings, not a stub of them.
@@ -114,6 +132,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.containerInspect.mockResolvedValue({ networks: [], mounts: [], ports: [] });
   api.serviceConnection.mockResolvedValue(MASKED);
+  api.serviceDbClients.mockResolvedValue(CLIENTS);
+  api.serviceOpenInClient.mockResolvedValue(undefined);
   api.mailStatus.mockResolvedValue({ available: false });
   api.mailMessages.mockResolvedValue([]);
   api.dbTargets.mockResolvedValue([]);
@@ -219,5 +239,130 @@ describe('the password', () => {
     expect(wrapper.text()).toContain('••••••••');
 
     vi.unstubAllGlobals();
+  });
+});
+
+/**
+ * G-3. The string had been right and copyable since this section was written;
+ * what nobody had written was the step that hands it to the application it was
+ * built for.
+ */
+/**
+ * A second way in, for the menu only.
+ *
+ * `mountSheet` stubs `teleport` so the panel renders inside the wrapper, and
+ * that stub does not merely relocate an overlay's content — it drops it. The
+ * sheet is readable and the menu inside it is not, which is invisible until
+ * something asserts on a menu. So these mount the real thing and read
+ * `document.body`, where both the panel and the menu land.
+ */
+const mountSheetForOverlays = (service = MONGO) =>
+  mount(
+    {
+      components: { ServiceDetailSheet },
+      props: ['service'],
+      template: `
+        <v-app>
+          <ServiceDetailSheet :service="service" tld="stackvo.loc" :model-value="true" />
+        </v-app>`,
+    },
+    { props: { service }, global: { plugins: [vuetify, i18n] }, attachTo: document.body }
+  );
+
+const overlays = () => document.body.textContent;
+
+afterEach(() => {
+  document.body.innerHTML = '';
+});
+
+describe('opening it in a client', () => {
+  it('offers the clients this machine actually has, greying out the rest', async () => {
+    const wrapper = mountSheetForOverlays();
+    await flushPromises();
+
+    expect(api.serviceDbClients).toHaveBeenCalledWith('mongo');
+
+    // Queried from `document`, not from the wrapper: without the teleport stub
+    // the panel itself is on `document.body` too.
+    document.querySelector('[aria-label="Open in a database client"]').click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+
+    const text = overlays();
+    expect(text).toContain('MongoDB Compass');
+    // Absent would read as "this app has never heard of DBeaver", which is a
+    // different statement from "it is not installed here".
+    expect(text).toContain('DBeaver');
+  });
+
+  it('hands the service and the chosen client to Rust, and nothing else', async () => {
+    const wrapper = mountSheetForOverlays();
+    await flushPromises();
+
+    // Queried from `document`, not from the wrapper: without the teleport stub
+    // the panel itself is on `document.body` too.
+    document.querySelector('[aria-label="Open in a database client"]').click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+
+    const compass = [...document.querySelectorAll('.v-list-item')].find((el) =>
+      el.textContent.includes('MongoDB Compass')
+    );
+    compass.click();
+    await flushPromises();
+
+    // The URI is not one of the arguments. Rust re-resolves it with the real
+    // password, because a string that has been through the front end is one
+    // that could have been changed there.
+    expect(api.serviceOpenInClient).toHaveBeenCalledWith('mongo', 'compass');
+  });
+
+  /**
+   * The container address is a name on a Docker network. Offering to open it
+   * would rebuild the exact confusion the two rows exist to prevent, so the
+   * button appears once and on the host row.
+   */
+  it('is offered on the host row only', async () => {
+    const wrapper = mountSheet();
+    await flushPromises();
+
+    const buttons = wrapper
+      .findAll('button')
+      .filter((button) => button.attributes('aria-label') === 'Open in a database client');
+    expect(buttons).toHaveLength(1);
+  });
+
+  /**
+   * Most services have no connection string, and AMQP or SMTP has one no
+   * desktop database client takes. An empty list hides the button rather than
+   * opening an empty menu.
+   */
+  it('is absent when nothing on this machine opens that kind of address', async () => {
+    api.serviceDbClients.mockResolvedValue([]);
+    const wrapper = mountSheet();
+    await flushPromises();
+
+    const open = wrapper
+      .findAll('button')
+      .find((button) => button.attributes('aria-label') === 'Open in a database client');
+    expect(open).toBeUndefined();
+  });
+
+  /**
+   * A picker that cannot be built is a picker that is not shown. The copy
+   * button beside it still works, and it is what this replaces — so a failure
+   * here must not take the section down with it.
+   */
+  it('leaves the rest of the section working when the list cannot be fetched', async () => {
+    api.serviceDbClients.mockRejectedValue(new Error('nope'));
+    const wrapper = mountSheet();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain(
+      'mongodb://root:••••••••@127.0.0.1:27017/stackvo?authSource=admin'
+    );
+    expect(
+      wrapper.findAll('button').find((b) => b.attributes('aria-label') === 'Copy')
+    ).toBeTruthy();
   });
 });

@@ -82,6 +82,187 @@ export default {
     menuAbout: 'About StackVo',
   },
 
+  /**
+   * The command palette (A-2).
+   *
+   * `keys` spells the shortcut out rather than drawing key caps: the string is
+   * one line in a footer and a reader who has never used a palette needs the
+   * sentence, not the glyphs.
+   */
+  palette: {
+    title: 'Command palette',
+    placeholder: 'Type a command or a project name…',
+    empty: 'Nothing matches “{query}”.',
+    keys: '↑ ↓ to move · Enter to run · Esc to close',
+    sections: {
+      navigate: 'Go to',
+      projects: 'Projects',
+      stack: 'Stack',
+      app: 'App',
+    },
+    /**
+     * The project verbs are the palette's own rather than `actions.*`.
+     *
+     * Those say "Start the container", which is true of the button they were
+     * written for and reads wrong at the end of a row naming a project — and
+     * the row is also what the reader is typing at, so it wants the shortest
+     * true sentence, not the most precise one.
+     */
+    project: {
+      start: 'Start {name}',
+      stop: 'Stop {name}',
+      restart: 'Restart {name}',
+      build: 'Build {name}',
+      site: 'Open {domain} in the browser',
+    },
+  },
+
+  /**
+   * `stackvo.local.json` — this machine's overrides (B-2).
+   *
+   * `notIgnored` is the only warning of the three git states, and it says what
+   * to do rather than only that something is wrong: a file that reaches a
+   * commit stops being a machine setting and becomes everybody's.
+   */
+  local: {
+    title: 'This machine only',
+    explain:
+      'Values here override stackvo.json for this checkout and are not meant to be committed. Useful for a version you are testing against, or a domain that clashes with something else on this machine.',
+    applied: 'In force on this machine:',
+    refused:
+      'Ignored: {keys}. Those describe the repository rather than this machine, so they are only read from stackvo.json.',
+    ignored: 'git is keeping this file out of commits.',
+    notIgnored:
+      'git would commit this file. Add stackvo.local.json to .gitignore — otherwise these settings become the whole team\u2019s.',
+    remove: 'Remove',
+  },
+
+  /**
+   * Lifecycle hooks (B-3).
+   *
+   * `explain` names the risk rather than only the feature. A screen that made
+   * approving easier than reading would be the opposite of what this is for.
+   */
+  hooks: {
+    title: 'When this project starts and stops',
+    explain:
+      'Commands declared in stackvo.json. Steps that run in the container need no approval — it already runs this repository\u2019s code. Steps that run on your machine do.',
+    inContainer: 'in container',
+    onThisMachine: 'on this machine',
+    needsConsent:
+      'These commands would run on your machine and have not been approved. Read them, then approve — approval is recorded against these exact commands, so a change asks again.',
+    approved: 'Approved on this machine, for these exact commands.',
+    approve: 'Approve these commands',
+    revoke: 'Withdraw approval',
+    policyOff: 'Hooks are turned off on this machine by an administrator.',
+    policyHost:
+      'Commands that run on the machine are turned off by an administrator. Steps that run in the container are unaffected.',
+  },
+
+  /**
+   * Authoring a service package (C-1).
+   *
+   * `explain` names the obstacle rather than the feature: what stopped anybody
+   * writing a package was the sha256 bookkeeping, not the JSON.
+   */
+  authoring: {
+    title: 'Write a package',
+    explain:
+      'A manifest states the hash of every file it ships, and StackVo checks them on every read — so editing a fragment by hand leaves a package that will not load. Create writes one that is already correct; Seal fixes the hashes after you have edited it, and refuses anything the validator would.',
+    category: 'Category',
+    service: 'Service id',
+    version: 'Version',
+    image: 'Image',
+    imageHint: 'repository:tag — a package pins the image it runs. Only needed to create.',
+    create: 'Create',
+    check: 'Check',
+    seal: 'Seal',
+    refused: 'Refused — nothing was written:',
+    valid: '{service} {version} is valid.',
+    resealed: 'Hashes rewritten for: {files}',
+  },
+
+  /**
+   * The local DNS responder (E-1).
+   *
+   * `explain` says what it is *not* — a resolver — because that is the fact
+   * somebody needs before turning on something that answers DNS on their
+   * machine.
+   */
+  dns: {
+    title: 'Local DNS',
+    subtitle: 'Answer for this workspace\u2019s names without editing the hosts file',
+    explain:
+      'A responder that answers for one suffix and refuses everything else. It never forwards, has no upstream and holds no cache — it is not a resolver for this machine, only for the names StackVo creates. That also makes wildcards work, which the hosts file cannot do at all.',
+    responder: 'Answer on 127.0.0.1:{port}',
+    responderHint:
+      'Every name ending in {suffix} resolves to this machine, with no entry per project.',
+    resolver: 'Let the system ask it',
+    resolverHint:
+      'Writes {file}. Needs an administrator password, and changes how this machine resolves that suffix.',
+    manual:
+      'This platform has no per-suffix resolver directory. Add this line to whatever sits in front of resolv.conf — dnsmasq or NetworkManager — and reload it:',
+    unsupported:
+      'Windows has no per-suffix resolver: the only mechanism redirects every name on the machine, which is not what this is for. Projects keep using the hosts file here.',
+  },
+
+  /**
+   * User routes (E-4).
+   *
+   * `explain` leads with `localhost`, because that is the one thing everybody
+   * types and the one thing that cannot work unaided.
+   */
+  routes: {
+    title: 'Custom routes',
+    subtitle: 'Point a name at something StackVo did not start',
+    explain:
+      'A dev server you started yourself, a service in another tool, a staging host. Write http://localhost:3000 and StackVo corrects it — inside the proxy\u2019s container “localhost” is the proxy, which is a 502 with no explanation.',
+    domain: 'Name',
+    target: 'Goes to',
+    enabled: 'Enabled',
+    add: 'Add a route',
+    remove: 'Remove this route',
+    save: 'Save and apply',
+    empty: 'No custom routes yet.',
+  },
+
+  /**
+   * Moving one instance's data into another (G-4).
+   *
+   * `explain` names the destructive half first, because that is the fact the
+   * plan exists to put on screen before the button is worth pressing.
+   */
+  dbMove: {
+    title: 'Move data to another instance',
+    explain:
+      'Dumps this instance and restores it into another one, replacing everything there. Same engine works; MySQL and MariaDB read each other with care; different families are refused.',
+    target: 'Into',
+    move: 'Move',
+    confirm: 'Replace everything in {to} with the contents of this instance?',
+    done: 'Moved {bytes} bytes into {to}.',
+  },
+
+  /**
+   * Suspending idle projects (I-2).
+   *
+   * `explain` names the signal, because "how does it know" is the first
+   * question about anything that stops a container on its own.
+   */
+  idle: {
+    title: 'Suspend idle projects',
+    subtitle: 'Stop what nothing has asked for',
+    explain:
+      'Measured from the proxy\u2019s access log — the only honest signal, since php-fpm uses no CPU whether it is serving or asleep. A suspended project is simply stopped; start it from the list, the tray or ⌘K. There is no wake-on-request.',
+    threshold: 'Idle minutes',
+    thresholdHint: '0 turns this off. A project the log has never mentioned is never suspended.',
+    suspendNow: 'Suspend {count} now',
+    none: 'No projects are running.',
+    never: 'no requests yet',
+    justNow: 'just now',
+    minutes: '{minutes} min ago',
+    wouldStop: 'past the threshold',
+  },
+
   quickActions: {
     startAll: 'Start all containers',
     stopAll: 'Stop all containers',
@@ -145,6 +326,19 @@ export default {
     colOpen: 'Open in the browser',
     colDetail: 'Detail',
     colDelete: 'Delete',
+    // Every one of these carries the project's name. A table of twenty rows
+    // whose every button announces "Delete" gives a screen reader user no way
+    // to tell which project they are about to remove.
+    aria: {
+      build: 'Build {name}',
+      stop: 'Stop {name}',
+      start: 'Start {name}',
+      restart: 'Restart {name}',
+      open: 'Open {name} in the browser',
+      detail: 'Open the details of {name}',
+      delete: 'Delete {name}',
+      fixHosts: 'Add a hosts entry for {name}',
+    },
     default: 'Default',
     noDnsRecord: 'No hosts entry',
     addToHosts: 'Add this line to your hosts file:',
@@ -289,6 +483,7 @@ export default {
     fromHostHint: 'Compass, TablePlus, psql',
     fromContainer: 'From another container',
     fromContainerHint: "your project's own application",
+    openInClient: 'Open in a database client',
     notPublished:
       'The container is running but publishes no port to the host, so nothing on this machine can reach it.',
     credentials: 'Credentials',
@@ -571,6 +766,16 @@ export default {
     notThere: 'That folder does not look like a {source} installation.',
     sizeAtLeast: 'at least {size}',
   },
+  unmanaged: {
+    title: 'Unmanaged code',
+    review: 'Folders and sites to take over',
+    explain:
+      'Code on this machine that StackVo is not running: folders under projects/ with no stackvo.json, and sites belonging to XAMPP or Laragon.',
+    waiting: '{n} waiting.',
+    nothing: 'Nothing waiting.',
+    pickExplain: 'Only the usual install paths were scanned. Point at another one.',
+    none: 'Nothing found. Every folder under projects/ has a stackvo.json, and no XAMPP or Laragon sites were seen where those tools normally install.',
+  },
   adopt: {
     found: '{n} folder(s) under projects/ have no stackvo.json.',
     from: 'detected from {files}',
@@ -675,6 +880,10 @@ export default {
     subtitle: 'Step debugging for this project.',
     on: 'Enabled',
     off: 'Disabled',
+    firstTime:
+      'Switching on the first time adds the extension to the image and needs a rebuild. After that, turning it on and off only restarts the container — the extension stays, and costs nothing while it is off.',
+    staysInstalled:
+      'The extension stays in the image while this is off. It costs nothing there, and turning debugging back on is a container restart rather than a rebuild.',
     needsRebuild:
       'The extension is compiled into the image, so this does nothing until the project is regenerated and rebuilt.',
     notActive:
@@ -748,6 +957,11 @@ export default {
   },
 
   release: {
+    pushExplain:
+      'Push it to a registry, or take a compose file to run it with. StackVo pushes only a verified image and only to a tag that names a registry — a registry keeps layers, so deleting a tag later does not remove what was in it.',
+    pushCheck: 'Check',
+    push: 'Push',
+    recipe: 'Deployment recipe',
     load: 'Load a bundle',
     loadExplain:
       'Read a .tar written by Save back into this machine’s Docker. This is the receiving end of an air-gapped hand-off, so it needs no project and no plan.',
@@ -792,6 +1006,9 @@ export default {
     open: 'Open',
     deleteOne: 'Delete this profile',
     summary: '{n} functions · {total} of measured work · {creator}',
+    flame: 'Call tree',
+    flameHint: 'What called what, and what each branch cost.',
+    noTree: 'This profile records no calls — a single function, or a file whose tail was cut.',
     truncated:
       'This profile was larger than the read limit, so the numbers below cover only part of it.',
     colFunction: 'Function',
@@ -1476,6 +1693,67 @@ export default {
       'This URL is live on the public internet and has no authentication. Anyone who has it reaches this project on your machine. Stop sharing when the test is done.',
   },
 
+  migration: {
+    title: 'Your services move house',
+    lead: 'This workspace still keeps its services in `.env`. This version builds them from an instance table and the package catalogue instead, and the old path has been removed — so the stack cannot be assembled until they have moved.',
+    reversible:
+      '`.env` is copied to `.env.pre-market.bak` first and its service lines are commented out, so this can be undone from the Market page.',
+    reading: 'Reading what is in .env…',
+    willKeep: 'What will move — {count} service(s), keeping their ports and their data:',
+    blocked: 'These have to be settled first',
+    missing: 'Packages this machine does not have yet',
+    notInCatalogue: 'not in the catalogue this machine has fetched',
+    nothing: 'Nothing in `.env` is switched on, so there is nothing to move.',
+    apply: 'Move them',
+    later: 'Not now',
+    laterHint:
+      'Leaving this opens the app without services. Projects, domains and certificates keep working; the Market page offers the same move.',
+  },
+
+  timeline: {
+    title: 'Request timeline',
+    explain:
+      'What the code thought it had, what it actually asked the database for, and what it sent — on one axis. Dumps carry the request they happened in; queries and mail do not, because neither a database log nor a mail catcher records which request produced the entry, and guessing would be wrong the first time two overlap.',
+    database: 'Database',
+    requests: 'Requests:',
+    notRecording:
+      'The query log is not recording, so only the dumps are here. Switch it on in the pane above, reload the page you are investigating, then refresh this.',
+    empty: 'Nothing yet — reload the page you are investigating.',
+  },
+
+  queryLog: {
+    title: 'Query log',
+    explain:
+      'What the database was actually asked, and where the same question was asked once per row. Switched on from here — no agent, no rebuild, no code in your application.',
+    database: 'Database',
+    record: 'Record queries',
+    clear: 'Start again',
+    noTarget:
+      'This workspace runs no database whose log this can read. MySQL and MariaDB keep it in a table, Postgres writes it to the container’s stream in a format this app pins, and Mongo profiles into a collection per database — all four switch on at runtime, with no agent and no rebuild.',
+    cost: 'Recording logs every statement, unsampled, and costs write throughput. Switch it off when you are done — it is an instrument, not telemetry. Stopping also clears what was collected, because the log holds statement text.',
+    howTo:
+      'Switch it on, reload the page you are investigating, then look. Repeated shapes are listed first.',
+    repeats: 'Repeated queries',
+    noRepeats: 'Nothing repeated three times or more.',
+    nothingYet: 'Nothing recorded yet — reload the page you are looking at.',
+    example: 'for example',
+    statements: 'Statements ({count})',
+  },
+
+  lan: {
+    title: 'On this network',
+    explain:
+      'Open this project on a phone or another computer on the same network. The name resolves through sslip.io, which works out the address from the name itself — nothing is registered, nothing is published, and no traffic leaves the network.',
+    share: 'Answer on a name other devices can resolve',
+    noAddress:
+      'This machine has no private network address to offer. Either it is offline, or its address is public — and a development site under a name anybody on the internet can resolve is not what this switch is for.',
+    certWarning:
+      'The visiting browser will warn about the certificate. It is issued by this machine’s local CA, which that device has never heard of — the connection is real and the name is right. Install the CA there to remove the warning, or continue past it.',
+    regenerateHint: 'The name reaches the router and the certificate on the next regenerate.',
+    stale:
+      '{host} is written into the generated files, and this machine is no longer on that network. Regenerate — until then that name resolves to whichever machine took the address.',
+  },
+
   doctor: {
     title: 'Doctor',
     sectionDesc: 'What is wrong, said with names — and the repair beside each finding.',
@@ -1635,6 +1913,10 @@ export default {
     runtime: 'Runtime',
     phpVersion: 'PHP version',
     nodeVersion: 'Node version',
+    packageManager: 'Package manager',
+    packageManagerNone: 'Not pinned (npm as the image ships it)',
+    packageManagerHint:
+      'Enables Corepack in the image, which is what makes a `packageManager` field in package.json pin a version. Leaving it unpinned builds the image exactly as before.',
     server: 'Web server',
     documentRoot: 'Document root',
     extensions: 'PHP extensions',
@@ -1786,6 +2068,12 @@ export default {
     installATerminal: 'Install one, or use the built-in terminal instead.',
     chooseABrowser: 'Choose a browser in Settings → External applications.',
     chooseAnEditor: 'Choose an editor in Settings, or open the folder manually.',
+    migrateTheWorkspace:
+      "Move this workspace's services out of .env — the app offers it on the next launch, and the Market page offers the same move. It is reversible.",
+    servicePublishesNothing:
+      'Start the service, or check that it publishes a port — a container reachable only on the Docker network has no address a client on this machine can use.',
+    chooseADbClient:
+      'Install a client that opens this kind of address, or copy the connection string and paste it in yourself.',
     waitForOperation: 'Wait for it to finish, or watch the operation console for progress.',
     quickCommandsAreFixed: 'Commands come from the fixed catalog; ids are not arbitrary.',
     imageReferenceCharset: 'Lowercase letters, digits, and . _ - / : only.',

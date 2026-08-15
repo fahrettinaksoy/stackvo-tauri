@@ -259,10 +259,17 @@ function applyChange(project) {
 /**
  * Folders under `projects/` with no `stackvo.json`.
  *
- * Shown above the table rather than behind a menu: they are invisible
- * everywhere else in the app, which is exactly why they accumulate. On the
- * checkout this was written against there were eleven of them, three of which
- * were Laravel applications.
+ * Behind the overflow menu now, with a count on the button. They used to sit
+ * as a strip above the table, and the reason for that was real — they are
+ * invisible everywhere else in the app, which is exactly why they accumulate;
+ * on the checkout this was first written against there were eleven of them,
+ * three of which were Laravel applications.
+ *
+ * What paid for the move is that the strip cost every reader vertical space on
+ * every visit for a job most people do once. The count is the half worth
+ * keeping: a badge still says "there are eleven", so the thing that must not
+ * become invisible does not, and the panels themselves are one click away
+ * rather than permanently above the table.
  */
 const adoptable = ref([]);
 const adopting = ref(null);
@@ -280,13 +287,36 @@ async function loadAdoptable() {
  * Sites belonging to XAMPP or Laragon.
  *
  * Beside the adoptable folders rather than in a wizard of its own: both
- * questions are "there is code on this machine StackVo is not running", and a
- * migration behind a menu is one people do not find in the window where they
- * are still deciding.
+ * questions are "there is code on this machine StackVo is not running", so
+ * they share one panel and one entry point.
  */
 const installs = ref([]);
 const importing = ref(null);
 const importMove = ref(false);
+
+/**
+ * The panel both of them live in.
+ *
+ * A dialog rather than a menu full of expansion panels: adopting is a decision
+ * per folder, made against evidence — the detected runtime, the files it was
+ * read from, the size of what would be copied — and a menu that has to stay
+ * open while you read three lines per row and then flip a destructive switch
+ * is a menu being used as a window.
+ */
+const unmanagedOpen = ref(false);
+
+/**
+ * What the button's badge counts.
+ *
+ * Sites already taken are left out: they are listed so you can see the import
+ * worked, not because there is anything left to do about them, and counting
+ * them would leave the badge showing a number that no amount of work clears.
+ */
+const unmanagedCount = computed(
+  () =>
+    adoptable.value.length +
+    installs.value.reduce((n, i) => n + i.sites.filter((s) => !s.taken).length, 0)
+);
 
 /**
  * An installation somewhere the well-known paths do not look.
@@ -310,6 +340,10 @@ async function pickInstall(source) {
     // Replaces a previous answer for the same path rather than stacking, so
     // pointing at the same folder twice does not list its sites twice.
     installs.value = [...installs.value.filter((i) => i.path !== found.path), found];
+    // The scan can be started from the menu, where the panel that holds the
+    // result is not on screen. Finding sites and showing nothing reads as the
+    // folder having been rejected.
+    unmanagedOpen.value = true;
   } catch (e) {
     actionError.value = e;
   }
@@ -493,7 +527,6 @@ onUnmounted(() => teardown?.());
           variant="tonal"
           size="small"
           elevation="0"
-          class="mr-2"
           :aria-label="t('app.refresh')"
           :loading="inventory.loadingProjects"
           @click="inventory.loadProjects()"
@@ -501,6 +534,78 @@ onUnmounted(() => teardown?.());
           <v-icon>mdi-refresh</v-icon>
           <v-tooltip activator="parent" location="bottom">{{ t('app.refresh') }}</v-tooltip>
         </v-btn>
+
+        <!-- The things you do to the workspace rather than to a project. Both
+             of them answer "there is code on this machine StackVo is not
+             running", which is a question about the folder the table is a view
+             of — so it belongs beside the table's own controls. -->
+        <!-- Bounded. A menu sizes itself to its widest child, and a subtitle is
+             a sentence — unbounded, the first version ran the full width of the
+             window because one row explained itself in a line of prose. -->
+        <v-menu location="bottom end" min-width="280" max-width="360">
+          <template #activator="{ props: menu }">
+            <v-btn
+              v-bind="menu"
+              icon
+              variant="tonal"
+              size="small"
+              elevation="0"
+              class="mr-2"
+              :aria-label="t('unmanaged.title')"
+            >
+              <!-- The number, not a dot: "eleven folders are sitting there
+                   undeclared" is the whole of what the strip above the table
+                   used to say at a glance, and a dot says only "something". -->
+              <v-badge
+                :model-value="!!unmanagedCount"
+                :content="unmanagedCount"
+                color="primary"
+                offset-x="-2"
+                offset-y="-2"
+              >
+                <v-icon>mdi-dots-vertical</v-icon>
+              </v-badge>
+              <v-tooltip activator="parent" location="bottom">
+                {{ t('unmanaged.title') }}
+              </v-tooltip>
+            </v-btn>
+          </template>
+
+          <v-list density="compact" class="more-menu">
+            <v-list-subheader>{{ t('unmanaged.title') }}</v-list-subheader>
+
+            <!-- Every item says what it does under its name. A menu where one
+                 row is explained and the next two are not reads as the first
+                 one needing an excuse.
+
+                 The count is folders and sites together, as the badge is:
+                 "{n} folders" would read 0 on a machine whose only unmanaged
+                 code is a XAMPP installation. -->
+            <v-list-item
+              prepend-icon="mdi-folder-search-outline"
+              :title="t('unmanaged.review')"
+              :subtitle="
+                unmanagedCount
+                  ? t('unmanaged.waiting', { n: unmanagedCount })
+                  : t('unmanaged.nothing')
+              "
+              @click="unmanagedOpen = true"
+            />
+
+            <v-divider class="my-1" />
+
+            <!-- The scans that ran on load only looked where the installers
+                 put things. This is for the second drive. -->
+            <v-list-item
+              v-for="source in ['xampp', 'laragon']"
+              :key="source"
+              prepend-icon="mdi-folder-open-outline"
+              :title="t('imports.pick', { tool: source })"
+              :subtitle="t('unmanaged.pickExplain')"
+              @click="pickInstall(source)"
+            />
+          </v-list>
+        </v-menu>
       </div>
     </template>
 
@@ -512,169 +617,233 @@ onUnmounted(() => teardown?.());
       @close="actionError = null"
     />
 
-    <!-- Unmanaged folders ------------------------------------------------ -->
-    <!-- Real code sitting in projects/ with no stackvo.json. It is invisible
-         everywhere else in the app, which is why it accumulates. -->
-    <!-- Sites belonging to another tool. Same shape as the adoptable panel
-         below it, because it answers the same question from further away. -->
-    <div class="d-flex ga-2 px-4 py-2">
-      <v-btn
-        v-for="source in ['xampp', 'laragon']"
-        :key="source"
-        size="x-small"
-        variant="text"
-        prepend-icon="mdi-folder-search-outline"
-        @click="pickInstall(source)"
-      >
-        {{ t('imports.pick', { tool: source }) }}
-      </v-btn>
-    </div>
+    <!-- Unmanaged code ---------------------------------------------------- -->
+    <!-- Real code sitting in projects/ with no stackvo.json, and sites
+         belonging to XAMPP or Laragon. Both are invisible everywhere else in
+         the app, which is why they accumulate; the badge on the overflow
+         button is what keeps them from being invisible here too. -->
+    <v-dialog v-model="unmanagedOpen" max-width="820" scrollable>
+      <v-card>
+        <v-card-title class="d-flex align-center ga-2">
+          <v-icon size="20">mdi-folder-search-outline</v-icon>
+          {{ t('unmanaged.title') }}
+        </v-card-title>
+        <v-card-subtitle class="text-caption pb-2">{{ t('unmanaged.explain') }}</v-card-subtitle>
 
-    <v-expansion-panels
-      v-if="installs.some((i) => i.sites.length)"
-      variant="accordion"
-      rounded="0"
-      flat
-      class="adopt-panels"
-    >
-      <v-expansion-panel v-for="install in installs" :key="install.path" elevation="0">
-        <v-expansion-panel-title>
-          <v-icon size="small" class="mr-2">mdi-import</v-icon>
-          <span class="text-body-2">
-            {{ t('imports.found', { tool: install.source, n: install.sites.length }) }}
-          </span>
-        </v-expansion-panel-title>
+        <v-divider />
 
-        <v-expansion-panel-text class="adopt-body">
-          <div class="text-caption text-medium-emphasis mb-2">
-            {{ t('imports.explain', { path: install.path }) }}
+        <v-card-text class="pa-0">
+          <!-- The same error as the page's, and deliberately the same ref: an
+               import that fails while this is open would otherwise report it
+               behind the dialog. -->
+          <ErrorAlert
+            :error="actionError"
+            type="error"
+            closable
+            class="ma-2"
+            @close="actionError = null"
+          />
+
+          <div class="d-flex ga-2 px-4 py-2">
+            <v-btn
+              v-for="source in ['xampp', 'laragon']"
+              :key="source"
+              size="x-small"
+              variant="text"
+              prepend-icon="mdi-folder-search-outline"
+              @click="pickInstall(source)"
+            >
+              {{ t('imports.pick', { tool: source }) }}
+            </v-btn>
           </div>
 
-          <!-- The destructive choice is a switch above the list, off, and says
+          <!-- Said rather than left as an empty dialog: "we looked and there
+               is nothing" and "this has not run" look identical when blank. -->
+          <div
+            v-if="!unmanagedCount && !installs.some((i) => i.sites.length)"
+            class="px-4 pb-4 text-caption text-medium-emphasis"
+          >
+            {{ t('unmanaged.none') }}
+          </div>
+
+          <!-- Sites belonging to another tool. Same shape as the adoptable
+               panel below it, because it answers the same question from
+               further away. -->
+          <v-expansion-panels
+            v-if="installs.some((i) => i.sites.length)"
+            variant="accordion"
+            rounded="0"
+            flat
+            class="adopt-panels"
+          >
+            <v-expansion-panel v-for="install in installs" :key="install.path" elevation="0">
+              <v-expansion-panel-title>
+                <v-icon size="small" class="mr-2">mdi-import</v-icon>
+                <span class="text-body-2">
+                  {{ t('imports.found', { tool: install.source, n: install.sites.length }) }}
+                </span>
+              </v-expansion-panel-title>
+
+              <v-expansion-panel-text class="adopt-body">
+                <div class="text-caption text-medium-emphasis mb-2">
+                  {{ t('imports.explain', { path: install.path }) }}
+                </div>
+
+                <!-- The destructive choice is a switch above the list, off, and says
                what it does. A per-row "move" button would be a delete somebody
                reaches for while aiming at the row below. -->
-          <v-switch
-            v-model="importMove"
-            color="warning"
-            density="compact"
-            hide-details
-            class="mb-2"
-            :label="t('imports.move')"
-          />
-          <div class="text-caption text-medium-emphasis mb-3">
-            {{ importMove ? t('imports.moveOn') : t('imports.moveOff') }}
-          </div>
+                <v-switch
+                  v-model="importMove"
+                  color="warning"
+                  density="compact"
+                  hide-details
+                  class="mb-2"
+                  :label="t('imports.move')"
+                />
+                <div class="text-caption text-medium-emphasis mb-3">
+                  {{ importMove ? t('imports.moveOn') : t('imports.moveOff') }}
+                </div>
 
-          <div v-for="site in install.sites" :key="site.path" class="adopt-row">
-            <span class="adopt-name">{{ site.name }}</span>
+                <div v-for="site in install.sites" :key="site.path" class="adopt-row">
+                  <span class="adopt-name">{{ site.name }}</span>
 
-            <v-chip v-if="site.detected.framework" size="x-small" color="success" variant="tonal">
-              {{ site.detected.framework }}
-            </v-chip>
-            <v-chip v-else size="x-small" variant="tonal">{{ site.detected.runtime }}</v-chip>
+                  <v-chip
+                    v-if="site.detected.framework"
+                    size="x-small"
+                    color="success"
+                    variant="tonal"
+                  >
+                    {{ site.detected.framework }}
+                  </v-chip>
+                  <v-chip v-else size="x-small" variant="tonal">{{ site.detected.runtime }}</v-chip>
 
-            <v-chip v-if="site.domain" size="x-small" variant="tonal">{{ site.domain }}</v-chip>
+                  <v-chip v-if="site.domain" size="x-small" variant="tonal">{{
+                    site.domain
+                  }}</v-chip>
 
-            <span class="adopt-evidence">
-              {{
-                site.partial
-                  ? t('imports.sizeAtLeast', { size: bytes(site.bytes) })
-                  : bytes(site.bytes)
-              }}
-            </span>
+                  <span class="adopt-evidence">
+                    {{
+                      site.partial
+                        ? t('imports.sizeAtLeast', { size: bytes(site.bytes) })
+                        : bytes(site.bytes)
+                    }}
+                  </span>
 
-            <v-spacer />
+                  <v-spacer />
 
-            <span v-if="site.taken" class="text-caption text-medium-emphasis mr-2">
-              {{ t('imports.taken') }}
-            </span>
-            <v-btn
-              v-else
-              size="x-small"
-              variant="tonal"
-              color="primary"
-              prepend-icon="mdi-import"
-              :loading="importing === site.path"
-              :disabled="!!importing || !!adopting"
-              @click="importSite(install, site)"
-            >
-              {{ t('imports.take') }}
-            </v-btn>
-          </div>
-        </v-expansion-panel-text>
-      </v-expansion-panel>
-    </v-expansion-panels>
+                  <span v-if="site.taken" class="text-caption text-medium-emphasis mr-2">
+                    {{ t('imports.taken') }}
+                  </span>
+                  <v-btn
+                    v-else
+                    size="x-small"
+                    variant="tonal"
+                    color="primary"
+                    prepend-icon="mdi-import"
+                    :loading="importing === site.path"
+                    :disabled="!!importing || !!adopting"
+                    @click="importSite(install, site)"
+                  >
+                    {{ t('imports.take') }}
+                  </v-btn>
+                </div>
+              </v-expansion-panel-text>
+            </v-expansion-panel>
+          </v-expansion-panels>
 
-    <!-- Flush and square, like the search field directly under it. Both span
-         the card, and a radius on a surface that runs to an edge cuts a notch
-         out of the corner rather than rounding it — which is what the inset
-         version looked like against the rows below. -->
-    <v-expansion-panels
-      v-if="adoptable.length"
-      variant="accordion"
-      rounded="0"
-      flat
-      class="adopt-panels"
-    >
-      <v-expansion-panel elevation="0">
-        <v-expansion-panel-title>
-          <v-icon size="small" class="mr-2">mdi-folder-search-outline</v-icon>
-          <span class="text-body-2">{{ t('adopt.found', { n: adoptable.length }) }}</span>
-        </v-expansion-panel-title>
+          <!-- Flush and square, and still square in here: it runs to both
+               edges of the card, and a radius on a surface that meets an edge
+               cuts a notch out of the corner rather than rounding it. -->
+          <!-- Open on arrival. Behind the table it was one click from a strip
+               that was already on screen; from a menu item it would be three,
+               and the third would be a header you asked for by name. Seeded
+               rather than controlled — there is no listener bound, so Vuetify
+               treats the value as the starting one and the panel still
+               collapses when it is pressed. -->
+          <v-expansion-panels
+            v-if="adoptable.length"
+            :model-value="0"
+            variant="accordion"
+            rounded="0"
+            flat
+            class="adopt-panels"
+          >
+            <v-expansion-panel elevation="0">
+              <v-expansion-panel-title>
+                <v-icon size="small" class="mr-2">mdi-folder-search-outline</v-icon>
+                <span class="text-body-2">{{ t('adopt.found', { n: adoptable.length }) }}</span>
+              </v-expansion-panel-title>
 
-        <!-- Bounded and scrolling: a checkout with twenty stray folders pushed
+              <!-- Bounded and scrolling: a checkout with twenty stray folders pushed
              the table itself off the screen, and this is a thing you deal with
              once rather than the reason the page exists. -->
-        <v-expansion-panel-text class="adopt-body">
-          <div v-for="folder in adoptable" :key="folder.name" class="adopt-row">
-            <span class="adopt-name">{{ folder.name }}</span>
+              <v-expansion-panel-text class="adopt-body">
+                <div v-for="folder in adoptable" :key="folder.name" class="adopt-row">
+                  <span class="adopt-name">{{ folder.name }}</span>
 
-            <v-chip v-if="folder.detected.framework" size="x-small" color="success" variant="tonal">
-              {{ folder.detected.framework }}
-            </v-chip>
-            <v-chip v-else size="x-small" variant="tonal">{{ folder.detected.runtime }}</v-chip>
+                  <v-chip
+                    v-if="folder.detected.framework"
+                    size="x-small"
+                    color="success"
+                    variant="tonal"
+                  >
+                    {{ folder.detected.framework }}
+                  </v-chip>
+                  <v-chip v-else size="x-small" variant="tonal">{{
+                    folder.detected.runtime
+                  }}</v-chip>
 
-            <!-- The files the guess came from. A document root inferred wrongly
+                  <!-- The files the guess came from. A document root inferred wrongly
                builds, starts and serves a 404 with no error anywhere. -->
-            <span class="adopt-evidence">
-              {{
-                folder.detected.evidence.length
-                  ? t('adopt.from', { files: folder.detected.evidence.join(', ') })
-                  : t('adopt.noEvidence')
-              }}
-            </span>
+                  <span class="adopt-evidence">
+                    {{
+                      folder.detected.evidence.length
+                        ? t('adopt.from', { files: folder.detected.evidence.join(', ') })
+                        : t('adopt.noEvidence')
+                    }}
+                  </span>
 
-            <v-spacer />
+                  <v-spacer />
 
-            <!-- Offered only when the folder has one. It is the better route when
+                  <!-- Offered only when the folder has one. It is the better route when
                it exists: a compose file states the PHP version, the domain and
                the services, none of which any marker file does. -->
-            <v-btn
-              v-if="folder.composeFile"
-              size="x-small"
-              variant="tonal"
-              color="primary"
-              prepend-icon="mdi-file-import-outline"
-              :loading="migrationBusy && migrationFor === folder.name"
-              :disabled="!!adopting || migrationBusy"
-              @click="scanCompose(folder)"
-            >
-              {{ t('migrate.read') }}
-            </v-btn>
+                  <v-btn
+                    v-if="folder.composeFile"
+                    size="x-small"
+                    variant="tonal"
+                    color="primary"
+                    prepend-icon="mdi-file-import-outline"
+                    :loading="migrationBusy && migrationFor === folder.name"
+                    :disabled="!!adopting || migrationBusy"
+                    @click="scanCompose(folder)"
+                  >
+                    {{ t('migrate.read') }}
+                  </v-btn>
 
-            <v-btn
-              size="x-small"
-              variant="tonal"
-              :loading="adopting === folder.name"
-              :disabled="!!adopting || !folder.hasFiles || migrationBusy"
-              @click="adopt(folder)"
-            >
-              {{ t('adopt.action') }}
-            </v-btn>
-          </div>
-        </v-expansion-panel-text>
-      </v-expansion-panel>
-    </v-expansion-panels>
+                  <v-btn
+                    size="x-small"
+                    variant="tonal"
+                    :loading="adopting === folder.name"
+                    :disabled="!!adopting || !folder.hasFiles || migrationBusy"
+                    @click="adopt(folder)"
+                  >
+                    {{ t('adopt.action') }}
+                  </v-btn>
+                </div>
+              </v-expansion-panel-text>
+            </v-expansion-panel>
+          </v-expansion-panels>
+        </v-card-text>
+
+        <v-divider />
+
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="unmanagedOpen = false">{{ t('app.close') }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
 
     <!-- The compose review. A dialog rather than an inline expansion: it is a
          decision about two files at once — a manifest and the shared .env —
@@ -837,11 +1006,18 @@ onUnmounted(() => teardown?.());
 
         <template #item.domain="{ item }">
           <div v-if="item.domain" class="d-flex align-center ga-2">
-            <a
+            <!-- A button, not an anchor. It carries no href — it calls a
+                 command — and an anchor without one takes no focus and is
+                 announced as text, so the whole table was unreachable by
+                 keyboard. Found by the first run of the browser suite. -->
+            <button
+              type="button"
               class="domain-link"
-              @click="item.domainConfigured && api.openInBrowser(`https://${item.domain}`)"
-              >{{ item.domain }}</a
+              :disabled="!item.domainConfigured"
+              @click="api.openInBrowser(`https://${item.domain}`)"
             >
+              {{ item.domain }}
+            </button>
 
             <!-- A domain with no hosts entry cannot resolve. The web UI could
                  detect this; here the icon is also the fix. -->
@@ -851,6 +1027,8 @@ onUnmounted(() => teardown?.());
                   v-bind="props"
                   color="warning"
                   size="small"
+                  :aria-label="t('projectsView.aria.fixHosts', { name: item.domain })"
+                  :aria-hidden="false"
                   @click.stop="hostsFixFor = item.domain"
                   >mdi-alert-circle</v-icon
                 >
@@ -922,6 +1100,7 @@ onUnmounted(() => teardown?.());
             variant="tonal"
             :loading="ops.isBusy(item.name)"
             :disabled="!app.engineUp || !item.manifestValid"
+            :aria-label="t('projectsView.aria.build', { name: item.name })"
             @click="act(item, (n) => api.projectBuild(n))"
           >
             <v-icon>mdi-hammer-wrench</v-icon>
@@ -933,6 +1112,7 @@ onUnmounted(() => teardown?.());
             color="error"
             variant="tonal"
             :loading="ops.isBusy(item.name)"
+            :aria-label="t('projectsView.aria.stop', { name: item.name })"
             @click="act(item, api.projectStop)"
           >
             <v-icon>mdi-stop</v-icon>
@@ -945,6 +1125,7 @@ onUnmounted(() => teardown?.());
             variant="tonal"
             :loading="ops.isBusy(item.name)"
             :disabled="!app.engineUp"
+            :aria-label="t('projectsView.aria.start', { name: item.name })"
             @click="act(item, api.projectStart)"
           >
             <v-icon>mdi-play</v-icon>
@@ -959,6 +1140,7 @@ onUnmounted(() => teardown?.());
             color="warning"
             variant="tonal"
             :loading="ops.isBusy(item.name)"
+            :aria-label="t('projectsView.aria.restart', { name: item.name })"
             @click="act(item, api.projectRestart)"
           >
             <v-icon>mdi-restart</v-icon>
@@ -1019,6 +1201,7 @@ onUnmounted(() => teardown?.());
             size="small"
             color="primary"
             variant="tonal"
+            :aria-label="t('projectsView.aria.open', { name: item.name })"
             @click="api.openInBrowser(`https://${item.domain}`)"
           >
             <v-icon>mdi-open-in-new</v-icon>
@@ -1031,6 +1214,7 @@ onUnmounted(() => teardown?.());
             size="small"
             color="info"
             variant="tonal"
+            :aria-label="t('projectsView.aria.detail', { name: item.name })"
             @click="router.push(`/projects/${item.name}`)"
           >
             <v-icon>mdi-open-in-app</v-icon>
@@ -1044,6 +1228,7 @@ onUnmounted(() => teardown?.());
             color="error"
             variant="tonal"
             :disabled="ops.isBusy(item.name)"
+            :aria-label="t('projectsView.aria.delete', { name: item.name })"
             @click="deleteTarget = item"
           >
             <v-icon>mdi-delete</v-icon>
@@ -1140,16 +1325,30 @@ onUnmounted(() => teardown?.());
 </template>
 
 <style scoped>
-/* Bounded so a checkout with many stray folders cannot push the table off the
-   screen. The height is the panel body's, not the page's — adopting is
-   something you do once, and it should not become the reason this page
-   scrolls. */
-/* A rule under it, so the panel reads as a band of the card rather than as a
-   row of the table it sits above. */
+/* The subtitles wrap instead of being clipped.
+   Against a bounded menu the stock rule turns every explanation into its first
+   four words and an ellipsis, which is a sentence that costs a line and says
+   nothing. `white-space` is not what does it and setting that alone was the
+   first, failed attempt: the truncation is `-webkit-line-clamp: 1` from
+   `.v-list-item--one-line`, and a clamp only applies to `display:
+   -webkit-box`. Both have to go, so the paragraph is a paragraph. */
+.more-menu :deep(.v-list-item-subtitle) {
+  display: block;
+  -webkit-line-clamp: unset;
+  white-space: normal;
+  line-height: 1.35;
+  padding-block: 2px;
+}
+
+/* A rule under it, so each panel reads as a band of the dialog rather than as
+   the start of the next one. */
 .adopt-panels {
   border-bottom: thin solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
 
+/* Bounded so a checkout with many stray folders scrolls inside its own panel
+   rather than pushing the other one, and the dialog's buttons, out of reach.
+   The dialog scrolls too — this is so both lists stay reachable at once. */
 .adopt-body :deep(.v-expansion-panel-text__wrapper) {
   max-height: 240px;
   overflow-y: auto;
@@ -1185,9 +1384,21 @@ onUnmounted(() => teardown?.());
 }
 
 .domain-link {
+  /* The reset a button needs to read as the text it replaced. */
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  text-align: inherit;
+
   color: inherit;
   cursor: pointer;
   text-decoration: none;
+}
+
+.domain-link:disabled {
+  cursor: default;
 }
 
 .domain-link:hover {

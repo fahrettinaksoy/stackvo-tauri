@@ -526,18 +526,20 @@ mod tests {
         std::fs::write(
             project.join("stackvo.json"),
             r#"{"name":"shop","domain":"shop.loc","runtime":"php",
-                "php":{"version":"8.4","extensions":["gd","xdebug"]}}"#,
+                "php":{"version":"8.4","xdebug":true,"extensions":["gd","xdebug"]}}"#,
         )
         .unwrap();
 
         let args = compose_base_args(&dir);
         assert!(overlays(&args).contains(&"docker-compose.xdebug.yml".to_string()));
 
-        // And it disappears again once nothing asks for it.
+        // And it disappears again once the switch goes off — with the
+        // extension still in the image, which is the whole of F-4: turning
+        // debugging off must not cost the next `on` a rebuild.
         std::fs::write(
             project.join("stackvo.json"),
             r#"{"name":"shop","domain":"shop.loc","runtime":"php",
-                "php":{"version":"8.4","extensions":["gd"]}}"#,
+                "php":{"version":"8.4","extensions":["gd","xdebug"]}}"#,
         )
         .unwrap();
         let args = compose_base_args(&dir);
@@ -567,7 +569,7 @@ mod tests {
         std::fs::write(
             project.join("stackvo.json"),
             r#"{"name":"shop","domain":"shop.loc","runtime":"php",
-                "php":{"version":"8.4","extensions":["gd"]}}"#,
+                "php":{"version":"8.4","extensions":["gd","xdebug"]}}"#,
         )
         .unwrap();
         std::fs::write(
@@ -586,7 +588,7 @@ mod tests {
         std::fs::write(
             project.join("stackvo.json"),
             r#"{"name":"shop","domain":"shop.loc","runtime":"php",
-                "php":{"version":"8.4","extensions":["gd","xdebug"]}}"#,
+                "php":{"version":"8.4","xdebug":true,"extensions":["gd","xdebug"]}}"#,
         )
         .unwrap();
         let args = compose_base_args(&dir);
@@ -641,7 +643,7 @@ mod tests {
         std::fs::write(
             php.join("stackvo.json"),
             r#"{"name":"shop","domain":"shop.loc","runtime":"php",
-                "php":{"version":"8.4","extensions":["gd"]}}"#,
+                "php":{"version":"8.4","extensions":["gd","xdebug"]}}"#,
         )
         .unwrap();
 
@@ -679,7 +681,7 @@ mod tests {
         std::fs::write(
             php.join("stackvo.json"),
             r#"{"name":"shop","domain":"shop.loc","runtime":"php",
-                "php":{"version":"8.4","extensions":["gd"]}}"#,
+                "php":{"version":"8.4","extensions":["gd","xdebug"]}}"#,
         )
         .unwrap();
         std::fs::write(
@@ -724,7 +726,7 @@ mod tests {
         std::fs::write(
             php.join("stackvo.json"),
             r#"{"name":"shop","domain":"shop.loc","runtime":"php",
-                "php":{"version":"8.4","extensions":["gd","xdebug"]}}"#,
+                "php":{"version":"8.4","xdebug":true,"extensions":["gd","xdebug"]}}"#,
         )
         .unwrap();
         let args = compose_base_args(&dir);

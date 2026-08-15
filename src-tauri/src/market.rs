@@ -631,7 +631,24 @@ pub fn remembered(root: &Path) -> Result<Option<SourceRef>> {
 }
 
 /// Turn a remembered reference back into something that can fetch.
+///
+/// The one place a source becomes something that can read bytes, which is why
+/// `policy.market.allowedSources` is enforced here rather than at each call
+/// site. A remembered reference goes through this too, deliberately: a policy
+/// that arrived after somebody had already fetched from a mirror must take
+/// effect on the next refresh, not on the next fresh install.
 pub fn open(root: &Path, reference: &SourceRef) -> Result<Box<dyn Source>> {
+    let market = crate::policy::current().market();
+    if !market.allows_source(&reference.location) {
+        return Err(Error::new(
+            Code::Forbidden,
+            format!(
+                "{} is not a catalogue source this machine is allowed to use",
+                reference.location
+            ),
+        ));
+    }
+
     match reference.kind.as_str() {
         "local" => Ok(Box::new(LocalSource::new(&reference.location))),
         "https" => Ok(Box::new(HttpSource::new(root, &reference.location)?)),

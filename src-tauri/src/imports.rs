@@ -41,6 +41,15 @@ use std::path::{Path, PathBuf};
 pub enum Source {
     Xampp,
     Laragon,
+    /// MAMP. The same shape as XAMPP — one directory of sites, no vhost file
+    /// to read a name out of — and one of the three the competitive review
+    /// named (L).
+    Mamp,
+    /// Laravel Valet. **Not** the same shape, and that is the whole of the work
+    /// it needed: Valet has no directory of sites. It *parks* directories,
+    /// meaning "every child of this is a site", and it *links* individual ones
+    /// as symlinks under `~/.config/valet/Sites`. Both are read here.
+    Valet,
 }
 
 impl Source {
@@ -48,6 +57,8 @@ impl Source {
         match self {
             Source::Xampp => "xampp",
             Source::Laragon => "laragon",
+            Source::Mamp => "mamp",
+            Source::Valet => "valet",
         }
     }
 
@@ -56,6 +67,11 @@ impl Source {
         match self {
             Source::Xampp => "htdocs",
             Source::Laragon => "www",
+            Source::Mamp => "htdocs",
+            // Valet has none. The field exists for the tools that keep their
+            // sites in one directory, and returning something plausible here
+            // would send `scan_at` looking for a directory that never exists.
+            Source::Valet => "",
         }
     }
 }
@@ -123,10 +139,18 @@ pub fn well_known() -> Vec<(Source, PathBuf)> {
             PathBuf::from("/Applications/XAMPP/xamppfiles"),
         ));
         out.push((Source::Xampp, PathBuf::from("/Applications/XAMPP")));
+        out.push((Source::Mamp, PathBuf::from("/Applications/MAMP")));
+        // Valet's root is its config directory, not an install prefix — it has
+        // no install prefix, because it is a composer package on the user's
+        // PATH. `~/.config/valet` is where it writes everything this reads.
+        if let Some(home) = dirs::home_dir() {
+            out.push((Source::Valet, home.join(".config/valet")));
+        }
     }
     #[cfg(target_os = "windows")]
     {
         out.push((Source::Xampp, PathBuf::from("C:\\xampp")));
+        out.push((Source::Mamp, PathBuf::from("C:\\MAMP")));
         out.push((Source::Laragon, PathBuf::from("C:\\laragon")));
         out.push((Source::Laragon, PathBuf::from("D:\\laragon")));
     }
@@ -135,9 +159,18 @@ pub fn well_known() -> Vec<(Source, PathBuf)> {
         out.push((Source::Xampp, PathBuf::from("/opt/lampp")));
     }
 
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        // Valet's Linux forks keep the same config path.
+        if let Some(home) = dirs::home_dir() {
+            out.push((Source::Valet, home.join(".config/valet")));
+        }
+    }
+
     // Laragon is a Windows product and is not offered elsewhere: listing a path
     // that cannot exist would be a row that is always empty, which reads as a
-    // scan that failed rather than as a tool that is not installed.
+    // scan that failed rather than as a tool that is not installed. MAMP has no
+    // Linux build for the same reason.
     out
 }
 
@@ -168,6 +201,136 @@ pub fn server_name(conf: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Valet's sites, as [`Install`] rows.
+///
+/// `None` when there is no config at all — an absent `~/.config/valet` is
+/// "Valet is not installed", and a row for it would read as a scan that failed.
+fn scan_valet(root: &Path, projects: Option<&Path>) -> Option<Install> {
+    if !root.join("config.json").is_file() {
+        return None;
+    }
+    let (_, tld) = valet_config(root);
+
+    let mut sites = Vec::new();
+    for (name, path) in valet_sites(root) {
+        // A link whose target is gone is reported by Valet too and is worth
+        // seeing; it is skipped here because there is nothing to copy, and an
+        // import row with no bytes behind it is a button that fails.
+        if !path.is_dir() {
+            continue;
+        }
+        let (bytes, partial) = measure(&path);
+        sites.push(Site {
+            // Valet knows the hostname exactly — the site name plus the
+            // configured suffix — which is more than XAMPP can say and is why
+            // this is `Some` where XAMPP's is `None`.
+            domain: Some(format!("{name}.{tld}")),
+            taken: projects.is_some_and(|p| p.join(name.to_ascii_lowercase()).exists()),
+            path: path.display().to_string(),
+            name,
+            bytes,
+            partial,
+            detected: crate::detect::detect(&path),
+        });
+    }
+
+    Some(Install {
+        source: Source::Valet,
+        path: root.display().to_string(),
+        sites,
+    })
+}
+
+/// Where Valet says its sites are, and what suffix it serves them under.
+///
+/// `~/.config/valet/config.json` holds `paths` — the directories that were
+/// `valet park`ed — and `tld`. Both are read with `serde_json` rather than
+/// assumed: the key was `domain` before Valet 3 and is `tld` after, so a build
+/// that guessed would silently produce `.test` for somebody serving `.localhost`.
+pub fn valet_config(root: &Path) -> (Vec<PathBuf>, String) {
+    let mut parked = Vec::new();
+    let mut tld = "test".to_string();
+
+    if let Ok(text) = std::fs::read_to_string(root.join("config.json")) {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(list) = value.get("paths").and_then(|v| v.as_array()) {
+                parked.extend(list.iter().filter_map(|v| v.as_str()).map(PathBuf::from));
+            }
+            // `tld` since Valet 3, `domain` before it. Read in that order so a
+            // config carrying both — an upgrade leaves one behind — takes the
+            // current one.
+            if let Some(value) = value
+                .get("tld")
+                .or_else(|| value.get("domain"))
+                .and_then(|v| v.as_str())
+            {
+                let value = value.trim().trim_start_matches('.');
+                if !value.is_empty() {
+                    tld = value.to_ascii_lowercase();
+                }
+            }
+        }
+    }
+    (parked, tld)
+}
+
+/// Every site Valet serves, from both of the ways it can be told about one.
+///
+/// A **linked** site is a symlink under `Sites/` whose name is the hostname;
+/// the target is where the code is. A **parked** directory means every child of
+/// it is a site named after its own directory. Reading only one of the two
+/// would miss half of somebody's setup, and which half depends on how they
+/// happen to work.
+///
+/// Linked wins on a collision, because that is what Valet does: an explicit
+/// link is the thing somebody typed.
+pub fn valet_sites(root: &Path) -> Vec<(String, PathBuf)> {
+    let (parked, _) = valet_config(root);
+    let mut out: Vec<(String, PathBuf)> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+
+    for entry in std::fs::read_dir(root.join("Sites"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        // `read_link` rather than `canonicalize`: a link whose target has been
+        // deleted still tells us the name Valet serves, and canonicalize would
+        // drop the row entirely.
+        let Ok(target) = std::fs::read_link(&path) else {
+            continue;
+        };
+        if seen.insert(name.to_string()) {
+            out.push((name.to_string(), target));
+        }
+    }
+
+    for dir in parked {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !is_site(name) {
+                continue;
+            }
+            if seen.insert(name.to_string()) {
+                out.push((name.to_string(), path));
+            }
+        }
+    }
+
+    out.sort_by_key(|(name, _)| name.to_ascii_lowercase());
+    out
 }
 
 /// Is this a site, or part of the tool?
@@ -214,6 +377,13 @@ fn measure(dir: &Path) -> (u64, bool) {
 
 /// The sites in one installation.
 pub fn scan_at(source: Source, install: &Path, projects: Option<&Path>) -> Option<Install> {
+    // Valet keeps no directory of sites, so it takes the other path entirely.
+    // Folding it into the loop below would mean a `web_root` that is a lie and
+    // a special case in the middle of a walk that is about directories.
+    if source == Source::Valet {
+        return scan_valet(install, projects);
+    }
+
     let web = install.join(source.web_root());
     if !web.is_dir() {
         return None;
@@ -392,5 +562,129 @@ mod tests {
         assert!(scan_at(Source::Xampp, &dir, None).is_none());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Valet (L) --------------------------------------------------------
+
+    fn valet_root(config: &str, links: &[(&str, &str)]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "stackvo-valet-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("Sites")).unwrap();
+        std::fs::write(dir.join("config.json"), config).unwrap();
+        for (name, target) in links {
+            let target = dir.join(target);
+            std::fs::create_dir_all(&target).unwrap();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&target, dir.join("Sites").join(name)).unwrap();
+        }
+        dir
+    }
+
+    /// The key was `domain` before Valet 3 and is `tld` after. A build that
+    /// guessed would quietly serve `.test` to somebody using `.localhost`.
+    #[test]
+    fn the_suffix_is_read_from_either_spelling_and_the_current_one_wins() {
+        let a = valet_root(r#"{"tld":"localhost"}"#, &[]);
+        assert_eq!(valet_config(&a).1, "localhost");
+
+        let b = valet_root(r#"{"domain":"dev"}"#, &[]);
+        assert_eq!(valet_config(&b).1, "dev");
+
+        // An upgrade leaves the old key behind; the current one must win.
+        let c = valet_root(r#"{"domain":"dev","tld":"test"}"#, &[]);
+        assert_eq!(valet_config(&c).1, "test");
+
+        // No config at all is Valet's own default.
+        let d = valet_root("{}", &[]);
+        assert_eq!(valet_config(&d).1, "test");
+
+        for dir in [a, b, c, d] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn a_leading_dot_in_the_suffix_is_not_repeated_in_the_hostname() {
+        let dir = valet_root(r#"{"tld":".test"}"#, &[("shop", "code/shop")]);
+        let install = scan_valet(&dir, None).unwrap();
+        assert_eq!(install.sites[0].domain.as_deref(), Some("shop.test"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Reading only one of Valet's two ways of knowing about a site would miss
+    /// half of somebody's setup, and which half depends on how they work.
+    #[test]
+    fn both_linked_and_parked_sites_are_found() {
+        let dir = valet_root(r#"{"tld":"test"}"#, &[("linked", "elsewhere/linked")]);
+        let parked = dir.join("parked");
+        std::fs::create_dir_all(parked.join("shop")).unwrap();
+        std::fs::create_dir_all(parked.join("blog")).unwrap();
+        std::fs::write(
+            dir.join("config.json"),
+            format!(r#"{{"tld":"test","paths":["{}"]}}"#, parked.display()),
+        )
+        .unwrap();
+
+        let names: Vec<String> = valet_sites(&dir).into_iter().map(|(n, _)| n).collect();
+        assert!(names.contains(&"linked".to_string()), "{names:?}");
+        assert!(names.contains(&"shop".to_string()), "{names:?}");
+        assert!(names.contains(&"blog".to_string()), "{names:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Valet does the same: an explicit link is the thing somebody typed.
+    #[test]
+    fn a_link_wins_over_a_parked_directory_of_the_same_name() {
+        let dir = valet_root(r#"{"tld":"test"}"#, &[("shop", "linked/shop")]);
+        let parked = dir.join("parked");
+        std::fs::create_dir_all(parked.join("shop")).unwrap();
+        std::fs::write(
+            dir.join("config.json"),
+            format!(r#"{{"tld":"test","paths":["{}"]}}"#, parked.display()),
+        )
+        .unwrap();
+
+        let sites = valet_sites(&dir);
+        let shop: Vec<_> = sites.iter().filter(|(n, _)| n == "shop").collect();
+        assert_eq!(shop.len(), 1, "one row per name");
+        assert!(
+            shop[0].1.to_string_lossy().contains("linked"),
+            "{:?}",
+            shop[0].1
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// No config is "Valet is not installed", and a row for it would read as a
+    /// scan that failed.
+    #[test]
+    fn a_machine_without_valet_yields_no_install_rather_than_an_empty_one() {
+        let dir = std::env::temp_dir().join("stackvo-valet-absent");
+        assert!(scan_valet(&dir, None).is_none());
+    }
+
+    /// Valet knows the hostname exactly, which is more than XAMPP can say.
+    #[test]
+    fn a_valet_site_arrives_with_its_domain_already_known() {
+        let dir = valet_root(r#"{"tld":"test"}"#, &[("shop", "code/shop")]);
+        let install = scan_valet(&dir, None).unwrap();
+        assert_eq!(install.source, Source::Valet);
+        assert_eq!(install.sites.len(), 1);
+        assert_eq!(install.sites[0].domain.as_deref(), Some("shop.test"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// MAMP is XAMPP's shape, and the point of the test is that it went through
+    /// the same path rather than gaining one of its own.
+    #[test]
+    fn mamp_reads_its_htdocs_the_way_xampp_does() {
+        assert_eq!(Source::Mamp.web_root(), "htdocs");
+        assert_eq!(Source::Valet.web_root(), "");
     }
 }
