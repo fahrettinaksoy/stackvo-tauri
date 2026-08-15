@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router';
 import { api } from '@/lib/ipc';
 import PageLayout from '@/components/PageLayout.vue';
 import ErrorAlert from '@/components/ErrorAlert.vue';
+import MailRelayPane from '@/components/MailRelayPane.vue';
 
 /**
  * The inbox as a destination — Herd's Mail page, done here.
@@ -189,6 +190,48 @@ async function clearAll() {
 
 const current = computed(() => messages.value.find((m) => m.id === selected.value) ?? null);
 
+/**
+ * Release one message to a real address (M-2).
+ *
+ * The catcher goes on catching everything; this sends the one that is open. The
+ * opposite shape — pointing the application at a real server — would send the
+ * forty password resets a test suite generates in an hour to whatever addresses
+ * the fixtures happen to contain.
+ *
+ * The recipient is typed rather than taken from the message's own `To`: the
+ * reason to release is usually that somebody else has to look at it, and
+ * re-sending to the fixture address it was addressed to is the one thing that
+ * is never useful.
+ */
+const releaseTo = ref('');
+const releasing = ref(false);
+const released = ref(false);
+
+async function releaseCurrent() {
+  if (!current.value || !releaseTo.value.trim()) return;
+  releasing.value = true;
+  released.value = false;
+  error.value = null;
+  try {
+    await api.mailRelease(
+      current.value.id,
+      releaseTo.value
+        .split(',')
+        .map((a) => a.trim())
+        .filter(Boolean)
+    );
+    released.value = true;
+    releaseTo.value = '';
+  } catch (e) {
+    // Mailpit's own sentence when no relay is configured, carried through
+    // unchanged — a generic "release failed" sends somebody looking at their
+    // SMTP provider for a setting that is missing here.
+    error.value = e;
+  } finally {
+    releasing.value = false;
+  }
+}
+
 /** Delete the open message. No confirm — a catcher is a bin; only the
  *  whole-inbox clear keeps its dialog. */
 async function deleteCurrent() {
@@ -233,6 +276,11 @@ onUnmounted(() => clearInterval(timer));
   >
     <div class="mail-page">
       <ErrorAlert :error="error" type="error" closable class="ma-4 mb-0" @close="error = null" />
+
+      <!-- Where a released message goes (M-2). On this page rather than in
+           settings, because it is configured for a reason that happens here:
+           somebody presses Release and is told no relay is set up. -->
+      <MailRelayPane v-if="status?.enabled && running" class="mx-4 mt-3" />
 
       <!-- First load: nothing is known yet, claim nothing. -->
       <div v-if="!status" class="mail-center">
@@ -395,6 +443,35 @@ onUnmounted(() => clearInterval(timer));
                       t('mail.deleteOne')
                     }}</v-tooltip>
                   </v-btn>
+                </div>
+
+                <!-- M-2. Typed rather than pre-filled with the message's own
+                     recipient: the reason to release is that somebody else has
+                     to see it, and re-sending to the fixture address is the one
+                     thing that is never useful. -->
+                <div class="d-flex align-center ga-2 mb-3" data-test="mail-release">
+                  <v-text-field
+                    v-model="releaseTo"
+                    :label="t('mail.releaseTo')"
+                    :hint="t('mail.releaseHint')"
+                    persistent-hint
+                    density="compact"
+                    variant="outlined"
+                    style="max-width: 360px"
+                  />
+                  <v-btn
+                    size="small"
+                    variant="tonal"
+                    :disabled="!releaseTo.trim()"
+                    :loading="releasing"
+                    prepend-icon="mdi-send-outline"
+                    @click="releaseCurrent"
+                  >
+                    {{ t('mail.release') }}
+                  </v-btn>
+                  <span v-if="released" class="text-caption text-success">
+                    {{ t('mail.released') }}
+                  </span>
                 </div>
 
                 <!-- Every recipient field the catcher reported, labelled and

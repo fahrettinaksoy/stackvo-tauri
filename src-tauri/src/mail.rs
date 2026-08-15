@@ -819,6 +819,61 @@ pub async fn save_attachment(root: &Path, id: &str, part_id: &str, path: &Path) 
 }
 
 /// Empty the inbox.
+/// Send one caught message on to real recipients (M-2).
+///
+/// Mailpit's own release endpoint. The catcher goes on catching everything —
+/// this is the opposite shape from pointing the application at a real server,
+/// which would send the forty password resets a test suite generates in an hour
+/// to whatever addresses the fixtures happen to contain.
+///
+/// MailHog has no equivalent, and that is reported rather than worked around:
+/// releasing by opening our own SMTP connection would make this app a mail
+/// sender, with a TLS stack and a credential in this process, to add a feature
+/// to the catcher somebody has already replaced.
+pub async fn release(root: &Path, id: &str, to: &[String]) -> Result<()> {
+    let (kind, base) = resolve(root)?;
+    if kind != Kind::Mailpit {
+        return Err(Error::new(
+            Code::Unsupported,
+            "MailHog cannot release a message; Mailpit can",
+        ));
+    }
+    if to.is_empty() {
+        return Err(Error::new(Code::InvalidInput, "no recipient was given"));
+    }
+
+    let response = client()
+        .post(format!("{base}/api/v1/message/{id}/release"))
+        .json(&serde_json::json!({ "To": to }))
+        .timeout(std::time::Duration::from_secs(20))
+        .send()
+        .await
+        .map_err(|e| {
+            Error::new(
+                Code::EngineUnreachable,
+                format!("the mail API did not answer: {e}"),
+            )
+        })?;
+
+    if response.status().is_success() {
+        return Ok(());
+    }
+
+    // Mailpit answers 400 with its own sentence when no relay is configured,
+    // and that sentence is the whole diagnosis — a generic "release failed"
+    // would send somebody looking at their SMTP provider for a setting that is
+    // missing here.
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    Err(Error::new(
+        Code::InvalidInput,
+        format!(
+            "the catcher refused to release it ({status}): {}",
+            body.trim()
+        ),
+    ))
+}
+
 pub async fn clear(root: &Path) -> Result<()> {
     let (kind, base) = resolve(root)?;
 

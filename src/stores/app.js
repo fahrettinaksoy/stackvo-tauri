@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { api, StackvoError } from '@/lib/ipc';
-import { syncLocale } from '@/i18n';
+import { loadLocalePacks, syncLocale } from '@/i18n';
 
 /**
  * Workspace + engine state — the two things every other view depends on.
@@ -163,6 +163,11 @@ export const useAppStore = defineStore('app', () => {
     // screen the boot can land on — the requirements gate, the first-run setup
     // — is one somebody reads, and reading it in the wrong language is worst on
     // exactly the launch where nothing has been chosen yet.
+    // Packs before the language is settled (M-7): `syncLocale` checks the
+    // resolved tag against the registered locales, and a pack that has not
+    // been loaded yet is a language the app would decline to open in — one
+    // frame of the user's choice, then English.
+    await loadLocalePacks().catch(() => []);
     await Promise.all([
       syncLocale().catch(() => {}),
       refreshWorkspace(),

@@ -1,6 +1,6 @@
 //! Does the responder answer a *real* resolver, not just its own encoder?
 //!
-//! E-1. `dns.rs` has eighteen unit tests and every one of them builds the query
+//! E-1. `dns.rs` has its own unit tests and every one of them builds the query
 //! with the same code that reads it back. That proves the module is
 //! self-consistent and proves nothing about whether `dig`, `getaddrinfo` or a
 //! browser would accept a word of it — which is the only question that matters,
@@ -13,14 +13,40 @@
 //! ```sh
 //! cargo run --example dns_probe
 //! ```
+//!
+//! ## What the first version of this file missed
+//!
+//! It looked for a `status:` line and called anything that had one a pass, and
+//! every case passed. Above the status line `dig` was also printing
+//!
+//! ```text
+//! ;; Warning: Message parser reports malformed message packet.
+//! ```
+//!
+//! for every REFUSED and every NODATA — the header said "one question" over a
+//! body that carried none. A lenient tool read it anyway; a stub resolver drops
+//! what it cannot match against the query it sent, and a dropped reply is not a
+//! fast failure, it is a five-second timeout. So the warning is now a failure
+//! here, `+tcp` is measured because a resolver picks its own transport, and
+//! `+edns` is measured because that is what a modern one actually sends.
 
 use stackvo_desktop_lib::dns;
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+/// One `dig` invocation and what it has to say.
+struct Case {
+    name: &'static str,
+    kind: &'static str,
+    /// Extra `dig` flags — the transport and EDNS cases.
+    flags: &'static [&'static str],
+    expect_status: &'static str,
+    expect_answer: &'static str,
+}
+
 fn main() {
-    let socket = match dns::bind() {
+    let udp = match dns::bind() {
         Ok(socket) => socket,
         Err(e) => {
             println!("could not bind: {}", e.message);
@@ -28,48 +54,127 @@ fn main() {
             return;
         }
     };
+    let tcp = dns::bind_tcp().ok();
+    if tcp.is_none() {
+        println!("warning: tcp/{} could not be bound", dns::PORT);
+    }
 
     let stop = Arc::new(AtomicBool::new(false));
-    let worker = {
+    let mut workers = vec![{
         let stop = Arc::clone(&stop);
-        std::thread::spawn(move || dns::serve(socket, "stackvo.loc".to_string(), stop))
-    };
+        std::thread::spawn(move || dns::serve(udp, "stackvo.loc".to_string(), stop))
+    }];
+    if let Some(listener) = tcp {
+        let stop = Arc::clone(&stop);
+        workers.push(std::thread::spawn(move || {
+            dns::serve_tcp(listener, "stackvo.loc".to_string(), stop)
+        }));
+    }
 
     println!("responder on 127.0.0.1:{}, serving .loc\n", dns::PORT);
 
-    // Names chosen to cover the three answers the responder has: a plain name,
-    // a name several labels deep (the wildcard E-2 wanted), and a name outside
-    // the suffix, which must be refused rather than answered with anything.
-    let cases: [(&str, &str, &str); 5] = [
-        ("shop.loc", "A", "127.0.0.1"),
-        ("a.b.deep.loc", "A", "127.0.0.1 (wildcard)"),
-        ("shop.loc", "AAAA", "::1"),
-        ("shop.loc", "MX", "no answer, NOERROR"),
-        ("google.com", "A", "REFUSED"),
+    // The three answers the responder has — an address, no data, a refusal —
+    // each asked the three ways something might ask: plain UDP, EDNS (what a
+    // modern stub sends), and TCP (what a retry arrives on).
+    let cases = [
+        Case {
+            name: "shop.loc",
+            kind: "A",
+            flags: &["+noedns"],
+            expect_status: "NOERROR",
+            expect_answer: "127.0.0.1",
+        },
+        Case {
+            name: "a.b.deep.loc",
+            kind: "A",
+            flags: &["+noedns"],
+            expect_status: "NOERROR",
+            expect_answer: "127.0.0.1",
+        },
+        Case {
+            name: "shop.loc",
+            kind: "AAAA",
+            flags: &["+noedns"],
+            expect_status: "NOERROR",
+            expect_answer: "::1",
+        },
+        // Type 65. Every Chrome and Safari page load asks this before it asks
+        // for an address, so this NODATA is on the hot path, not an oddity.
+        Case {
+            name: "shop.loc",
+            kind: "TYPE65",
+            flags: &["+noedns"],
+            expect_status: "NOERROR",
+            expect_answer: "—",
+        },
+        Case {
+            name: "shop.loc",
+            kind: "MX",
+            flags: &["+noedns"],
+            expect_status: "NOERROR",
+            expect_answer: "—",
+        },
+        Case {
+            name: "google.com",
+            kind: "A",
+            flags: &["+noedns"],
+            expect_status: "REFUSED",
+            expect_answer: "—",
+        },
+        Case {
+            name: "shop.loc",
+            kind: "A",
+            flags: &["+edns=0"],
+            expect_status: "NOERROR",
+            expect_answer: "127.0.0.1",
+        },
+        Case {
+            name: "google.com",
+            kind: "A",
+            flags: &["+edns=0"],
+            expect_status: "REFUSED",
+            expect_answer: "—",
+        },
+        Case {
+            name: "shop.loc",
+            kind: "A",
+            flags: &["+tcp", "+noedns"],
+            expect_status: "NOERROR",
+            expect_answer: "127.0.0.1",
+        },
+        Case {
+            name: "deep.nested.shop.loc",
+            kind: "A",
+            flags: &["+tcp", "+edns=0"],
+            expect_status: "NOERROR",
+            expect_answer: "127.0.0.1",
+        },
     ];
 
     let mut failures = 0;
-    for (name, kind, expected) in cases {
-        let output = Command::new("dig")
-            .args([
-                "+time=2",
-                "+tries=1",
-                "@127.0.0.1",
-                "-p",
-                &dns::PORT.to_string(),
-                name,
-                kind,
-            ])
-            .output();
+    for case in &cases {
+        let mut args = vec![
+            "+time=2".to_string(),
+            "+tries=1".to_string(),
+            "@127.0.0.1".to_string(),
+            "-p".to_string(),
+            dns::PORT.to_string(),
+        ];
+        args.extend(case.flags.iter().map(|f| f.to_string()));
+        args.push(case.name.to_string());
+        args.push(case.kind.to_string());
 
-        let Ok(output) = output else {
+        let Ok(output) = Command::new("dig").args(&args).output() else {
             println!("dig is not on this machine — nothing was measured");
             stop.store(true, std::sync::atomic::Ordering::Relaxed);
-            let _ = worker.join();
+            for worker in workers {
+                let _ = worker.join();
+            }
             return;
         };
 
         let text = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
         let status = text
             .lines()
             .find(|line| line.contains("status:"))
@@ -88,29 +193,83 @@ fn main() {
             .map(|line| line.split_whitespace().last().unwrap_or("").to_string())
             .unwrap_or_default();
 
-        // `dig` printing a status at all is the whole point: it means the bytes
-        // parsed as a DNS message by something this code did not write.
-        let ok = status != "?";
+        // The line that used to be printed and ignored. A malformed reply is a
+        // reply a stub resolver drops, which reads to a user as a name that
+        // takes five seconds to fail.
+        let malformed = text.contains("malformed") || stderr.contains("malformed");
+
+        let answer = if answer.is_empty() {
+            "—".to_string()
+        } else {
+            answer
+        };
+        let ok = status == case.expect_status && answer == case.expect_answer && !malformed;
         if !ok {
             failures += 1;
         }
+
         println!(
-            "  {:<14} {:<5} status={:<9} answer={:<10} expected {}",
-            name,
-            kind,
+            "  {} {:<20} {:<5} {:<12} status={:<9} answer={:<10} expected {} / {}",
+            if ok { "ok  " } else { "FAIL" },
+            case.name,
+            case.kind,
+            case.flags.join(" "),
             status,
-            if answer.is_empty() { "—" } else { &answer },
-            expected
+            answer,
+            case.expect_status,
+            case.expect_answer,
         );
+        if malformed {
+            println!("       dig calls this reply malformed");
+        }
     }
 
+    // The app's own self-test, run against the same live responder. This is
+    // what the DNS pane's "Test it" button shows, and the interesting line is
+    // the third: the first two ask a socket this process owns, and the third
+    // asks the machine. They disagree on any machine where the resolver file
+    // has not been written — which is most of them, and is exactly the
+    // distinction a status built out of "the file exists" cannot draw.
+    println!("\nthe self-test, as the pane runs it:");
+    let check = dns::check("stackvo.loc");
+    println!("  name    {}", check.name);
+    for (label, probe) in [
+        ("udp   ", &check.udp),
+        ("tcp   ", &check.tcp),
+        ("system", &check.system),
+        ("public", &check.public),
+    ] {
+        println!(
+            "  {label}  {}  {}",
+            if probe.ok { "ok  " } else { "no  " },
+            probe.detail
+        );
+    }
+    println!(
+        "  verdict {}",
+        if check.ok {
+            "this machine resolves the suffix"
+        } else {
+            "the responder and the machine do not agree yet"
+        }
+    );
+
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
-    let _ = worker.join();
+    for worker in workers {
+        let _ = worker.join();
+    }
 
     println!();
     if failures == 0 {
-        println!("every reply parsed as DNS by dig.");
+        println!(
+            "{} of {} replies are what dig expected.",
+            cases.len(),
+            cases.len()
+        );
     } else {
-        println!("{failures} of 5 replies were not readable as DNS — the table above is the evidence, not the summary.");
+        println!(
+            "{failures} of {} replies were wrong — the table above is the evidence, not the summary.",
+            cases.len()
+        );
     }
 }

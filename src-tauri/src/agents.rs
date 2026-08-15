@@ -30,18 +30,36 @@
 //! belongs to the user's editor, and a feature that litters it is a feature
 //! they turn off.
 //!
-//! ## What is deliberately not here
+//! ## The two that used to be missing (K-1)
 //!
-//! **Codex.** Its configuration is TOML (`~/.codex/config.toml`), and editing
-//! TOML while preserving comments and key order needs `toml_edit` — a
-//! dependency, which in this repository is a measured decision rather than an
-//! afterthought (ADR 0010's cost section is the precedent). Writing it with a
-//! plain serialiser would reformat a file we do not own, which is exactly the
-//! rule above.
+//! **Codex** was absent because its configuration is TOML and editing TOML
+//! while preserving comments and key order needs `toml_edit` — a dependency,
+//! which in this repository is a measured decision rather than an afterthought.
+//! It was measured: toml_edit and toml_writer are **already in `Cargo.lock`**
+//! through Tauri's own graph, so taking them directly adds two dependency edges
+//! and zero packages. `Cargo.toml` carries the numbers.
 //!
-//! **Zed.** Its `context_servers` shape changed across releases and could not
-//! be verified against a running copy on the machine this was written on. A
-//! shape written from memory is a config that silently does nothing.
+//! The shape was not written from memory either. A real `~/.codex/config.toml`
+//! on the machine this was built on holds `[mcp_servers.node_repl]` with
+//! `command`, `args`, `startup_timeout_sec` and a nested `[mcp_servers.<name>.env]`
+//! table, and OpenAI's own diagnostics reference documents the same
+//! `[mcp_servers.<name>]` block. That file — comments, quoted keys like
+//! `[plugins."browser@openai-bundled"]`, and all — is what
+//! `examples/agent_config_probe.rs` runs this module against.
+//!
+//! **Zed** was absent because its `context_servers` shape changed across
+//! releases and could not be verified against a running copy. It still cannot —
+//! Zed is not installed here — so the shape comes from Zed's current published
+//! documentation rather than from memory, and it is the flat one:
+//! `"context_servers": { "<name>": { "command": "…", "args": [], "env": {} } }`,
+//! with no `source` key. The older nested `command: { path, args, env }` form
+//! and the `"source": "custom"` key are both gone from that page.
+//!
+//! Zed's path is the other half of the same problem: its documentation does not
+//! state one, and Zed keeps some things under `~/.config/zed` and others under
+//! `~/Library/Application Support/Zed`. So this **looks in both** and writes
+//! whichever exists, rather than picking one and being wrong on half the
+//! machines — see [`config_candidates`].
 //!
 //! ## The binary
 //!
@@ -77,15 +95,34 @@ pub enum Shape {
     /// VS Code's own format, which names the map differently and requires the
     /// transport to be stated.
     VsCode,
+    /// `{ "context_servers": { "<name>": { "command": …, "args": [], "env": {} } } }`
+    /// — Zed. The entry is the same object every other JSON client uses; only
+    /// the map's name differs.
+    Zed,
+    /// `[mcp_servers.<name>]` with `command`, `args` and an `env` sub-table —
+    /// Codex, and the only one of these that is not JSON.
+    CodexToml,
 }
 
 impl Shape {
     /// The top-level key the map of servers lives under.
-    fn key(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Shape::McpServers => "mcpServers",
             Shape::VsCode => "servers",
+            Shape::Zed => "context_servers",
+            Shape::CodexToml => "mcp_servers",
         }
+    }
+
+    /// Is this file TOML rather than JSON?
+    ///
+    /// One question asked in four places rather than a `match` in each: the
+    /// difference runs through parsing, editing, reading back and the check
+    /// that decides whether a button is offered, and a branch missed in any one
+    /// of them is a file edited with the wrong parser.
+    pub fn is_toml(self) -> bool {
+        self == Shape::CodexToml
     }
 }
 
@@ -129,6 +166,16 @@ pub const CLIENTS: &[Client] = &[
         label: "Gemini CLI",
         shape: Shape::McpServers,
     },
+    Client {
+        id: "codex",
+        label: "Codex",
+        shape: Shape::CodexToml,
+    },
+    Client {
+        id: "zed",
+        label: "Zed",
+        shape: Shape::Zed,
+    },
 ];
 
 pub fn client(id: &str) -> Option<&'static Client> {
@@ -137,10 +184,62 @@ pub fn client(id: &str) -> Option<&'static Client> {
 
 /// Where a client's configuration file is on this platform.
 ///
+/// The first candidate that exists, or the first candidate when none does —
+/// see [`config_candidates`] for why some clients have more than one.
+///
 /// `None` when the home directory cannot be found, which is the one case where
 /// there is no answer rather than a wrong one.
 pub fn config_path(id: &str) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
+    let candidates = config_candidates(id);
+    candidates
+        .iter()
+        .find(|path| path.is_file())
+        .or_else(|| candidates.first())
+        .cloned()
+}
+
+/// Every place a client might keep its configuration, best first.
+///
+/// One entry for all but two of them, and the two are not an inconsistency:
+///
+/// * **Zed** does not document a path, and keeps some things under
+///   `~/.config/zed` and others under `~/Library/Application Support/Zed`.
+///   Picking one would be right on some machines and silently wrong on the
+///   rest — writing a file Zed never reads is the exact failure this module
+///   exists to avoid.
+/// * **Codex** honours `CODEX_HOME`, and the machine this was written on sets
+///   it. A hard-coded `~/.codex` would edit a file that installation does not
+///   read.
+pub fn config_candidates(id: &str) -> Vec<PathBuf> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+
+    if id == "codex" {
+        let base = std::env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| home.join(".codex"));
+        return vec![base.join("config.toml")];
+    }
+
+    if id == "zed" {
+        let mut out = vec![home.join(".config/zed/settings.json")];
+        #[cfg(target_os = "macos")]
+        out.push(home.join("Library/Application Support/Zed/settings.json"));
+        #[cfg(target_os = "windows")]
+        if let Some(dir) = dirs::config_dir() {
+            out.push(dir.join("Zed/settings.json"));
+        }
+        return out;
+    }
+
+    single_config_path(id, &home).into_iter().collect()
+}
+
+fn single_config_path(id: &str, home: &Path) -> Option<PathBuf> {
+    #[allow(unused_variables)]
+    let home = home.to_path_buf();
 
     Some(match id {
         // Claude Code keeps one file at the root of the home directory, and it
@@ -289,6 +388,114 @@ pub fn entry(
     serde_json::Value::Object(object)
 }
 
+// ------------------------------------------------------------- TOML editing
+
+/// Parse Codex's file, or say why it cannot be edited.
+///
+/// The same contract as [`document`] and for the same reasons: an empty file is
+/// an empty document rather than an error, and anything that does not parse is
+/// **reported** rather than rewritten. A TOML file that fails to parse is
+/// usually one somebody is halfway through editing, and replacing it with a
+/// clean render is how a tool eats an afternoon of somebody's configuration.
+fn toml_document(text: &str) -> Result<toml_edit::DocumentMut> {
+    text.parse::<toml_edit::DocumentMut>().map_err(|e| {
+        Error::new(
+            Code::InvalidInput,
+            format!("the configuration file is not valid TOML: {e}"),
+        )
+        .with_hint(crate::hints::AGENT_CONFIG_UNPARSEABLE)
+    })
+}
+
+/// `text` with our `[mcp_servers.stackvo]` block inserted or replaced.
+///
+/// `toml_edit` is what makes this safe: it keeps the document as it was written
+/// — comments, blank lines, key order, `'single'` versus `"double"` quoting —
+/// and edits the one table named here. Everything this file already held comes
+/// back out unchanged, which is the same promise the JSON path makes through
+/// `serde_json::Value`.
+///
+/// The table is created **implicit**, so a file with no `mcp_servers` at all
+/// gains `[mcp_servers.stackvo]` and not an empty `[mcp_servers]` header above
+/// it — the shape Codex itself writes.
+pub fn toml_insert(
+    text: &str,
+    command: &str,
+    allow_writes: bool,
+    root: Option<&str>,
+) -> Result<String> {
+    use toml_edit::{value, Array, Item, Table};
+
+    let mut document = toml_document(text)?;
+    let table = document.as_table_mut();
+
+    if !table.contains_key(Shape::CodexToml.key()) {
+        let mut servers = Table::new();
+        servers.set_implicit(true);
+        table.insert(Shape::CodexToml.key(), Item::Table(servers));
+    }
+
+    // A `mcp_servers` that is a value rather than a table — someone's typo, or
+    // an inline table — is refused rather than replaced, exactly as the JSON
+    // path refuses a populated non-object.
+    let Some(servers) = table
+        .get_mut(Shape::CodexToml.key())
+        .and_then(Item::as_table_mut)
+    else {
+        return Err(Error::new(
+            Code::Conflict,
+            format!(
+                "`{}` in the configuration file is not a table",
+                Shape::CodexToml.key()
+            ),
+        )
+        .with_hint(crate::hints::AGENT_CONFIG_UNPARSEABLE));
+    };
+
+    let mut entry = Table::new();
+    entry.insert("command", value(command));
+
+    let mut args = Array::new();
+    if allow_writes {
+        args.push("--allow-writes");
+    }
+    entry.insert("args", value(args));
+
+    if let Some(root) = root {
+        let mut env = Table::new();
+        env.insert("STACKVO_ROOT", value(root));
+        entry.insert("env", Item::Table(env));
+    }
+
+    servers.insert(ENTRY, Item::Table(entry));
+    Ok(document.to_string())
+}
+
+/// `text` without our block. An empty `mcp_servers` left behind is left behind,
+/// for the reason [`remove`] gives about the JSON one.
+pub fn toml_remove(text: &str) -> Result<String> {
+    let mut document = toml_document(text)?;
+    if let Some(servers) = document
+        .as_table_mut()
+        .get_mut(Shape::CodexToml.key())
+        .and_then(toml_edit::Item::as_table_mut)
+    {
+        servers.remove(ENTRY);
+    }
+    Ok(document.to_string())
+}
+
+/// The command Codex's file already holds for us, if any.
+pub fn toml_installed_command(text: &str) -> Option<String> {
+    let document = text.parse::<toml_edit::DocumentMut>().ok()?;
+    document
+        .get(Shape::CodexToml.key())?
+        .get(ENTRY)?
+        .get("command")?
+        .as_str()
+        .map(str::to_string)
+}
+
 /// Parse a client's configuration file, or say why it cannot be edited.
 ///
 /// An empty or whitespace-only file is an empty object, not an error: that is
@@ -353,7 +560,7 @@ pub fn insert(text: &str, shape: Shape, entry: serde_json::Value) -> Result<Stri
     };
 
     map.insert(ENTRY.to_string(), entry);
-    render(&document)
+    render(&document, text)
 }
 
 /// `text` without our entry. Anything else in the file is untouched, including
@@ -367,20 +574,64 @@ pub fn remove(text: &str, shape: Shape) -> Result<String> {
         map.remove(ENTRY);
     }
 
-    render(&document)
+    render(&document, text)
 }
 
-/// Two-space JSON with a trailing newline — what every one of these files is
-/// already formatted as, and what an editor writing it back will produce.
-fn render(document: &serde_json::Value) -> Result<String> {
-    let mut text = serde_json::to_string_pretty(document).map_err(|e| {
+/// JSON in **the file's own indentation**, with a trailing newline.
+///
+/// This said "two-space, what every one of these files is already formatted as"
+/// and that was a guess. `examples/agent_config_probe.rs`, run against the real
+/// files on a developer's machine, found a four-space `~/.gemini/settings.json`
+/// coming back two-space: 1,065 bytes in, 867 out, for an edit that added one
+/// entry. Nothing was lost and the whole file still moved, which is the thing
+/// this module refuses to do to a file it does not own.
+///
+/// Read from the first indented line rather than counted across the document: a
+/// file mixes indentation only when somebody is already unhappy with it, and
+/// the first line that is indented at all is the one an editor would have used
+/// to guess the same thing.
+fn render(document: &serde_json::Value, original: &str) -> Result<String> {
+    let indent = detect_indent(original);
+    let mut out = Vec::new();
+    let formatter = serde_json::ser::PrettyFormatter::with_indent(indent.as_bytes());
+    let mut serialiser = serde_json::Serializer::with_formatter(&mut out, formatter);
+
+    serde::Serialize::serialize(document, &mut serialiser).map_err(|e| {
         Error::new(
             Code::IoError,
             format!("serialising the configuration file: {e}"),
         )
     })?;
-    text.push('\n');
+
+    let mut text = String::from_utf8(out).map_err(|e| {
+        Error::new(
+            Code::IoError,
+            format!("the configuration file did not come back as text: {e}"),
+        )
+    })?;
+    // Only where the file had one. A file that ended without a newline is a
+    // file somebody's tooling wrote that way.
+    if original.is_empty() || original.ends_with('\n') {
+        text.push('\n');
+    }
     Ok(text)
+}
+
+/// The indentation the file already uses: a tab, or however many spaces.
+///
+/// Two spaces when there is nothing to read it from, which is what every one of
+/// these clients writes when it creates the file itself.
+fn detect_indent(text: &str) -> String {
+    for line in text.lines() {
+        if line.starts_with('\t') {
+            return "\t".to_string();
+        }
+        let spaces = line.len() - line.trim_start_matches(' ').len();
+        if spaces > 0 && line.trim_start().starts_with('"') {
+            return " ".repeat(spaces);
+        }
+    }
+    "  ".to_string()
 }
 
 /// The entry a file already holds for us, if any.
@@ -452,14 +703,24 @@ pub fn status(root: Option<&str>) -> Status {
                     .and_then(|p| p.parent().map(Path::is_dir))
                     .unwrap_or(false);
 
+            // Asked of the parser that owns the format. A TOML file put
+            // through `serde_json` is unparseable every time, which would show
+            // Codex as broken on a machine where nothing is wrong.
             let parseable = match &text {
+                Some(text) if client.shape.is_toml() => {
+                    text.trim().is_empty() || toml_document(text).is_ok()
+                }
                 Some(text) => document(text).is_ok(),
                 None => true,
             };
 
-            let registered = text
-                .as_deref()
-                .and_then(|text| installed_command(text, client.shape));
+            let registered = text.as_deref().and_then(|text| {
+                if client.shape.is_toml() {
+                    toml_installed_command(text)
+                } else {
+                    installed_command(text, client.shape)
+                }
+            });
 
             ClientStatus {
                 id: client.id.to_string(),
@@ -547,12 +808,12 @@ pub fn install(id: &str, allow_writes: bool, root: Option<&str>) -> Result<Strin
         .with_hint(crate::hints::BUILD_THE_MCP_SERVER));
     };
 
-    let entry = entry(
-        client.shape,
-        &binary.display().to_string(),
-        allow_writes,
-        root,
-    );
+    let command = binary.display().to_string();
+    if client.shape.is_toml() {
+        return rewrite(id, |text| toml_insert(text, &command, allow_writes, root));
+    }
+
+    let entry = entry(client.shape, &command, allow_writes, root);
     rewrite(id, |text| insert(text, client.shape, entry))
 }
 
@@ -564,12 +825,320 @@ pub fn uninstall(id: &str) -> Result<String> {
             format!("unknown client {id}"),
         ));
     };
+    if client.shape.is_toml() {
+        return rewrite(id, toml_remove);
+    }
     rewrite(id, |text| remove(text, client.shape))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file's own indentation is what it gets back.
+    ///
+    /// This module said "two-space, what every one of these files is already
+    /// formatted as" and a real `~/.gemini/settings.json` was four-space: the
+    /// round trip moved 1,065 bytes to 867 for an edit that added one entry.
+    #[test]
+    fn a_files_own_shape_survives_the_edit() {
+        let four = "{\n    \"a\": {\n        \"b\": 1\n    }\n}\n";
+        let out = insert(
+            four,
+            Shape::McpServers,
+            entry(Shape::McpServers, "/bin/x", false, None),
+        )
+        .unwrap();
+        assert!(
+            out.contains("\n    \"a\""),
+            "four spaces became something else: {out}"
+        );
+        assert_eq!(
+            remove(&out, Shape::McpServers).unwrap(),
+            format!("{{\n    \"a\": {{\n        \"b\": 1\n    }},\n    \"mcpServers\": {{}}\n}}\n"),
+            "everything but the map we created has to come back"
+        );
+
+        let tabbed = "{\n\t\"a\": 1\n}\n";
+        let out = insert(
+            tabbed,
+            Shape::McpServers,
+            entry(Shape::McpServers, "/bin/x", false, None),
+        )
+        .unwrap();
+        assert!(out.contains("\n\t\"a\""), "a tab-indented file: {out}");
+
+        // A file that ended without a newline is one somebody's tooling wrote
+        // that way, and adding one is still a change to a file we do not own.
+        let no_newline = "{\"a\": 1}";
+        let out = insert(
+            no_newline,
+            Shape::McpServers,
+            entry(Shape::McpServers, "/bin/x", false, None),
+        )
+        .unwrap();
+        assert!(!out.ends_with("\n\n"), "{out:?}");
+    }
+
+    /// Key order is the file's, not the alphabet's.
+    ///
+    /// `serde_json::Map` is a BTreeMap unless `preserve_order` is on, so every
+    /// object this app rewrote came back sorted. On a 58 KB `~/.claude.json`
+    /// that is a whole-file diff produced by adding one entry — measured, not
+    /// imagined, by `examples/agent_config_probe.rs`.
+    #[test]
+    fn the_order_a_file_had_is_the_order_it_keeps() {
+        let source = r#"{
+  "zeta": 1,
+  "alpha": 2,
+  "middle": { "z": 1, "a": 2 }
+}"#;
+        let out = insert(
+            source,
+            Shape::McpServers,
+            entry(Shape::McpServers, "/bin/x", false, None),
+        )
+        .unwrap();
+
+        assert!(
+            out.find("\"zeta\"").unwrap() < out.find("\"alpha\"").unwrap(),
+            "the top level was sorted: {out}"
+        );
+        assert!(
+            out.find("\"z\"").unwrap() < out.find("\"a\"").unwrap(),
+            "a nested object was sorted: {out}"
+        );
+        // And ours goes at the end, where a new key belongs.
+        assert!(out.find("mcpServers").unwrap() > out.find("middle").unwrap());
+    }
+
+    /// Codex's file, in the shape a real one has.
+    ///
+    /// Copied from the structure of `~/.codex/config.toml` on the machine this
+    /// was written on: a bare key above every table, a quoted table name with
+    /// an `@` in it, an existing MCP server with a nested `env` table, a
+    /// single-quoted value, and comments that mark somebody else's managed
+    /// block. Every one of those is a thing a plain serialiser would move,
+    /// requote or delete.
+    const CODEX: &str = r#"
+notify = ["/Applications/Codex.app/Contents/MacOS/Client", "turn-ended"]
+
+[marketplaces.openai-bundled]
+last_updated = "2026-06-27T13:25:50Z"
+source_type = "local"
+
+[plugins."browser@openai-bundled"]
+enabled = true
+
+[mcp_servers.node_repl]
+args = []
+command = "/Applications/Codex.app/Contents/Resources/node_repl"
+startup_timeout_sec = 120
+
+[mcp_servers.node_repl.env]
+NODE_REPL_TRUSTED_CODE_PATHS = "/Users/me/.codex"
+
+# >>> somebody-else SessionStart >>>
+[[hooks.session_start]]
+command = 'echo "prefer the graph"'
+# <<< somebody-else SessionStart <<<
+"#;
+
+    /// The promise of the whole module, on the format that could not keep it
+    /// until now: everything already in the file comes back out unchanged.
+    #[test]
+    fn a_codex_file_survives_being_written_to() {
+        let out = toml_insert(CODEX, "/usr/local/bin/stackvo-mcp", false, None).unwrap();
+
+        // Somebody else's server, with its nested table and its extra key.
+        assert!(out.contains("[mcp_servers.node_repl]"), "{out}");
+        assert!(out.contains("startup_timeout_sec = 120"));
+        assert!(out.contains("[mcp_servers.node_repl.env]"));
+        // A quoted table name, a bare key above the tables, a single-quoted
+        // value and the comments around it.
+        assert!(out.contains(r#"[plugins."browser@openai-bundled"]"#));
+        assert!(out.contains(
+            r#"notify = ["/Applications/Codex.app/Contents/MacOS/Client", "turn-ended"]"#
+        ));
+        assert!(
+            out.contains("command = 'echo \"prefer the graph\"'"),
+            "{out}"
+        );
+        assert!(out.contains("# >>> somebody-else SessionStart >>>"));
+        assert!(out.contains("# <<< somebody-else SessionStart <<<"));
+
+        // And ours is in it.
+        assert!(out.contains("[mcp_servers.stackvo]"), "{out}");
+        assert!(out.contains(r#"command = "/usr/local/bin/stackvo-mcp""#));
+        assert_eq!(
+            toml_installed_command(&out).as_deref(),
+            Some("/usr/local/bin/stackvo-mcp")
+        );
+    }
+
+    /// A file with no `mcp_servers` at all gains the block Codex writes, and
+    /// not an empty parent header above it.
+    #[test]
+    fn a_file_without_the_table_gains_the_shape_codex_writes() {
+        let out = toml_insert("model = \"gpt-5\"\n", "/bin/mcp", true, Some("/w")).unwrap();
+
+        assert!(
+            out.contains("model = \"gpt-5\""),
+            "the file's own key: {out}"
+        );
+        assert!(out.contains("[mcp_servers.stackvo]"), "{out}");
+        assert!(
+            !out.contains("[mcp_servers]\n"),
+            "an empty parent header is not what Codex writes: {out}"
+        );
+        assert!(out.contains(r#"args = ["--allow-writes"]"#), "{out}");
+        assert!(out.contains("[mcp_servers.stackvo.env]"), "{out}");
+        assert!(out.contains(r#"STACKVO_ROOT = "/w""#), "{out}");
+
+        // It has to parse as what it claims to be.
+        let parsed: toml_edit::DocumentMut = out.parse().expect("valid TOML");
+        assert_eq!(
+            parsed["mcp_servers"]["stackvo"]["command"].as_str(),
+            Some("/bin/mcp")
+        );
+    }
+
+    /// Registering twice is one entry, not two, and the second registration
+    /// wins — the same rule the JSON path follows.
+    #[test]
+    fn registering_codex_twice_replaces_rather_than_appends() {
+        let once = toml_insert(CODEX, "/old/stackvo-mcp", false, None).unwrap();
+        let twice = toml_insert(&once, "/new/stackvo-mcp", true, None).unwrap();
+
+        assert_eq!(twice.matches("[mcp_servers.stackvo]").count(), 1, "{twice}");
+        assert_eq!(
+            toml_installed_command(&twice).as_deref(),
+            Some("/new/stackvo-mcp")
+        );
+        assert!(twice.contains(r#"args = ["--allow-writes"]"#));
+        assert!(twice.contains("[mcp_servers.node_repl]"), "still theirs");
+    }
+
+    /// Taking it out leaves everything else, including the empty parent — this
+    /// module does not decide things about a file it does not own.
+    #[test]
+    fn removing_from_codex_leaves_the_rest_alone() {
+        let with = toml_insert(CODEX, "/bin/mcp", false, Some("/w")).unwrap();
+        let without = toml_remove(&with).unwrap();
+
+        assert!(!without.contains("[mcp_servers.stackvo]"), "{without}");
+        assert!(!without.contains("STACKVO_ROOT"));
+        assert!(without.contains("[mcp_servers.node_repl]"));
+        assert!(without.contains(r#"[plugins."browser@openai-bundled"]"#));
+        assert_eq!(toml_installed_command(&without), None);
+        // Removing what is not there is not an error.
+        assert!(toml_remove(&without).is_ok());
+    }
+
+    /// A file halfway through being edited is reported, never rewritten.
+    #[test]
+    fn a_broken_codex_file_is_refused_rather_than_replaced() {
+        let broken = "[mcp_servers.node_repl\ncommand = \"x\"\n";
+        let error = toml_insert(broken, "/bin/mcp", false, None).unwrap_err();
+        assert_eq!(error.code, Code::InvalidInput);
+        assert!(
+            error.message.contains("not valid TOML"),
+            "{}",
+            error.message
+        );
+
+        // And a key that is not a table is refused rather than overwritten.
+        let wrong = "mcp_servers = 3\n";
+        assert_eq!(
+            toml_insert(wrong, "/bin/mcp", false, None)
+                .unwrap_err()
+                .code,
+            Code::Conflict
+        );
+    }
+
+    /// Zed's map has its own name and the same entry every other JSON client
+    /// uses. Verified against Zed's current published documentation — the older
+    /// nested `command: { path, args }` form and the `source` key are gone.
+    #[test]
+    fn zed_is_written_under_its_own_key_with_a_flat_command() {
+        let out = insert(
+            "{}",
+            Shape::Zed,
+            entry(Shape::Zed, "/bin/stackvo-mcp", false, Some("/w")),
+        )
+        .unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let server = &parsed["context_servers"]["stackvo"];
+        assert_eq!(server["command"], "/bin/stackvo-mcp");
+        assert!(server["args"].is_array());
+        assert_eq!(server["env"]["STACKVO_ROOT"], "/w");
+        assert!(
+            server.get("source").is_none(),
+            "the docs have no source key"
+        );
+        assert!(server.get("type").is_none(), "that one is VS Code's");
+        assert!(parsed.get("mcpServers").is_none(), "wrong map: {out}");
+    }
+
+    /// The two new clients have to be reachable the way every other one is —
+    /// this is what a registration button is wired to.
+    #[test]
+    fn both_new_clients_are_known_and_have_a_path() {
+        for id in ["codex", "zed"] {
+            let client = client(id).unwrap_or_else(|| panic!("{id} is not in CLIENTS"));
+            assert!(!client.label.is_empty());
+            let candidates = config_candidates(id);
+            assert!(!candidates.is_empty(), "{id} has nowhere to write");
+            assert!(config_path(id).is_some(), "{id} resolved to no path");
+        }
+
+        // Codex's file is TOML and Zed's is not; everything downstream branches
+        // on this and a wrong answer picks the wrong parser.
+        assert!(client("codex").unwrap().shape.is_toml());
+        assert!(!client("zed").unwrap().shape.is_toml());
+    }
+
+    /// Zed does not document a path and keeps things in two places, so both are
+    /// looked for. A machine with neither still gets an answer to show.
+    #[test]
+    fn zed_is_looked_for_in_both_of_its_homes() {
+        let candidates = config_candidates("zed");
+        assert!(candidates
+            .iter()
+            .any(|p| p.ends_with(".config/zed/settings.json")));
+        #[cfg(target_os = "macos")]
+        assert!(
+            candidates.len() > 1,
+            "macOS keeps some of Zed's files under Application Support"
+        );
+    }
+
+    /// `CODEX_HOME` moves the whole directory, and the machine this was written
+    /// on sets it. A hard-coded `~/.codex` would edit a file that installation
+    /// does not read.
+    #[test]
+    fn codex_follows_its_own_home_variable() {
+        // Serialised against the other environment-reading tests by being the
+        // only one that touches this variable.
+        let previous = std::env::var_os("CODEX_HOME");
+        // SAFETY: single-threaded within this test, and restored below.
+        unsafe { std::env::set_var("CODEX_HOME", "/tmp/elsewhere") };
+        assert_eq!(
+            config_candidates("codex")
+                .first()
+                .map(|p| p.display().to_string()),
+            Some("/tmp/elsewhere/config.toml".to_string())
+        );
+
+        unsafe { std::env::remove_var("CODEX_HOME") };
+        assert!(config_candidates("codex")[0].ends_with(".codex/config.toml"));
+
+        if let Some(value) = previous {
+            unsafe { std::env::set_var("CODEX_HOME", value) };
+        }
+    }
 
     /// Cursor's file with two servers already in it, formatted as Cursor writes
     /// it. The point of every test below is that this survives.

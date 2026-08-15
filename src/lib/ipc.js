@@ -258,6 +258,12 @@ export const api = {
   dnsStop: () => call('dns_stop'),
   dnsResolverInstall: () => call('dns_resolver_install'),
   dnsResolverRemove: () => call('dns_resolver_remove'),
+  /**
+   * Measures the whole path rather than the half this app owns: the responder
+   * over both transports, then the machine's own resolver. A status that says
+   * "the file is written" cannot tell anyone whether a name resolves.
+   */
+  dnsCheck: () => call('dns_check'),
 
   /** Computes the change without elevating, so the UI can show a diff first. */
   hostsPlan: (add = [], remove = []) => call('hosts_plan', { add, remove }),
@@ -281,6 +287,19 @@ export const api = {
   mailMessages: (limit = 50) => call('mail_messages', { limit }),
   mailMessage: (id) => call('mail_message', { id }),
   mailClear: () => call('mail_clear'),
+
+  /**
+   * The mail relay (M-2): letting one caught message leave.
+   *
+   * `mailRelayGet` never returns the password — `hasPassword` is a boolean and
+   * there is no command in this app that reads a stored credential back.
+   * `mailRelaySet` takes `null` to leave the stored one alone and `''` to
+   * remove it, because "do not touch it" and "clear it" are different
+   * intentions that one field cannot carry.
+   */
+  mailRelayGet: () => call('mail_relay_get'),
+  mailRelaySet: (config, password = null) => call('mail_relay_set', { config, password }),
+  mailRelease: (id, to) => call('mail_release', { id, to }),
   mailDelete: (id) => call('mail_delete', { id }),
   /** Server-side search; Mailpit's own query syntax reaches it verbatim. */
   mailSearch: (query, limit = 100) => call('mail_search', { query, limit }),
@@ -330,6 +349,32 @@ export const api = {
    * graph across to ignore it.
    */
   profilerTree: (name, id) => call('profiler_tree', { name, id }),
+  /**
+   * The flame graph for a recorded trace (F-3).
+   *
+   * A different command from `profilerTree` because it is a different picture
+   * read from a different file: cachegrind holds summed edges and traces hold
+   * stacks, and only the second can say that one caller of a function was
+   * expensive and another was not.
+   */
+  profilerFlame: (name, id) => call('profiler_flame', { name, id }),
+
+  // I-1. The heavy directories of a project, in named volumes rather than on
+  // the host filesystem — measured at 3.8x on a framework boot and 2.8x on the
+  // writes a request makes. `perfSet` seeds the volume from the host before it
+  // saves anything, which is why it is one call and not two.
+  // M-5, M-6, M-10. Three per-project settings in one small document: whole
+  // document rather than per key, because three commands over one file is three
+  // chances for it and the screen to disagree.
+  siteSettings: (name) => call('site_settings', { name }),
+  siteSave: (name, env, directoryListing, sshAgent) =>
+    call('site_save', { name, env, directoryListing, sshAgent }),
+
+  perfStatus: (name) => call('perf_status', { name }),
+  perfSet: (name, path, enabled) => call('perf_set', { name, path, enabled }),
+  perfExport: (name, path) => call('perf_export', { name, path }),
+  /** Deletes the volume. Separate from the switch, deliberately. */
+  perfForget: (name, path) => call('perf_forget', { name, path }),
   queryLog: (service) => call('query_log', { service }),
   /** Start or stop recording. Stopping also clears what was collected. */
   queryLogRecord: (service, recording) => call('query_log_record', { service, recording }),
@@ -473,6 +518,50 @@ export const api = {
   tunnelStart: (name) => call('tunnel_start', { name }),
   tunnelStop: (name) => call('tunnel_stop', { name }),
 
+  /**
+   * A QR code for an address meant to be opened on another device (M-3).
+   *
+   * Returns the module matrix, not a picture: the caller draws it, so the same
+   * symbol can be an SVG here and something else later without a second
+   * encoder. Rejects text longer than a version 10 symbol holds rather than
+   * encoding part of it.
+   */
+  qrEncode: (text) => call('qr_encode', { text }),
+
+  /**
+   * The page that lists every site, on the workspace suffix itself (M-4).
+   *
+   * `landingRefresh` is separate from `landingStart` on purpose: the sidecar
+   * serves a file, so starting a project after the page was written leaves it
+   * stale without anything having stopped. One button doing both would restart
+   * a container to update a list.
+   */
+  /**
+   * The redirect URI to register with an identity provider (M-12).
+   *
+   * The tunnel URL is read on the Rust side rather than passed in: a quick
+   * tunnel's address changes on every start, and a callback registered from a
+   * stale one fails at the last step of the flow.
+   */
+  oauthCallbacks: (name, path) => call('oauth_callbacks', { name, path }),
+
+  /**
+   * Stripe's own webhook listener, per project (M-11).
+   *
+   * `stripeKeySet` writes to the OS keystore and returns a boolean; there is
+   * no command that reads a key back, deliberately — the pane can replace it
+   * or clear it and never display it.
+   */
+  stripeStatus: () => call('stripe_status'),
+  stripeKeySet: (name, key) => call('stripe_key_set', { name, key }),
+  stripeStart: (name, path, events = []) => call('stripe_start', { name, path, events }),
+  stripeStop: (name) => call('stripe_stop', { name }),
+
+  landingStatus: () => call('landing_status'),
+  landingStart: () => call('landing_start'),
+  landingStop: () => call('landing_stop'),
+  landingRefresh: () => call('landing_refresh'),
+
   /** Worker kinds this project offers, detected from its files. */
   workerOptions: (name) => call('worker_options', { name }),
   /** Every worker sidecar, restart counts included. */
@@ -572,6 +661,22 @@ export const api = {
   /** Writes the diagnostic archive to a path the user chose in the save dialog. */
   diagnosticsBundle: (path) => call('diagnostics_bundle', { path }),
   localeGet: () => call('locale_get'),
+
+  /**
+   * Language packs (M-7) — a language this build was not shipped with.
+   *
+   * One JSON file per language in the app's config directory, with the same
+   * shape as `i18n/locales/en.js`. `localePacks` lists them, a broken one
+   * included with its parse error: a hand-edited file that simply vanishes
+   * from the picker is the worst failure this could have.
+   *
+   * `localePackWrite` is how "start a translation" works — the front end sends
+   * the English catalogue, because the front end is where the catalogue lives.
+   */
+  localePacks: () => call('locale_packs'),
+  localePackRead: (tag) => call('locale_pack_read', { tag }),
+  localePackWrite: (tag, messages) => call('locale_pack_write', { tag, messages }),
+  localePackDelete: (tag) => call('locale_pack_delete', { tag }),
   /** Redraw the tray and menu bar, optionally adopting a new catalog first. */
   trayRelabel: (labels) => call('tray_relabel', { labels }),
   appsAvailable: () => call('apps_available'),

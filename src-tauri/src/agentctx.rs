@@ -218,10 +218,7 @@ mod tests {
 
     fn empty_root() -> std::path::PathBuf {
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "stackvo-agentctx-{}-{n}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("stackvo-agentctx-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

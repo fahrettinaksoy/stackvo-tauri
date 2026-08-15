@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n';
 import { api } from '@/lib/ipc';
 import { useCopyTick } from '@/composables/useCopyTick';
 import ErrorAlert from '@/components/ErrorAlert.vue';
+import QrCode from '@/components/QrCode.vue';
 
 /**
  * The address a phone on the same Wi-Fi can open this project at.
@@ -112,6 +113,14 @@ watch(() => props.name, load, { immediate: true });
           <v-icon>{{ copied === 'lan' ? 'mdi-check' : 'mdi-content-copy' }}</v-icon>
           <v-tooltip activator="parent">{{ t('a11y.copy') }}</v-tooltip>
         </v-btn>
+      </div>
+
+      <!-- The whole point of this address is that it is opened on a device
+           that is not this one, and it is a dashed IP address inside a hostname
+           — the exact shape somebody mistypes twice and then gives up on. -->
+      <div class="d-flex align-start ga-3 mt-3">
+        <QrCode :text="`https://${host}`" :size="152" />
+        <div class="text-caption text-medium-emphasis pt-1">{{ t('lan.scan') }}</div>
       </div>
 
       <!-- Said before the phone says it, because on a phone the two failures

@@ -59,6 +59,13 @@ pub struct Fingerprint {
     pub cargo_toml: bool,
     /// `Gemfile` — only Ruby.
     pub gemfile: bool,
+    /// `bin/rails` — Rails, and not merely Ruby.
+    ///
+    /// A `Gemfile` is Sinatra, Jekyll and a Ruby script with two dependencies
+    /// as often as it is Rails, so it is the wrong thing to offer `rails
+    /// db:migrate` on. Rails' own `rails new` writes this binstub and nothing
+    /// else does — the same relationship `bin/console` has with Symfony.
+    pub bin_rails: bool,
     /// `manage.py` — Django, and nothing else, puts this at the root.
     pub manage_py: bool,
     /// `requirements.txt` or `pyproject.toml` — Python, with less certainty
@@ -638,6 +645,7 @@ pub fn fingerprint(dir: &Path) -> Fingerprint {
         go_mod: dir.join("go.mod").is_file(),
         cargo_toml: dir.join("Cargo.toml").is_file(),
         gemfile: dir.join("Gemfile").is_file(),
+        bin_rails: dir.join("bin").join("rails").is_file(),
         manage_py: dir.join("manage.py").is_file(),
         python_deps: dir.join("requirements.txt").is_file() || dir.join("pyproject.toml").is_file(),
         deno_config: dir.join("deno.json").is_file()

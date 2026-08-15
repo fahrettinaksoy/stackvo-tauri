@@ -165,15 +165,15 @@ pub fn record_with(
 /// purpose: that one names files, where colons are illegal on Windows, and this
 /// one is read by whoever reviews the trail. Both sort lexicographically, which
 /// is what makes `sort` work on this file without a parser.
-fn now_rfc3339() -> String {
+pub(crate) fn now_rfc3339() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    rfc3339(secs)
+    rfc3339_of(secs)
 }
 
-fn rfc3339(unix_seconds: i64) -> String {
+pub(crate) fn rfc3339_of(unix_seconds: i64) -> String {
     let (year, month, day) = crate::crash::civil_from_days(unix_seconds.div_euclid(86_400));
     let time_of_day = unix_seconds.rem_euclid(86_400);
     format!(

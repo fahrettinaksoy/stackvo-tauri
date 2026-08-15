@@ -14,6 +14,7 @@ import { api } from '@/lib/ipc';
 import { listenAll, REFRESH_TRIGGERS } from '@/lib/events';
 import OperationConsole from '@/components/OperationConsole.vue';
 import { toasts } from '@/lib/toast';
+import { notify } from '@/lib/notify';
 import ErrorAlert from '@/components/ErrorAlert.vue';
 import RequirementsGate from '@/components/RequirementsGate.vue';
 import BootstrapGate from '@/components/BootstrapGate.vue';
@@ -352,6 +353,36 @@ onMounted(async () => {
   // Rust: the route table and the guard that waits for a workspace both live
   // on this side, and a second answer to "can this page open yet" is how the
   // two come to disagree.
+  /**
+   * Start or stop a project from the tray, without the window coming forward
+   * (M-8).
+   *
+   * Handled here rather than in Rust for the same reason routing is: the
+   * commands, the store and the refresh all live on this side, and a second
+   * implementation of "start a project" in the tray handler would sooner or
+   * later disagree with this one about hooks. Hiding a window does not destroy
+   * its webview, so this code is running even when nothing is on screen.
+   *
+   * The notification is the whole feedback channel: there is no pane to show a
+   * spinner in, and an action with no acknowledgement reads as a menu item
+   * that did nothing.
+   */
+  keep(
+    await listenAll(['tray:toggle_project'], async (_event, name) => {
+      if (!name) return;
+      const project = inventory.projects.find((p) => p.name === name);
+      if (!project) return;
+      const stopping = project.running;
+      try {
+        await (stopping ? api.projectStop(name) : api.projectStart(name));
+        await inventory.loadAll();
+        notify(name, t(stopping ? 'tray.stopped' : 'tray.started', { name }));
+      } catch (e) {
+        notify(name, e?.message ?? t('tray.failed', { name }));
+      }
+    })
+  );
+
   keep(
     await listenAll(['tray:open_project', 'tray:navigate'], (event, payload) => {
       if (!payload) return;

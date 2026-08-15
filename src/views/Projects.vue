@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import { useInventoryStore } from '@/stores/inventory';
 import { useOperationsStore } from '@/stores/operations';
+import { useFavourites } from '@/composables/useFavourites';
 import { useAppStore } from '@/stores/app';
 import { parentDomain } from '@/lib/manifest';
 import { bytes } from '@/lib/format';
@@ -64,6 +65,9 @@ const rows = computed(() => {
       // and groups start closed, so the header was suppressed, nothing was
       // left to open it, and five projects vanished from the page.
       parentDomain: parent && counts.get(parent) > 1 ? parent : null,
+      // A field rather than a lookup in the cell: the table sorts on it, and a
+      // sort key that is not on the row is a column that does not sort.
+      favourite: favourites.isFavourite(p.name),
     };
   });
 });
@@ -104,9 +108,21 @@ const groupBy = [{ key: 'parentDomain', order: 'asc' }];
  * rows arrived in whatever order the inventory returned them — which is the
  * order Docker happened to answer in, and changes between refreshes.
  */
-const sortBy = [{ key: 'domain', order: 'asc' }];
+/**
+ * Starred projects first, then by domain (M-1).
+ *
+ * A sort rather than a filter: nothing is hidden, so this cannot become a mode
+ * somebody gets stuck in — the same reason the inventory store refuses to hide
+ * broken projects.
+ */
+const favourites = useFavourites();
+const sortBy = [
+  { key: 'favourite', order: 'desc' },
+  { key: 'domain', order: 'asc' },
+];
 
 const headers = computed(() => [
+  { title: '', key: 'favourite', sortable: false, align: 'center', width: 44 },
   { title: t('projectsView.colDomain'), key: 'domain', sortable: true, align: 'start' },
   { title: t('projectsView.colRuntime'), key: 'runtime', sortable: true, align: 'start' },
   { title: t('projectsView.colServer'), key: 'server', sortable: true, align: 'start' },
@@ -325,6 +341,17 @@ const unmanagedCount = computed(
  * this the answer for somebody with XAMPP on a second drive is "StackVo says I
  * do not have XAMPP", which is worse than no scan at all.
  */
+/**
+ * The tools a person can point at (L).
+ *
+ * All five, and two of them are only reachable this way: Valet is a composer
+ * package on PATH and Sail is one inside each project, so neither has an
+ * installation directory for the scan to find. The list used to be the two that
+ * were written first — which meant somebody whose MAMP is not in
+ * /Applications had no way to say so.
+ */
+const IMPORT_SOURCES = ['xampp', 'laragon', 'mamp', 'valet', 'sail'];
+
 async function pickInstall(source) {
   const { open } = await import('@tauri-apps/plugin-dialog');
   const path = await open({ directory: true, multiple: false });
@@ -471,6 +498,7 @@ const migrationFields = computed(() => {
 let teardown = null;
 
 onMounted(async () => {
+  favourites.load();
   inventory.loadProjects();
   loadAdoptable();
   loadImports();
@@ -597,7 +625,7 @@ onUnmounted(() => teardown?.());
             <!-- The scans that ran on load only looked where the installers
                  put things. This is for the second drive. -->
             <v-list-item
-              v-for="source in ['xampp', 'laragon']"
+              v-for="source in IMPORT_SOURCES"
               :key="source"
               prepend-icon="mdi-folder-open-outline"
               :title="t('imports.pick', { tool: source })"
@@ -646,7 +674,7 @@ onUnmounted(() => teardown?.());
 
           <div class="d-flex ga-2 px-4 py-2">
             <v-btn
-              v-for="source in ['xampp', 'laragon']"
+              v-for="source in IMPORT_SOURCES"
               :key="source"
               size="x-small"
               variant="text"
@@ -720,6 +748,21 @@ onUnmounted(() => teardown?.());
                   <v-chip v-if="site.domain" size="x-small" variant="tonal">{{
                     site.domain
                   }}</v-chip>
+
+                  <!-- Only Sail says what it needs: its compose file names the
+                       services, mapped here onto this app's own catalogue. The
+                       other tools do not state it, and inventing it would be
+                       an import that describes something nobody wrote. -->
+                  <v-chip
+                    v-for="service in site.services || []"
+                    :key="service"
+                    size="x-small"
+                    color="info"
+                    variant="tonal"
+                    :title="t('imports.serviceHint')"
+                  >
+                    {{ service }}
+                  </v-chip>
 
                   <span class="adopt-evidence">
                     {{
@@ -1002,6 +1045,25 @@ onUnmounted(() => teardown?.());
               </div>
             </td>
           </tr>
+        </template>
+
+        <template #item.favourite="{ item }">
+          <v-btn
+            icon
+            size="x-small"
+            variant="text"
+            data-test="favourite"
+            :aria-label="
+              item.favourite
+                ? t('projectsView.aria.unfavourite', { name: item.name })
+                : t('projectsView.aria.favourite', { name: item.name })
+            "
+            @click="favourites.toggle(item.name)"
+          >
+            <v-icon :color="item.favourite ? 'warning' : undefined" size="small">
+              {{ item.favourite ? 'mdi-star' : 'mdi-star-outline' }}
+            </v-icon>
+          </v-btn>
         </template>
 
         <template #item.domain="{ item }">

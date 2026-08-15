@@ -71,6 +71,8 @@ const owners = ref(null);
 const requirements = computed(() => report.value?.preflight?.requirements ?? []);
 const ports = computed(() => report.value?.ports ?? []);
 const hostsMissing = computed(() => report.value?.hostsMissing ?? []);
+/** Null unless the machine's resolver points at a responder that is not there. */
+const dns = computed(() => report.value?.dns ?? null);
 const generated = computed(() => report.value?.generated ?? null);
 
 /**
@@ -371,6 +373,18 @@ onMounted(load);
         </v-btn>
       </div>
     </template>
+
+    <!-- The one DNS failure nothing else reports: the machine asks a responder
+         that is not there, so every name under the suffix fails while the app,
+         the containers and the proxy all look healthy. `dns` is null in every
+         other state, including the feature being off. -->
+    <div v-if="dns" class="row mt-2">
+      <v-icon color="warning" size="18">mdi-dns-outline</v-icon>
+      <div class="min-w-0">
+        <span class="text-body-2">{{ t('doctor.dnsBroken', dns) }}</span>
+        <div class="text-caption text-medium-emphasis">{{ t('doctor.dnsBrokenFix') }}</div>
+      </div>
+    </div>
   </SettingsGroup>
 
   <!-- ---- php extensions ---------------------------------------------------- -->

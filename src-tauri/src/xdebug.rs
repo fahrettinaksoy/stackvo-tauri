@@ -103,12 +103,18 @@ pub fn with_extension(extensions: &[String], enabled: bool) -> Vec<String> {
 
 /// What Xdebug is being used for.
 ///
-/// Two values, not a set, and that is a finding rather than a simplification.
+/// One value, not a set, and that is a finding rather than a simplification.
 /// The modes want *opposite* start triggers: stepping wants
 /// `start_with_request=default` so a breakpoint fires on the next page load,
-/// while profiling wants `trigger` so every request does not write a
-/// multi-megabyte cachegrind file. Offering `debug,profile` would have to pick
-/// one of those, and either choice silently breaks the other half.
+/// while profiling and tracing want `trigger` so every request does not write a
+/// multi-megabyte file. Offering `debug,profile` would have to pick one of
+/// those, and either choice silently breaks the other half.
+///
+/// [`Mode::Trace`] is the third, and it is what closes F-3. Profiling writes
+/// cachegrind, which holds summed edges and no stacks, so what can be drawn
+/// from it is a call tree. A trace holds every entry and exit with its depth,
+/// which is a stack — see [`crate::trace`] for what that changes and what it
+/// costs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
@@ -117,6 +123,7 @@ pub enum Mode {
     #[default]
     Debug,
     Profile,
+    Trace,
 }
 
 impl Mode {
@@ -124,7 +131,17 @@ impl Mode {
         match self {
             Mode::Debug => "debug",
             Mode::Profile => "profile",
+            Mode::Trace => "trace",
         }
+    }
+
+    /// Does this mode write files this app reads back?
+    ///
+    /// The two that do share every setting in [`profile_ini`] — the output
+    /// directory, the trigger, and Xdebug 3.4's compression, which
+    /// `XDEBUG_CONFIG` silently ignores.
+    pub fn records_to_disk(self) -> bool {
+        matches!(self, Mode::Profile | Mode::Trace)
     }
 }
 
@@ -188,7 +205,17 @@ pub fn profile_ini() -> String {
          ; Xdebug 3.4 gzips by default, and XDEBUG_CONFIG cannot turn that off.\n\
          xdebug.use_compression=0\n\
          ; Otherwise every single request writes a multi-megabyte file.\n\
-         xdebug.start_with_request=trigger\n",
+         xdebug.start_with_request=trigger\n\
+         ; Format 1 is the computerised one: tab-separated entry and exit\n\
+         ; records with a depth on each. Format 0 is for humans and has no\n\
+         ; machine-readable exit, so a flame graph cannot be built from it.\n\
+         xdebug.trace_format=1\n\
+         ; The return VALUE of every call, which is the application's data and\n\
+         ; is not needed to know what called what.\n\
+         xdebug.collect_return=0\n\
+         ; %t is the timestamp: one file per request rather than each request\n\
+         ; overwriting the last.\n\
+         xdebug.trace_output_name=trace.%t.%p\n",
         crate::profile::CONTAINER_DIR
     )
 }
@@ -519,7 +546,20 @@ fn entries(root: &Path) -> Vec<Entry> {
         // itself is derived: an ini left behind by a project that has since
         // stopped profiling would keep sending its output somewhere, and the
         // symptom is profiles appearing that nobody asked for.
-        let ini_path = if mode == Mode::Profile {
+        let ini_path = if mode.records_to_disk() {
+            // **Xdebug does not create `output_dir`, and says nothing when it
+            // is missing.** The ini has named `/var/log/xdebug` since profiling
+            // shipped, that path is the container's view of
+            // `logs/projects/<name>/xdebug`, and nothing on either side ever
+            // made the directory — so switching profiling on, triggering a
+            // request and finding an empty list was the *normal* outcome, with
+            // no error anywhere to say why. Found by running a trace against a
+            // live container rather than by reading anything.
+            //
+            // Created here because this runs before every compose command, so
+            // it is also repaired for a workspace that was cleaned out.
+            ensure_output_dir(&crate::profile::host_dir(root, name));
+
             let path = ini_dir(root).join(format!("{name}.ini"));
             match std::fs::create_dir_all(ini_dir(root))
                 .map_err(|e| e.to_string())
@@ -546,6 +586,30 @@ fn entries(root: &Path) -> Vec<Entry> {
     }
 
     out
+}
+
+/// Make the directory Xdebug writes into, on the host side of the mount.
+///
+/// The mode is set wide on Unix on purpose and it is not carelessness: the
+/// directory is created by *this app*, which runs as the user, and written by
+/// **php-fpm inside the container**, which runs as whatever that image chose —
+/// `www-data` in most PHP images. On Docker Desktop the file sharing layer maps
+/// ownership away and either would work; on Linux the container writes as its
+/// own uid to a host directory owned by somebody else, and the failure is the
+/// same silent one this whole function exists to fix.
+///
+/// It holds development profiles inside the user's own workspace, and it is the
+/// same trade every `logs/` directory in this tree already makes.
+fn ensure_output_dir(dir: &Path) {
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        tracing::warn!(dir = %dir.display(), error = %e, "could not create the Xdebug output directory");
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o777));
+    }
 }
 
 /// Re-render the overlay from the manifests, and report whether it now exists.

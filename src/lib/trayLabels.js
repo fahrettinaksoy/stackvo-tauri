@@ -39,6 +39,13 @@ export function trayLabels(t) {
     noWorkspace: t('tray.noWorkspace'),
     noProjects: t('tray.noProjects'),
 
+    // The verbs the tray can act with (M-8). `{name}` survives to Rust for
+    // the same reason `{count}` does: the ordering decision belongs in the
+    // language file, where a language that puts the name first can express it.
+    control: t('tray.control'),
+    startProject: t('tray.startProject'),
+    stopProject: t('tray.stopProject'),
+
     // Counted — the placeholders survive to Rust deliberately.
     containers: t('tray.containers'),
     more: t('tray.more'),

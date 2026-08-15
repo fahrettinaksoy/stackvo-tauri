@@ -31,6 +31,8 @@ const {
   tree,
   treeBusy,
   loadTree,
+  flame,
+  openTrace,
   openId,
   busy,
   error,
@@ -42,6 +44,17 @@ const {
   remove,
   clear,
 } = useProfiler(toRef(props, 'name'));
+
+/**
+ * A trace's own unit, which is not the profile's.
+ *
+ * `cost` formats whatever the cachegrind file declared — usually microseconds,
+ * sometimes something else, and it reads that from the file rather than
+ * assuming. A trace is always microseconds, because this app computes them
+ * from the timestamps itself.
+ */
+const micros = (value) =>
+  value >= 1000 ? `${(value / 1000).toFixed(1)} ms` : `${Math.round(value)} µs`;
 
 watch(
   () => [props.name, props.runtime],
@@ -81,6 +94,12 @@ watch(
           <v-btn value="profile" :disabled="!!busy" prepend-icon="mdi-speedometer">
             {{ t('profiler.modeProfile') }}
           </v-btn>
+          <!-- F-3. A third mode rather than a checkbox on profiling: it writes
+               a different file, read by a different parser, and it is the only
+               one of the three that can produce a real flame graph. -->
+          <v-btn value="trace" :disabled="!!busy" prepend-icon="mdi-fire">
+            {{ t('profiler.modeTrace') }}
+          </v-btn>
         </v-btn-toggle>
         <div class="text-caption text-medium-emphasis mt-2">
           {{ t('profiler.modesExclusive') }}
@@ -88,9 +107,12 @@ watch(
 
         <!-- The step people miss. Profiling waits for a trigger, so
              loading the page changes nothing until it carries one. -->
-        <v-alert v-if="status.mode === 'profile'" type="info" variant="tonal" class="mt-4">
+        <v-alert v-if="status.mode !== 'debug'" type="info" variant="tonal" class="mt-4">
           <div class="text-caption">
             {{ t('profiler.howToRecord', { trigger: status.trigger }) }}
+          </div>
+          <div v-if="status.mode === 'trace'" class="text-caption mt-1">
+            {{ t('profiler.traceCost') }}
           </div>
         </v-alert>
         <!-- Fires for either mode, not just profiling: switching back
@@ -178,6 +200,82 @@ watch(
           <v-tooltip activator="parent">{{ t('profiler.deleteOne') }}</v-tooltip>
         </v-btn>
       </div>
+
+      <!-- Traces (F-3). A second list rather than rows mixed into the first:
+           they are read by a different parser and open a different view, and a
+           combined list would make somebody read the file name to know which. -->
+      <template v-if="status.traces?.length">
+        <div class="section-head mt-5 mb-2 d-flex align-center">
+          <v-icon size="18" class="mr-2">mdi-fire</v-icon>
+          {{ t('profiler.traces', { n: status.traces.length }) }}
+        </div>
+        <div v-for="file in status.traces" :key="file.id" class="cmd-row" data-test="trace-row">
+          <div class="flex-grow-1 min-width-0">
+            <div class="mono text-body-2">{{ file.id }}</div>
+            <div class="text-caption text-medium-emphasis">
+              {{ bytes(file.bytes) }}
+              <span v-if="file.modified">
+                · {{ new Date(file.modified * 1000).toLocaleString() }}</span
+              >
+            </div>
+          </div>
+          <v-btn
+            size="small"
+            variant="tonal"
+            :loading="busy === file.id"
+            :disabled="!!busy"
+            @click="openTrace(file)"
+          >
+            {{ t('profiler.open') }}
+          </v-btn>
+          <v-btn
+            icon
+            size="x-small"
+            variant="text"
+            :aria-label="t('profiler.deleteOne')"
+            :disabled="!!busy"
+            @click="remove(file)"
+          >
+            <v-icon>mdi-delete-outline</v-icon>
+            <v-tooltip activator="parent">{{ t('profiler.deleteOne') }}</v-tooltip>
+          </v-btn>
+        </div>
+      </template>
+
+      <!-- An open trace: the graph on its own. A trace has no per-function
+           aggregate to tabulate — that is what a profile is for. -->
+      <template v-if="flame">
+        <div class="section-head mt-5 mb-1">
+          <v-icon size="18" class="mr-2">mdi-fire</v-icon>{{ openId }}
+        </div>
+        <div class="text-caption text-medium-emphasis mb-2" data-test="flame-summary">
+          {{
+            t('profiler.flameSummary', {
+              records: flame.records,
+              stacks: flame.stacks,
+              total: (flame.total / 1000).toFixed(1),
+            })
+          }}
+        </div>
+        <v-alert
+          v-if="flame.truncated || flame.pruned || flame.depthCapped"
+          type="info"
+          variant="tonal"
+          density="compact"
+          class="mb-2"
+        >
+          <div v-if="flame.truncated" class="text-caption">{{ t('profiler.traceTruncated') }}</div>
+          <div v-if="flame.pruned" class="text-caption">
+            {{ t('profiler.tracePruned', { n: flame.pruned }) }}
+          </div>
+          <div v-if="flame.depthCapped" class="text-caption">
+            {{ t('profiler.traceDepthCapped') }}
+          </div>
+        </v-alert>
+        <FlameView :frames="flame.frames" :format="micros" class="mb-3">
+          <template #empty>{{ t('profiler.noTree') }}</template>
+        </FlameView>
+      </template>
 
       <!-- The report. Self cost, because it is the one this parser can
            state exactly and the one that answers "what is slow". -->

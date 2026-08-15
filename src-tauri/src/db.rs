@@ -202,6 +202,71 @@ fn default_user(kind: Kind) -> &'static str {
     }
 }
 
+/// Run whichever of two client programs the image actually ships.
+///
+/// **MariaDB 11 removed the `mysql*` symlinks and 12 ships without them.** A
+/// `mariadb:12` container has `mariadb`, `mariadb-dump`, `mariadb-admin` and no
+/// `mysql` at all — so every one of this app's database features asked that
+/// container for a program that is not in it, and got back `exec: "mysql":
+/// executable file not found`. Dumps, restores, snapshots, moves and the query
+/// log, all of them, on a service that is in the catalogue and shipped working
+/// on `mariadb:10`.
+///
+/// Found by running the query-log probe against the live stack rather than by
+/// reading anything: the unit tests assert the argument *list*, and the list
+/// was right for the program it named.
+///
+/// The choice is made inside the container, by the container, because that is
+/// the only party that knows what it has. `"$@"` rather than interpolation, so
+/// the arguments stay separate argv entries exactly as they were built here —
+/// the same rule `elevate` and `runner` follow.
+fn either_client(preferred: &str, fallback: &str, args: &[String]) -> Vec<String> {
+    let mut out = vec![
+        "sh".to_string(),
+        "-c".to_string(),
+        format!(
+            "if command -v {preferred} >/dev/null 2>&1; \
+             then exec {preferred} \"$@\"; else exec {fallback} \"$@\"; fi"
+        ),
+        // `sh -c` gives $0 to the next argument, so a placeholder has to sit
+        // between the script and the real arguments or the first one vanishes.
+        "stackvo".to_string(),
+    ];
+    out.extend(args.iter().cloned());
+    out
+}
+
+/// The client program for a MySQL-family container, whichever name it has.
+fn mysql_family(kind: Kind, tool: &str, args: Vec<String>) -> Vec<String> {
+    match kind {
+        // MariaDB's own names first: an image new enough to have dropped the
+        // symlinks is the case this exists for, and one old enough to have only
+        // `mysqldump` falls through to it.
+        // `mariadb-dump` with a hyphen, `mysqldump` without one — the two
+        // families do not name their tools the same way, which is why this
+        // takes both names rather than a suffix.
+        Kind::Mariadb => either_client(
+            &format!(
+                "mariadb{}",
+                if tool.is_empty() {
+                    String::new()
+                } else {
+                    format!("-{tool}")
+                }
+            ),
+            &format!("mysql{tool}"),
+            &args,
+        ),
+        // MySQL has never shipped the `mariadb*` names, so there is nothing to
+        // choose between and no reason to pay for a shell.
+        _ => {
+            let mut out = vec![format!("mysql{tool}")];
+            out.extend(args);
+            out
+        }
+    }
+}
+
 /// The arguments after `docker exec`, for reading a database out.
 ///
 /// Returned rather than executed so the shape is testable — the difference
@@ -214,7 +279,6 @@ pub fn dump_args(kind: Kind, user: &str, database: Option<&str>) -> Vec<String> 
     match kind {
         Kind::Mysql | Kind::Mariadb => {
             let mut args = vec![
-                s("mysqldump"),
                 format!("--user={user}"),
                 // Without this, InnoDB tables are dumped one at a time while
                 // the application keeps writing, and the result is internally
@@ -228,7 +292,7 @@ pub fn dump_args(kind: Kind, user: &str, database: Option<&str>) -> Vec<String> 
                 Some(db) => args.push(s(db)),
                 None => args.push(s("--all-databases")),
             }
-            args
+            mysql_family(kind, "dump", args)
         }
         Kind::Postgres => {
             let mut args = vec![s("pg_dump"), format!("--username={user}"), s("--clean")];
@@ -260,11 +324,11 @@ pub fn restore_args(kind: Kind, user: &str, database: Option<&str>) -> Vec<Strin
 
     match kind {
         Kind::Mysql | Kind::Mariadb => {
-            let mut args = vec![s("mysql"), format!("--user={user}")];
+            let mut args = vec![format!("--user={user}")];
             if let Some(db) = database {
                 args.push(s(db));
             }
-            args
+            mysql_family(kind, "", args)
         }
         Kind::Postgres => {
             let mut args = vec![s("psql"), format!("--username={user}")];
@@ -480,12 +544,17 @@ pub async fn run_sql(root: &Path, service: &str, sql: &str) -> Result<String> {
     let mut args = exec_args(&settings, false);
     match settings.kind {
         Kind::Mysql | Kind::Mariadb => {
-            args.push("mysql".to_string());
-            args.push(format!("-u{}", settings.user));
-            args.push("-N".to_string());
-            args.push("-B".to_string());
-            args.push("-e".to_string());
-            args.push(sql.to_string());
+            args.extend(mysql_family(
+                settings.kind,
+                "",
+                vec![
+                    format!("-u{}", settings.user),
+                    "-N".to_string(),
+                    "-B".to_string(),
+                    "-e".to_string(),
+                    sql.to_string(),
+                ],
+            ));
         }
         // `-tA`: no header, no alignment — the same tab-free, row-per-line
         // shape `-N -B` gives on the MySQL side, so one parser reads both.
@@ -731,6 +800,38 @@ mod tests {
         assert!(args.contains(&"--routines".to_string()));
         assert!(args.contains(&"--triggers".to_string()));
         assert_eq!(args.last().unwrap(), "stackvo");
+    }
+
+    /// MariaDB 11 removed the `mysql*` symlinks and 12 ships without them, so
+    /// every command this app sent a `mariadb:12` container named a program
+    /// that was not in it. The tests above pass on the argument *list*, which
+    /// was right for the program it named — the program was the bug, and only
+    /// running it against the real image found that.
+    ///
+    /// Both names are here rather than just the new one: the same catalogue
+    /// still offers `mariadb:10`, where only `mysqldump` exists.
+    #[test]
+    fn mariadb_asks_for_its_own_client_and_falls_back_to_the_old_name() {
+        let args = dump_args(Kind::Mariadb, "root", Some("stackvo"));
+        let script = args.join(" ");
+        assert_eq!(args[0], "sh", "the container picks, because it knows");
+        assert!(script.contains("command -v mariadb-dump"), "{script}");
+        assert!(script.contains("exec mysqldump"), "no fallback: {script}");
+        // The arguments still arrive as arguments — `"$@"` rather than a
+        // second layer of quoting, and a placeholder for `$0` so the first one
+        // is not eaten by the shell.
+        assert!(script.contains("\"$@\""), "{script}");
+        assert_eq!(args[3], "stackvo", "the $0 placeholder");
+        assert!(args.contains(&"--single-transaction".to_string()));
+        assert_eq!(args.last().unwrap(), "stackvo");
+
+        let restore = restore_args(Kind::Mariadb, "root", Some("shop")).join(" ");
+        assert!(restore.contains("command -v mariadb "), "{restore}");
+        assert!(restore.contains("exec mysql "), "{restore}");
+
+        // MySQL has never shipped the mariadb names, so it pays for no shell.
+        assert_eq!(dump_args(Kind::Mysql, "root", None)[0], "mysqldump");
+        assert_eq!(restore_args(Kind::Mysql, "root", None)[0], "mysql");
     }
 
     #[test]

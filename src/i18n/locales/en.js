@@ -80,6 +80,12 @@ export default {
     more: '+{count} more…',
     runningSummary: '{running}/{total} projects running',
     menuAbout: 'About StackVo',
+    control: 'Start / stop',
+    startProject: 'Start {name}',
+    stopProject: 'Stop {name}',
+    started: '{name} is running.',
+    stopped: '{name} has stopped.',
+    failed: '{name} could not be changed.',
   },
 
   /**
@@ -189,6 +195,45 @@ export default {
    * somebody needs before turning on something that answers DNS on their
    * machine.
    */
+  perf: {
+    title: 'Performance layer',
+    explain:
+      'A bind mount costs 2–3× a named volume on metadata and on writes, and that is where a Docker workflow feels slow on macOS and Windows. These directories are written by the tooling inside the container and read by it on every request — moving them off the host filesystem measured 3.8× on a framework boot and 2.8× on the writes a request makes. Your own code stays where your editor can see it.',
+    inVolume: 'In a volume ({volume})',
+    onHost: 'On the host — {files}+ files',
+    notThereYet: 'Not in the project yet; the tooling will create it inside the container.',
+    editorCannotSee:
+      'Your editor cannot see this directory any more. Export a snapshot when the index needs refreshing.',
+    export: 'Export to host',
+    exported:
+      'Copied {path} to the host — {size}. It is a snapshot; the container keeps writing to the volume.',
+    forget: 'Delete volume',
+    toggle: 'Move {path} into a volume',
+    needsRecreate: 'Apply to the container for this to take effect.',
+    nothingToOffer: 'Nothing here to move — this project has no dependency directory.',
+  },
+  site: {
+    title: 'Project settings',
+    explain:
+      'Settings this app applies to the project’s own container, kept in .stackvo/site.json so they travel with the project when a teammate clones it.',
+    envTitle: 'Environment variables',
+    envExplain:
+      'Set on the container, not written into your application’s .env — that file is the framework’s. Applied when the container is recreated.',
+    key: 'Name',
+    value: 'Value',
+    addRow: 'Add a variable',
+    removeRow: 'Remove this variable',
+    save: 'Save',
+    listing: 'Show a directory index',
+    listingHint:
+      'Serves a browsable listing where there is no index file. Useful for a folder of downloads or build output.',
+    listingUnsupported:
+      '{server} has no configuration file for this — it is configured inside its own image.',
+    sshAgent: 'Forward my SSH agent',
+    sshAgentHint:
+      'Lets composer install and git pull reach private repositories from inside the container, without a key ever being copied into the image. Anything running in that container can sign with your keys while it is up.',
+    sshAgentNone: 'No SSH agent is running on this machine, so there is nothing to forward.',
+  },
   dns: {
     title: 'Local DNS',
     subtitle: 'Answer for this workspace\u2019s names without editing the hosts file',
@@ -197,13 +242,41 @@ export default {
     responder: 'Answer on 127.0.0.1:{port}',
     responderHint:
       'Every name ending in {suffix} resolves to this machine, with no entry per project.',
+    udpOnly:
+      'UDP only — tcp/{port} is held by something else. Most lookups work; a retry over TCP will not.',
+    broken:
+      'This machine asks for {suffix} on port {port} and nothing is answering there, so those names are failing right now. Turn the responder on, or turn the switch below off.',
+    stale:
+      'Left over from a suffix this workspace no longer uses: {files}. Those names are being refused rather than resolved. Re-applying the switch below removes them.',
+    foreign:
+      'A file is already there and is not ours — {detail}. It will be copied aside first, and put back when this is turned off.',
     resolver: 'Let the system ask it',
     resolverHint:
-      'Writes {file}. Needs an administrator password, and changes how this machine resolves that suffix.',
+      'Writes {file} through {mechanism}. Needs an administrator password, and changes how this machine resolves that suffix.',
+    resolverHintRule:
+      'Adds a {mechanism} rule for this suffix. Needs an administrator password, and changes how this machine resolves that suffix.',
+    reload: 'Then runs: {command}',
     manual:
-      'This platform has no per-suffix resolver directory. Add this line to whatever sits in front of resolv.conf — dnsmasq or NetworkManager — and reload it:',
-    unsupported:
-      'Windows has no per-suffix resolver: the only mechanism redirects every name on the machine, which is not what this is for. Projects keep using the hosts file here.',
+      'Nothing recognisable sits in front of this machine\u2019s resolver, so there is no file to write for you. Add this line to whatever does resolve names here — dnsmasq, NetworkManager — and reload it:',
+    manualFile: 'On most machines that file is {file}.',
+    noPrompt:
+      'This machine has {mechanism} but no way for a windowed app to ask for a password. Apply this yourself:',
+    test: 'Test it',
+    testHint: 'Asks the responder, then asks this machine — they are different questions.',
+    mechanisms: {
+      resolver: 'an /etc/resolver file',
+      'network-manager': 'NetworkManager\u2019s dnsmasq',
+      dnsmasq: 'dnsmasq',
+      'systemd-resolved': 'systemd-resolved',
+      nrpt: 'the Name Resolution Policy Table',
+      manual: 'no known mechanism',
+    },
+    probes: {
+      udp: 'The responder, over UDP',
+      tcp: 'The responder, over TCP',
+      system: 'This machine\u2019s own resolver',
+      public: 'The rest of the internet',
+    },
   },
 
   /**
@@ -330,6 +403,8 @@ export default {
     // whose every button announces "Delete" gives a screen reader user no way
     // to tell which project they are about to remove.
     aria: {
+      favourite: 'Pin {name} to the top',
+      unfavourite: 'Unpin {name}',
       build: 'Build {name}',
       stop: 'Stop {name}',
       start: 'Start {name}',
@@ -758,6 +833,8 @@ export default {
       'Read from {path}. Nothing is ever written back to it. Importing copies the site into this workspace and then adopts it like any other folder.',
     take: 'Import',
     taken: 'Already here',
+    serviceHint:
+      'Its compose file asks for this. StackVo has its own — switch it on in Settings after importing.',
     move: 'Move instead of copying',
     moveOff: 'The original stays where it is, so the other tool keeps working while you compare.',
     moveOn:
@@ -847,6 +924,30 @@ export default {
     noSubject: '(no subject)',
     notRunning: 'The mail catcher is not running, so nothing is being captured.',
     clear: 'Empty inbox',
+    release: 'Release',
+    releaseTo: 'Send this message on to',
+    releaseHint: 'A real address, or several separated by commas. The catcher keeps its copy.',
+    released: 'Sent.',
+    relayTitle: 'Relay',
+    relayOff: 'Not configured — Release will be refused.',
+    relayConfigure: 'Configure',
+    relayExplain:
+      'The SMTP server a released message is sent through. Nothing your application sends goes here — the catcher still catches everything, and only a message you release leaves.',
+    relayEnable: 'Allow releasing messages',
+    relayHost: 'SMTP host',
+    relayPort: 'Port',
+    relaySecurity: 'Security',
+    relayNoTls: 'None',
+    relayUsername: 'Username',
+    relayPassword: 'Password',
+    relayPasswordSet: 'Password (stored — leave blank to keep)',
+    relayForget: 'Forget the password',
+    relayFrom: 'Send as',
+    relayFromHint: 'Providers reject a sender address they do not own.',
+    relayAllowed: 'Only allow sending to',
+    relayAllowedHint: 'Comma separated. Empty means anywhere, which is one typo away from a real customer.',
+    relayNoKeystore: 'This machine has no keystore, so a password cannot be stored. Use a relay that needs none.',
+    relayRestart: 'The catcher picks these up when it is recreated — restart the stack after saving.',
     deleteOne: 'Delete this message',
     confirmClear:
       'This deletes every captured message. A mail catcher is a bin, so there is no backup.',
@@ -992,6 +1093,17 @@ export default {
     needsXdebug: 'Turn Xdebug on first — profiling is a mode of the same extension.',
     modeDebug: 'Step debugging',
     modeProfile: 'Profiling',
+    modeTrace: 'Trace',
+    traceCost:
+      'A trace records every function entry and exit, so it is far heavier than a profile — a single request can run to hundreds of megabytes. Record one page, then switch back.',
+    traces: 'Recorded traces ({n})',
+    flameSummary:
+      '{records} entry and exit records, {stacks} distinct stacks, {total} ms accounted for.',
+    traceTruncated:
+      'The trace was longer than this app reads. What is drawn is the start of the request, not the whole of it.',
+    tracePruned: '{n} path(s) were too thin to draw and are not shown.',
+    traceDepthCapped:
+      'The stack went deeper than 64 frames; below that it was measured, not drawn.',
     modesExclusive:
       'One or the other. Stepping connects on every request; profiling waits for a trigger, so leaving both on would break one of them.',
     howToRecord:
@@ -1372,6 +1484,11 @@ export default {
 
     theme: 'Theme',
     language: 'Language',
+    packProgress: '{done} of {total} strings ({percent}%) — the rest falls back to English',
+    packRemove: 'Remove',
+    packTag: 'Language tag',
+    packHint: 'A tag like de, fr or pt-BR. Starts a file you can translate; untranslated strings stay English.',
+    packStart: 'Start a translation',
     preferences: 'Preferences',
     stackSub: 'Compose level: regenerates and recreates containers.',
     runtimes: {
@@ -1681,6 +1798,7 @@ export default {
 
   tunnel: {
     title: 'Share',
+    scan: 'Point a camera at this to open the tunnel on another device. It stops working when the tunnel does.',
     explain:
       'A temporary public URL that forwards to this project — for webhook senders (Stripe, GitHub) that cannot reach a .loc domain. Runs a Cloudflare quick tunnel as a sidecar container on the stack network; no account needed.',
     needsRunning: 'Start the project first — the tunnel forwards to its container.',
@@ -1740,8 +1858,49 @@ export default {
     statements: 'Statements ({count})',
   },
 
+  stripe: {
+    title: 'Stripe webhooks',
+    explain:
+      'Forwards live Stripe events into this project. The CLI connects outward, so nothing has to be reachable from the internet and the signing secret stays the same for the session — unlike a tunnel, whose address changes on every start.',
+    key: 'Secret or restricted API key',
+    keyHint: 'Stored in your OS keystore, never in a file in the workspace.',
+    keyStored: 'A key is stored for this project.',
+    saveKey: 'Store',
+    clearKey: 'Remove',
+    path: 'Forward to path',
+    needsRunning: 'Start the project first — otherwise every event fails to deliver and Stripe records the failures.',
+    connecting: 'Connecting to Stripe…',
+    secretIs: 'Webhook signing secret for this session:',
+    start: 'Listen',
+    stop: 'Stop',
+  },
+  oauth: {
+    title: 'OAuth callback',
+    explain:
+      'The redirect URI to paste into a provider\'s console. A redirect is sent to the browser, not fetched by the provider — so the local address works for the flow itself. What differs is whether the provider will accept the string when you register it.',
+    path: 'Callback path',
+    local: 'Local address',
+    public: 'Public address',
+    noTunnel: 'No tunnel is running, so there is no public address. Start one in Share above if a provider refuses the local one.',
+    takesLocal: 'Local works',
+    takesPublic: 'Needs public',
+  },
+  landing: {
+    title: 'Landing page',
+    explain: 'One page listing every project and service, on this workspace\'s own address.',
+    counts: '{projects} projects, {services} services',
+    start: 'Serve it',
+    stop: 'Stop',
+    refresh: 'Rewrite',
+    rendered: 'Written {when}. It does not update itself.',
+  },
+  qr: {
+    label: 'QR code for {text}',
+    tooLong: 'This address is too long for a QR code.',
+  },
   lan: {
     title: 'On this network',
+    scan: 'Point a camera at this to open the address on the other device. The certificate warning below appears there too.',
     explain:
       'Open this project on a phone or another computer on the same network. The name resolves through sslip.io, which works out the address from the name itself — nothing is registered, nothing is published, and no traffic leaves the network.',
     share: 'Answer on a name other devices can resolve',
@@ -1796,6 +1955,10 @@ export default {
     extRemoveHint: 'Nothing that runs changes — the build already drops it.',
     hostsMissing: '{count} domain(s) have no hosts entry.',
     hostsRepair: 'Review & repair',
+    dnsBroken:
+      'The machine resolves {suffix} through a local responder on port {port}, and nothing is answering there — every name under that suffix is failing.',
+    dnsBrokenFix:
+      'Settings → Local DNS: turn the responder back on, or turn off the switch that points this machine at it.',
 
     generatedTitle: 'Generated configuration',
     generatedDesc:
@@ -2022,6 +2185,20 @@ export default {
     hostsNeedsAdmin: 'Administrator rights are required to edit the hosts file.',
     hostsNotReplaced: 'The hosts file could not be replaced.',
     installPolkit: 'Install polkit, or edit /etc/hosts manually.',
+    perfPathIsRelative: 'Name a directory inside the project, like vendor or storage/framework.',
+    perfNothingToSeed:
+      'That directory does not exist in the project yet. Install the dependencies first, or enable it and let the tooling create it inside the container.',
+    perfSeedFailed: 'The directory could not be copied into the volume, so nothing was changed.',
+    tldIsOneLabel: 'A suffix ends in one label of letters, digits and hyphens — stackvo.loc.',
+    dnsPlaceTheLineYourself:
+      'Add the line shown to whatever resolves names on this machine, then reload it.',
+    dnsStartTheResponderFirst:
+      'Start the responder first — this would otherwise point the machine at a closed port.',
+    dnsMachineIsNotAskingUs:
+      'The responder answers, but this machine is not asking it. Something else may sit in front of the resolver.',
+    dnsPublicNamesStopped:
+      'The change took public names down with it and was undone. Nothing was left behind.',
+    dnsPortAlreadyAnswering: 'Something else on this machine is already answering on that port.',
     serviceMustBeInCatalog: 'Only services listed in contracts/env.schema.json can be managed.',
     snapshotNameCharset:
       'Use letters, digits, dot, dash and underscore — the name becomes a filename. `auto-` is reserved for scheduled snapshots.',

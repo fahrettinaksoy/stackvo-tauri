@@ -76,6 +76,12 @@ export default {
     more: '+{count} proje daha…',
     runningSummary: '{running}/{total} proje çalışıyor',
     menuAbout: 'StackVo Hakkında',
+    control: 'Başlat / durdur',
+    startProject: '{name}: başlat',
+    stopProject: '{name}: durdur',
+    started: '{name} çalışıyor.',
+    stopped: '{name} durdu.',
+    failed: '{name} değiştirilemedi.',
   },
 
   /**
@@ -182,6 +188,45 @@ export default {
    * makinesinde DNS'e cevap veren bir şeyi açmadan önce insanın ihtiyacı olan
    * bilgi bu.
    */
+  perf: {
+    title: 'Performans katmanı',
+    explain:
+      'Bind mount, metadata ve yazmada adlandırılmış birimin 2–3 katına mal oluyor; macOS ve Windows’ta Docker akışını yavaş hissettiren yer burası. Bu dizinleri konteyner içindeki araçlar yazıyor ve her istekte yine onlar okuyor — host dosya sisteminden çıkarmak, framework açılışında 3,8 kat, bir isteğin yazmalarında 2,8 kat ölçüldü. Kendi kodunuz editörünüzün gördüğü yerde kalıyor.',
+    inVolume: 'Birimde ({volume})',
+    onHost: 'Host’ta — {files}+ dosya',
+    notThereYet: 'Projede henüz yok; konteyner içindeki araçlar oluşturacak.',
+    editorCannotSee:
+      'Editörünüz artık bu dizini göremiyor. Dizin güncellenmesi gerektiğinde bir anlık görüntü dışa aktarın.',
+    export: 'Host’a aktar',
+    exported:
+      '{path} host’a kopyalandı — {size}. Bu bir anlık görüntü; konteyner birime yazmayı sürdürüyor.',
+    forget: 'Birimi sil',
+    toggle: '{path} dizinini birime taşı',
+    needsRecreate: 'Etkili olması için konteynere uygulayın.',
+    nothingToOffer: 'Taşınacak bir şey yok — bu projede bağımlılık dizini bulunmuyor.',
+  },
+  site: {
+    title: 'Proje ayarları',
+    explain:
+      'Bu uygulamanın projenin kendi konteynerine uyguladığı ayarlar. .stackvo/site.json içinde tutulur, yani bir takım arkadaşınız klonladığında onunla birlikte gelir.',
+    envTitle: 'Ortam değişkenleri',
+    envExplain:
+      'Konteynere veriliyor; uygulamanızın .env dosyasına yazılmıyor — o dosya framework’ün. Konteyner yeniden oluşturulunca geçerli olur.',
+    key: 'Ad',
+    value: 'Değer',
+    addRow: 'Değişken ekle',
+    removeRow: 'Bu değişkeni kaldır',
+    save: 'Kaydet',
+    listing: 'Dizin listesi göster',
+    listingHint:
+      'Index dosyası olmayan yerlerde gezilebilir bir liste sunar. İndirme klasörü ya da derleme çıktısı için işe yarar.',
+    listingUnsupported:
+      '{server} için yapılandırma dosyası yok — kendi imajının içinde yapılandırılıyor.',
+    sshAgent: 'SSH ajanımı ilet',
+    sshAgentHint:
+      'composer install ve git pull konteynerin içinden özel depolara ulaşabilir; imaja hiçbir anahtar kopyalanmadan. O konteynerde çalışan her şey, konteyner ayakta olduğu sürece anahtarlarınızla imzalayabilir.',
+    sshAgentNone: 'Bu makinede çalışan bir SSH ajanı yok, iletilecek bir şey de yok.',
+  },
   dns: {
     title: 'Yerel DNS',
     subtitle: 'Hosts dosyasını düzenlemeden bu çalışma alanının adlarına cevap ver',
@@ -189,13 +234,41 @@ export default {
       'Tek bir soneke cevap veren, diğer her şeyi reddeden bir yanıtlayıcı. Asla iletmiyor, üst sunucusu ve önbelleği yok — bu makinenin çözümleyicisi değil, yalnız StackVo’nun ürettiği adların. Joker adları da bu çalıştırıyor; hosts dosyası bunu hiç yapamıyor.',
     responder: '127.0.0.1:{port} üzerinde cevap ver',
     responderHint: '{suffix} ile biten her ad bu makineye çözülür, proje başına kayıt gerekmeden.',
+    udpOnly:
+      'Yalnız UDP — tcp/{port} başka bir şeyin elinde. Sorguların çoğu çalışır; TCP üzerinden bir yeniden deneme çalışmaz.',
+    broken:
+      'Bu makine {suffix} için {port} portuna soruyor ve orada cevap veren yok; o adlar şu anda çözülmüyor. Ya yanıtlayıcıyı açın ya aşağıdaki anahtarı kapatın.',
+    stale:
+      'Bu çalışma alanının artık kullanmadığı bir sonekten kalmış: {files}. O adlar çözülmüyor, reddediliyor. Aşağıdaki anahtarı yeniden uygulamak bunları kaldırır.',
+    foreign:
+      'O yolda zaten bir dosya var ve bize ait değil — {detail}. Önce kenara kopyalanır, bu kapatıldığında geri konur.',
     resolver: 'Sistem buna sorsun',
     resolverHint:
-      '{file} dosyasını yazar. Yönetici parolası ister ve bu makinenin o soneki nasıl çözdüğünü değiştirir.',
+      '{mechanism} üzerinden {file} dosyasını yazar. Yönetici parolası ister ve bu makinenin o soneki nasıl çözdüğünü değiştirir.',
+    resolverHintRule:
+      'Bu sonek için bir {mechanism} kuralı ekler. Yönetici parolası ister ve bu makinenin o soneki nasıl çözdüğünü değiştirir.',
+    reload: 'Ardından şunu çalıştırır: {command}',
     manual:
-      'Bu platformda sonek başına çözümleyici dizini yok. Bu satırı resolv.conf’un önünde ne varsa — dnsmasq ya da NetworkManager — ona ekleyip yeniden yükleyin:',
-    unsupported:
-      'Windows’ta sonek başına çözümleyici yok: tek mekanizma makinedeki her adı yönlendiriyor, ki bu buradaki amacın tersi. Projeler burada hosts dosyasını kullanmaya devam ediyor.',
+      'Bu makinenin çözümleyicisinin önünde tanınan bir şey yok, dolayısıyla sizin için yazılacak bir dosya da yok. Bu satırı burada adları gerçekten çözen şeye — dnsmasq, NetworkManager — ekleyip yeniden yükleyin:',
+    manualFile: 'Çoğu makinede o dosya {file} olur.',
+    noPrompt:
+      'Bu makinede {mechanism} var ama pencereli bir uygulamanın parola sorabileceği bir yol yok. Bunu kendiniz uygulayın:',
+    test: 'Sına',
+    testHint: 'Önce yanıtlayıcıya, sonra bu makineye sorar — bunlar farklı sorular.',
+    mechanisms: {
+      resolver: 'bir /etc/resolver dosyası',
+      'network-manager': 'NetworkManager’ın dnsmasq’ı',
+      dnsmasq: 'dnsmasq',
+      'systemd-resolved': 'systemd-resolved',
+      nrpt: 'Ad Çözümleme İlke Tablosu (NRPT)',
+      manual: 'bilinen bir mekanizma yok',
+    },
+    probes: {
+      udp: 'Yanıtlayıcı, UDP üzerinden',
+      tcp: 'Yanıtlayıcı, TCP üzerinden',
+      system: 'Bu makinenin kendi çözümleyicisi',
+      public: 'İnternetin geri kalanı',
+    },
   },
 
   /**
@@ -322,6 +395,8 @@ export default {
     // "Sil" demesi, ekran okuyucu kullanıcısına hangi projeyi kaldırmak üzere
     // olduğunu söylemez.
     aria: {
+      favourite: '{name} projesini yukarı sabitle',
+      unfavourite: '{name} sabitlemesini kaldır',
       build: '{name} projesini derle',
       stop: '{name} projesini durdur',
       start: '{name} projesini başlat',
@@ -743,6 +818,8 @@ export default {
       '{path} okundu. Oraya asla bir şey yazılmaz. İçe aktarma, siteyi bu çalışma alanına kopyalar ve ardından diğer klasörler gibi sahiplenir.',
     take: 'İçe aktar',
     taken: 'Zaten burada',
+    serviceHint:
+      'Compose dosyası bunu istiyor. StackVo’nun kendisi var — içe aktardıktan sonra Ayarlar’dan açın.',
     move: 'Kopyalamak yerine taşı',
     moveOff: 'Aslı yerinde kalır, yani karşılaştırırken diğer araç çalışmaya devam eder.',
     moveOn: 'Kopya tamamlandığında aslı silinir. Diğer araç bu siteyi artık sunmayacak.',
@@ -827,6 +904,30 @@ export default {
     noSubject: '(konu yok)',
     notRunning: 'Posta yakalayıcı çalışmıyor, hiçbir şey yakalanmıyor.',
     clear: 'Gelen kutusunu boşalt',
+    release: 'Gönder',
+    releaseTo: 'Bu mesajı şuraya ilet',
+    releaseHint: 'Gerçek bir adres ya da virgülle ayrılmış birkaç adres. Kopyası yakalayıcıda kalır.',
+    released: 'Gönderildi.',
+    relayTitle: 'Aktarım sunucusu',
+    relayOff: 'Ayarlanmadı — gönderme reddedilir.',
+    relayConfigure: 'Ayarla',
+    relayExplain:
+      'İletilen mesajın geçeceği SMTP sunucusu. Uygulamanızın gönderdiği hiçbir şey buraya gitmez — yakalayıcı hepsini yakalamaya devam eder, yalnızca sizin ilettiğiniz mesaj dışarı çıkar.',
+    relayEnable: 'Mesaj iletmeye izin ver',
+    relayHost: 'SMTP sunucusu',
+    relayPort: 'Port',
+    relaySecurity: 'Güvenlik',
+    relayNoTls: 'Yok',
+    relayUsername: 'Kullanıcı adı',
+    relayPassword: 'Parola',
+    relayPasswordSet: 'Parola (saklı — korumak için boş bırakın)',
+    relayForget: 'Parolayı unut',
+    relayFrom: 'Gönderen',
+    relayFromHint: 'Sağlayıcılar sahibi olmadıkları bir gönderen adresini reddeder.',
+    relayAllowed: 'Yalnızca şuraya gönderilebilsin',
+    relayAllowedHint: 'Virgülle ayırın. Boş bırakmak “her yere” demektir; bu da tek yazım hatası uzaklıktadır.',
+    relayNoKeystore: 'Bu makinede anahtar deposu yok, parola saklanamaz. Parola istemeyen bir sunucu kullanın.',
+    relayRestart: 'Yakalayıcı bunları yeniden oluşturulduğunda okur — kaydettikten sonra yığını yeniden başlatın.',
     deleteOne: 'Bu mesajı sil',
     confirmClear:
       'Yakalanan tüm mesajlar silinecek. Posta yakalayıcı bir çöp kutusudur, yedeği yoktur.',
@@ -972,6 +1073,14 @@ export default {
     needsXdebug: 'Önce Xdebug’i açın — profilleme aynı eklentinin bir kipidir.',
     modeDebug: 'Adım adım hata ayıklama',
     modeProfile: 'Profilleme',
+    modeTrace: 'İz',
+    traceCost:
+      'İz kaydı her fonksiyon girişini ve çıkışını yazar; profilden çok daha ağırdır — tek bir istek yüzlerce megabayta çıkabilir. Bir sayfayı kaydedin, sonra geri alın.',
+    traces: 'Kaydedilen izler ({n})',
+    flameSummary: '{records} giriş/çıkış kaydı, {stacks} ayrı yığın, toplam {total} ms.',
+    traceTruncated: 'İz, bu uygulamanın okuduğundan uzundu. Çizilen isteğin tamamı değil, başı.',
+    tracePruned: '{n} yol çizilemeyecek kadar inceydi ve gösterilmiyor.',
+    traceDepthCapped: 'Yığın 64 kareden derine indi; oranın altı ölçüldü ama çizilmedi.',
     modesExclusive:
       'Biri ya da diğeri. Adım ayıklama her istekte bağlanır, profilleme bir tetikleyici bekler; ikisini birden açık bırakmak birini bozar.',
     howToRecord:
@@ -1347,6 +1456,11 @@ export default {
 
     theme: 'Tema',
     language: 'Dil',
+    packProgress: '{total} dizeden {done} tanesi ({percent}%) — kalanı İngilizce görünür',
+    packRemove: 'Kaldır',
+    packTag: 'Dil etiketi',
+    packHint: 'de, fr ya da pt-BR gibi bir etiket. Çevirebileceğiniz bir dosya oluşturur; çevrilmeyen dizeler İngilizce kalır.',
+    packStart: 'Çeviri başlat',
     preferences: 'Tercihler',
     stackSub: 'Compose seviyesinde: yeniden üretir ve konteynerleri yeniden kurar.',
     runtimes: {
@@ -1653,6 +1767,7 @@ export default {
   },
 
   tunnel: {
+    scan: 'Tüneli başka bir cihazda açmak için kamerayı buna tutun. Tünel durunca bu da çalışmaz.',
     title: 'Paylaş',
     explain:
       'Bu projeye yönlenen geçici bir genel URL — .loc alan adına erişemeyen webhook gönderenler (Stripe, GitHub) için. Yığın ağında yan konteyner olarak bir Cloudflare hızlı tüneli çalıştırır; hesap gerekmez.',
@@ -1713,7 +1828,48 @@ export default {
     statements: 'İfadeler ({count})',
   },
 
+  stripe: {
+    title: 'Stripe webhook’ları',
+    explain:
+      'Canlı Stripe olaylarını bu projeye iletir. CLI dışarı doğru bağlanır; yani internetten erişilebilir olmak gerekmiyor ve imza gizi oturum boyunca değişmiyor — adresi her başlatışta değişen tünelin aksine.',
+    key: 'Gizli veya kısıtlı API anahtarı',
+    keyHint: 'İşletim sisteminin anahtar deposunda tutulur, çalışma alanındaki bir dosyada değil.',
+    keyStored: 'Bu proje için bir anahtar saklı.',
+    saveKey: 'Sakla',
+    clearKey: 'Kaldır',
+    path: 'İletilecek yol',
+    needsRunning: 'Önce projeyi başlatın — aksi hâlde her olay iletilemez ve Stripe bu başarısızlıkları kaydeder.',
+    connecting: 'Stripe’a bağlanılıyor…',
+    secretIs: 'Bu oturumun webhook imza gizi:',
+    start: 'Dinle',
+    stop: 'Durdur',
+  },
+  oauth: {
+    title: 'OAuth geri dönüş adresi',
+    explain:
+      'Sağlayıcının konsoluna yapıştırılacak adres. Yönlendirme tarayıcıya gönderilir, sağlayıcı bu adresi kendisi çağırmaz — yani akışın kendisi için yerel adres çalışır. Değişen şey, kaydederken sağlayıcının bu metni kabul edip etmediği.',
+    path: 'Geri dönüş yolu',
+    local: 'Yerel adres',
+    public: 'Genel adres',
+    noTunnel: 'Çalışan tünel yok, bu yüzden genel adres de yok. Sağlayıcı yereli reddederse yukarıdaki Paylaş bölümünden bir tünel başlatın.',
+    takesLocal: 'Yerel yeterli',
+    takesPublic: 'Genel gerekiyor',
+  },
+  landing: {
+    title: 'Açılış sayfası',
+    explain: 'Her projeyi ve servisi listeleyen tek sayfa, bu çalışma alanının kendi adresinde.',
+    counts: '{projects} proje, {services} servis',
+    start: 'Yayına al',
+    stop: 'Durdur',
+    refresh: 'Yeniden yaz',
+    rendered: '{when} tarihinde yazıldı. Kendi kendini güncellemiyor.',
+  },
+  qr: {
+    label: '{text} için QR kodu',
+    tooLong: 'Bu adres bir QR koduna sığmayacak kadar uzun.',
+  },
   lan: {
+    scan: 'Adresi diğer cihazda açmak için kamerayı buna tutun. Aşağıdaki sertifika uyarısı orada da çıkar.',
     title: 'Bu ağda',
     explain:
       'Bu projeyi aynı ağdaki bir telefondan ya da başka bir bilgisayardan açın. Ad sslip.io üzerinden çözülüyor; adres adın kendisinden hesaplanıyor — hiçbir şey kaydedilmiyor, hiçbir şey yayınlanmıyor ve ağdan dışarı trafik çıkmıyor.',
@@ -1770,6 +1926,10 @@ export default {
     extRemoveHint: 'Çalışan hiçbir şey değişmez — derleme onu zaten düşürüyor.',
     hostsMissing: '{count} alan adının hosts kaydı yok.',
     hostsRepair: 'İncele ve onar',
+    dnsBroken:
+      'Makine {suffix} adlarını {port} portundaki yerel bir yanıtlayıcı üzerinden çözüyor ve orada cevap veren yok — o sonek altındaki her ad düşüyor.',
+    dnsBrokenFix:
+      'Ayarlar → Yerel DNS: yanıtlayıcıyı yeniden açın ya da makineyi ona yönlendiren anahtarı kapatın.',
 
     generatedTitle: 'Üretilen yapılandırma',
     generatedDesc:
@@ -1999,6 +2159,20 @@ export default {
     hostsNeedsAdmin: 'hosts dosyasını düzenlemek için yönetici yetkisi gerekiyor.',
     hostsNotReplaced: 'hosts dosyası değiştirilemedi.',
     installPolkit: 'polkit kurun ya da /etc/hosts dosyasını elle düzenleyin.',
+    perfPathIsRelative: 'Proje içinden bir dizin adı verin: vendor, storage/framework gibi.',
+    perfNothingToSeed:
+      'O dizin projede henüz yok. Önce bağımlılıkları kurun ya da açıp konteyner içindeki araçların oluşturmasına izin verin.',
+    perfSeedFailed: 'Dizin birime kopyalanamadı, bu yüzden hiçbir şey değiştirilmedi.',
+    tldIsOneLabel: 'Sonek tek bir etiketle biter: harf, rakam ve tire — stackvo.loc gibi.',
+    dnsPlaceTheLineYourself:
+      'Gösterilen satırı bu makinede adları çözen şeye ekleyin ve onu yeniden yükleyin.',
+    dnsStartTheResponderFirst:
+      'Önce yanıtlayıcıyı başlatın — aksi hâlde makine kapalı bir porta yönlendirilirdi.',
+    dnsMachineIsNotAskingUs:
+      'Yanıtlayıcı cevap veriyor ama makine ona sormuyor. Çözümleyicinin önünde başka bir şey olabilir.',
+    dnsPublicNamesStopped:
+      'Değişiklik genel adları da götürdü ve geri alındı. Geride hiçbir şey bırakılmadı.',
+    dnsPortAlreadyAnswering: 'Bu makinede o portta zaten başka bir şey cevap veriyor.',
     serviceMustBeInCatalog:
       'Yalnızca contracts/env.schema.json içinde listelenen servisler yönetilebilir.',
     snapshotNameCharset:

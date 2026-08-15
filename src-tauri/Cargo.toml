@@ -83,8 +83,40 @@ keyring = { version = "3", default-features = false, features = [
   "crypto-rust",
 ] }
 
+# Editing somebody else's TOML without reformatting it (K-1).
+#
+# `agents.rs` writes an MCP entry into each assistant's own configuration file
+# and its first rule is that everything already in the file survives — comments,
+# key order, quoting style. For JSON that comes free from `serde_json::Value`;
+# for Codex's `~/.codex/config.toml` it does not, and a plain serialiser would
+# hand somebody back a file with their comments gone and their tables reordered.
+# That is why K-1 sat unbuilt: the module header names this dependency as the
+# blocker and this repository treats one as a measured decision.
+#
+# Measured before adding, the same way `sha2` was: **no new package enters the
+# lock file.** toml_edit 0.25 and toml_writer are already there and already in
+# `NOTICE.md`, reached through `proc-macro-crate` under Tauri's own graph —
+# `Cargo.lock` gains two dependency edges and zero packages. This changes what
+# this crate may `use` rather than what gets compiled, audited or licensed.
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
+
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `preserve_order` keeps a JSON object's keys in the order the file had them.
+#
+# Without it `serde_json::Map` is a BTreeMap, so every object this app parses
+# and writes back comes out **alphabetised**. `agents.rs` edits configuration
+# files it does not own and promises that what is already in them survives —
+# and `examples/agent_config_probe.rs`, run against the real files on a
+# developer's machine, showed four of them coming back with their keys
+# reordered. A 58 KB `~/.claude.json` rewritten into a different order is not
+# data loss and is still not something a tool should do to somebody's file
+# while adding one entry to it.
+#
+# Measured: `indexmap` is what this turns on and it is already in `Cargo.lock`
+# and `NOTICE.md` — no package enters the tree. The behaviour change is
+# deliberate and global, which is the point: every JSON document this app
+# rewrites is somebody else's.
+serde_json = { version = "1", features = ["preserve_order"] }
 # Content addressing for service packages. A manifest states the sha256 of every
 # file it ships and the registry states the sha256 of the manifest, so a client
 # can tell what it downloaded from what somebody else wrote — see

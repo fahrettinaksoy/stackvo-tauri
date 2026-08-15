@@ -806,6 +806,17 @@ pub struct Doctor {
     /// Project domains with no hosts entry. Repaired through the reviewed
     /// `hosts_plan` / `hosts_apply` flow, never blindly.
     pub hosts_missing: Vec<String>,
+    /// The machine asks a local responder that is not answering (E-1).
+    ///
+    /// `None` in every ordinary state, including the feature being switched
+    /// off, because a doctor that lists what is *fine* is one people stop
+    /// reading. It is here at all because this is the single failure in the DNS
+    /// feature that nothing else on screen reports: the resolver file names a
+    /// port, something else took that port, and the symptom is every project
+    /// domain failing to resolve with no error anywhere — the app looks
+    /// healthy, the containers are up, and the browser says the server cannot
+    /// be found.
+    pub dns: Option<DnsTrouble>,
     pub generated: GeneratedStatus,
     /// Unused image/volume counts and bytes; `None` with the engine down.
     pub space: Option<crate::engine::SystemResources>,
@@ -813,6 +824,15 @@ pub struct Doctor {
     pub extensions: Vec<ExtensionProblem>,
     /// Credentials in the keystore that the Bash CLI would misread.
     pub keystore: KeystoreCheck,
+}
+
+/// The resolver points at a port nothing answers on.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DnsTrouble {
+    /// The suffix that has stopped resolving because of it.
+    pub suffix: String,
+    pub port: u16,
 }
 
 /// What a workspace with keystore-backed credentials means for the other tool.
@@ -924,11 +944,22 @@ pub async fn run(root: Option<&Path>) -> Doctor {
         None
     };
 
+    // Two local reads and a loopback probe, and only the second one costs
+    // anything — and only in the state being looked for.
+    let dns = root
+        .map(crate::certs::suffix)
+        .filter(|suffix| crate::dns::configured(suffix) && !crate::dns::answering(suffix))
+        .map(|suffix| DnsTrouble {
+            suffix,
+            port: crate::dns::PORT,
+        });
+
     Doctor {
         core: core_containers(root, engine_up).await,
         preflight,
         ports,
         hosts_missing,
+        dns,
         generated,
         space,
         // Reads files only, so it survives the engine being down — which is
