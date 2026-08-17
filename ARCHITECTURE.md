@@ -19,9 +19,9 @@ Three parts, in the order a request travels:
 
 | Part                                | Where                | Size                    |
 | ----------------------------------- | -------------------- | ----------------------- |
-| Front end — Vue 3, Vuetify 3, Pinia | `src/`               | 24k lines               |
-| Back end — Rust, 89 modules         | `src-tauri/src/`     | 38k lines               |
-| The boundary between them           | `contracts/ipc.json` | 238 commands, 69 events |
+| Front end — Vue 3, Vuetify 3, Pinia | `src/`               | 38k lines               |
+| Back end — Rust, 94 modules         | `src-tauri/src/`     | 76k lines               |
+| The boundary between them           | `contracts/ipc.json` | 248 commands, 69 events |
 
 The two halves never share a type. They share a **contract**, and §5 is about
 why that is a deliberate cost rather than an omission.
@@ -71,25 +71,25 @@ document behind it:
 
 ### 3.1 Layers
 
-`src-tauri/src/` is flat — 89 modules, no subdirectories — but it is not
+`src-tauri/src/` is flat — 94 modules, no subdirectories — but it is not
 unstructured. There are four bands, and the dependency arrows only ever point
 downward:
 
 ```
-  entry              1.3k   lib.rs, main.rs, menu, tray — plugins, state, the
+  entry              1.8k   lib.rs, main.rs, menu, tray — plugins, state, the
       │                     handler list, the window
       ▼
-  commands.rs        6.7k   the IPC surface: 174 #[tauri::command] functions
+  commands.rs       12.8k   the IPC surface: 247 #[tauri::command] functions
       │                     argument validation, orchestration, nothing else
       ▼
-  domain            22.7k   32 modules: generator, manifest, certs, hosts,
-      │                     mail, xdebug, profile, preset, migrate, doctor, …
+  domain            53.3k   94 modules: generator, manifest, certs, hosts,
+      │                     mail, xdebug, profile, preset, migrate, worktree, …
       │                     one subject each; no Tauri types
       ▼
-  platform           5.2k   engine (Docker), runner, elevate, pty, watcher,
+  platform           5.6k   engine (Docker), runner, elevate, pty, watcher,
       │                     applog, atomic, paths, appdir, git
       ▼
-  primitives         2.0k   error, events, progress, hints, inflight, logging,
+  primitives         2.2k   error, events, progress, hints, inflight, logging,
                             crash, contracts
 ```
 
@@ -98,7 +98,7 @@ that is the rule the band structure exists to enforce: everything below it can
 be called from a test, from the `diagnose` example, or from the MCP surface,
 with no running application. → [decision 0001](docs/durum.md)
 
-The 6.7k-line `commands.rs` is the known cost of that rule. It is a directory of
+The 12.7k-line `commands.rs` is the known cost of that rule. It is a directory of
 thin functions rather than a module with a subject, and splitting it by subject
 is the obvious next move; it has not been done because the file's size is
 uncomfortable rather than harmful, and the split would touch every command at
@@ -112,12 +112,13 @@ once.
 | The manifest   | `manifest`, `detect`, `migrate`                                             | `stackvo.json`: its schema, guessing one for an adopted folder, and moving old ones forward                                |
 | Docker         | `engine`, `runner`, `inflight`                                              | Talking to the daemon (bollard), running `docker compose` as a streamed operation, and refusing two at once on one subject |
 | Networking     | `certs`, `hosts`, `elevate`, `tunnel`                                       | TLS via mkcert, `/etc/hosts`, the one privileged call, and the Cloudflare sidecar                                          |
-| Services       | `db`, `worker`, `quickcmd`, `release`, `stats`                              | The optional stack, the per-project sidecars, the command catalogue, and the production image                              |
+| Services       | `db`, `worker`, `quickcmd`, `repl`, `release`, `stats`                      | The optional stack, the per-project sidecars, the command catalogue, the snippet workbench, and the production image       |
 | PHP            | `phpini`, `xdebug`, `profile`, `debugbridge`                                | The overlay that reaches a running container, and the profiler's output                                                    |
 | Node           | `devserver`                                                                 | The dev-server sidecar and the `allowedHosts` snippet                                                                      |
 | Mail           | `mail`                                                                      | The catcher, its search, and the HTML/link checks                                                                          |
+| Branches       | `git`, `worktree`                                                           | Cloning with the user's own git, and giving a branch its own directory, hostname, database and environment                 |
 | Diagnosis      | `doctor`, `preflight`, `diagnostics`, `applog`, `crash`                     | What is wrong, what can be fixed automatically, and what to send when it cannot                                            |
-| The app itself | `workspace`, `preset`, `config`, `locale`, `watcher`, `tray`, `menu`, `mcp` | Where things live, sharing that setup, and the surfaces other than the window                                              |
+| The app itself | `workspace`, `preset`, `config`, `locale`, `watcher`, `tray`, `menu`, `mcp`, `cli` | Where things live, sharing that setup, and the three surfaces other than the window: the tray, the MCP server and `stackvo` |
 
 ### 3.3 State
 
@@ -167,8 +168,8 @@ rather than reaching for it.
 That is not how it started. `Settings.vue` and `ProjectDetail.vue` were 3.4k and
 3.0k lines, held every section's state in one `<script setup>`, and could not be
 mounted in a test at all — so neither was covered by anything. Splitting them
-into 26 panes (14 for the project page, 12 for settings) is the largest single change in this repository's history and is
-written up in [`docs/durum.md`](docs/durum.md) §3.
+into 26 panes (14 for the project page, 12 for settings) is the largest single
+change in this repository's history; its entry is in `CHANGELOG.md`.
 
 Two things that split taught, both now enforced by tests:
 
@@ -196,8 +197,8 @@ rejections".
 
 ## 5. The contract
 
-`contracts/ipc.json` is the specification of the boundary: 238 commands, 69
-events, 58 named types, 3 error shapes, and — for most entries — a `why`.
+`contracts/ipc.json` is the specification of the boundary: 244 commands, 69
+events, 97 named types, 3 error shapes, and — for most entries — a `why`.
 
 It is a **hand-maintained document, not generated code**, and that is the
 trade-off worth stating plainly. Generating TypeScript types from the Rust
@@ -247,8 +248,8 @@ no translation in both locales.
 
 | Suite                   | Count | What it is for                                                                       |
 | ----------------------- | ----: | ------------------------------------------------------------------------------------ |
-| Rust unit + integration |   538 | The domain band, mostly against real files in a temp workspace                       |
-| Front-end (vitest)      |   533 | Composables, and every page and pane **mounted**                                     |
+| Rust unit + integration | 1,186 | The domain band, mostly against real files in a temp workspace                       |
+| Front-end (vitest)      |   794 | Composables, and every page and pane **mounted**                                     |
 | Differential            |     — | The Rust generator's output against what the Bash generator writes, on real projects |
 
 The tests that exist to catch a _class_ of mistake rather than a case, and are
@@ -279,7 +280,7 @@ when keeping "what is left" in five places stopped being readable.
 
 | Section | Answers |
 | --- | --- |
-| §1 | What was delivered, with the decision and the mistake found on the way. |
+| §1 | Where the record of delivered work is — `CHANGELOG.md`, §6 and the git history. Finished items leave that document. |
 | §2–§3 | What the product cannot do against ten rivals, and what the engineering will not carry at ten developers and three hundred machines. |
 | §4–§5 | What to do next, and what is waiting on a decision only the owner can make. |
 | §6 | **The decisions**, numbered. Comments in this codebase say "ADR 0005"; that is §6. |
@@ -299,8 +300,8 @@ first draft named a module as weakly tested that was 94% covered, and counted 33
 of something there were 60 of.
 
 So the checkable claims here are checked. `src-tauri/tests/readme_claims.rs`
-covers `README.md`; the counts above (89 modules, 238 commands, 185 contract
-entries, 533 front-end and 538 Rust tests) come from `contract_agreement.rs` and from the module list itself, and
+covers `README.md`; the counts above (94 modules, 248 commands) come from
+`contract_agreement.rs` and from the module list itself, and
 a claim that drifts fails a test rather than aging quietly.
 
 The prose is not machine-checkable, and that is what review is for. When a

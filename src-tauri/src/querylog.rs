@@ -27,16 +27,31 @@
 //! data itself: an `INSERT` carries the row. It is never written to disk by this
 //! app, never included in a diagnostics bundle, and cleared with the session.
 //!
-//! ## Postgres and Mongo are not here, and that is a boundary rather than a gap
+//! One database breaks the middle clause and the pane says so: on Postgres the
+//! recording *is* the server writing to its own log file, so switching it on
+//! puts every statement on disk inside the container. Nothing here can take that
+//! back out — see [`clear`] for what "cleared with the session" means when the
+//! log belongs to somebody else.
 //!
-//! Postgres logs to a file or to stderr, and `log_statement` is settable at
-//! runtime — but reading it back means reading the container's log stream and
-//! parsing a format that changes with `log_line_prefix`, which is a setting.
-//! `pg_stat_statements` is the right answer there and it is an extension that
-//! has to be loaded at start-up, so it is a package change rather than a
-//! command. Mongo's profiler is per-database and writes a capped collection.
-//! Both are real work of a different shape; naming them here is how the next
-//! reader knows they were considered rather than forgotten.
+//! ## Postgres and Mongo joined, and the note that said they could not
+//!
+//! This header used to end with a paragraph explaining that Postgres and Mongo
+//! were out of reach: a stream whose format `log_line_prefix` changes, and a
+//! profiler that is per-database. Both facts were true and neither was a reason.
+//! `log_line_prefix` is a setting **this app can set**, and per-database is a
+//! loop. What the note actually recorded was a shape of mistake worth keeping:
+//! the difference between "cannot" and "differently" is one measurement, and
+//! twice here the measurement went the other way.
+//!
+//! The Postgres half then failed a third time, for a reason none of the
+//! reasoning above would have found. It read the container's log stream, which
+//! is right for a stock image and wrong for every Postgres this app installs:
+//! the packaged `postgresql.conf` sets `logging_collector = on`, and a collector
+//! takes stderr out of the stream and puts it in a file. Recording worked, the
+//! parser worked, every unit test passed, and the pane showed nothing. The fix
+//! is to stop assuming and ask the server — [`pg_log_path_sql`] — and the lesson
+//! is the one `examples/querylog_probe.rs` exists to enforce: a fixture proves
+//! the parser reads what its author believed the format to be.
 
 use crate::db::Kind;
 use crate::error::{Code, Error, Result};
@@ -84,8 +99,12 @@ pub struct Repeat {
 pub struct Session {
     /// Is the log on for this instance?
     pub recording: bool,
-    /// True when this kind of database can be asked at all — see the module
-    /// header for why Postgres and Mongo answer false.
+    /// True when this kind of database can be asked at all.
+    ///
+    /// All four this app runs answer true; anything else in the workspace —
+    /// Redis, RabbitMQ, Memcached — keeps no statement log to switch on, and
+    /// answers false rather than erroring, because the screen asks every
+    /// database and "this kind cannot" must not read as "something broke".
     pub supported: bool,
     pub entries: Vec<Entry>,
     /// Shapes seen more times than [`N_PLUS_ONE`], most repeated first.
@@ -210,15 +229,19 @@ fn collapse_in_lists(sql: &str) -> String {
 /// manufactured.
 fn is_own_traffic(sql: &str) -> bool {
     let lower = sql.to_ascii_lowercase();
-    lower.contains("general_log")
+    // Postgres: exact, because every statement this module sends carries the
+    // comment. The keyword list below stays for MySQL, whose general log records
+    // the statement without a way to add one.
+    lower.contains(OWN_MARKER)
+        || lower.contains("general_log")
         || lower.contains("@@general_log")
         || lower.starts_with("set global")
         || lower.starts_with("select @@")
-        // The Postgres half asks these, and a session whose first finding is
-        // the tool reading its own switch is a finding the tool manufactured.
+        // Kept as a floor under the comment marker: a workspace that was
+        // recording before this version shipped has unmarked `ALTER SYSTEM`
+        // lines already in its log, and they are still not findings.
         || lower.starts_with("alter system")
         || lower.contains("pg_reload_conf")
-        || lower.starts_with("show ")
 }
 
 /// The shapes worth naming, most repeated first.
@@ -421,6 +444,22 @@ fn mongo_skip_list() -> String {
 /// lines it asked for from the lines the server writes anyway.
 const PG_MARKER: &str = "STACKVO";
 
+/// The comment every statement **this module** sends to Postgres carries.
+///
+/// `log_statement = 'all'` logs this module's own statements too, comment and
+/// all, so a session's first finding used to be the tool asking where its log
+/// was. [`is_own_traffic`] matched those by keyword — `alter system`, `show `,
+/// `pg_reload_conf` — which is a list that has to be extended every time a
+/// statement is added and which hides a *user's* `SHOW` along the way. A comment
+/// this app writes is exact: it marks the statements it sent and nothing else.
+const OWN_MARKER: &str = "stackvo:querylog";
+
+/// What [`clear`] writes into a Postgres log to mean "everything above this is
+/// the previous session".
+///
+/// See [`clear`] for why a watermark rather than a deletion.
+const PG_CLEAR_MARKER: &str = "stackvo:querylog:clear";
+
 /// The SQL that turns recording on, off, or reports it.
 ///
 /// Kept as functions rather than inlined so the statements are visible in one
@@ -591,41 +630,120 @@ fn is_own_mongo_traffic(text: &str) -> bool {
 
 // ------------------------------------------------------------- postgres
 
-/// Turn logging on, and pin the format so it can be read back.
+/// Turn logging on, and pin the format **and the place** so it can be read back.
 ///
-/// Two `ALTER SYSTEM` statements and a reload — no restart. The prefix is the
-/// half that makes this possible at all: `%n` is a Unix epoch, so a Postgres
-/// statement lands on the same axis as a MySQL one and as a dump, and the
-/// marker separates the lines this asked for from the server's own chatter.
+/// Three `ALTER SYSTEM` statements and a reload — no restart. Each pins one
+/// thing a reader would otherwise have to guess:
+///
+/// * `log_statement = 'all'` is the switch itself.
+/// * `log_line_prefix` carries `%n`, a Unix epoch, so a Postgres statement lands
+///   on the same axis as a MySQL one and as a dump, and the marker separates the
+///   lines this asked for from the server's own chatter. `%n` was the one thing
+///   here that looked like a version risk, so it was measured rather than
+///   assumed: `postgres:12` — the oldest version this app's catalogue offers —
+///   and `postgres:14` both write it. An escape a server did not understand
+///   would be dropped silently, leaving lines with no timestamp and a pane that
+///   says "recording" over an empty list.
+/// * `log_destination = 'stderr'` is the format of the file. A workspace
+///   configured for `csvlog` or `jsonlog` writes the same statements in a shape
+///   [`pg_parse`] cannot read, and unlike the prefix that is not visible in
+///   anything the pane shows.
 ///
 /// `ALTER SYSTEM` writes `postgresql.auto.conf`, which survives a restart —
-/// which is exactly why [`pg_disable`] resets both keys rather than only
+/// which is exactly why [`pg_disable_sql`] resets every key rather than only
 /// turning the switch off. A workspace left with a rewritten `log_line_prefix`
 /// would be one this app changed and never changed back.
-fn pg_enable_sql() -> [&'static str; 3] {
+fn pg_enable_sql() -> [&'static str; 4] {
     [
-        "ALTER SYSTEM SET log_statement = 'all'",
+        "ALTER SYSTEM SET log_statement = 'all' /* stackvo:querylog */",
         // Cannot be one statement with the above: `ALTER SYSTEM` refuses to run
         // inside a transaction block, and psql wraps a multi-statement `-c` in
         // one. Measured, as an error message, on the first attempt.
-        "ALTER SYSTEM SET log_line_prefix = 'STACKVO %n '",
-        "SELECT pg_reload_conf()",
+        "ALTER SYSTEM SET log_line_prefix = 'STACKVO %n ' /* stackvo:querylog */",
+        "ALTER SYSTEM SET log_destination = 'stderr' /* stackvo:querylog */",
+        "SELECT pg_reload_conf() /* stackvo:querylog */",
     ]
 }
 
-fn pg_disable_sql() -> [&'static str; 3] {
+fn pg_disable_sql() -> [&'static str; 4] {
     [
-        "ALTER SYSTEM RESET log_statement",
-        "ALTER SYSTEM RESET log_line_prefix",
-        "SELECT pg_reload_conf()",
+        "ALTER SYSTEM RESET log_statement /* stackvo:querylog */",
+        "ALTER SYSTEM RESET log_line_prefix /* stackvo:querylog */",
+        "ALTER SYSTEM RESET log_destination /* stackvo:querylog */",
+        "SELECT pg_reload_conf() /* stackvo:querylog */",
     ]
 }
 
-/// Pull the statements out of a container log.
+/// Is it on? Asked of the server rather than remembered by this app.
+fn pg_status_sql() -> &'static str {
+    "SHOW log_statement /* stackvo:querylog */"
+}
+
+/// Where the server is writing, in the server's own words.
+///
+/// The one question the first version of this never asked, and the reason the
+/// Postgres half read nothing on a real workspace. It assumed a container's log
+/// stream — true of the stock image, false of every StackVo Postgres package,
+/// which ships a `postgresql.conf` with `logging_collector = on`. A collector
+/// takes stderr away from the container's stdout and writes it to a file under
+/// the data directory, so `docker logs` holds the startup banner, one line
+/// saying "redirecting log output to logging collector process", and then
+/// nothing for the rest of the container's life. Measured against this
+/// workspace's own `postgres:14`: recording on, statements in the file, and
+/// `logs_tail` returning a banner from four hours earlier.
+///
+/// `pg_current_logfile('stderr')` is the server answering it directly, and it
+/// answers rotation too — a `log_filename` with a `%Y-%m-%d` in it names a
+/// different file every day and this always names today's. It is `NULL` when
+/// there is no collector, which is the signal to read the stream instead.
+///
+/// Relative paths are resolved here rather than in Rust because
+/// `data_directory` is another thing only the server knows.
+fn pg_log_path_sql() -> &'static str {
+    "SELECT COALESCE(CASE WHEN pg_current_logfile('stderr') LIKE '/%' \
+       THEN pg_current_logfile('stderr') \
+       ELSE current_setting('data_directory') || '/' || pg_current_logfile('stderr') END, '') \
+     /* stackvo:querylog */"
+}
+
+/// The statement whose presence in the log means "everything above me is over".
+fn pg_clear_sql() -> String {
+    format!("SELECT '{PG_CLEAR_MARKER}'")
+}
+
+/// Everything the server has written that this app can still reach.
+///
+/// Two sources, and the server picks: the file when a collector owns it, the
+/// container's stream when nothing does. The fallback is not a guess — a
+/// collector's file that cannot be read from here (a `tail` the image does not
+/// ship, a path outside the container's own filesystem) is a reason to try the
+/// other source rather than to report a session with nothing in it.
+async fn pg_log_text(root: &std::path::Path, service: &str) -> Result<String> {
+    let container = crate::db::container_of(root, service);
+    let path = crate::db::run_sql(root, service, pg_log_path_sql())
+        .await?
+        .trim()
+        .to_string();
+
+    if path.is_empty() {
+        return crate::engine::logs_tail(&container, PG_TAIL).await;
+    }
+    match crate::db::read_tail(&container, &path, PG_TAIL).await {
+        Ok(text) => Ok(text),
+        Err(_) => crate::engine::logs_tail(&container, PG_TAIL).await,
+    }
+}
+
+/// Pull the statements out of a Postgres log.
 ///
 /// Only the marked lines, and only the ones that are statements: the same log
 /// carries the `LOG:  parameter … changed` line this module's own `ALTER SYSTEM`
 /// produced, which would otherwise be the first thing every session reported.
+///
+/// The log is append-only from this app's side, so [`clear`] is a **watermark**
+/// rather than a deletion: a statement carrying [`PG_CLEAR_MARKER`] means
+/// everything above it belongs to a session somebody already finished with, and
+/// what has been collected so far is dropped on the spot.
 pub fn pg_parse(text: &str) -> Vec<Entry> {
     let mut out: Vec<Entry> = Vec::new();
 
@@ -656,6 +774,12 @@ pub fn pg_parse(text: &str) -> Vec<Entry> {
             continue;
         };
         let sql = sql.trim();
+        // The watermark, checked before anything filters it: what came before
+        // it is a session the reader has already thrown away.
+        if sql.contains(PG_CLEAR_MARKER) {
+            out.clear();
+            continue;
+        }
         // An empty statement is the opening line of a multi-line one whose text
         // is entirely on the continuations; keep it so they have somewhere to
         // land, and drop it at the end if nothing followed.
@@ -705,6 +829,13 @@ pub async fn disable(root: &std::path::Path, service: &str) -> Result<()> {
         return Ok(());
     }
     if kind == Kind::Postgres {
+        // The watermark first, while the log is still recording — otherwise
+        // stopping would leave this session's statements as the first thing the
+        // next one shows. Every other kind here deletes what it collected on the
+        // way out, and this is the nearest true thing on a log the app does not
+        // own: the statements stay in the server's file, and nothing this app
+        // shows reaches back past the line.
+        crate::db::run_sql(root, service, &pg_clear_sql()).await?;
         for statement in pg_disable_sql() {
             crate::db::run_sql(root, service, statement).await?;
         }
@@ -717,9 +848,15 @@ pub async fn disable(root: &std::path::Path, service: &str) -> Result<()> {
 
 /// Throw away what has been collected without turning recording off — the
 /// "start again from here" a person reaches for before reloading a page.
-/// Postgres cannot truncate: what it wrote is in the container's log stream,
-/// which this app does not own and must not rewrite — so "start again" there is
-/// a no-op rather than a deletion, and the screen keeps showing the session.
+///
+/// Postgres cannot truncate, and that has not changed: what it wrote is a log
+/// this app does not own and must not rewrite. What *did* change is the
+/// conclusion drawn from it. This used to be a no-op there — the button worked
+/// on three databases and quietly did nothing on the fourth — and "cannot
+/// delete" is not the same as "cannot start again". So it writes a **watermark**
+/// instead: one statement whose text says where the previous session ended, and
+/// [`pg_parse`] drops everything above it on the next read. The reader gets what
+/// they pressed the button for; the server's log is left exactly as it was.
 pub async fn clear(root: &std::path::Path, service: &str) -> Result<()> {
     let kind = guard(service)?;
     // Mongo drops its collection on the way off; "start again" mid-session is
@@ -734,7 +871,9 @@ pub async fn clear(root: &std::path::Path, service: &str) -> Result<()> {
         return Ok(());
     }
     if kind == Kind::Postgres {
-        return Ok(());
+        return crate::db::run_sql(root, service, &pg_clear_sql())
+            .await
+            .map(|_| ());
     }
     crate::db::run_sql(root, service, "TRUNCATE TABLE mysql.general_log;")
         .await
@@ -773,13 +912,12 @@ pub async fn read(root: &std::path::Path, service: &str) -> Result<Session> {
         };
         (on, entries)
     } else if kind == Kind::Postgres {
-        let on = crate::db::run_sql(root, service, "SHOW log_statement")
+        let on = crate::db::run_sql(root, service, pg_status_sql())
             .await?
             .trim()
             .eq_ignore_ascii_case("all");
         let entries = if on {
-            let container = crate::db::container_of(root, service);
-            pg_parse(&crate::engine::logs_tail(&container, PG_TAIL).await?)
+            pg_parse(&pg_log_text(root, service).await?)
         } else {
             Vec::new()
         };
@@ -981,6 +1119,57 @@ LOG:  checkpoint starting: time
     #[test]
     fn an_empty_statement_with_no_continuation_is_dropped() {
         assert!(pg_parse("STACKVO 1786801312.948 LOG:  statement: \n").is_empty());
+    }
+
+    /// Every statement this module sends carries a comment, and none of them is
+    /// a finding — including the one that asks where the log file is, which is
+    /// sent on **every read** and would otherwise be the most repeated shape in
+    /// any session long enough to matter.
+    #[test]
+    fn the_statements_this_module_sends_are_not_findings() {
+        let mut log = String::new();
+        for statement in pg_enable_sql()
+            .iter()
+            .chain(pg_disable_sql().iter())
+            .chain([pg_status_sql(), pg_log_path_sql()].iter())
+        {
+            log.push_str(&format!(
+                "STACKVO 1786801017.193 LOG:  statement: {statement}\n"
+            ));
+        }
+        log.push_str("STACKVO 1786801018.000 LOG:  statement: SELECT * FROM posts\n");
+
+        let entries = pg_parse(&log);
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(entries[0].sql, "SELECT * FROM posts");
+    }
+
+    /// The keyword list this replaced hid `SHOW ` — every `SHOW`, including a
+    /// user's own. A query log that drops the reader's statements to hide the
+    /// tool's is one that lies in the direction nobody would check.
+    #[test]
+    fn a_users_own_show_is_still_a_finding() {
+        let entries = pg_parse("STACKVO 1786801017.193 LOG:  statement: SHOW search_path\n");
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(entries[0].sql, "SHOW search_path");
+    }
+
+    /// "Start again from here" on a log that cannot be truncated: the watermark
+    /// is a statement, and everything above it goes.
+    #[test]
+    fn the_clear_watermark_drops_what_came_before_it() {
+        let log = format!(
+            "STACKVO 1786801010.000 LOG:  statement: SELECT * FROM old_page\n\
+             STACKVO 1786801011.000 LOG:  statement: {}\n\
+             STACKVO 1786801012.000 LOG:  statement: SELECT * FROM new_page\n",
+            pg_clear_sql()
+        );
+
+        let entries = pg_parse(&log);
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(entries[0].sql, "SELECT * FROM new_page");
+        // And the watermark itself is not shown as a statement somebody ran.
+        assert!(!entries[0].sql.contains(PG_CLEAR_MARKER));
     }
 
     /// A malformed or unmarked line is dropped rather than half-read — the same

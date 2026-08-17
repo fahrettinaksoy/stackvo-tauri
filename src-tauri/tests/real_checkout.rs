@@ -361,11 +361,16 @@ fn quick_commands_match_what_each_real_project_has() {
         let commands = quickcmd::for_project(&root, &name).expect("commands");
 
         for command in &commands {
-            // Every offer resolves back to the catalog — the id the UI is given
-            // is exactly the id `quick_command_run` will accept.
-            let spec = quickcmd::resolve(&command.id).expect("offered id must resolve");
+            // Every offer resolves back — the id the UI is given is exactly the
+            // id `quick_command_run` will accept, whether it came from the
+            // catalogue or from the project's own manifest (B-4).
+            let spec =
+                quickcmd::resolve(&root, &name, &command.id).expect("offered id must resolve");
             assert_eq!(spec.display, command.display);
-            // And the marker it claims really is there.
+            assert_eq!(spec.declared, command.declared);
+
+            // And the marker it claims really is there. A declared command
+            // names `stackvo.json`, which is the file it was read out of.
             assert!(
                 dir.join(&command.because).exists(),
                 "{name}: offered {} on the strength of {}, which is absent",

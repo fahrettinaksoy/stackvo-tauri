@@ -67,4 +67,24 @@ describe('the right-to-left setting', () => {
       expect(vuetify.locale.rtl.value[locale]).toBe(false);
     }
   });
+
+  /**
+   * The second half, and it is not the same element.
+   *
+   * Vuetify's flag turns the app root round. Everything Vue teleports out of
+   * that root — which in this application is every dialog, side sheet, menu and
+   * tooltip, because the overlay container is a sibling of `#app` — inherits
+   * its direction from the document instead. `tests/e2e/rtl.e2e.js` is what
+   * measures the result with boxes; this is what keeps the attribute from
+   * quietly going away.
+   */
+  it('turns the document round as well as the app root', () => {
+    applyAppearance({ rtl: true });
+    expect(document.documentElement.getAttribute('dir')).toBe('rtl');
+
+    // Written both ways rather than removed when off: an attribute that is
+    // sometimes absent is one a user stylesheet has to guess about.
+    applyAppearance({ rtl: false });
+    expect(document.documentElement.getAttribute('dir')).toBe('ltr');
+  });
 });

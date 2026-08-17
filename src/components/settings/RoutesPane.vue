@@ -167,7 +167,7 @@ onMounted(load);
 
 <style scoped>
 .note {
-  padding-left: 56px;
+  padding-inline-start: 56px;
   padding-top: 2px;
   font-size: 0.7rem;
 }

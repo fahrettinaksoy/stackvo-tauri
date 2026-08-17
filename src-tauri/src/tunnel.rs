@@ -216,6 +216,7 @@ mod tests {
             errors: vec![],
             warnings: vec![],
             hooks: Default::default(),
+            commands: Default::default(),
             local: Vec::new(),
         };
         assert_eq!(internal_port(&m), 80);

@@ -20,6 +20,7 @@ import PhpIniPane from '@/components/project/PhpIniPane.vue';
 import ManifestPane from '@/components/project/ManifestPane.vue';
 import LocalOverridePane from '@/components/project/LocalOverridePane.vue';
 import HooksPane from '@/components/project/HooksPane.vue';
+import WorktreePane from '@/components/project/WorktreePane.vue';
 import RequirementsPane from '@/components/project/RequirementsPane.vue';
 import OverviewPane from '@/components/project/OverviewPane.vue';
 import ProfilerPane from '@/components/project/ProfilerPane.vue';
@@ -29,6 +30,7 @@ import StripePane from '@/components/project/StripePane.vue';
 import LanPane from '@/components/project/LanPane.vue';
 import WorkersPane from '@/components/project/WorkersPane.vue';
 import TerminalPane from '@/components/project/TerminalPane.vue';
+import ReplPane from '@/components/project/ReplPane.vue';
 import XdebugPane from '@/components/project/XdebugPane.vue';
 import ReleasePane from '@/components/project/ReleasePane.vue';
 import { useOperationsStore } from '@/stores/operations';
@@ -522,6 +524,20 @@ onUnmounted(() => {
                 {{ t('quickCmd.because', { file: command.because }) }}
               </v-list-item-subtitle>
               <template #append>
+                <!-- Where the row came from, said rather than implied (B-4).
+                   A command out of the repository somebody cloned is a
+                   different kind of thing from one this application shipped,
+                   and the person deciding whether to press it is entitled to
+                   know which they are looking at. -->
+                <v-chip
+                  v-if="command.declared"
+                  size="x-small"
+                  variant="tonal"
+                  color="info"
+                  class="mr-2"
+                >
+                  {{ t('quickCmd.declared') }}
+                </v-chip>
                 <!-- Said on the row, not discovered by pressing it: one of these
                    opens a terminal window and the other prints into the
                    console below, and they look identical otherwise. -->
@@ -823,6 +839,11 @@ onUnmounted(() => {
              case. -->
         <template v-if="shows('container')">
           <TerminalPane :container-name="project?.containerName" :running="running" />
+          <!-- F-5, and deliberately directly under the terminal. §5.5 was the
+               decision to reverse `quickcmd.rs`'s refusal of an in-app REPL,
+               and the refusal is answered by adjacency rather than by argument:
+               a line at a time goes above, a snippet you edit goes here. -->
+          <ReplPane :name="name" :running="running" />
         </template>
 
         <!-- MANIFEST ------------------------------------------------------ -->
@@ -856,6 +877,15 @@ onUnmounted(() => {
              the only way to approve one. -->
         <template v-if="shows('configuration')">
           <HooksPane :name="name" />
+        </template>
+
+        <!-- WORKTREES (N) ------------------------------------------------- -->
+        <!-- Below the two manifests, because that is what a worktree is made
+             of: the branch's committed file, and a machine-local overlay that
+             gives the checkout its own name and hostname. A project either has
+             worktrees or is one, and the pane draws whichever applies. -->
+        <template v-if="shows('configuration')">
+          <WorktreePane :name="name" @changed="load" @removed="router.push('/projects')" />
         </template>
 
         <!-- LOGS ------------------------------------------------------------ -->

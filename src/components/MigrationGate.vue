@@ -197,6 +197,6 @@ onMounted(load);
 .gate-inner {
   width: 100%;
   max-width: 560px;
-  text-align: left;
+  text-align: start;
 }
 </style>

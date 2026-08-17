@@ -559,7 +559,7 @@ watch(
 .change-key {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   opacity: 0.65;
-  margin-right: 4px;
+  margin-inline-end: 4px;
 }
 
 /* Struck through rather than merely dimmed: on a dialog that is the last look

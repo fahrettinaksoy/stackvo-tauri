@@ -741,7 +741,7 @@ onUnmounted(() => clearInterval(timer));
   gap: 2px;
   width: 100%;
   padding: 10px 14px;
-  text-align: left;
+  text-align: start;
   border-radius: calc(var(--app-radius, 12px) - 4px);
 }
 

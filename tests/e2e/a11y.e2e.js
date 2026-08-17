@@ -30,12 +30,24 @@ import { stage } from './stage.js';
  * gate having to decide what it means.
  */
 
-/** The pages a person actually lands on, by the route that opens them. */
+/**
+ * Every route in the application, by the address that opens it.
+ *
+ * It was four of the nine, and the four were the ones somebody thought of. That
+ * is a fine start and a poor basis for a conformance statement, which is a
+ * claim about the product rather than about a sample of it — so the list is now
+ * the router's, and `accessibility-claims.spec.js` fails if the two come apart.
+ */
 const PAGES = [
   ['dashboard', '/'],
   ['projects', '/#/projects'],
+  ['project detail', '/#/projects/shop'],
   ['market', '/#/market'],
+  ['logs', '/#/logs'],
+  ['dumps', '/#/dumps'],
+  ['mail', '/#/mail'],
   ['settings', '/#/settings'],
+  ['about', '/#/about'],
 ];
 
 for (const [name, route] of PAGES) {
@@ -49,10 +61,15 @@ for (const [name, route] of PAGES) {
     await expect(page.getByRole('main')).toBeVisible();
     await page.waitForLoadState('networkidle');
 
-    const results = await new AxeBuilder({ page })
-      // The rendered application, not the scaffolding around it.
-      .include('#app')
-      .analyze();
+    // The whole document, and that is a correction rather than a widening for
+    // its own sake. This scoped itself to `#app` — "the rendered application,
+    // not the scaffolding around it" — and Vuetify's overlay container is a
+    // sibling of `#app`, not a child of it. Every tooltip, menu, dialog and
+    // side sheet in this application lives in that container, so the run that
+    // reported "zero serious" had never looked at any of them. It was hiding
+    // one serious rule (`aria-tooltip-name`, four nodes on the dashboard alone)
+    // and the two page-level rules that only exist against `<html>`.
+    const results = await new AxeBuilder({ page }).analyze();
 
     const bad = results.violations.filter((v) => ['serious', 'critical'].includes(v.impact));
     const rest = results.violations.filter((v) => !['serious', 'critical'].includes(v.impact));

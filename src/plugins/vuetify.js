@@ -29,7 +29,21 @@ const brand = {
 
 const sharedVariables = {
   'border-color': '#000000',
-  'medium-emphasis-opacity': 0.68,
+  // Vuetify's default is 0.6 and this was already raised once, to 0.68, for the
+  // reason it is now raised again: it is the opacity every caption, hint and
+  // field label in the application is drawn at, and it decides whether they
+  // meet WCAG AA.
+  //
+  // 0.68 did not. A field label composites its colour alpha (0.87) with the
+  // element opacity (this), so `rgba(27,32,38,.87)` at 0.68 lands on `#787b7f`
+  // — 4.25:1 on white and 3.97:1 on the search field's `#f7f7f7`, both under
+  // the 4.5 threshold. Measured by axe in a real engine, on the settings and
+  // projects pages, once the run stopped being scoped to `#app`.
+  //
+  // 0.76 gives an effective 0.661, which is `#68` on white: 5.1:1 there and
+  // 5.2:1 on `#f7f7f7`. In the dark theme the same change moves text *up* the
+  // scale, since on-surface is the light colour there.
+  'medium-emphasis-opacity': 0.76,
   'border-opacity': 0.12,
 };
 

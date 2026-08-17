@@ -24,7 +24,23 @@ pub struct HostsEntry {
     pub managed_by_stackvo: bool,
 }
 
+/// Where the hosts file is, or where a test says it is.
+///
+/// `STACKVO_HOSTS_PATH` is a seam, and the same one `STACKVO_ROOT` is: without
+/// it the only way to exercise [`apply`] is to overwrite the real
+/// `/etc/hosts`, so §3 #35 — "the privilege paths never ran on Windows or
+/// Linux" — could only ever be closed by trusting the code. With it, the plan,
+/// the write and the marker block round-trip against a temporary file on every
+/// platform CI runs, which is all three.
+///
+/// It is read on every call rather than cached: a test that sets it after this
+/// module has been touched once would otherwise write to the real file.
 pub fn hosts_path() -> PathBuf {
+    if let Ok(from_env) = std::env::var("STACKVO_HOSTS_PATH") {
+        if !from_env.trim().is_empty() {
+            return PathBuf::from(from_env.trim());
+        }
+    }
     if cfg!(target_os = "windows") {
         PathBuf::from(r"C:\Windows\System32\drivers\etc\hosts")
     } else {
@@ -322,7 +338,19 @@ pub fn apply(add: &[String], remove: &[String]) -> crate::error::Result<HostsPla
         let _ = std::fs::write(&backup, original);
     }
 
-    let ok = elevated_copy(&staged, &path)?;
+    // Asked for without a password first, and this is not an optimisation.
+    //
+    // The elevated path was unconditional, so the app raised a polkit dialog or
+    // a UAC prompt even where the file was already ours to write — a root
+    // shell, a CI runner, a machine whose administrator made `/etc/hosts`
+    // group-writable on purpose. A password prompt that cannot change the
+    // outcome is one that teaches people to type their password at anything
+    // that asks, which is the opposite of what a single elevation point is for.
+    //
+    // It is also what makes §3 #35 testable at all: with `STACKVO_HOSTS_PATH`
+    // pointing at a temporary file, this branch is the one that runs, on every
+    // platform, without a prompt nobody could answer in CI.
+    let ok = write_in_place(&path, &plan.preview) || elevated_copy(&staged, &path)?;
     let _ = std::fs::remove_file(&staged);
 
     if !ok {
@@ -333,6 +361,38 @@ pub fn apply(add: &[String], remove: &[String]) -> crate::error::Result<HostsPla
     }
 
     Ok(plan)
+}
+
+/// Replace the file's contents without asking anybody, if we already may.
+///
+/// Opened and truncated rather than written through [`crate::atomic::write`],
+/// and the difference matters here in a way it does not anywhere else this app
+/// writes: an atomic write replaces the *inode*, so the new `/etc/hosts` would
+/// carry the mode and owner of whatever this process created rather than the
+/// ones the system set. A hosts file that lands as `0600 developer:staff` is a
+/// hosts file the resolver may still read and the next tool will not — and it
+/// is not a mistake that announces itself.
+///
+/// The cost is that this is not atomic, which the elevated `cp` below is not
+/// either. `apply` has already written the previous contents to a backup, and
+/// the read-back is what turns "the write claimed to succeed" into "the file
+/// says what we meant".
+fn write_in_place(path: &Path, contents: &str) -> bool {
+    use std::io::Write;
+
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path)
+    else {
+        return false;
+    };
+    if file.write_all(contents.as_bytes()).is_err() || file.flush().is_err() {
+        return false;
+    }
+    drop(file);
+
+    std::fs::read_to_string(path).is_ok_and(|written| written == contents)
 }
 
 /// Copy `from` over `to` with administrator rights.

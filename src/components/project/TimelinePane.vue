@@ -163,7 +163,7 @@ watch(service, load);
   max-height: 420px;
   overflow-y: auto;
   border-left: 2px solid rgb(var(--v-border-color), var(--v-border-opacity));
-  padding-left: 10px;
+  padding-inline-start: 10px;
 }
 
 .moment {
@@ -176,7 +176,7 @@ watch(service, load);
 
 .moment-at {
   flex: 0 0 62px;
-  text-align: right;
+  text-align: end;
   color: rgb(var(--v-theme-on-surface-variant));
   opacity: 0.7;
   font-variant-numeric: tabular-nums;

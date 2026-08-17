@@ -7,6 +7,7 @@ pub mod atomic;
 pub mod audit;
 pub mod authoring;
 pub mod certs;
+pub mod cli;
 pub mod commands;
 pub mod compose_policy;
 pub mod config;
@@ -66,10 +67,12 @@ pub mod querylog;
 pub mod quickcmd;
 pub mod release;
 pub mod render;
+pub mod repl;
 pub mod routes;
 pub mod runner;
 pub mod scaffold;
 pub mod secrets;
+pub mod signing;
 pub mod site;
 pub mod skeleton;
 pub mod snapshot;
@@ -80,10 +83,12 @@ pub mod template;
 pub mod timeline;
 pub mod trace;
 pub mod tray;
+pub mod tui;
 pub mod tunnel;
 pub mod watcher;
 pub mod worker;
 pub mod workspace;
+pub mod worktree;
 pub mod xdebug;
 
 use commands::AppState;
@@ -429,6 +434,12 @@ pub fn run() {
             commands::project_clone,
             commands::project_register,
             commands::git_available,
+            commands::worktree_support,
+            commands::worktree_list,
+            commands::worktree_plan,
+            commands::worktree_create,
+            commands::worktree_remove,
+            commands::worktree_env_set,
             commands::project_start,
             commands::project_stop,
             commands::project_restart,
@@ -542,6 +553,10 @@ pub fn run() {
             commands::site_save,
             commands::quick_commands,
             commands::quick_command_run,
+            commands::repl_runners,
+            commands::repl_run,
+            commands::repl_history,
+            commands::repl_history_clear,
             commands::devserver_status,
             commands::devserver_set,
             commands::migrate_scan,

@@ -1768,6 +1768,7 @@ mod tests {
             errors: vec![],
             warnings: vec![],
             hooks: Default::default(),
+            commands: Default::default(),
             local: Vec::new(),
         }
     }

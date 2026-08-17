@@ -230,6 +230,16 @@ pub struct Manifest {
     #[serde(skip_serializing_if = "crate::hooks::Hooks::is_empty")]
     pub hooks: crate::hooks::Hooks,
 
+    /// Commands this project offers next to the built-in ones (B-4).
+    ///
+    /// Here for the same reason `hooks` is: a malformed declaration becomes a
+    /// manifest finding rather than a surprise at the moment somebody presses
+    /// the button, and `read` stays the one place that knows how a project is
+    /// described. What may actually run is [`crate::quickcmd`]'s business —
+    /// these are container commands and can be nothing else.
+    #[serde(skip_serializing_if = "crate::quickcmd::Declared::is_empty")]
+    pub commands: crate::quickcmd::Declared,
+
     /// Which fields this machine's `stackvo.local.json` supplied, dotted.
     ///
     /// Empty for a manifest read straight from the committed file, which is
@@ -501,6 +511,20 @@ pub fn normalize(json: &serde_json::Value, raw: &str, dir_name: &str) -> Manifes
         });
     }
 
+    // ---- declared commands (B-4) ------------------------------------------
+    //
+    // Warnings for the same reason hooks are: a project with one unreadable
+    // command still has ten that work, and refusing to open it would be the
+    // wrong trade for a convenience.
+    let (commands, command_problems) = crate::quickcmd::parse(json);
+    for problem in command_problems {
+        warnings.push(Finding {
+            code: "COMMAND".into(),
+            path: problem.path,
+            message: problem.message,
+        });
+    }
+
     // ---- write rules the Bash parser depends on ---------------------------
     check_extension_layout(raw, &mut errors);
 
@@ -517,6 +541,7 @@ pub fn normalize(json: &serde_json::Value, raw: &str, dir_name: &str) -> Manifes
         node,
         lang,
         hooks,
+        commands,
         valid: errors.is_empty(),
         errors,
         warnings,
@@ -528,18 +553,41 @@ pub fn normalize(json: &serde_json::Value, raw: &str, dir_name: &str) -> Manifes
 pub const FILE: &str = "stackvo.json";
 pub const LOCAL_FILE: &str = "stackvo.local.json";
 
-/// Keys the local overlay may not carry, and why each one.
-///
-/// `name` keys the container, the image and the directory lookup, so a machine
-/// that renamed it locally would build one project and look for another. It is
-/// also the one field the contract cross-checks against the directory (W-04),
-/// which is a check about the repository rather than about a machine.
+/// Keys the local overlay may never carry, whatever they say.
 ///
 /// `runtime` is not a property of a machine. A repository is a PHP project or a
 /// Go one; "PHP here, Go on my laptop" describes two different programs, and
 /// every downstream decision — the image, the server, the health check — hangs
 /// off it.
-pub const LOCAL_REFUSED: [&str; 2] = ["name", "runtime"];
+///
+/// `name` is **not** on this list, and [`local_name_refused`] says why.
+pub const LOCAL_REFUSED: [&str; 1] = ["runtime"];
+
+/// May the local overlay set `name` to this?
+///
+/// Only to the directory it is sitting in, and that narrow permission is the
+/// whole of it. `name` keys the container, the image and the directory lookup,
+/// so a machine that renamed a project locally would build one thing and look
+/// for another — which is why every other value is refused exactly as it was
+/// when this key was on [`LOCAL_REFUSED`] outright.
+///
+/// What the permission is for is N, per-worktree environments. `git worktree
+/// add` checks a branch out into its own directory, and that directory is a
+/// project of its own here: its own container, its own domain, its own
+/// database. What it cannot have is its own `stackvo.json`, because the file in
+/// it is the *branch's* — writing to it would show up as a modification to
+/// whoever is working on that branch. So the committed manifest keeps saying
+/// `shop` while the directory is `shop-feature-x`, and W-04 fires on a mismatch
+/// that this app created deliberately and knows the reason for.
+///
+/// Restating the directory is the one thing a local file can say about identity
+/// that cannot be wrong: the value is checked against the directory it was read
+/// from, so the file can reconcile the manifest with where the checkout lives
+/// and can express nothing else. A different name is still refused, and still
+/// named in a warning rather than dropped.
+fn local_name_refused(value: &serde_json::Value, dir_name: &str) -> bool {
+    value.as_str() != Some(dir_name)
+}
 
 /// Read the committed manifest with this machine's overrides laid over it.
 ///
@@ -610,7 +658,7 @@ pub fn read_effective(committed_path: &Path, dir_name: &str) -> Result<Manifest>
         )
     })?;
 
-    let (applied, refused) = overlay(&mut json, &local);
+    let (applied, refused) = overlay(&mut json, &local, Some(dir_name));
     let mut manifest = normalize(&json, &raw, dir_name);
 
     for key in refused {
@@ -632,7 +680,17 @@ pub fn read_effective(committed_path: &Path, dir_name: &str) -> Result<Manifest>
 /// replaced whole, because the alternative is deciding whether a local file
 /// listing one alias means "also this" or "only this", and both readings are
 /// defensible, which is exactly why neither should be guessed at.
-fn overlay(base: &mut serde_json::Value, local: &serde_json::Value) -> (Vec<String>, Vec<String>) {
+///
+/// `dir_name` is here for one key: [`local_name_refused`] judges `name` against
+/// the directory rather than against a list. `None` marks a nested call, where
+/// `name` stays refused outright — a `name` inside `php` is not the project's
+/// and there is no directory to check it against, so the answer it had before
+/// this permission existed is still the right one.
+fn overlay(
+    base: &mut serde_json::Value,
+    local: &serde_json::Value,
+    dir_name: Option<&str>,
+) -> (Vec<String>, Vec<String>) {
     let mut applied = Vec::new();
     let mut refused = Vec::new();
 
@@ -641,7 +699,9 @@ fn overlay(base: &mut serde_json::Value, local: &serde_json::Value) -> (Vec<Stri
     };
 
     for (key, value) in local_map {
-        if LOCAL_REFUSED.contains(&key.as_str()) {
+        let name_refused =
+            key == "name" && dir_name.is_none_or(|dir| local_name_refused(value, dir));
+        if LOCAL_REFUSED.contains(&key.as_str()) || name_refused {
             refused.push(key.clone());
             continue;
         }
@@ -651,7 +711,7 @@ fn overlay(base: &mut serde_json::Value, local: &serde_json::Value) -> (Vec<Stri
 
         if nested {
             let slot = base_map.get_mut(key).expect("checked just above");
-            let (inner, _) = overlay(slot, value);
+            let (inner, _) = overlay(slot, value, None);
             for field in inner {
                 applied.push(format!("{key}.{field}"));
             }
@@ -764,6 +824,22 @@ pub fn write_local(dir: &Path, dir_name: &str, text: &str) -> Result<LocalOverri
         ));
     }
 
+    // The one key with a value-dependent answer, so it carries its own message:
+    // "may not set name" would be false — it may, to exactly one string — and a
+    // message that says the wrong thing costs somebody the ten minutes it takes
+    // to find out which.
+    if let Some(value) = map.get("name") {
+        if local_name_refused(value, dir_name) {
+            return Err(Error::new(
+                Code::InvalidManifest,
+                format!(
+                    "{LOCAL_FILE} may only set `name` to \"{dir_name}\", the directory it is in; \
+                     renaming a project locally would build one image and look for another"
+                ),
+            ));
+        }
+    }
+
     // Validated as the merged document, not on its own: a local file is a
     // fragment and would fail half the contract read alone — it has no `name`,
     // usually no `domain`. What has to be valid is what the renderer will see.
@@ -773,7 +849,7 @@ pub fn write_local(dir: &Path, dir_name: &str, text: &str) -> Result<LocalOverri
         serde_json::from_str(&committed)
             .map_err(|e| Error::new(Code::InvalidManifest, format!("{FILE}: {e}")))?
     };
-    overlay(&mut merged, &json);
+    overlay(&mut merged, &json, Some(dir_name));
     let check = normalize(&merged, "", dir_name);
     if !check.valid {
         return Err(Error::new(
@@ -1726,6 +1802,33 @@ pub fn to_json(manifest: &Manifest) -> String {
         lines.push(format!("  \"hooks\": {{\n{}\n  }}", groups.join(",\n")));
     }
 
+    // B-4, and here for exactly the reason the hooks block above is: this text
+    // is what `project_manifest_write` saves on every form submission, so a
+    // field the serialiser does not know about is one that disappears the
+    // first time somebody changes an unrelated setting. A project quietly
+    // losing the command it runs every day is the same class of bug as one
+    // that quietly stopped migrating on start.
+    if !manifest.commands.is_empty() {
+        let items: Vec<String> = manifest
+            .commands
+            .iter()
+            .map(|(id, command)| {
+                let argv: Vec<String> = command.argv.iter().map(|a| quote(a)).collect();
+                let mut fields = vec![format!("\"exec\": [{}]", argv.join(", "))];
+                if !command.about.is_empty() {
+                    fields.push(format!("\"about\": {}", quote(&command.about)));
+                }
+                // Written only when true: `false` is the default and a
+                // manifest full of restated defaults is one nobody reads.
+                if command.interactive {
+                    fields.push("\"interactive\": true".to_string());
+                }
+                format!("    {}: {{ {} }}", quote(id), fields.join(", "))
+            })
+            .collect();
+        lines.push(format!("  \"commands\": {{\n{}\n  }}", items.join(",\n")));
+    }
+
     if let Some(lang) = &manifest.lang {
         let mut block = format!("  {}: {{\n", quote(&manifest.runtime));
         let mut fields = vec![format!("    \"version\": {}", quote(&lang.version))];
@@ -1877,6 +1980,7 @@ mod write_tests {
             errors: vec![],
             warnings: vec![],
             hooks: Default::default(),
+            commands: Default::default(),
             local: Vec::new(),
         }
     }
@@ -2161,6 +2265,7 @@ mod write_tests {
             errors: vec![],
             warnings: vec![],
             hooks: Default::default(),
+            commands: Default::default(),
             local: Vec::new(),
         };
         let text = to_json(&m);
@@ -2230,6 +2335,65 @@ mod write_tests {
 
         // And the layout rule still holds: `php.extensions` is last.
         assert!(again.valid, "{:?}", again.errors);
+    }
+
+    /// Declared commands survive a form save (B-4).
+    ///
+    /// The same hazard the hooks round trip covers, and the reason both are
+    /// written: this text is what `project_manifest_write` saves whenever
+    /// somebody changes an unrelated setting, so a field the serialiser does
+    /// not know about disappears silently. Losing the command a project runs
+    /// every day is the same class of bug as one that quietly stopped
+    /// migrating on start.
+    #[test]
+    fn declared_commands_survive_the_editor_round_trip() {
+        let raw = r#"{
+  "name": "shop",
+  "domain": "shop.loc",
+  "runtime": "php",
+  "commands": {
+    "reindex": { "exec": ["php", "artisan", "app:reindex"], "about": "Rebuild the index" },
+    "console": { "exec": ["php", "artisan", "tinker"], "interactive": true },
+    "bare": { "exec": ["php", "-v"] }
+  },
+  "php": {
+    "version": "8.4"
+  }
+}
+"#;
+        let first = read_text(raw, "shop");
+        assert!(first.warnings.is_empty(), "{:?}", first.warnings);
+        let again = read_text(&to_json(&first), "shop");
+
+        assert_eq!(again.commands.len(), 3, "{}", to_json(&first));
+
+        let reindex = again.commands.get("reindex").expect("kept");
+        assert_eq!(reindex.argv, ["php", "artisan", "app:reindex"]);
+        assert_eq!(reindex.about, "Rebuild the index");
+        assert!(!reindex.interactive);
+
+        assert!(again.commands.get("console").unwrap().interactive);
+        // `about` and `interactive` are optional and come back as they went in.
+        assert_eq!(again.commands.get("bare").unwrap().about, "");
+
+        // The order the author wrote, not the alphabetical one a map would give.
+        let ids: Vec<&String> = again.commands.iter().map(|(id, _)| id).collect();
+        assert_eq!(ids, ["reindex", "console", "bare"]);
+
+        assert!(again.valid, "{:?}", again.errors);
+    }
+
+    /// A malformed declaration is a warning, like a malformed hook: a project
+    /// with one unreadable command still has a name, a domain and a container.
+    #[test]
+    fn a_broken_declared_command_is_a_warning_and_the_manifest_stays_valid() {
+        let m = read_text(
+            r#"{"name":"shop","domain":"shop.loc","runtime":"php","commands":{"x":{"host":["./deploy.sh"]}},"php":{"version":"8.4"}}"#,
+            "shop",
+        );
+        assert!(m.valid, "{:?}", m.errors);
+        assert!(m.commands.is_empty());
+        assert_eq!(m.warnings.iter().filter(|w| w.code == "COMMAND").count(), 1);
     }
 
     /// A malformed hook must not stop a project being opened or built.
@@ -2362,6 +2526,69 @@ mod write_tests {
             .map(|w| w.path.as_str())
             .collect();
         assert_eq!(refused, vec!["name", "runtime"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// N. The one identity a local file may state: the directory it is in.
+    ///
+    /// This is what makes a worktree checkout a project of its own. The
+    /// committed manifest in it belongs to the branch and says `shop`; the
+    /// directory is `shop-feature-x` because two checkouts cannot share one
+    /// folder; and W-04 would report that as a project that cannot be reached.
+    #[test]
+    fn a_local_file_may_restate_the_directory_it_is_in() {
+        let dir = project(
+            "worktree",
+            COMMITTED,
+            Some(r#"{"name": "shop-feature-x", "domain": "feature-x.shop.loc"}"#),
+        );
+        let m = read(&dir.join(FILE), "shop-feature-x").unwrap();
+
+        assert_eq!(m.name, "shop-feature-x");
+        assert_eq!(m.domain.as_deref(), Some("feature-x.shop.loc"));
+        assert!(m.valid, "W-04 still fires: {:?}", m.errors);
+        assert!(m.local.contains(&"name".to_string()));
+        assert!(
+            !m.warnings.iter().any(|w| w.code == "LOCAL_REFUSED"),
+            "{:?}",
+            m.warnings
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// And nothing wider than that. A name that is not the directory is the
+    /// case the key was refused outright for, and it stays refused.
+    #[test]
+    fn a_local_file_may_not_rename_a_project_to_anything_else() {
+        let dir = project("renamed", COMMITTED, Some(r#"{"name": "somewhere-else"}"#));
+        let m = read(&dir.join(FILE), "shop").unwrap();
+
+        assert_eq!(m.name, "shop", "the committed name stood");
+        assert!(
+            m.warnings
+                .iter()
+                .any(|w| w.code == "LOCAL_REFUSED" && w.path == "name"),
+            "{:?}",
+            m.warnings
+        );
+
+        // The write path refuses it too, and says which value it would take.
+        let err = write_local(&dir, "shop", r#"{"name": "somewhere-else"}"#).unwrap_err();
+        assert!(err.message.contains("\"shop\""), "{}", err.message);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The editor accepts what the worktree path writes, so the pane and the
+    /// creation flow cannot disagree about what a legal overlay is.
+    #[test]
+    fn the_editor_accepts_the_overlay_a_worktree_is_given() {
+        let dir = project("editable", COMMITTED, None);
+        let text = r#"{"name": "shop-feature-x", "domain": "feature-x.shop.loc"}"#;
+
+        let state = write_local(&dir, "shop-feature-x", text).unwrap();
+        assert!(state.exists);
+        assert!(state.refused.is_empty(), "{:?}", state.refused);
+        assert!(state.applied.contains(&"domain".to_string()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

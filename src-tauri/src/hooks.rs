@@ -601,6 +601,64 @@ pub async fn run(sink: &dyn crate::progress::ProgressSink, run: Run<'_>) -> Resu
     Ok(())
 }
 
+/// One project's hooks for one event: read the manifest, resolve consent and
+/// policy, run what is allowed.
+///
+/// This was the body of `commands::run_hooks`, which needed an `AppHandle` for
+/// one reason — building the sink to report into. Taking the sink instead is
+/// ADR 0001's rule applied to the last thing in the lifecycle path that still
+/// named a Tauri type, and it is what lets `stackvo start` and the start button
+/// run the same hooks rather than two things wearing one name.
+///
+/// **Never fails the caller.** A manifest that will not parse, a project
+/// directory that is not there, a step that exits non-zero — all of them are
+/// logged and swallowed here, because [`run`] has already made the argument:
+/// a container that started is started, and a convenience that failed
+/// afterwards must not be reported as the start failing.
+pub async fn run_for_project(
+    sink: &dyn crate::progress::ProgressSink,
+    root: &Path,
+    name: &str,
+    event: Event,
+) {
+    let Ok(dir) = crate::workspace::project_dir(root, name) else {
+        return;
+    };
+
+    // The effective manifest, deliberately: `stackvo.local.json` may override
+    // hooks the same way it overrides anything else, and a machine that wants
+    // a different post-start step is exactly the case B-2 exists for.
+    let Ok(manifest) = crate::manifest::read(&dir.join("stackvo.json"), name) else {
+        return;
+    };
+    if manifest.hooks.is_empty() {
+        return;
+    }
+
+    let consent = consent_path()
+        .map(|path| read_consent(&path))
+        .unwrap_or_default();
+
+    let operation_id = crate::events::next_operation_id("hook");
+    if let Err(e) = run(
+        sink,
+        Run {
+            operation_id: &operation_id,
+            project: name,
+            dir: &dir,
+            container: &format!("stackvo-{}", name.to_ascii_lowercase()),
+            hooks: &manifest.hooks,
+            event,
+            policy: crate::policy::current().hooks(),
+            consent: &consent,
+        },
+    )
+    .await
+    {
+        tracing::warn!(project = name, event = event.key(), error = %e.message, "a hook failed");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

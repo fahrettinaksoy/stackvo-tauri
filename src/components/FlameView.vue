@@ -154,7 +154,7 @@ function hue(name) {
   background: none;
   border: 0;
   padding: 0;
-  text-align: left;
+  text-align: start;
   font: inherit;
   cursor: pointer;
   height: 18px;
@@ -199,7 +199,7 @@ function hue(name) {
 }
 
 .frame-cost {
-  margin-left: auto;
+  margin-inline-start: auto;
   opacity: 0.65;
   font-variant-numeric: tabular-nums;
 }

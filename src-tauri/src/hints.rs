@@ -101,12 +101,32 @@ hints! {
         "Edit it from the project's Manifest tab instead.";
     START_PROJECT_FOR_COMMANDS = "startProjectForCommands",
         "Start the project first — these commands run inside its container.";
+    REPL_RUNNER_NEEDS_FILES = "replRunnerNeedsFiles",
+        "A runner is offered only where the project has the files it loads.";
     BUILD_AND_START_FOR_WORKER = "buildAndStartForWorker",
         "Build and start the project first — the worker runs its image.";
     WORKERS_ARE_DETECTED = "workersAreDetected",
         "Workers are detected from artisan and composer.json.";
     START_PROJECT_FOR_TUNNEL = "startProjectForTunnel",
         "Start the project first — the tunnel forwards to its container.";
+
+    // ------------------------------------------------ worktrees (N)
+    //
+    // Three, not ten. Every refusal in `plan_worktree` is a whole sentence that
+    // names the branch, the hostname or the directory that caused it — "give
+    // the worktree a name of its own" says less than the message it would sit
+    // under, and a hint that repeats the message is one people learn to skip.
+    // What is catalogued here is the case where the message is the engine's or
+    // git's own words and the way out is not in them.
+    WORKTREE_IS_DIRTY = "worktreeIsDirty",
+        "The worktree has uncommitted changes. Commit or stash them, or remove it with \
+         Force, which discards them.";
+    DATABASE_NAME_CHARSET = "databaseNameCharset",
+        "Database names may contain lower-case letters, digits and underscore, and \
+         must begin with a letter.";
+    MONGO_HAS_NO_SOURCE_DATABASE = "mongoHasNoSourceDatabase",
+        "Create the worktree with an empty database instead — MongoDB makes one on \
+         the first write.";
 
     // ---------------------------------------------------------------- certificates
     INSTALL_MKCERT = "installMkcert",
@@ -249,8 +269,18 @@ hints! {
          and paste it in yourself.";
     WAIT_FOR_OPERATION = "waitForOperation",
         "Wait for it to finish, or watch the operation console for progress.";
+    NO_REGISTRY_KEY = "noRegistryKey",
+        "This build pins no registry key. An organisation running its own mirror can \
+         pin one with the market.registryKey policy.";
+    SIGNED_BY_UNKNOWN_KEY = "signedByUnknownKey",
+        "The index may be from somewhere else, or the publisher may have rotated keys \
+         without this machine learning the new one.";
+    PACKAGE_VERSION_REVOKED = "packageVersionRevoked",
+        "The publisher withdrew this version. Pick another, or read why in the \
+         registry entry.";
     QUICK_COMMANDS_ARE_FIXED = "quickCommandsAreFixed",
-        "Commands come from the fixed catalog; ids are not arbitrary.";
+        "Ids come from the built-in catalogue or from this project's own \
+         stackvo.json; they are not arbitrary.";
     IMAGE_REFERENCE_CHARSET = "imageReferenceCharset",
         "Lowercase letters, digits, and . _ - / : only.";
     COMPOSE_FILE_NOT_FOUND = "composeFileNotFound",

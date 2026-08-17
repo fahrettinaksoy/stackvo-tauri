@@ -233,7 +233,7 @@ watch(cursor, async () => {
   background: none;
   font: inherit;
   font-size: 0.875rem;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
 }
 
@@ -258,8 +258,8 @@ watch(cursor, async () => {
 }
 
 .palette-row-hint {
-  margin-left: auto;
-  padding-left: 12px;
+  margin-inline-start: auto;
+  padding-inline-start: 12px;
   opacity: 0.55;
   font-size: 0.75rem;
 }

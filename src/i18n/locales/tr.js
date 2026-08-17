@@ -227,6 +227,55 @@ export default {
       'composer install ve git pull konteynerin içinden özel depolara ulaşabilir; imaja hiçbir anahtar kopyalanmadan. O konteynerde çalışan her şey, konteyner ayakta olduğu sürece anahtarlarınızla imzalayabilir.',
     sshAgentNone: 'Bu makinede çalışan bir SSH ajanı yok, iletilecek bir şey de yok.',
   },
+  worktree: {
+    title: 'Worktree’ler',
+    explain:
+      'Bir dala kendi ortamını verin: kendi dizini, kendi adresi, kendi veritabanı. İki dal aynı anda çalışır ve checkout’a git’in fark edeceği hiçbir şey yazılmaz.',
+    explainSelf:
+      'Bu proje bir worktree — başka bir projenin deposunun ikinci bir checkout’u; kendi dalında ve kendi ortamıyla.',
+    new: 'Yeni worktree',
+    none: 'Henüz kendi ortamı olan bir dal yok.',
+    parent: 'Şu projenin dalı',
+    branch: 'Dal',
+    branchTaken: 'zaten başka bir yerde checkout edilmiş',
+    createBranch: 'Dalı oluştur',
+    newBranchName: 'Yeni dal adı',
+    nameOverride: 'Ad (isteğe bağlı)',
+    domain: 'Cevap verdiği adres',
+    database: 'Veritabanı',
+    databaseMode: 'Veritabanı',
+    dbNone: 'Yok',
+    dbCreate: 'Yeni ve boş bir tane',
+    dbCopy: 'Bu çalışma alanınınkinin kopyası',
+    instance: 'Hangi motorda',
+    stopped: 'durdurulmuş',
+    noDatabase: 'Yok',
+    seededFrom: 'Şuradan kopyalandı',
+    copiedFrom: '{source} kopyalanarak',
+    willBeCalled: 'Adı şu olacak',
+    willAnswerAt: 'Şurada cevap verecek',
+    create: 'Oluştur',
+    cancel: 'Vazgeç',
+    remove: 'Kaldır',
+    removeTitle: '{name} kaldırılsın mı?',
+    removeExplain:
+      'Checkout gider. Aşağıdaki her şey ayrı bir karardır ve siz açmadıkça hiçbiri yapılmaz.',
+    removeForce: 'Commit edilmemiş değişikliklerini at',
+    removeDatabase: 'Veritabanını sil ({name})',
+    removeBranch: 'Dalı sil ({branch})',
+    dirty: 'commit edilmemiş değişiklik',
+    orphaned: 'dizin yok',
+    envTitle: 'Ortam değişkenleri',
+    envExplain:
+      'Bu worktree’nin konteynerine veriliyor. Checkout’un dışında tutuluyor; çünkü bir worktree’deki dosyalar dalın dosyalarıdır — oraya yazmak birinin git status’ünde görünürdü.',
+    derivedExplain:
+      'Bunlar da veriliyor ve saklanmıyor: her yeniden üretimde motordan okunuyor — yani Ayarlar’da değişen bir parola, burada hiçbir şey düzenlenmeden bu dala ulaşıyor. Birini değiştirmek için yukarıda aynı adla bir değişken tanımlayın.',
+    key: 'Ad',
+    value: 'Değer',
+    addRow: 'Değişken ekle',
+    removeRow: 'Bu değişkeni kaldır',
+    saveEnv: 'Kaydet',
+  },
   dns: {
     title: 'Yerel DNS',
     subtitle: 'Hosts dosyasını düzenlemeden bu çalışma alanının adlarına cevap ver',
@@ -372,6 +421,8 @@ export default {
   },
 
   projectsView: {
+    worktreeOf: '{parent} dalı',
+    colFavourite: 'Favori',
     subtitle: 'Yönetilen projeler ve konteynerleri',
     title: 'Projeler',
     list: 'Proje Listesi',
@@ -1112,6 +1163,7 @@ export default {
     explain:
       'Bu projede sık çalıştırdığınız komutlar; terminal açıp konteyner adını hatırlamanıza gerek kalmadan. Yalnızca projenin dosyalarının izin verdiği komutlar sunulur.',
     because: '{file} dosyasından',
+    declared: 'bu projeden',
     opensTerminal: 'terminal açar',
     needsRunning: 'Bunlar projenin konteynerinin içinde çalışır. Önce projeyi başlatın.',
     none: 'Burada artisan, composer.json, package.json veya wp-config.php yok; sunulacak bir şey de yok.',
@@ -1651,6 +1703,7 @@ export default {
     toggleConsole: 'Konsolu aç/kapat',
     loading: 'Yükleniyor',
     close: 'Kapat',
+    primaryNav: 'Ana gezinme',
   },
   actions: {
     start: 'Konteyneri başlat',
@@ -1745,6 +1798,35 @@ export default {
     stop: 'Kapat',
     exited: 'Kabuk sonlandı ({code}).',
   },
+  repl: {
+    title: 'Tezgâh',
+    explain:
+      'Bir parça kod yazın, bu projenin içinde uygulama açılmış hâlde çalıştırın, dönen cevabı okuyun. Tek satırlık işler için yukarıdaki terminal daha iyi — burası, üzerinde durmadan oynadığınız yirmi satır için.',
+    runner: 'Şununla çalıştır',
+    booted: 'uygulama açık',
+    bare: 'yalnızca dil',
+    snippet: 'Kod',
+    placeholder: 'dump(User::count());',
+    run: 'Çalıştır',
+    shortcut: '⌘/Ctrl + Enter',
+    needsRunning: 'Önce projeyi başlatın — kod onun konteyneri içinde çalışır.',
+    printYourself:
+      'Görmek istediğinizi kendiniz yazdırın — dump(), echo, print. Etkileşimli REPL’in aksine burada son ifadenin değeri kendiliğinden basılmıyor.',
+    output: 'Çıktı',
+    ok: 'çıkış 0',
+    exit: 'çıkış {code}',
+    timedOut: '30 saniyede durduruldu',
+    truncated: 'çıktı kırpıldı',
+    notLimited:
+      'Bu imajda timeout komutu yok, bu yüzden kod konteynerin içinde sınırlanamadı. Orada hâlâ çalışıyor olabilir.',
+    noOutput: 'Çalıştı ve hiçbir şey yazdırmadı.',
+    history: 'Çalıştırdığınız kodlar',
+    historyKeeps:
+      'Kodun kendisi saklanıyor, çıktısı değil — dönen şey sizin uygulamanızın verisi. Düzenleyiciye geri koymak için birine tıklayın.',
+    forget: 'Hepsini unut',
+    noRunner:
+      'Bu projede bir kod parçasının yükleyebileceği bir şey yok. Çalıştırıcı, ihtiyaç duyduğu dosyalar varsa sunuluyor: artisan ve laravel/tinker, wp-config.php, manage.py, bin/rails — ya da yalnızca dil için composer.json ve package.json.',
+  },
   workers: {
     title: 'İşçiler',
     explain:
@@ -1817,8 +1899,10 @@ export default {
     record: 'Sorguları kaydet',
     clear: 'Baştan başla',
     noTarget:
-      'Bu çalışma alanında günlüğü okunabilen bir veritabanı çalışmıyor. MySQL ve MariaDB günlüğü bir tabloda tutuyor, Postgres konteynerin akışına biçimini bu uygulamanın sabitlediği bir önekle yazıyor, Mongo ise veritabanı başına bir koleksiyona profil çıkarıyor — dördü de çalışma anında, ajansız ve yeniden derlemesiz açılıyor.',
+      'Bu çalışma alanında günlüğü okunabilen bir veritabanı çalışmıyor. MySQL ve MariaDB günlüğü bir tabloda tutuyor, Postgres kendi ayarlarının gösterdiği dosyaya ya da akışa yazıyor — hangisi olduğunu bu uygulama sunucuya soruyor ve biçimi sabitliyor — Mongo ise veritabanı başına bir koleksiyona profil çıkarıyor. Dördü de çalışma anında, ajansız ve yeniden derlemesiz açılıyor.',
     cost: 'Kayıt her ifadeyi örneklemeden günlüğe yazıyor ve her yazmada bir bedeli var. İşiniz bitince kapatın — bu bir ölçüm aracı değil, bir teşhis aleti. Durdurmak toplananı da siliyor, çünkü günlük ifade metnini tutuyor.',
+    costPostgres:
+      'Postgres’te bu ifadeler ayrıca sunucunun konteyner içindeki kendi günlük dosyasına yazılıyor. Durdurmak buradaki oturumu bitiriyor ama bu uygulama o dosyayı yeniden yazmıyor — ifade metni, sunucu dosyayı döndürene kadar orada kalıyor.',
     howTo:
       'Açın, incelediğiniz sayfayı yeniden yükleyin, sonra bakın. Tekrarlanan şekiller önce listeleniyor.',
     repeats: 'Tekrarlanan sorgular',
@@ -2144,9 +2228,16 @@ export default {
     installGitOrAdopt: 'git kurun ya da depoyu kendiniz klonlayıp klasörü devralın.',
     editFromManifestTab: 'Bunun yerine projenin Manifest sekmesinden düzenleyin.',
     startProjectForCommands: "Önce projeyi başlatın — bu komutlar onun container'ı içinde çalışır.",
+    replRunnerNeedsFiles: 'Bir çalıştırıcı, yalnızca projede yüklediği dosyalar varsa sunulur.',
     buildAndStartForWorker: 'Önce projeyi derleyip başlatın — worker onun imajıyla çalışır.',
     workersAreDetected: "Worker'lar artisan ve composer.json üzerinden tespit edilir.",
     startProjectForTunnel: "Önce projeyi başlatın — tünel onun container'ına yönlendirir.",
+    worktreeIsDirty:
+      'Worktree’de commit edilmemiş değişiklikler var. Bunları commit ya da stash edin; ya da onları atan Zorla seçeneğiyle kaldırın.',
+    databaseNameCharset:
+      'Veritabanı adları küçük harf, rakam ve alt çizgi içerebilir ve bir harfle başlamalıdır.',
+    mongoHasNoSourceDatabase:
+      'Worktree’yi boş bir veritabanıyla oluşturun — MongoDB ilk yazmada kendisi oluşturur.',
     installMkcert:
       "mkcert'i kurun: macOS'ta `brew install mkcert`, Linux'ta paket yöneticinizle, Windows'ta `choco install mkcert`. Sonra tekrar deneyin.",
     checkTldAndDomains:
@@ -2233,7 +2324,14 @@ export default {
     chooseADbClient:
       'Bu tür adresleri açan bir istemci kurun ya da bağlantı dizesini kopyalayıp kendiniz yapıştırın.',
     waitForOperation: 'Bitmesini bekleyin ya da ilerlemeyi işlem konsolundan izleyin.',
-    quickCommandsAreFixed: 'Komutlar sabit katalogdan gelir; kimlikler serbest değildir.',
+    noRegistryKey:
+      'Bu derleme hiçbir registry anahtarı pinlemiyor. Kendi aynasını çalıştıran bir kurum market.registryKey politikasıyla bir tane pinleyebilir.',
+    signedByUnknownKey:
+      'Dizin başka bir yerden geliyor olabilir ya da yayıncı, bu makine yenisini öğrenmeden anahtar değiştirmiş olabilir.',
+    packageVersionRevoked:
+      'Yayıncı bu sürümü geri çekti. Başka bir sürüm seçin ya da gerekçesini registry kaydında okuyun.',
+    quickCommandsAreFixed:
+      'Kimlikler ya gömülü katalogdan ya da bu projenin kendi stackvo.json dosyasından gelir; serbest değildir.',
     imageReferenceCharset: 'Yalnızca küçük harf, rakam ve . _ - / : karakterleri.',
     composeFileNotFound:
       'compose.yaml, compose.yml, docker-compose.yaml ve docker-compose.yml dosyalarına bakıldı.',

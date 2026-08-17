@@ -808,7 +808,7 @@ function openSource(row) {
   text-overflow: ellipsis;
   white-space: nowrap;
   direction: rtl;
-  text-align: right;
+  text-align: end;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
   color: rgb(var(--v-theme-primary));

@@ -255,3 +255,75 @@ body::-webkit-scrollbar,
 *::-webkit-scrollbar {
   display: none; /* Chrome, Safari, Edge */
 }
+
+/* A status colour used as text is a different colour from the same status used
+   as a fill.
+
+   `appearance.js` derives `<role>-text` for each of the four, moved far enough
+   from the surface to meet WCAG AA and no further, with the hue kept. This
+   points Vuetify's generated text utilities at it, so every existing
+   `text-success` in the application becomes readable without a single call site
+   changing — and `bg-success`, the dot and the chip, keep the colour the
+   palette actually chose.
+
+   The class is repeated rather than qualified by a theme class. Vuetify's own
+   utility is `.text-success { color: rgb(var(--v-theme-success)) !important }`,
+   so this has to win on specificity, and `.v-theme--light .text-success` looked
+   like the way to do it and is not: Vuetify puts the theme class on the themed
+   element **itself** as often as on an ancestor — every `v-icon` carries one —
+   and a descendant combinator does not match an element by its own class.
+   Repeating the class is specificity 0,2,0 against 0,1,0, whatever the tree
+   looks like and whatever order the sheets load in. */
+.text-success.text-success {
+  color: rgb(var(--v-theme-success-text)) !important;
+}
+
+.text-warning.text-warning {
+  color: rgb(var(--v-theme-warning-text)) !important;
+}
+
+.text-error.text-error {
+  color: rgb(var(--v-theme-error-text)) !important;
+}
+
+.text-info.text-info {
+  color: rgb(var(--v-theme-info-text)) !important;
+}
+
+/* Read by a screen reader, not seen by anybody else.
+
+   The standard clip-rect idiom rather than `display: none` or `visibility:
+   hidden`, both of which take the text out of the accessibility tree as well —
+   which is the opposite of the point. Used where an element's meaning is
+   carried by an icon and its name has nowhere to go. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+/* A closed overlay is not a thing on the page, and it must not be one in the
+   accessibility tree either.
+
+   Vuetify keeps an overlay's root element in the DOM after it has been built
+   and hides only its *content*: the root stays `display: flex` with a live box,
+   and for a tooltip that root carries `role="tooltip"`. axe rates the result
+   serious (`aria-tooltip-name`) and it is right to — a screen reader is offered
+   a tooltip with no name at all, once per tooltip the page has built, and this
+   application builds eighty-three of them.
+
+   Hiding the inactive root removes it from the tree. What it does not remove is
+   the text: the activator points at the tooltip with `aria-describedby`, and
+   the name computation walks a hidden node it was pointed at deliberately. So
+   the description a screen reader reads is unchanged and the empty landmark is
+   gone — measured both ways in `tests/e2e/a11y.e2e.js`, which now runs over the
+   whole document rather than over `#app` alone. */
+.v-overlay:not(.v-overlay--active) {
+  display: none;
+}

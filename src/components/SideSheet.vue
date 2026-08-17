@@ -66,12 +66,13 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
   <Teleport to="body">
     <v-navigation-drawer
       :model-value="modelValue"
-      location="right"
+      location="end"
       temporary
       :width="width"
       border="0"
       elevation="12"
       :class="['side-sheet', { 'side-sheet--flush': flush }]"
+      :aria-label="title"
       @update:model-value="emit('update:modelValue', $event)"
     >
       <!-- `prepend` renders outside `.v-navigation-drawer__content`, which is
@@ -136,7 +137,10 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
   align-items: center;
   gap: 12px;
   height: 64px;
-  padding: 0 8px 0 24px;
+  /* Logical, because the comment above already said start and end and the
+     shorthand said left and right. */
+  padding-block: 0;
+  padding-inline: 24px 8px;
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
 }

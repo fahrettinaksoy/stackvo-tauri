@@ -59,18 +59,22 @@ async fn main() {
 
         match exercise(&root, service).await {
             Ok(report) => {
-                let ok = report.entries > 0 && report.found_marker && report.repeat_seen;
+                let ok = report.entries > 0
+                    && report.found_marker
+                    && report.repeat_seen
+                    && report.cleared;
                 if !ok {
                     failures += 1;
                 }
                 println!(
-                    "  {} entries={} marker={} repeats={} (n+1 of {} seen as {})",
+                    "  {} entries={} marker={} repeats={} (n+1 of {} seen as {}) cleared={}",
                     if ok { "ok  " } else { "FAIL" },
                     report.entries,
                     report.found_marker,
                     report.repeats,
                     report.expected_repeat,
                     report.repeat_seen,
+                    report.cleared,
                 );
                 for line in &report.detail {
                     println!("      {line}");
@@ -125,6 +129,15 @@ struct Report {
     expected_repeat: usize,
     /// Whether the repeat detector saw that group.
     repeat_seen: bool,
+    /// Whether "start again from here" actually started again.
+    ///
+    /// Measured rather than trusted because on Postgres it is the one operation
+    /// that cannot delete anything: the log belongs to the server, so clearing
+    /// is a watermark written into it and honoured on the way back out. A
+    /// watermark that was never written and a `clear` that returns `Ok(())`
+    /// having done nothing look identical from the caller's side — which is
+    /// what the Postgres branch used to be.
+    cleared: bool,
     detail: Vec<String>,
 }
 
@@ -175,7 +188,15 @@ async fn exercise(root: &Path, service: &str) -> stackvo_desktop_lib::error::Res
         .iter()
         .find(|group| group.example.contains(MARKER));
 
+    // And now the other button. Recording stays on, so anything still carrying
+    // the marker afterwards is a session that was never actually cleared.
+    querylog::clear(root, service).await?;
+    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+    let after = querylog::read(root, service).await?;
+    let cleared = !after.entries.iter().any(|entry| entry.sql.contains(MARKER));
+
     Ok(Report {
+        cleared,
         entries: session.entries.len(),
         repeats: session.repeats.len(),
         found_marker,

@@ -429,6 +429,42 @@
         }
       },
       "additionalProperties": false
+    },
+    "commands": {
+      "type": "object",
+      "maxProperties": 32,
+      "description": "Commands this project offers next to the built-in ones (B-4). The webview still only ever sends an id; what changed is that a workspace may declare one in a file on disk. Keyed by id: lower-case letters, digits and dashes, up to 40 characters. An id that is already a built-in command is refused rather than allowed to replace it, because either silent outcome ends with somebody pressing a button whose label does not describe what it runs.",
+      "propertyNames": {
+        "pattern": "^[a-z0-9-]{1,40}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "exec"
+        ],
+        "properties": {
+          "exec": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Run inside the project's own container, as an argv ARRAY and never a command string — nothing here spawns a shell to re-split one. There is deliberately no `host` form: a container already runs the repository's code, so a repository able to run a command in it has gained nothing, whereas a host step is what turns a clone plus a button into arbitrary code execution. That one is a hook, where it is approved against a digest first."
+          },
+          "about": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "One line shown beside the command."
+          },
+          "interactive": {
+            "type": "boolean",
+            "description": "Needs a TTY and a human at it, like `tinker`. Opens the user's own terminal instead of the operation console."
+          }
+        }
+      }
     }
   },
   "allOf": [

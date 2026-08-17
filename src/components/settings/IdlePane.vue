@@ -134,7 +134,7 @@ onMounted(load);
 }
 
 .idle-since {
-  margin-left: auto;
+  margin-inline-start: auto;
   font-size: 0.75rem;
 }
 </style>
