@@ -234,6 +234,55 @@ export default {
       'Lets composer install and git pull reach private repositories from inside the container, without a key ever being copied into the image. Anything running in that container can sign with your keys while it is up.',
     sshAgentNone: 'No SSH agent is running on this machine, so there is nothing to forward.',
   },
+  worktree: {
+    title: 'Worktrees',
+    explain:
+      'Give a branch an environment of its own: its own directory, its own hostname, its own database. Both branches run at the same time, and nothing is written into the checkout that git would notice.',
+    explainSelf:
+      'This project is a worktree — a second checkout of another project’s repository, on its own branch and with its own environment.',
+    new: 'New worktree',
+    none: 'No branch has an environment of its own yet.',
+    parent: 'Branch of',
+    branch: 'Branch',
+    branchTaken: 'already checked out somewhere',
+    createBranch: 'Create the branch',
+    newBranchName: 'New branch name',
+    nameOverride: 'Name (optional)',
+    domain: 'Answers at',
+    database: 'Database',
+    databaseMode: 'Database',
+    dbNone: 'None',
+    dbCreate: 'A new, empty one',
+    dbCopy: 'A copy of this workspace’s',
+    instance: 'On which engine',
+    stopped: 'stopped',
+    noDatabase: 'None',
+    seededFrom: 'Copied from',
+    copiedFrom: 'copied from {source}',
+    willBeCalled: 'Will be called',
+    willAnswerAt: 'Will answer at',
+    create: 'Create',
+    cancel: 'Cancel',
+    remove: 'Remove',
+    removeTitle: 'Remove {name}?',
+    removeExplain:
+      'The checkout goes. Everything else below is a separate decision, and each one is off unless you turn it on.',
+    removeForce: 'Discard its uncommitted changes',
+    removeDatabase: 'Drop its database ({name})',
+    removeBranch: 'Delete the branch ({branch})',
+    dirty: 'uncommitted changes',
+    orphaned: 'directory missing',
+    envTitle: 'Environment variables',
+    envExplain:
+      'Set on this worktree’s container. Kept outside the checkout, because the files in a worktree are the branch’s — writing there would show up in somebody’s git status.',
+    derivedExplain:
+      'Also given, and read from the engine on every rebuild rather than stored — so a password changed in Settings reaches this branch without anything here being edited. Set a variable of the same name above to override one.',
+    key: 'Name',
+    value: 'Value',
+    addRow: 'Add a variable',
+    removeRow: 'Remove this variable',
+    saveEnv: 'Save',
+  },
   dns: {
     title: 'Local DNS',
     subtitle: 'Answer for this workspace\u2019s names without editing the hosts file',
@@ -380,6 +429,8 @@ export default {
   },
 
   projectsView: {
+    worktreeOf: 'branch of {parent}',
+    colFavourite: 'Favourite',
     subtitle: 'The managed projects and their containers',
     title: 'Projects',
     list: 'Projects List',
@@ -1134,6 +1185,7 @@ export default {
     explain:
       'The commands you run in this project, without opening a terminal and remembering the container name. Only what the project has the files for is offered.',
     because: 'from {file}',
+    declared: 'from this project',
     opensTerminal: 'opens a terminal',
     needsRunning: 'These run inside the project’s container. Start it first.',
     none: 'No artisan, composer.json, package.json or wp-config.php here, so there is nothing to offer.',
@@ -1678,6 +1730,9 @@ export default {
     // sample. Vuetify gives the spinner role="progressbar" and no name.
     loading: 'Loading',
     close: 'Close',
+    // The window holds three `<nav>` landmarks; a list of three identical
+    // ones is a list nobody can navigate by.
+    primaryNav: 'Main navigation',
   },
   actions: {
     start: 'Start the container',
@@ -1775,6 +1830,35 @@ export default {
     stop: 'Close',
     exited: 'The shell exited ({code}).',
   },
+  repl: {
+    title: 'Workbench',
+    explain:
+      'Write a snippet, run it inside this project with the application booted, read what came back. For one line at a time the terminal above is better — this is for the twenty lines you keep editing.',
+    runner: 'Run it with',
+    booted: 'application booted',
+    bare: 'language only',
+    snippet: 'Snippet',
+    placeholder: 'dump(User::count());',
+    run: 'Run',
+    shortcut: '⌘/Ctrl + Enter',
+    needsRunning: 'Start the project first — a snippet runs inside its container.',
+    printYourself:
+      'Print what you want to see — dump(), echo, print. Unlike the interactive REPL, this does not echo the value of the last expression.',
+    output: 'Output',
+    ok: 'exit 0',
+    exit: 'exit {code}',
+    timedOut: 'stopped at 30 seconds',
+    truncated: 'output cut',
+    notLimited:
+      'This image has no timeout command, so the snippet could not be limited inside the container. It may still be running in there.',
+    noOutput: 'It ran and printed nothing.',
+    history: 'Snippets you ran',
+    historyKeeps:
+      'The code, never the output — what came back is your application’s data. Click one to put it back in the editor.',
+    forget: 'Forget them',
+    noRunner:
+      'There is nothing in this project for a snippet to load. A runner is offered where the files it needs are: artisan and laravel/tinker, wp-config.php, manage.py, bin/rails — or composer.json and package.json for the language on its own.',
+  },
   workers: {
     title: 'Workers',
     explain:
@@ -1847,8 +1931,10 @@ export default {
     record: 'Record queries',
     clear: 'Start again',
     noTarget:
-      'This workspace runs no database whose log this can read. MySQL and MariaDB keep it in a table, Postgres writes it to the container’s stream in a format this app pins, and Mongo profiles into a collection per database — all four switch on at runtime, with no agent and no rebuild.',
+      'This workspace runs no database whose log this can read. MySQL and MariaDB keep it in a table, Postgres writes it to whichever file or stream its own settings name — this app asks the server which, and pins the format — and Mongo profiles into a collection per database. All four switch on at runtime, with no agent and no rebuild.',
     cost: 'Recording logs every statement, unsampled, and costs write throughput. Switch it off when you are done — it is an instrument, not telemetry. Stopping also clears what was collected, because the log holds statement text.',
+    costPostgres:
+      'On Postgres those statements are also written into the server’s own log file inside the container. Stopping ends the session here, but this app does not rewrite that file — statement text stays in it until the server rotates it.',
     howTo:
       'Switch it on, reload the page you are investigating, then look. Repeated shapes are listed first.',
     repeats: 'Repeated queries',
@@ -2171,9 +2257,16 @@ export default {
     installGitOrAdopt: 'Install git, or clone the repository yourself and adopt the folder.',
     editFromManifestTab: "Edit it from the project's Manifest tab instead.",
     startProjectForCommands: 'Start the project first — these commands run inside its container.',
+    replRunnerNeedsFiles: 'A runner is offered only where the project has the files it loads.',
     buildAndStartForWorker: 'Build and start the project first — the worker runs its image.',
     workersAreDetected: 'Workers are detected from artisan and composer.json.',
     startProjectForTunnel: 'Start the project first — the tunnel forwards to its container.',
+    worktreeIsDirty:
+      'The worktree has uncommitted changes. Commit or stash them, or remove it with Force, which discards them.',
+    databaseNameCharset:
+      'Database names may contain lower-case letters, digits and underscore, and must begin with a letter.',
+    mongoHasNoSourceDatabase:
+      'Create the worktree with an empty database instead — MongoDB makes one on the first write.',
     installMkcert:
       'Install it with `brew install mkcert` (macOS), your package manager (Linux), or `choco install mkcert` (Windows), then try again.',
     checkTldAndDomains: 'Check DEFAULT_TLD_SUFFIX in .env and the `domain` in each stackvo.json.',
@@ -2252,7 +2345,14 @@ export default {
     chooseADbClient:
       'Install a client that opens this kind of address, or copy the connection string and paste it in yourself.',
     waitForOperation: 'Wait for it to finish, or watch the operation console for progress.',
-    quickCommandsAreFixed: 'Commands come from the fixed catalog; ids are not arbitrary.',
+    noRegistryKey:
+      'This build pins no registry key. An organisation running its own mirror can pin one with the market.registryKey policy.',
+    signedByUnknownKey:
+      'The index may be from somewhere else, or the publisher may have rotated keys without this machine learning the new one.',
+    packageVersionRevoked:
+      'The publisher withdrew this version. Pick another, or read why in the registry entry.',
+    quickCommandsAreFixed:
+      "Ids come from the built-in catalogue or from this project's own stackvo.json; they are not arbitrary.",
     imageReferenceCharset: 'Lowercase letters, digits, and . _ - / : only.',
     composeFileNotFound:
       'Looked for compose.yaml, compose.yml, docker-compose.yaml and docker-compose.yml.',

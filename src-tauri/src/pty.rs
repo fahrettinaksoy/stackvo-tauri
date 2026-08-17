@@ -319,10 +319,10 @@ pub fn open_external_shell(command: &str, preferred: Option<&str>) -> Result<()>
 /// `spawn_terminal` exists in three platform flavours.
 pub fn open_external_command(
     container: &str,
-    spec: &crate::quickcmd::Spec,
+    command: &crate::quickcmd::Resolved,
     preferred: Option<&str>,
 ) -> Result<()> {
-    let argv = crate::quickcmd::exec_argv(container, spec);
+    let argv = crate::quickcmd::exec_argv(container, command);
     let command = format!("docker {}", argv.join(" "));
 
     let (id, ..) = crate::apps::resolve_terminal(preferred)?;

@@ -455,6 +455,38 @@ describe('axe over the extracted project panes', () => {
         workerStatus: [{ project: 'shop', kind: 'queue', restarts: 3 }],
       },
     ],
+    // N. Seeded as the parent role — a list and a create button — because that
+    // is the half with controls in it; the worktree role's own editor reuses
+    // the key/value rows `SitePane` is already scanned with.
+    [
+      'WorktreePane',
+      {
+        worktreeSupport: {
+          gitAvailable: true,
+          repository: true,
+          linked: false,
+          domain: 'shop.loc',
+          currentBranch: 'main',
+          branches: [{ name: 'feature/x', checkedOut: false, current: false }],
+          instances: [{ id: 'mysql-9-4', service: 'mysql', kind: 'mysql', running: true }],
+          worktrees: [
+            {
+              name: 'shop-feature-x',
+              parent: 'shop',
+              branch: 'feature/x',
+              domain: 'feature-x.shop.loc',
+              path: '/code/shop-feature-x',
+              database: { instance: 'mysql-9-4', name: 'stackvo_feature_x' },
+              env: {},
+              createdAt: '2026-01-01T00:00:00Z',
+              exists: true,
+              dirty: true,
+              orphaned: false,
+            },
+          ],
+        },
+      },
+    ],
   ])('%s has no violations', async (name, seed) => {
     vi.resetModules();
     vi.doMock('@/lib/ipc', () => ({

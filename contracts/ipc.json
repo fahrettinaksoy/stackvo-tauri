@@ -1488,6 +1488,70 @@
       "why": "The only way a repository reached the workspace was the user cloning it in a terminal and then adopting the folder. The clone is the one step the app was not doing, and it is the first one.",
       "notes": "StackVo authenticates NOTHING. No keys, no agent, no known_hosts, no tokens, no host trust — git and ssh read the user's own config, and a URL that works in their terminal works here. GIT_TERMINAL_PROMPT=0 and GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=15' are set for one reason only: a windowless subprocess must fail rather than wait for an answer nobody can give. StrictHostKeyChecking is deliberately NOT disabled — silently trusting an unknown host is the one failure worth stopping for. No host is special-cased; a self-hosted forge on a company domain is the case this was built for. The URL is the first webview-supplied string in this codebase to reach a subprocess argv, so `git::parse` is an allowlist of two shapes (ssh/https URL, or scp-style user@host:path) rather than a filter: `ext::` transports execute commands, a leading `-` is read by git as an option, and file:// is not a network fetch. Emits scaffold:progress / scaffold:done deliberately — same step of the same flow, and the console already subscribes. Ends with code on disk. `hasManifest` says which follow-up the caller owes, and the two are opposites: a repository without a stackvo.json is adopted (detect, then write one), a repository with one is registered (the committed settings are the team's answer and are not overwritten). Cloning a repository that ships its manifest — the arrangement the file is commit-friendly for — used to end in \"already has a stackvo.json\" with nothing generated. Either way a clone never becomes a second way to create a project."
     },
+    "worktree_support": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "name": "string"
+      },
+      "returns": "WorktreeSupport",
+      "why": "N. Everything a project can say about worktrees before a dialog opens: whether git is here, whether the directory is a repository, which branches exist and which of them are already checked out somewhere, which database instances a branch could be given a database on, and the worktrees this project already has. One call rather than five, because the answer decides whether the button is even drawn.",
+      "notes": "`reason` is a sentence, not a boolean — 'not a git repository', 'itself a worktree', 'no domain in its manifest'. `linked` is git's own answer (a linked checkout has its own git dir and a shared common dir), which is a different question from `record`: `record` means this app made it and therefore knows what it gave it. Branches come back newest-commit-first, because the branch somebody wants a worktree for is almost always one they touched this week. Instances that are stopped are listed and marked rather than hidden: 'why is that greyed out' has an answer on the row, 'why is the list empty' does not."
+    },
+    "worktree_list": {
+      "new": true,
+      "kind": "query",
+      "args": {},
+      "returns": "WorktreeRow[]",
+      "why": "Every worktree in the workspace, so the projects list can say `branch of shop` on a row instead of showing two unrelated siblings. Asking per project would be one command per row.",
+      "notes": "Each row carries what is true right now beside what was recorded: `exists` for the directory, `dirty` for uncommitted work (null when git could not answer — the same third state `projectLocalRead` reports for ignore rules), and `orphaned` when the registration outlived the checkout. Reads two files and asks git per row; no Docker call, so it answers with the engine down."
+    },
+    "worktree_plan": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "name": "string",
+        "branch": "string",
+        "options": "{ newBranch?: boolean, name?: string, database?: 'none' | 'create' | 'copy', instance?: string }?"
+      },
+      "returns": "WorktreePlan",
+      "why": "A worktree creates a directory, a hostname, a container and a database at once, and the only moment any of those can be argued with is before they exist. The same plan-then-apply pair as hosts_plan/hosts_apply and db_move_plan/db_move_apply.",
+      "notes": "No side effects — safe to call on every keystroke in the branch field. A refused plan still carries the name, path, hostname and database it *would* have produced, because a dialog that blanks out when it says no makes the reason harder to act on. `refused` is one sentence naming the cause: git missing, the project not a repository or itself one, no `domain` to build under, a branch git will not accept, a branch already checked out elsewhere (git allows one working tree per branch), a directory or hostname already taken, or a database instance that is absent or stopped. `warnings` is for what proceeds anyway: a parent with a `*.` alias means two Traefik routes match the new name, MongoDB has no CREATE DATABASE, and a database of that name already existing means it will be used rather than created."
+    },
+    "worktree_create": {
+      "new": true,
+      "kind": "operation",
+      "args": {
+        "name": "string",
+        "branch": "string",
+        "options": "{ newBranch?: boolean, name?: string, database?: 'none' | 'create' | 'copy', instance?: string }?"
+      },
+      "returns": "OperationId",
+      "why": "N — the item nothing else in this space does. `git worktree add` gives a branch its own directory; this gives that directory its own subdomain, its own database and its own environment, so two branches of one application run side by side.",
+      "notes": "Plans first and refuses on the plan's own reason, so the command and the preview cannot disagree. Steps in order, each rolling back the ones before it: git worktree add (streamed as scaffold:progress / scaffold:done, the same events project_clone uses), then the manifest, then the database, then the record, then the generate. NOTHING IS WRITTEN INTO THE CHECKOUT THAT GIT TRACKS — the files in a worktree are the branch's. Identity goes into stackvo.local.json, the machine-local overlay that exists to be the file that is never committed, and which is added to the repository's .git/info/exclude (git's own per-clone ignore list, never .gitignore) when git says it is not ignored yet. A branch that carries no stackvo.json gets a full one derived from the parent's instead, with the parent's aliases and LAN sharing dropped so it cannot claim the same names. The environment — database credentials, APP_URL, STACKVO_WORKTREE_BRANCH — is app-owned, outside every checkout, and reaches the container through the compose overlay site.rs already renders. The database is a database on an instance that is already running, not an instance of its own: a branch is not a different engine. Emits project:creating / project:created, because a worktree IS a project and nothing downstream knows the word. Audited as worktree_create."
+    },
+    "worktree_remove": {
+      "new": true,
+      "kind": "operation",
+      "args": {
+        "name": "string",
+        "options": "{ force?: boolean, dropDatabase?: boolean, deleteBranch?: boolean }?"
+      },
+      "returns": "OperationId",
+      "why": "The way back. A worktree left behind is a directory that looks like a project, a branch git will not check out anywhere else, and a database nothing points at.",
+      "notes": "Four things can go and three of them are separate decisions the screen asks first: the checkout always, its uncommitted changes (`force`), its database (`dropDatabase`) and its branch (`deleteBranch`). Order is the reverse of creation with one exception — the containers go first, because Docker holds the tree open through its bind mount and git refuses to remove a worktree files are being written into. The database is dropped before the checkout: one that will not drop should leave the worktree there to try again from, rather than leaving a database nothing points at. `db::drop_database` refuses the instance's own database and the engines' system databases whatever the record says. Deleting the branch is best effort and never fatal — the worktree is already gone by then, and refusing to finish over an unmerged branch would leave the removal half done. project_delete reaching a worktree through the ordinary Delete button forgets the record and prunes git's registration, and deliberately leaves the branch and the database alone: `removeFiles` is that command's only licence to destroy anything. Audited as worktree_remove."
+    },
+    "worktree_env_set": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string",
+        "env": "Record<string, string>"
+      },
+      "returns": "{ env: Record<string, string>, effective: Record<string, string> }",
+      "why": "A worktree's own environment variables. site_save cannot serve this: it writes .stackvo/site.json, which is inside the checkout, and on a worktree the checkout is a branch somebody else is working on.",
+      "notes": "Keys and values go through the same checks the project overlay applies (site::checked_key / checked_value) — a POSIX variable name, and a value with no line break in it, because the overlay is YAML and a newline in a scalar is a second directive somebody else wrote. `effective` is what the container will actually be given: the derived database variables and APP_URL beside the typed ones, with DB_PASSWORD masked and the same password masked inside DATABASE_URL. The credentials are never stored in the record — they are derived from the instance on every render, so a password changed in Settings reaches every worktree at the next generate instead of leaving a stale copy. A typed variable of the same name still wins, which is what makes the derived ones a default rather than a decision."
+    },
     "project_create": {
       "replaces": "POST /api/projects/create",
       "kind": "operation",
@@ -1638,7 +1702,7 @@
       },
       "returns": "QueryLogSession",
       "why": "F-1, and §2 called it the largest product gap: three competitors sell query logging and N+1 detection, and this stack could not say what the database had been asked. The row also said it needed a collector inside the container — for MySQL and MariaDB that is wrong, and this is why.",
-      "notes": "MySQL and MariaDB keep a general query log that can be pointed at a TABLE and switched on with two SET GLOBAL statements, at runtime, on a stock image — no agent, no rebuild, no code in the application. Verified against mysql:8.0 before it was written. Postgres logs to a stream in a format its own settings change and wants pg_stat_statements, which is a start-up extension; Mongo's profiler is per-database. Both answer supported:false rather than an error, because 'not this kind' must not read as 'something broke'. See src-tauri/src/querylog.rs."
+      "notes": "All four databases this app runs, each switched on at runtime with no agent, no rebuild and no code in the application. MySQL and MariaDB point their general log at a TABLE with two SET GLOBAL statements; Mongo profiles per database; Postgres takes three ALTER SYSTEM statements and a reload, which pin the switch, an epoch-stamped line prefix and the destination format. Reading Postgres back means asking the server where it writes — pg_current_logfile() — rather than assuming the container's stdout: every StackVo Postgres package ships logging_collector = on, which takes stderr away from the stream and puts it in a file under the data directory. Anything that is not a database answers supported:false rather than an error, because 'not this kind' must not read as 'something broke'. Verified against this workspace's live mysql:9.7, mariadb:12.3, postgres:14 and mongo:8.0 by examples/querylog_probe.rs. See src-tauri/src/querylog.rs."
     },
     "query_log_record": {
       "new": true,
@@ -1649,7 +1713,7 @@
       },
       "returns": "QueryLogSession",
       "why": "The log records every statement unsampled and costs write throughput, so it is an instrument you switch on, look at, and switch off — never a default.",
-      "notes": "One command with a boolean rather than two, because the pair is one decision and the interesting failure is leaving it on. Stopping also truncates: what the log holds is statement text, and in a development database an INSERT carries the row. Nothing is written to disk by the app and nothing reaches a diagnostics bundle."
+      "notes": "One command with a boolean rather than two, because the pair is one decision and the interesting failure is leaving it on. Stopping also clears: what the log holds is statement text, and in a development database an INSERT carries the row. MySQL truncates the table and Mongo drops the collection; Postgres cannot, because the log is the server's own file, so stopping writes the same watermark query_log_clear does and nothing this app shows reaches back past it. Nothing is written to disk by the app and nothing reaches a diagnostics bundle — on Postgres the server itself keeps what it wrote, which the pane says while recording."
     },
     "query_log_clear": {
       "new": true,
@@ -1658,7 +1722,8 @@
         "service": "string"
       },
       "returns": "QueryLogSession",
-      "why": "Start again from here — what somebody presses before reloading the page they are investigating. Without it every read is the whole session and the one request under study is buried."
+      "why": "Start again from here — what somebody presses before reloading the page they are investigating. Without it every read is the whole session and the one request under study is buried.",
+      "notes": "A deletion on three of the four: MySQL truncates mysql.general_log, Mongo drops system.profile. Postgres deletes nothing — the log belongs to the server and this app must not rewrite it — and used to answer with a no-op, which is the same reply as success and was hidden by hiding the button. It now writes a watermark statement, and the reader drops everything above it. 'Cannot delete' was never the same as 'cannot start again'."
     },
     "project_lan_share": {
       "new": true,
@@ -1891,7 +1956,7 @@
         "build:success"
       ],
       "why": "Runs one, by id.",
-      "notes": "**The fixed catalog is the security model.** The frontend sends an ID, never a command; the argv is built on the Rust side from compiled-in words, so there is no code path by which the webview can name a program to execute — the same handle-not-a-path rule app_log_open uses, for the same reason: a project pane that accepted an arbitrary command string from its own frontend is a remote shell with extra steps. Every command is spawned as an argv ARRAY, never through a shell, so a project called `a; rm -rf ~` is a container name that does not exist rather than a second command. Two kinds, because they behave differently: interactive commands (tinker, wp shell) need a TTY and a human, so they open the user's own terminal and return null — an in-app REPL would be a second, worse one next to the one they have configured; one-shot commands stream through the operation console. `-it` is added only for the interactive ones, because Docker refuses `-t` when stdin is not a TTY. Refuses when the container is not running, so the failure is \"the project is not running\" rather than Docker's \"No such container\"."
+      "notes": "**The fixed catalog is the security model.** The frontend sends an ID, never a command; the argv is built on the Rust side from compiled-in words, so there is no code path by which the webview can name a program to execute — the same handle-not-a-path rule app_log_open uses, for the same reason: a project pane that accepted an arbitrary command string from its own frontend is a remote shell with extra steps. Every command is spawned as an argv ARRAY, never through a shell, so a project called `a; rm -rf ~` is a container name that does not exist rather than a second command. Two kinds, because they behave differently: interactive commands (tinker, wp shell) need a TTY and a human, so they open the user's own terminal and return null — an in-app REPL would be a second, worse one next to the one they have configured; one-shot commands stream through the operation console. `-it` is added only for the interactive ones, because Docker refuses `-t` when stdin is not a TTY. Refuses when the container is not running, so the failure is \"the project is not running\" rather than Docker's \"No such container\". B-4: the id may now name a command the project declared in its own stackvo.json as well as one compiled in. The webview still never names a program — `quickcmd::resolve` is the only place either becomes an argv, and a declared command reaches `docker exec` through the same function a built-in does."
     },
     "quick_commands": {
       "new": true,
@@ -1901,7 +1966,48 @@
       },
       "returns": "QuickCommand[]",
       "why": "P3-19 was \"a tinker quick action — the PTY exists, so it is nearly free\". It is, and on its own it is also one button. What is worth building is the set it belongs to: artisan tinker, artisan migrate, composer install, npm install, wp shell. Each of those today means opening a terminal, remembering the container name and typing `docker exec -it stackvo-<project> …`.",
-      "notes": "Offered only when the marker file exists — driven off the same Fingerprint adoption uses, so \"does this project have artisan\" is answered in one place. Offering a command the project cannot run is worse than omitting it: the failure arrives as `artisan: not found` in an operation console, which reads as a broken app rather than as a button that never applied. `because` names the file the offer is based on. Deliberately ABSENT: migrate:fresh, migrate:reset, db:wipe and composer update — the first three drop the user's data behind a button four characters from the safe one, and the last rewrites a lock file. Those are things to type deliberately in the terminal that is one click away. M-9 adds the four frameworks this app scaffolds and did not offer a row for: Symfony (bin/console), Django (manage.py), Rails and plain Ruby. Each is the same shape — a fixed id, an argv and a marker file only that framework writes. Rails is detected on `bin/rails` rather than on a Gemfile, which is Sinatra and Jekyll as often as it is Rails, and it runs through `bundle exec` rather than the binstub: a binstub is only executable if its permission bit survived the checkout, and `bundle exec` needs the gem rather than the bit. Doctrine's migrate carries --allow-no-migration because it exits non-zero with nothing to run, which the console would draw as a failed operation. This is NOT the B-4 unlock: B-4 is a command the WORKSPACE declares, and every row here is still compiled in."
+      "notes": "Offered only when the marker file exists — driven off the same Fingerprint adoption uses, so \"does this project have artisan\" is answered in one place. Offering a command the project cannot run is worse than omitting it: the failure arrives as `artisan: not found` in an operation console, which reads as a broken app rather than as a button that never applied. `because` names the file the offer is based on. Deliberately ABSENT: migrate:fresh, migrate:reset, db:wipe and composer update — the first three drop the user's data behind a button four characters from the safe one, and the last rewrites a lock file. Those are things to type deliberately in the terminal that is one click away. M-9 adds the four frameworks this app scaffolds and did not offer a row for: Symfony (bin/console), Django (manage.py), Rails and plain Ruby. Each is the same shape — a fixed id, an argv and a marker file only that framework writes. Rails is detected on `bin/rails` rather than on a Gemfile, which is Sinatra and Jekyll as often as it is Rails, and it runs through `bundle exec` rather than the binstub: a binstub is only executable if its permission bit survived the checkout, and `bundle exec` needs the gem rather than the bit. Doctrine's migrate carries --allow-no-migration because it exits non-zero with nothing to run, which the console would draw as a failed operation. This is NOT the B-4 unlock: B-4 is a command the WORKSPACE declares, and every row here is still compiled in. B-4: the list is the built-in catalogue filtered by the project's marker files, then whatever the project's own stackvo.json declares under `commands`, marked with `declared` so a caller can say which is which. Declared entries are container commands only — there is no `host` form, which is why this needed no approval flow; see src-tauri/src/quickcmd.rs."
+    },
+    "repl_runners": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "name": "string"
+      },
+      "returns": "ReplRunner[]",
+      "why": "F-5, and \u00a75.5 held it as a decision rather than a task: quickcmd refused an in-app REPL in writing \u2014 \"a second, worse REPL next to the one they already have configured\" \u2014 and reversing a refusal is not something a commit does quietly. The refusal stands for a LINE repl and this is not one. A snippet is twenty lines you edit: write a query, run it, change line three, run it again. In tinker that is retyping. `tinker` still opens the user's own terminal, and the two are split by what the person is doing rather than ranked.",
+      "notes": "Offered from the same Fingerprint the quick commands use. Two tiers, and each row says which it is: `booted` means the application is loaded (artisan tinker, wp eval, manage.py shell, bin/rails runner), and false means the language on its own (php -r, node -e) \u2014 a pane that showed them alike would let somebody debug for ten minutes before finding out their models were never loaded. Laravel is offered only where composer.json also declares laravel/tinker, because --execute is Tinker's flag and a --no-dev install does not have it. See src-tauri/src/repl.rs."
+    },
+    "repl_run": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string",
+        "runner": "string (runner id)",
+        "code": "string (the snippet)"
+      },
+      "returns": "ReplRun",
+      "why": "Run the snippet against the booted application and hand back everything about the run \u2014 both streams, the exit code, the duration.",
+      "notes": "**The webview picks a runner, it never names a program.** `laravel` means `php artisan tinker --execute` and nothing else; an id outside the table is refused before anything is spawned, and so is one the project has no files for. The snippet is ONE argv element and always the LAST, so a snippet containing `; rm -rf ~` is a string rather than a second command \u2014 the rule hooks and quickcmd state as their security model. It runs in the project's own container, which already runs that repository's code, and there is no host runner: a snippet that has to run on this machine is a hook, approved against a digest first. Two limits, guarding different failures: `timeout` INSIDE the container stops the snippet (killing a docker exec client does not stop what it started), and this process's own clock stops the wait. `limited` records which \u2014 measured present in php, node, python, ruby and wordpress-cli images, but \"every image I checked\" is not \"every image\". Success is read from the exit code and never from \"stderr was empty\": a PHP fatal is written to stdout, measured. Laravel's --execute does not echo the last expression the way the interactive REPL does, so the pane says to dump()."
+    },
+    "repl_history": {
+      "new": true,
+      "kind": "query",
+      "args": {
+        "name": "string"
+      },
+      "returns": "ReplSnippet[]",
+      "why": "The snippet you ran ten minutes ago, back in the editor. Without it the workbench is a text box that forgets, which is the terminal REPL's weakness rather than an improvement on it.",
+      "notes": "The code, never the output. A snippet is what the person wrote and is the thing they want back; the output is the application's DATA \u2014 a row, a customer, a token \u2014 and querylog states the rule this follows: what came out of somebody's database is not written to disk by this app. Kept in the app's own config directory beside hook-consent.json, never in the project, because a file written into a checkout turns up in somebody's git status. A re-run moves a snippet back to the top rather than adding a copy."
+    },
+    "repl_history_clear": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "name": "string"
+      },
+      "returns": "ReplSnippet[]",
+      "why": "Forget them. A snippet can hold a customer's id or a token somebody pasted in, and a history with no way to clear it is one people learn not to use."
     },
     "release_build": {
       "new": true,
@@ -3506,6 +3612,33 @@
       "because": "string (the marker file)",
       "note": "`display` is the command as typed, so what runs and what is shown cannot drift. `interactive` decides where it goes — the user's terminal, or the operation console. `id` is the only thing quick_command_run accepts."
     },
+    "ReplRunner": {
+      "id": "string",
+      "display": "string (the command, snippet excluded)",
+      "language": "'php'|'python'|'ruby'|'javascript'",
+      "booted": "bool",
+      "about": "string",
+      "because": "string (the marker file)",
+      "note": "`display` is the command as typed with the snippet left off, so what runs and what is shown cannot drift. `id` is the only thing repl_run accepts. `booted` is the difference between User::count() meaning something and meaning nothing."
+    },
+    "ReplRun": {
+      "runner": "string",
+      "display": "string",
+      "stdout": "string",
+      "stderr": "string",
+      "exit_code": "int?",
+      "ms": "int",
+      "timed_out": "bool",
+      "truncated": "bool",
+      "limited": "bool",
+      "note": "Success is `exit_code == 0`, never \"stderr is empty\" \u2014 a PHP fatal goes to stdout. `limited` false means the in-container limit was not available, so the snippet may still be running in there after this app stopped waiting; the pane says so rather than letting a leak look like a clean stop. Streams are cut at 256 KiB from the FRONT, because a stack trace's useful half is its last lines."
+    },
+    "ReplSnippet": {
+      "at": "int (unix seconds)",
+      "runner": "string",
+      "code": "string",
+      "note": "The code, never the output \u2014 see repl_history."
+    },
     "ReleasePlan": {
       "strategy": "'layer'|'retag'",
       "base_image": "string",
@@ -3771,6 +3904,49 @@
       "agentAvailable": "bool - false when no agent is running on this machine",
       "server": "string - named so the pane can say which server cannot list a directory",
       "note": "M-10's socket is NOT $SSH_AUTH_SOCK. On macOS and Windows the daemon runs in a VM where the host's path means nothing, and Docker Desktop publishes the agent at /run/host-services/ssh-auth.sock instead; on Linux the daemon is the host and the real socket is the answer. Measured: a container with the Desktop path mounted answers 'ssh-add -l' with \"The agent has no identities\" - the agent replying - where an unforwarded one says it could not open a connection. Forwarding is off by default and per project, because anything in that container can sign with every key in the agent for as long as it is up."
+    },
+    "Worktree": {
+      "name": "string — the project name, which is also the directory name, and the identity everything else keys off",
+      "parent": "string — the project it was branched from",
+      "branch": "string — the git branch checked out into it",
+      "domain": "string — a subdomain of the parent's, so it stays inside any wildcard route or certificate the parent has",
+      "path": "string — absolute, and recorded rather than derived: the project tree can be moved, and a derived path would send `git worktree remove` somewhere git has never heard of",
+      "database": "{ instance: string, name: string, seededFrom?: string } | null",
+      "env": "Record<string,string> — what somebody typed. The database credentials are NOT here; they are derived from the instance on every render",
+      "createdAt": "string — RFC 3339",
+      "note": "N. Stored in <root>/worktrees.json, outside every checkout, because the files in a worktree directory are the branch's and this app writes nothing there that git tracks. `seededFrom` is the only record of whether a branch started with a copy of the data or an empty schema, which is the question somebody asks three weeks later."
+    },
+    "WorktreeRow": {
+      "...": "every field of Worktree, flattened",
+      "exists": "bool — is the directory still there",
+      "dirty": "bool | null — uncommitted work a removal would discard. null when git could not answer, which is a third state and not a warning",
+      "orphaned": "bool — the record points somewhere git no longer has a checkout, usually because the folder was deleted by hand"
+    },
+    "WorktreePlan": {
+      "parent": "string",
+      "branch": "string",
+      "newBranch": "bool — whether the branch would be created rather than checked out",
+      "name": "string",
+      "path": "string",
+      "domain": "string",
+      "database": "{ instance: string, service: string, name: string, seed: bool, source?: string } | null",
+      "warnings": "string[] — what proceeds anyway",
+      "refused": "string | null — one sentence naming why it cannot",
+      "possible": "bool",
+      "note": "Carries what it WOULD have produced even when refused: a dialog that blanks out on refusal makes the reason harder to act on, not easier."
+    },
+    "WorktreeSupport": {
+      "gitAvailable": "bool",
+      "repository": "bool — is the project's directory a git repository at all",
+      "linked": "bool — is it itself a linked worktree, as git sees it. Different from `record`, which means this app made it",
+      "record": "Worktree | null",
+      "effectiveEnv": "Record<string,string> | null — what this worktree's container is actually given, present only when `record` is. DB_PASSWORD is masked, and so is the same password inside DATABASE_URL",
+      "domain": "string | null — what a new worktree's hostname would be built under",
+      "currentBranch": "string | null — null for a detached head",
+      "branches": "Array<{ name: string, checkedOut: bool, current: bool }> — newest commit first",
+      "instances": "DbInstance[] — stopped ones included and marked",
+      "reason": "string | null — why worktrees are unavailable here",
+      "worktrees": "WorktreeRow[] — this project's own"
     }
   },
   "coverage": {

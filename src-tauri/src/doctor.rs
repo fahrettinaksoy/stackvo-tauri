@@ -824,6 +824,58 @@ pub struct Doctor {
     pub extensions: Vec<ExtensionProblem>,
     /// Credentials in the keystore that the Bash CLI would misread.
     pub keystore: KeystoreCheck,
+    /// Installed package versions the publisher has since withdrawn (C).
+    ///
+    /// The other half of a takedown. `market::install` refuses a withdrawn
+    /// version, which stops the *next* machine; this is what tells the ones
+    /// that already have it. Nothing else would: the container keeps running,
+    /// the stack looks healthy, and the withdrawal is a line in an index
+    /// nobody re-reads by hand.
+    pub revoked: Vec<RevokedInstall>,
+}
+
+/// An installed version its publisher has withdrawn.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevokedInstall {
+    pub instance: String,
+    pub service: String,
+    pub version: String,
+    /// The publisher's own words, shown verbatim: a withdrawal nobody can read
+    /// the reason for is one people work around.
+    pub reason: Option<String>,
+}
+
+/// Which installed instances the cached index says were withdrawn.
+///
+/// Read from the **cached** index rather than fetched. The doctor runs when
+/// somebody is already having a problem, and a network call in the middle of
+/// it is a second thing that can fail; a machine that has never fetched an
+/// index has nothing installed from one either.
+fn revoked_installs(root: Option<&Path>) -> Vec<RevokedInstall> {
+    let Some(root) = root else {
+        return Vec::new();
+    };
+    let Ok(Some(registry)) = crate::market::cached(root) else {
+        return Vec::new();
+    };
+    let Ok(table) = crate::instances::Table::load(root) else {
+        return Vec::new();
+    };
+
+    table
+        .instances
+        .iter()
+        .filter_map(|instance| {
+            let row = registry.version(&instance.service, &instance.version)?;
+            row.revoked.then(|| RevokedInstall {
+                instance: instance.id.clone(),
+                service: instance.service.clone(),
+                version: instance.version.clone(),
+                reason: row.revoked_reason.clone(),
+            })
+        })
+        .collect()
 }
 
 /// The resolver points at a port nothing answers on.
@@ -966,6 +1018,7 @@ pub async fn run(root: Option<&Path>) -> Doctor {
         // exactly when somebody is reading this page.
         extensions: root.map(extension_problems).unwrap_or_default(),
         keystore: keystore_check(root),
+        revoked: revoked_installs(root),
     }
 }
 

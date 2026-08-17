@@ -9,12 +9,54 @@
 //!
 //! ## The catalog is fixed, and that is the security model
 //!
-//! The frontend sends an **id**, never a command. `run` looks the id up in
-//! [`CATALOG`] and builds the argv itself; there is no code path by which the
-//! webview can name a program to execute. That is the same handle-not-a-path
-//! rule [`crate::applog`] uses, for the same reason: a project pane that
-//! accepted an arbitrary command string from its own frontend is a remote shell
-//! with extra steps.
+//! The frontend sends an **id**, never a command. `run` looks the id up and
+//! builds the argv itself; there is no code path by which the webview can name
+//! a program to execute. That is the same handle-not-a-path rule
+//! [`crate::applog`] uses, for the same reason: a project pane that accepted an
+//! arbitrary command string from its own frontend is a remote shell with extra
+//! steps.
+//!
+//! That rule is intact and is **not** what B-4 changed.
+//!
+//! ## What a project may add, and why it is allowed to (B-4)
+//!
+//! [`CATALOG`] is eleven commands that most projects have. What it cannot know
+//! is the one command *this* project runs every day — `artisan app:reindex`,
+//! `npm run codegen`, a `bin/` script somebody wrote last week. So a project
+//! declares its own in `stackvo.json`:
+//!
+//! ```json
+//! "commands": {
+//!   "reindex": { "exec": ["php", "artisan", "app:reindex"], "about": "Rebuild the search index" }
+//! }
+//! ```
+//!
+//! The webview still only ever sends `"reindex"`. What changed is where the
+//! **workspace** may declare one — and `docs/durum.md` §5's first question was
+//! exactly that distinction: the argument against a webview naming a program is
+//! about a surface that runs code it did not choose; a file on disk in the
+//! repository is not that surface.
+//!
+//! ### The container, and nothing else
+//!
+//! A declared command may only be `exec` — inside the project's own container.
+//! There is no `host` form, and its absence is the whole reason this needed no
+//! new approval flow. [`crate::hooks`] makes the argument in full: a container
+//! already runs the repository's code, so a repository able to run a command in
+//! it has gained nothing. A **host** step is what turns `git clone` plus a
+//! button into arbitrary code execution, and that one has a consent record
+//! keyed to a digest.
+//!
+//! So B-4 stops at the container line. Reaching past it is `hooks`' `host`
+//! step, which already exists, already asks, and is a different decision than
+//! the one that was taken here.
+//!
+//! ### An id may not be taken twice
+//!
+//! A declared command whose id is already in [`CATALOG`] is **refused**, and
+//! reported as a manifest problem rather than silently winning or silently
+//! losing. Either of those is the same failure: somebody presses a button
+//! labelled `migrate` believing it is `php artisan migrate`.
 //!
 //! Every command is spawned as an argv array — never through a shell — so a
 //! project called `a; rm -rf ~` is a container name that does not exist rather
@@ -338,6 +380,239 @@ pub struct QuickCommand {
     pub interactive: bool,
     /// What the offer is based on, so an unexpected list can be explained.
     pub because: String,
+    /// Declared by the project rather than compiled in (B-4).
+    ///
+    /// On screen rather than merely in the data: a row that came out of the
+    /// repository somebody cloned is a different kind of thing from one this
+    /// application shipped, and the person deciding whether to press it is
+    /// entitled to know which they are looking at.
+    pub declared: bool,
+}
+
+/// A command a project declared in its own `stackvo.json` (B-4).
+///
+/// Owned rather than `&'static`, which is the one structural difference from
+/// [`Spec`] and the reason [`Resolved`] exists: a catalogue entry lives in the
+/// binary, and this one lives in a file that can change while the app is open.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Declared {
+    /// In the order the file had them.
+    ///
+    /// A list of pairs rather than a map, and the reason is the order: a
+    /// `BTreeMap` would alphabetise, so a pane would list somebody's commands
+    /// in an order they did not choose and a manifest saved from the form
+    /// would come back reordered. `IndexMap` would keep it and is not a direct
+    /// dependency here; at 32 entries a linear lookup is not worth one.
+    #[serde(flatten)]
+    by_id: std::collections::BTreeMap<String, DeclaredCommand>,
+    /// The ids, in file order. `by_id` carries the values.
+    #[serde(skip)]
+    order: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeclaredCommand {
+    /// argv, run inside the container. Never a shell string, never a host
+    /// process — see the module comment.
+    pub argv: Vec<String>,
+    pub about: String,
+    pub interactive: bool,
+}
+
+impl Declared {
+    pub fn is_empty(&self) -> bool {
+        self.by_id.is_empty()
+    }
+
+    pub fn get(&self, id: &str) -> Option<&DeclaredCommand> {
+        self.by_id.get(id)
+    }
+
+    /// In the order the manifest declared them.
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &DeclaredCommand)> {
+        self.order
+            .iter()
+            .filter_map(|id| self.by_id.get_key_value(id.as_str()))
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_id.len()
+    }
+}
+
+/// A command that is about to run, from wherever it came from.
+///
+/// The two sources meet here and nowhere else, so every caller past this point
+/// — the operation runner, the external terminal, the CLI — is written once
+/// and cannot treat a declared command differently by accident.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resolved {
+    pub id: String,
+    pub display: String,
+    pub argv: Vec<String>,
+    pub interactive: bool,
+    pub declared: bool,
+}
+
+impl From<&'static Spec> for Resolved {
+    fn from(spec: &'static Spec) -> Self {
+        Self {
+            id: spec.id.to_string(),
+            display: spec.display.to_string(),
+            argv: spec.argv.iter().map(|s| s.to_string()).collect(),
+            interactive: spec.interactive,
+            declared: false,
+        }
+    }
+}
+
+/// Read `commands` out of a manifest.
+///
+/// Shaped like [`crate::hooks::parse`] and returning problems the same way,
+/// because it is the same job on the same file: what could be understood is
+/// kept, what could not is reported by path, and neither stops the manifest
+/// from loading. A project with one malformed command still has a name, a
+/// domain and a container.
+pub fn parse(json: &serde_json::Value) -> (Declared, Vec<crate::hooks::Problem>) {
+    use crate::hooks::Problem;
+
+    let mut out = Declared::default();
+    let mut problems = Vec::new();
+
+    let Some(block) = json.get("commands") else {
+        return (out, problems);
+    };
+    let Some(map) = block.as_object() else {
+        problems.push(Problem {
+            path: "commands".into(),
+            message: "`commands` must be an object keyed by id".into(),
+        });
+        return (out, problems);
+    };
+
+    for (id, value) in map {
+        let at = format!("commands.{id}");
+        let bad = |message: String| Problem {
+            path: at.clone(),
+            message,
+        };
+
+        if !is_safe_id(id) {
+            problems.push(bad(format!(
+                "\"{id}\" is not a usable id — lower-case letters, digits and \
+                 dashes, up to 40 characters"
+            )));
+            continue;
+        }
+
+        // The catalogue wins by refusing rather than by overriding. Either
+        // silent outcome ends with somebody pressing a button whose label
+        // does not describe what it runs.
+        if find(id).is_some() {
+            problems.push(bad(format!(
+                "\"{id}\" is already a built-in command; declared commands \
+                 cannot replace one — rename it"
+            )));
+            continue;
+        }
+
+        let Some(object) = value.as_object() else {
+            problems.push(bad("a command is an object with `exec`".into()));
+            continue;
+        };
+
+        // `host` is named in the error rather than ignored: somebody who tried
+        // it has a mental model to correct, and the correction is a real
+        // feature that exists elsewhere.
+        if object.contains_key("host") {
+            problems.push(bad(
+                "a declared command runs in the project's container; `host` is \
+                 not accepted here. A step that has to run on this machine is a \
+                 hook, where it is approved against a digest first"
+                    .into(),
+            ));
+            continue;
+        }
+
+        let Some(exec) = object.get("exec") else {
+            problems.push(bad("a command needs `exec`".into()));
+            continue;
+        };
+
+        let argv = match argv_of(exec) {
+            Ok(argv) => argv,
+            Err(message) => {
+                problems.push(bad(message));
+                continue;
+            }
+        };
+
+        out.order.push(id.clone());
+        out.by_id.insert(
+            id.clone(),
+            DeclaredCommand {
+                about: object
+                    .get("about")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                interactive: object
+                    .get("interactive")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                argv,
+            },
+        );
+    }
+
+    (out, problems)
+}
+
+/// An id that is safe as a map key, a DOM id and an argument.
+///
+/// Deliberately narrower than "any string": the id travels to the webview and
+/// back and is compared against the catalogue, and a value that needs escaping
+/// somewhere in that round trip is one that will eventually not be escaped.
+fn is_safe_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 40
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// An argv array, or why it is not one.
+///
+/// A string is refused rather than split on spaces. Splitting is how
+/// `["sh", "-c", "a && b"]` becomes four arguments and how a path with a space
+/// in it becomes two — and the whole of this module's security model is that a
+/// command is an array nobody re-parses.
+fn argv_of(value: &serde_json::Value) -> std::result::Result<Vec<String>, String> {
+    let Some(list) = value.as_array() else {
+        return Err(
+            "`exec` is an argv array — [\"php\", \"artisan\", \"app:reindex\"] — never a \
+             command string, because nothing here spawns a shell to re-split one"
+                .into(),
+        );
+    };
+    if list.is_empty() {
+        return Err("`exec` needs at least the program to run".into());
+    }
+    if list.len() > 32 {
+        return Err("`exec` takes at most 32 arguments".into());
+    }
+
+    let mut argv = Vec::with_capacity(list.len());
+    for item in list {
+        match item.as_str() {
+            Some(text) if !text.is_empty() => argv.push(text.to_string()),
+            Some(_) => return Err("an argument cannot be empty".into()),
+            None => return Err("every argument is a string".into()),
+        }
+    }
+    Ok(argv)
 }
 
 // -------------------------------------------------------------- pure logic
@@ -387,8 +662,33 @@ pub fn available(print: &crate::detect::Fingerprint) -> Vec<QuickCommand> {
             about: spec.about.to_string(),
             interactive: spec.interactive,
             because: spec.needs.marker().to_string(),
+            declared: false,
         })
         .collect()
+}
+
+/// Everything on offer: what the files support, then what the project declared.
+///
+/// Declared commands come **last** and are marked. Two reasons, and neither is
+/// cosmetic: the built-in rows are in a fixed order people learn, and a
+/// repository that could reorder the list could put its own row where
+/// `migrate` usually is.
+///
+/// No filtering by fingerprint for the declared half. A project that names a
+/// command is asserting it can run it, and this application guessing otherwise
+/// — hiding `bin/console` because `Needs::BinConsole` looked at the wrong path
+/// — would be a button that vanished for a reason nobody could see.
+pub fn offered(print: &crate::detect::Fingerprint, declared: &Declared) -> Vec<QuickCommand> {
+    let mut out = available(print);
+    out.extend(declared.iter().map(|(id, command)| QuickCommand {
+        id: id.clone(),
+        display: command.argv.join(" "),
+        about: command.about.clone(),
+        interactive: command.interactive,
+        because: "stackvo.json".to_string(),
+        declared: true,
+    }));
+    out
 }
 
 pub fn find(id: &str) -> Option<&'static Spec> {
@@ -397,15 +697,18 @@ pub fn find(id: &str) -> Option<&'static Spec> {
 
 /// `docker exec` argv for a command. Interactive adds `-it`.
 ///
-/// Built here rather than at the call site so the two callers — the operation
-/// runner and the external terminal — cannot disagree about what a command is.
-pub fn exec_argv(container: &str, spec: &Spec) -> Vec<String> {
+/// Built here rather than at the call site so every caller — the operation
+/// runner, the external terminal, the CLI — cannot disagree about what a
+/// command is. It takes a [`Resolved`], which is where the built-in and the
+/// declared halves have already become one shape: there is no branch below
+/// this line that could treat a declared command more freely.
+pub fn exec_argv(container: &str, command: &Resolved) -> Vec<String> {
     let mut argv = vec!["exec".to_string()];
-    if spec.interactive {
+    if command.interactive {
         argv.push("-it".to_string());
     }
     argv.push(container.to_string());
-    argv.extend(spec.argv.iter().map(|s| s.to_string()));
+    argv.extend(command.argv.iter().cloned());
     argv
 }
 
@@ -417,18 +720,63 @@ pub fn for_project(root: &Path, name: &str) -> Result<Vec<QuickCommand>> {
     if !dir.is_dir() {
         return Err(Error::not_found(format!("project {name}")));
     }
-    Ok(available(&crate::detect::fingerprint(&dir)))
+    Ok(offered(
+        &crate::detect::fingerprint(&dir),
+        &declared_for(root, name),
+    ))
 }
 
-/// Resolve an id against the catalog, refusing anything else.
+/// The commands this project declares, or none.
 ///
-/// The whole point of the id: the frontend cannot name a program, only pick
-/// one that was compiled in.
-pub fn resolve(id: &str) -> Result<&'static Spec> {
-    find(id).ok_or_else(|| {
+/// A manifest that will not parse yields an empty set rather than an error: the
+/// built-in commands are still perfectly runnable, and losing the whole pane
+/// over a typo in one declaration would be the wrong trade. The typo is
+/// reported where every other manifest problem is.
+///
+/// Reads the **effective** manifest, so `stackvo.local.json` can override it —
+/// the same rule hooks follow, and the case B-2 exists for.
+pub fn declared_for(root: &Path, name: &str) -> Declared {
+    crate::workspace::project_dir(root, name)
+        .ok()
+        .and_then(|dir| crate::manifest::read(&dir.join("stackvo.json"), name).ok())
+        .map(|manifest| manifest.commands)
+        .unwrap_or_default()
+}
+
+/// Resolve an id, refusing anything that is neither built in nor declared.
+///
+/// The whole point of the id survives B-4: the frontend still cannot name a
+/// program. It can pick one that was compiled in, or one the **project's own
+/// file** declared — and this function is the only place either becomes an
+/// argv.
+pub fn resolve(root: &Path, project: &str, id: &str) -> Result<Resolved> {
+    resolve_with(&declared_for(root, project), id)
+}
+
+/// The same resolution, against a set already in hand.
+///
+/// Split out so the rule can be tested without a project directory, and so the
+/// two callers that already hold the manifest — the pane's listing and the
+/// CLI — do not read it twice.
+pub fn resolve_with(declared: &Declared, id: &str) -> Result<Resolved> {
+    if let Some(spec) = find(id) {
+        return Ok(Resolved::from(spec));
+    }
+
+    if let Some(command) = declared.get(id) {
+        return Ok(Resolved {
+            id: id.to_string(),
+            display: command.argv.join(" "),
+            argv: command.argv.clone(),
+            interactive: command.interactive,
+            declared: true,
+        });
+    }
+
+    Err(
         Error::new(Code::NotFound, format!("\"{id}\" is not a known command"))
-            .with_hint(crate::hints::QUICK_COMMANDS_ARE_FIXED)
-    })
+            .with_hint(crate::hints::QUICK_COMMANDS_ARE_FIXED),
+    )
 }
 
 #[cfg(test)]
@@ -445,15 +793,173 @@ mod tests {
         }
     }
 
-    /// The security model in one assertion: an id that is not in the catalog
-    /// resolves to nothing, so there is no path from the webview to an
-    /// arbitrary `docker exec`.
+    /// The security model in one assertion, and B-4 did not weaken it: an id
+    /// that is neither compiled in nor declared by the project resolves to
+    /// nothing, so there is still no path from the webview to an arbitrary
+    /// `docker exec`.
     #[test]
-    fn only_catalog_ids_resolve() {
-        assert!(resolve("tinker").is_ok());
-        assert!(resolve("rm -rf /").is_err());
-        assert!(resolve("").is_err());
-        assert!(resolve("../../bin/sh").is_err());
+    fn only_known_ids_resolve() {
+        let none = Declared::default();
+        assert!(resolve_with(&none, "tinker").is_ok());
+        assert!(resolve_with(&none, "rm -rf /").is_err());
+        assert!(resolve_with(&none, "").is_err());
+        assert!(resolve_with(&none, "../../bin/sh").is_err());
+        // Declared by *some* project is not declared by this one.
+        assert!(resolve_with(&none, "reindex").is_err());
+    }
+
+    // ------------------------------------------- declared commands (B-4)
+
+    fn declared(json: &str) -> (Declared, Vec<crate::hooks::Problem>) {
+        parse(&serde_json::from_str(json).expect("the fixture is JSON"))
+    }
+
+    #[test]
+    fn a_declared_command_is_read_and_offered_after_the_built_in_ones() {
+        let (commands, problems) = declared(
+            r#"{ "commands": {
+                   "reindex": { "exec": ["php","artisan","app:reindex"], "about": "Rebuild it" },
+                   "codegen": { "exec": ["npm","run","codegen"] }
+                 } }"#,
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(commands.len(), 2);
+
+        let offered = offered(&laravel(), &commands);
+        let ids: Vec<&str> = offered.iter().map(|c| c.id.as_str()).collect();
+
+        // The built-in rows keep their order and their place at the top: a
+        // repository that could reorder the list could put its own row where
+        // `migrate` usually is.
+        assert_eq!(ids.first(), Some(&"tinker"));
+        assert_eq!(&ids[ids.len() - 2..], ["reindex", "codegen"]);
+
+        let mine = offered.iter().find(|c| c.id == "reindex").unwrap();
+        assert!(
+            mine.declared,
+            "the pane has to be able to say where it came from"
+        );
+        assert_eq!(mine.because, "stackvo.json");
+        assert_eq!(mine.display, "php artisan app:reindex");
+        assert!(!offered.iter().find(|c| c.id == "tinker").unwrap().declared);
+    }
+
+    /// The line B-4 stops at. A host step is what turns `git clone` plus a
+    /// button into arbitrary code execution, and it has a consent record
+    /// somewhere else; here it is refused, by name, so the author is told
+    /// where the real feature lives.
+    #[test]
+    fn a_declared_command_may_not_run_on_the_host() {
+        let (commands, problems) =
+            declared(r#"{ "commands": { "deploy": { "host": ["./deploy.sh"] } } }"#);
+        assert!(commands.is_empty(), "nothing may have been accepted");
+        assert_eq!(problems.len(), 1);
+        assert!(
+            problems[0].message.contains("hook"),
+            "{}",
+            problems[0].message
+        );
+    }
+
+    /// A command string is refused rather than split. Splitting on spaces is
+    /// how `sh -c "a && b"` becomes four arguments and how a path with a space
+    /// becomes two — and this module's whole model is an array nobody re-parses.
+    #[test]
+    fn exec_must_be_an_array_and_is_never_split() {
+        let (commands, problems) =
+            declared(r#"{ "commands": { "x": { "exec": "php artisan app:reindex" } } }"#);
+        assert!(commands.is_empty());
+        assert!(
+            problems[0].message.contains("argv array"),
+            "{}",
+            problems[0].message
+        );
+
+        let (_, empty) = declared(r#"{ "commands": { "x": { "exec": [] } } }"#);
+        assert_eq!(empty.len(), 1);
+        let (_, holes) = declared(r#"{ "commands": { "x": { "exec": ["php", ""] } } }"#);
+        assert_eq!(holes.len(), 1);
+        let (_, typed) = declared(r#"{ "commands": { "x": { "exec": ["php", 7] } } }"#);
+        assert_eq!(typed.len(), 1);
+    }
+
+    /// Shadowing a built-in is refused rather than resolved either way.
+    /// Whichever silent outcome you pick, somebody presses a button labelled
+    /// `migrate` believing it is `php artisan migrate`.
+    #[test]
+    fn a_declared_command_cannot_take_a_built_in_id() {
+        let (commands, problems) =
+            declared(r#"{ "commands": { "migrate": { "exec": ["true"] } } }"#);
+        assert!(commands.is_empty());
+        assert!(
+            problems[0].message.contains("built-in"),
+            "{}",
+            problems[0].message
+        );
+
+        // And the built-in still resolves to the built-in.
+        let resolved = resolve_with(&commands, "migrate").unwrap();
+        assert!(!resolved.declared);
+        assert_eq!(resolved.argv, ["php", "artisan", "migrate", "--force"]);
+    }
+
+    #[test]
+    fn an_id_that_would_need_escaping_somewhere_is_refused() {
+        for bad in ["Reindex", "re index", "re/index", "../x", "re;index", ""] {
+            let json = format!(r#"{{ "commands": {{ "{bad}": {{ "exec": ["true"] }} }} }}"#);
+            let (commands, problems) = declared(&json);
+            assert!(
+                commands.is_empty() && !problems.is_empty(),
+                "\"{bad}\" was accepted as an id"
+            );
+        }
+        let (ok, none) = declared(r#"{ "commands": { "app-reindex2": { "exec": ["true"] } } }"#);
+        assert!(none.is_empty() && ok.len() == 1);
+    }
+
+    /// One bad declaration must not cost the project its other commands, for
+    /// the same reason a bad hook does not stop a project opening.
+    #[test]
+    fn one_unreadable_command_does_not_take_the_others_with_it() {
+        let (commands, problems) = declared(
+            r#"{ "commands": {
+                   "good": { "exec": ["php","-v"] },
+                   "bad":  { "exec": "not an array" }
+                 } }"#,
+        );
+        assert_eq!(commands.len(), 1);
+        assert!(commands.get("good").is_some());
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].path, "commands.bad");
+    }
+
+    /// A declared command reaches `docker exec` the same way a built-in does —
+    /// through one function, so there is no branch below it that could treat a
+    /// declared command more freely.
+    #[test]
+    fn a_declared_command_runs_through_the_same_exec_path() {
+        let (commands, _) = declared(
+            r#"{ "commands": { "shell-ish": { "exec": ["sh","-c","echo hi"], "interactive": true } } }"#,
+        );
+        let resolved = resolve_with(&commands, "shell-ish").unwrap();
+        assert!(resolved.declared && resolved.interactive);
+
+        let argv = exec_argv("stackvo-shop", &resolved);
+        assert_eq!(argv[0], "exec");
+        assert!(argv.contains(&"-it".to_string()));
+        assert!(argv.contains(&"stackvo-shop".to_string()));
+        assert!(argv.ends_with(&["sh".to_string(), "-c".to_string(), "echo hi".to_string()]));
+        // Never a shell on the host, and never a string: the argv arrives whole.
+        assert_eq!(argv.iter().filter(|a| *a == "echo hi").count(), 1);
+    }
+
+    #[test]
+    fn a_manifest_with_no_commands_block_declares_nothing() {
+        let (commands, problems) = declared(r#"{ "name": "shop" }"#);
+        assert!(commands.is_empty() && problems.is_empty());
+
+        let (_, wrong) = declared(r#"{ "commands": ["php"] }"#);
+        assert_eq!(wrong.len(), 1, "a list is not an object keyed by id");
     }
 
     /// Offering a command the project cannot run produces `artisan: not found`
@@ -481,8 +987,8 @@ mod tests {
     /// container name that does not exist, not a second command.
     #[test]
     fn a_hostile_container_name_is_one_argument() {
-        let spec = resolve("migrate").unwrap();
-        let argv = exec_argv("stackvo-a; rm -rf ~", spec);
+        let spec = resolve_with(&Declared::default(), "migrate").unwrap();
+        let argv = exec_argv("stackvo-a; rm -rf ~", &spec);
 
         assert_eq!(argv[0], "exec");
         assert_eq!(argv[1], "stackvo-a; rm -rf ~");
@@ -496,8 +1002,14 @@ mod tests {
     /// refuses `-t` outright when stdin is not a TTY.
     #[test]
     fn only_interactive_commands_ask_for_a_tty() {
-        assert!(exec_argv("c", resolve("tinker").unwrap()).contains(&"-it".to_string()));
-        assert!(!exec_argv("c", resolve("migrate").unwrap()).contains(&"-it".to_string()));
+        assert!(
+            exec_argv("c", &resolve_with(&Declared::default(), "tinker").unwrap())
+                .contains(&"-it".to_string())
+        );
+        assert!(
+            !exec_argv("c", &resolve_with(&Declared::default(), "migrate").unwrap())
+                .contains(&"-it".to_string())
+        );
     }
 
     /// Laravel refuses to migrate non-interactively when it believes it is in
@@ -514,7 +1026,7 @@ mod tests {
             "django-migrate",
             "django-collectstatic",
         ] {
-            let spec = resolve(id).unwrap();
+            let spec = resolve_with(&Declared::default(), id).unwrap();
             assert!(
                 spec.argv
                     .iter()

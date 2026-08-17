@@ -465,6 +465,15 @@ export const api = {
    *  opened the user's own terminal. */
   quickCommandRun: (name, id) => call('quick_command_run', { name, id }),
 
+  // The workbench (F-5). Same rule one level down: the webview picks a runner
+  // by id and the argv is built on the Rust side, so `laravel` means
+  // `php artisan tinker --execute` and nothing else. The snippet crosses as one
+  // argument and never meets a shell.
+  replRunners: (name) => call('repl_runners', { name }),
+  replRun: (name, runner, code) => call('repl_run', { name, runner, code }),
+  replHistory: (name) => call('repl_history', { name }),
+  replHistoryClear: (name) => call('repl_history_clear', { name }),
+
   // Hot reload for node projects. Not a routing change: a node project has no
   // bind mount at all today, so the source in the container is a snapshot taken
   // when the image was built.
@@ -512,6 +521,30 @@ export const api = {
   gitAvailable: () => call('git_available'),
   projectClone: (url, name = null) => call('project_clone', { url, name }),
   projectRegister: (name) => call('project_register', { name }),
+
+  /**
+   * N — a branch with an environment of its own.
+   *
+   * `worktreeSupport` is the one call a pane makes on mount: whether git is
+   * here, whether the directory is a repository, which branches are free, which
+   * database instances exist, and the worktrees this project already has. The
+   * answer decides whether the button is drawn at all, so five calls would be
+   * five chances to draw half a screen.
+   *
+   * `worktreePlan` has no side effects and is safe on every keystroke — it is
+   * what puts the derived name, hostname and database name on screen before
+   * anything is created, and carries them even when it refuses.
+   */
+  worktreeSupport: (name) => call('worktree_support', { name }),
+  worktreeList: () => call('worktree_list'),
+  worktreePlan: (name, branch, options = null) => call('worktree_plan', { name, branch, options }),
+  worktreeCreate: (name, branch, options = null) =>
+    call('worktree_create', { name, branch, options }),
+  /** `force` discards uncommitted work; the other two are opt-ins of their own. */
+  worktreeRemove: (name, options = null) => call('worktree_remove', { name, options }),
+  /** A worktree's own variables — never `.stackvo/site.json`, which is in the
+   *  checkout and therefore in somebody's branch. */
+  worktreeEnvSet: (name, env) => call('worktree_env_set', { name, env }),
 
   /** Every tunnel sidecar and its public URL, read live from its log. */
   tunnelStatus: () => call('tunnel_status'),

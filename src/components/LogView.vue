@@ -785,7 +785,7 @@ onUnmounted(close);
 .log-origin {
   display: inline-block;
   width: 11ch;
-  margin-right: 10px;
+  margin-inline-end: 10px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

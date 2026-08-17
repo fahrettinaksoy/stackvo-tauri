@@ -227,8 +227,10 @@ onMounted(() => {
                 <v-icon color="info" size="48" class="mr-4">mdi-heart-pulse</v-icon>
                 <div class="flex-grow-1">
                   <div class="text-h4">{{ totalContainers }}</div>
-                  <div class="text-subtitle-1 text-grey">{{ t('dashboard.health') }}</div>
-                  <div class="text-caption text-grey">
+                  <div class="text-subtitle-1 text-medium-emphasis">
+                    {{ t('dashboard.health') }}
+                  </div>
+                  <div class="text-caption text-medium-emphasis">
                     <v-icon size="12" color="success">mdi-circle</v-icon>
                     {{ totalRunning }} {{ t('dashboard.running') }}
                     <v-icon size="12" color="error" class="ml-2">mdi-circle</v-icon>
@@ -247,8 +249,10 @@ onMounted(() => {
                 <v-icon color="info" size="48" class="mr-4">mdi-folder-multiple</v-icon>
                 <div class="flex-grow-1">
                   <div class="text-h4">{{ inventory.projects.length }}</div>
-                  <div class="text-subtitle-1 text-grey">{{ t('dashboard.projects') }}</div>
-                  <div class="text-caption text-grey">
+                  <div class="text-subtitle-1 text-medium-emphasis">
+                    {{ t('dashboard.projects') }}
+                  </div>
+                  <div class="text-caption text-medium-emphasis">
                     <v-icon size="12" color="success">mdi-circle</v-icon>
                     {{ inventory.runningProjects.length }} {{ t('dashboard.active') }}
                     <v-icon size="12" color="grey" class="ml-2">mdi-circle</v-icon>
@@ -268,8 +272,10 @@ onMounted(() => {
                 <v-icon color="info" size="48" class="mr-4">mdi-server</v-icon>
                 <div class="flex-grow-1">
                   <div class="text-h4">{{ inventory.services.length }}</div>
-                  <div class="text-subtitle-1 text-grey">{{ t('dashboard.services') }}</div>
-                  <div class="text-caption text-grey">
+                  <div class="text-subtitle-1 text-medium-emphasis">
+                    {{ t('dashboard.services') }}
+                  </div>
+                  <div class="text-caption text-medium-emphasis">
                     <v-icon size="12" color="success">mdi-circle</v-icon>
                     {{ inventory.runningServices.length }} {{ t('dashboard.active') }}
                     <v-icon size="12" color="grey" class="ml-2">mdi-circle</v-icon>
@@ -289,8 +295,10 @@ onMounted(() => {
                 <v-icon color="info" size="48" class="mr-4">mdi-layers</v-icon>
                 <div class="flex-grow-1">
                   <div class="text-h4">{{ metrics.resources?.images.total ?? '—' }}</div>
-                  <div class="text-subtitle-1 text-grey">{{ t('dashboard.images') }}</div>
-                  <div v-if="metrics.resources" class="text-caption text-grey">
+                  <div class="text-subtitle-1 text-medium-emphasis">
+                    {{ t('dashboard.images') }}
+                  </div>
+                  <div v-if="metrics.resources" class="text-caption text-medium-emphasis">
                     <v-icon size="12" color="success">mdi-circle</v-icon>
                     {{ metrics.resources.images.inUse }} {{ t('stats.inUse') }}
                     <v-icon size="12" color="grey" class="ml-2">mdi-circle</v-icon>
@@ -317,7 +325,9 @@ onMounted(() => {
       <v-row class="dash-row">
         <v-col cols="12" md="6" lg="3">
           <v-card elevation="1" class="pa-4 d-flex flex-column metric-card">
-            <div class="text-subtitle-2 text-grey mb-2">{{ t('dashboard.cpuLoad') }}</div>
+            <div class="text-subtitle-2 text-medium-emphasis mb-2">
+              {{ t('dashboard.cpuLoad') }}
+            </div>
 
             <div v-if="loading" class="flex-grow-1 d-flex align-center justify-center">
               <v-progress-circular indeterminate size="28" :aria-label="t('a11y.loading')" />
@@ -340,7 +350,7 @@ onMounted(() => {
                 <template #center>
                   <div class="text-center">
                     <div class="text-h5 font-weight-bold">{{ percent(stats.cpu.percent) }}</div>
-                    <div class="text-caption text-grey">{{ t('dashboard.cpu') }}</div>
+                    <div class="text-caption text-medium-emphasis">{{ t('dashboard.cpu') }}</div>
                   </div>
                 </template>
                 <!-- The rows are the split when the backend vouches for it
@@ -372,7 +382,9 @@ onMounted(() => {
         <v-col cols="12" md="6" lg="3">
           <v-card elevation="1" class="pa-4 d-flex flex-column metric-card">
             <div class="d-flex align-center mb-2">
-              <span class="text-subtitle-2 text-grey">{{ t('dashboard.cpuHistory') }}</span>
+              <span class="text-subtitle-2 text-medium-emphasis">{{
+                t('dashboard.cpuHistory')
+              }}</span>
               <v-spacer />
               <span class="text-h6">{{ percent(stats?.cpu.percent) }}</span>
             </div>
@@ -388,7 +400,7 @@ onMounted(() => {
               />
               <div class="d-flex justify-space-around mt-4">
                 <div v-for="k in ['min', 'avg', 'max']" :key="k" class="text-center">
-                  <div class="text-caption text-grey">{{ t(`dashboard.${k}`) }}</div>
+                  <div class="text-caption text-medium-emphasis">{{ t(`dashboard.${k}`) }}</div>
                   <div class="text-body-2 font-weight-bold">{{ percent(cpuHistoryStats[k]) }}</div>
                 </div>
               </div>
@@ -398,7 +410,7 @@ onMounted(() => {
 
         <v-col cols="12" md="6" lg="3">
           <v-card elevation="1" class="pa-4 d-flex flex-column metric-card">
-            <div class="text-subtitle-2 text-grey mb-2">{{ t('stats.memory') }}</div>
+            <div class="text-subtitle-2 text-medium-emphasis mb-2">{{ t('stats.memory') }}</div>
             <div v-if="loading" class="flex-grow-1 d-flex align-center justify-center">
               <v-progress-circular indeterminate size="28" :aria-label="t('a11y.loading')" />
             </div>
@@ -420,7 +432,9 @@ onMounted(() => {
                     >
                       {{ percent(stats.memory.percent) }}
                     </div>
-                    <div class="text-caption text-grey">{{ bytes(stats.memory.total) }}</div>
+                    <div class="text-caption text-medium-emphasis">
+                      {{ bytes(stats.memory.total) }}
+                    </div>
                   </div>
                 </template>
               </v-pie>
@@ -453,7 +467,7 @@ onMounted(() => {
 
         <v-col cols="12" md="6" lg="3">
           <v-card elevation="1" class="pa-4 d-flex flex-column metric-card">
-            <div class="text-subtitle-2 text-grey mb-2">{{ t('stats.storage') }}</div>
+            <div class="text-subtitle-2 text-medium-emphasis mb-2">{{ t('stats.storage') }}</div>
             <div v-if="loading" class="flex-grow-1 d-flex align-center justify-center">
               <v-progress-circular indeterminate size="28" :aria-label="t('a11y.loading')" />
             </div>
@@ -475,7 +489,9 @@ onMounted(() => {
                     >
                       {{ percent(stats.storage.percent, 0) }}
                     </div>
-                    <div class="text-caption text-grey">{{ bytes(stats.storage.total) }}</div>
+                    <div class="text-caption text-medium-emphasis">
+                      {{ bytes(stats.storage.total) }}
+                    </div>
                   </div>
                 </template>
               </v-pie>
@@ -514,17 +530,17 @@ onMounted(() => {
             <div class="d-flex align-start">
               <div class="flex-grow-1">
                 <div class="text-subtitle-1 font-weight-medium">{{ t('dashboard.diskIo') }}</div>
-                <div class="text-caption text-grey">{{ t('dashboard.diskIoSub') }}</div>
+                <div class="text-caption text-medium-emphasis">{{ t('dashboard.diskIoSub') }}</div>
               </div>
               <div class="d-flex ga-6">
                 <div class="text-center">
                   <v-icon size="18" color="info">mdi-download</v-icon>
-                  <div class="text-caption text-grey">{{ t('dashboard.read') }}</div>
+                  <div class="text-caption text-medium-emphasis">{{ t('dashboard.read') }}</div>
                   <div class="text-h6">{{ bytesPerSecond(stats?.disk.readRate) }}</div>
                 </div>
                 <div class="text-center">
                   <v-icon size="18" color="error">mdi-upload</v-icon>
-                  <div class="text-caption text-grey">{{ t('dashboard.write') }}</div>
+                  <div class="text-caption text-medium-emphasis">{{ t('dashboard.write') }}</div>
                   <div class="text-h6">{{ bytesPerSecond(stats?.disk.writeRate) }}</div>
                 </div>
               </div>
@@ -532,7 +548,7 @@ onMounted(() => {
 
             <v-row class="mt-2">
               <v-col cols="6">
-                <div class="text-caption text-grey mb-1">
+                <div class="text-caption text-medium-emphasis mb-1">
                   <v-icon size="14" color="info">mdi-arrow-down</v-icon>
                   {{ t('dashboard.readHistory') }}
                 </div>
@@ -546,7 +562,7 @@ onMounted(() => {
                 />
               </v-col>
               <v-col cols="6">
-                <div class="text-caption text-grey mb-1">
+                <div class="text-caption text-medium-emphasis mb-1">
                   <v-icon size="14" color="error">mdi-arrow-up</v-icon>
                   {{ t('dashboard.writeHistory') }}
                 </div>
@@ -568,17 +584,17 @@ onMounted(() => {
             <div class="d-flex align-start">
               <div class="flex-grow-1">
                 <div class="text-subtitle-1 font-weight-medium">{{ t('dashboard.network') }}</div>
-                <div class="text-caption text-grey">{{ t('dashboard.networkSub') }}</div>
+                <div class="text-caption text-medium-emphasis">{{ t('dashboard.networkSub') }}</div>
               </div>
               <div class="d-flex ga-6">
                 <div class="text-center">
                   <v-icon size="18" color="success">mdi-arrow-down</v-icon>
-                  <div class="text-caption text-grey">{{ t('stats.download') }}</div>
+                  <div class="text-caption text-medium-emphasis">{{ t('stats.download') }}</div>
                   <div class="text-h6">{{ bytesPerSecond(stats?.network.rxRate) }}</div>
                 </div>
                 <div class="text-center">
                   <v-icon size="18" color="warning">mdi-arrow-up</v-icon>
-                  <div class="text-caption text-grey">{{ t('stats.upload') }}</div>
+                  <div class="text-caption text-medium-emphasis">{{ t('stats.upload') }}</div>
                   <div class="text-h6">{{ bytesPerSecond(stats?.network.txRate) }}</div>
                 </div>
               </div>
@@ -586,7 +602,7 @@ onMounted(() => {
 
             <v-row class="mt-2">
               <v-col cols="6">
-                <div class="text-caption text-grey mb-1">
+                <div class="text-caption text-medium-emphasis mb-1">
                   <v-icon size="14" color="success">mdi-arrow-down</v-icon>
                   {{ t('dashboard.downloadHistory') }}
                 </div>
@@ -600,7 +616,7 @@ onMounted(() => {
                 />
               </v-col>
               <v-col cols="6">
-                <div class="text-caption text-grey mb-1">
+                <div class="text-caption text-medium-emphasis mb-1">
                   <v-icon size="14" color="warning">mdi-arrow-up</v-icon>
                   {{ t('dashboard.uploadHistory') }}
                 </div>

@@ -55,10 +55,17 @@ defineProps({
         <v-toolbar-title class="page-title">
           <v-icon size="40" class="mr-3">{{ topIcon }}</v-icon>
           <div class="d-flex flex-column justify-center">
-            <div class="d-flex align-center text-h5 font-weight-medium">
+            <!-- An `<h1>`, not a styled div. Every page in this application is
+                 built from this component and not one of them had a level-one
+                 heading, so a screen reader's "list the headings" started at
+                 level two or at nothing — axe's `page-has-heading-one`, on all
+                 four pages. `text-h5` is a class, so the size is unchanged; the
+                 margin reset is because a browser gives `h1` one and Vuetify's
+                 typography classes do not take it away. -->
+            <h1 class="d-flex align-center text-h5 font-weight-medium ma-0">
               {{ topTitle }}
               <slot name="top-title-extra" />
-            </div>
+            </h1>
             <div v-if="topSubtitle" class="text-caption page-subtitle">{{ topSubtitle }}</div>
           </div>
         </v-toolbar-title>
@@ -123,8 +130,13 @@ defineProps({
 
 /* Quieter than the title without leaving the toolbar's on-primary colour —
    a second full-strength line would read as a second heading. */
+/* Full strength, and the hierarchy comes from size instead.
+
+   This was `opacity: 0.82`, which put the subtitle at 3.62:1 against the
+   primary bar — a WCAG AA failure on every page in the application, and one
+   with no margin to trade away: white on `#1976d2` is 4.60:1, so *any* opacity
+   below 1 fails. `text-caption` already makes it the quieter line. */
 .page-subtitle {
-  opacity: 0.82;
   line-height: 1.2;
 }
 

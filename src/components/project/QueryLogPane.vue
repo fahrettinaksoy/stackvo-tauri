@@ -44,13 +44,11 @@ const busy = ref(false);
 const error = ref(null);
 
 /**
- * Only the ones that can answer.
+ * Only the ones that can answer, which is now all four this app runs.
  *
- * Postgres and Mongo are filtered out here rather than shown disabled, and the
- * difference matters: a greyed row invites "why not", and the honest answer —
- * their logs are a stream in a configurable format, or a capped collection —
- * is a paragraph, not a tooltip. The module says it at length; this says
- * nothing and offers what works.
+ * The list is still a filter rather than a greyed row: anything else in the
+ * workspace — Redis, RabbitMQ, Memcached — keeps no statement log to switch on,
+ * and a disabled row invites "why not" for an answer that is a paragraph.
  */
 const usable = computed(() =>
   asList(targets.value).filter((target) =>
@@ -156,11 +154,14 @@ watch(service, load);
           :label="t('queryLog.record')"
           @update:model-value="toggle($event)"
         />
-        <!-- Postgres writes to the container's log stream, which this app does
-             not own and must not rewrite — so "start again" is a MySQL-side
-             verb. Hidden rather than shown doing nothing. -->
+        <!-- Shown for every database now. Postgres was excluded here because
+             its log belongs to the server and this app must not rewrite it —
+             true, and it was the wrong conclusion: "cannot delete" is not
+             "cannot start again". Clearing writes a watermark into the log and
+             the reader stops at it, so the button does on Postgres exactly what
+             the person pressing it means. -->
         <v-btn
-          v-if="recording && service !== 'postgres'"
+          v-if="recording"
           size="small"
           variant="tonal"
           prepend-icon="mdi-broom"
@@ -185,6 +186,14 @@ watch(service, load);
            failure mode is forgetting. -->
       <v-alert v-if="recording" type="warning" variant="tonal" class="mt-3">
         <div class="text-caption">{{ t('queryLog.cost') }}</div>
+        <!-- The one cost that is not the same on all four. MySQL and Mongo
+             collect into something this app truncates or drops; Postgres writes
+             every statement into the server's own log file, and no button here
+             takes it back out. Said where the switch is rather than in a
+             document nobody reads at the moment it matters. -->
+        <div v-if="service === 'postgres'" class="text-caption mt-2">
+          {{ t('queryLog.costPostgres') }}
+        </div>
       </v-alert>
 
       <div v-else class="text-caption text-medium-emphasis mt-3">

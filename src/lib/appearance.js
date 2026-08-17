@@ -1,5 +1,6 @@
 import vuetify from '@/plugins/vuetify';
 import { i18n } from '@/i18n';
+import { readable } from '@/lib/contrast';
 
 /**
  * The look of the app, as data.
@@ -257,10 +258,43 @@ export function applyAppearance(appearance, systemAccent = null) {
     theme.colors.primary = primary;
     Object.assign(theme.colors, neutral[name], status.colors);
 
+    // A second, readable copy of each status colour, for the times it is used
+    // as *text* rather than as a fill.
+    //
+    // The palette is chosen for what a dot and a chip have to do, and it is good
+    // at that: `#4CAF50` reads as running at a glance. As small text on a card
+    // it is 2.77:1, against WCAG AA's 4.5 — a failure axe found ten of on the
+    // project page. Darkening the palette itself would be the wrong fix twice
+    // over: a darker dot is a worse dot, and `colorblind` is Okabe-Ito, whose
+    // values are the entire reason somebody picks it.
+    //
+    // So the fill keeps its colour and the text gets a variant, derived against
+    // this theme's own surface — which the neutral palette above may just have
+    // changed. `global.css` is where `.text-success` is pointed at it.
+    for (const [role, value] of Object.entries(status.colors)) {
+      theme.colors[`${role}-text`] = readable(value, theme.colors.surface);
+    }
+
     // Contrast is a pair of opacities rather than a second palette: Vuetify
     // renders secondary text and every divider through these two variables, so
     // raising them lifts the whole interface without inventing new colours.
-    theme.variables['medium-emphasis-opacity'] = a.highContrast ? 0.9 : 0.68;
+    //
+    // The *default* is the number that matters and it was 0.68, which does not
+    // meet WCAG AA. A field label composites its own colour alpha (0.87) with
+    // this, so `rgba(27,32,38,.87)` at 0.68 lands on `#787b7f` — 4.25:1 on
+    // white and 3.97:1 on the search field's `#f7f7f7`, both under 4.5.
+    // Measured by axe in a real engine once the run stopped being scoped to
+    // `#app`, which is where the label lives.
+    //
+    // 0.76 is 5.1:1 and 5.2:1 respectively. High contrast stays where it was:
+    // it is an enhancement on top of a baseline that now passes on its own,
+    // rather than the only setting in which the app is readable.
+    //
+    // This assignment is the one that decides it. `plugins/vuetify.js` declares
+    // the same variable and is overwritten here on every apply — a value set in
+    // two places where one of them always wins is how the first fix of this
+    // missed.
+    theme.variables['medium-emphasis-opacity'] = a.highContrast ? 0.9 : 0.76;
     theme.variables['border-opacity'] = a.highContrast ? 0.3 : 0.12;
   }
 
@@ -290,5 +324,26 @@ export function applyAppearance(appearance, systemAccent = null) {
   // language; the locales Vuetify already knows to be RTL are left alone.
   for (const name of i18n.global.availableLocales) {
     vuetify.locale.rtl.value[name] = a.rtl;
+  }
+
+  // And on the document, which is not the same element and not a duplicate of
+  // the line above.
+  //
+  // Vuetify's flag sets `direction: rtl` on `.v-application` — everything drawn
+  // *inside* the app root mirrors, and that is what the existing test measures.
+  // What it does not reach is everything drawn outside it, and in this
+  // application that is not an edge: Vuetify's overlay container is a sibling
+  // of `#app`, so every dialog, side sheet, menu and tooltip was still laid out
+  // left-to-right with the rest of the window mirrored. Measured in a real
+  // engine — `direction: ltr` on the overlay container while the app root said
+  // `rtl`.
+  //
+  // `dir` on `<html>` is inherited by the whole document, so it settles the
+  // overlays, the scrollbar side and the paragraph direction of any text that
+  // is not inside a Vuetify component. Written explicitly in both directions
+  // rather than removed when off: an attribute that is sometimes absent is one
+  // a user stylesheet or a screen reader has to guess about.
+  if (typeof document !== 'undefined') {
+    document.documentElement.setAttribute('dir', a.rtl ? 'rtl' : 'ltr');
   }
 }

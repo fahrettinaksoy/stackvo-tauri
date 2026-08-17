@@ -1,500 +1,60 @@
-# StackVo — durum, kararlar ve kalan işler
+# StackVo — kalan işler, kararlar ve ölçüm
 
-**Son ölçüm: 11 Ağustos 2026.** `docs/` altındaki iki dokümandan biri budur;
-diğeri [`servis-market-mimarisi.md`](servis-market-mimarisi.md), C-1, C-2 ve
-D-2'nin nasıl kapanacağını anlatan bir tasarım raporu ve tarif ettiği iş
-bitince silinecek.
+**Son ölçüm: 16 Ağustos 2026.** Bu dosyanın işi **kalanı** göstermek. Biten iş
+buradan silinir; kaydı `CHANGELOG.md`'ye, geri alınamaz bir tercih taşıyorsa
+§6'ya gider (§8).
 
-## Bu dosya ne
+`✅` bitti · `🟡` yarım · `⬜` başlanmadı · `⛔` engelli (dışarıdan bir şey
+gerekiyor) · `🔒` karar bekliyor
 
-Beş dokümanın yerini alıyor: iki rekabet analizi, bir kurumsal olgunluk
-incelemesi, bir platform matrisi ve on ADR. Onlarda ne olduğu **§6'da**, hangi
-kararların verildiği **§5'te**, neyin bitip neyin kaldığı **§2–§4'te**.
-
-Sıkıştırıldı, atılmadı: kararların gerekçesi ve yolda bulunan hatalar burada
-duruyor, çünkü bir kararın *neden* öyle verildiği bir sonraki okuyucunun
-ihtiyaç duyduğu tek şey. Silinen ayrıntı — rakip rakip özellik tabloları, aynı
-tespitin üç kez anlatımı — git geçmişinde.
-
-**Numaralar korundu.** Koddaki yorumlar "ADR 0005", "ADR 0009" diye atıf
-yapıyor; §5'teki tablo aynı numaraları taşıyor, yani o atıflar hâlâ bir yere
-gidiyor.
-
-## Nasıl ölçüldü
-
-Her durum satırı bugün ağaca karşı kontrol edildi, hatırlanarak değil. "Nasıl
-bakıldı" sütunu, bir sonraki okuyucunun aynı kontrolü tekrarlayabilmesi için
-var — pahalı yoldan öğrenilmiş bir ders: bir turda kalan-işler tablosunun altı
-satırı yanlış çıktı ve biri hiç açık değildi. Bir kontrolün *yapıldığının*
-yazılı olması, yapıldığı anlamına gelmiyor.
-
-**§2–§4'ün arkasında bir kapı yok ve olamaz.** "Yapılmadı" kodun ölçülebilir
-bir özelliği değil, bir niyetin kaydı. §5 ve §7'nin arkasında **var**: karar
-tablosu ve ölçüm tablosu testlerle tutuluyor, yanlış bir sayı build'i kırıyor.
-
-`✅` bitti · `🟡` yarım (ne yarım olduğu yazılı) · `⬜` başlanmadı ·
-`⛔` engelli (dışarıdan bir şey gerekiyor) · `🔒` karar bekliyor
+**§2–§4'ün arkasında kapı yok ve olamaz** — "yapılmadı" kodun ölçülebilir bir
+özelliği değil. Elde olan tek şey her satırın **nasıl bakıldığını** taşıması.
+§5, §6 ve §7'nin arkasında **var**: karar tablosu ve ölçüm testlerle tutuluyor,
+yanlış bir sayı build'i kırıyor.
 
 ---
 
-## 1. Teslim edilenlerin kaydı nerede
+## 1. Bitenlerin kaydı nerede
 
-Bu bölüm bir kayıt tutuyordu ve dosyanın yarısına çıkmıştı — 990 satır, hepsi
-bitmiş işin gerekçesi. Bu dosyanın işi **kalanı** göstermek, ve içinde ne kadar
-çok biten iş birikirse "ne kaldı" sorusunu cevaplamak o kadar zorlaşıyor.
-
-Bitenlerin kaydı dört yerde duruyor ve hiçbiri kaybolmadı:
-
-* **`CHANGELOG.md`** — her teslimatın ne olduğu ve neden öyle yapıldığı,
-  kullanıcıya bakan dille.
-* **`docs/servis-market-mimarisi.md`** — paket ve market mimarisinin tamamı,
-  fazlarıyla.
-* **§6 (Kararlar)** — geri alınamayan tercihler, ADR olarak, gerekçeleriyle.
-  Bir sonraki okuyucunun *neden öyle yapıldığını* aradığı yer burasıdır.
+* **`CHANGELOG.md`** — her teslimatın ne olduğu ve neden öyle yapıldığı.
+* **`docs/servis-market-mimarisi.md`** — paket ve market mimarisi; tarif ettiği
+  iş bitince silinecek.
+* **§6** — geri alınamayan tercihler, gerekçeleriyle. Koddaki "ADR 0005",
+  "ADR 0009" atıfları bu tabloyu kastediyor; numaralar korundu.
 * **git geçmişi** — her satırın hangi turda ve neden değiştiği.
 
-Bir madde §2'den ya da §3'ten çıktığında satırı silinir ve gerekçesi bu dört
-yerden birine yazılır. §8'in kuralı budur.
-
 ---
 
-## 2. Rekabet boşlukları — kalan
+## 2. Ürün boşlukları — kalan
 
 Sahadaki on ürüne karşı ölçüldü (Herd, Lerd, EnvKit, FlyEnv, ServBay, ForgeKit,
-Laragon, Laradock, DDEV, XAMPP). **Mimari olarak en yakın rakip DDEV** — Docker
-tabanlı, proje başına stack, paylaşılan Traefik router, mkcert HTTPS, repoya
-işlenen config — ve en zayıf tarafı tam da StackVo'nun en güçlüsü: resmî GUI'si
-terk edilmiş durumda.
-
-### C — Genişletilebilirlik
-
-**C-1 ve C-2 çıktı.** `authoring.rs` paketi yazıyor ve mühürlüyor,
-`policy.market.allowedSources` kurumsal kapıyı tutuyor.
-
-Kalan, bu turun işi değil ve mimari raporun kendi kararı: **üçüncü taraf
-*dağıtımı* v1'de yok** (`servis-market-mimarisi.md` §4.6). Bir moderasyon
-süreci, bir yayıncı kimliği ve bir kaldırma mekanizması gerektiriyor; mimarinin
-hazır olması — kaynak alanı, imza doğrulayıcı, policy validator, ve artık
-`allowedSources` — yeterli, kapının açılması ayrı bir karar. İmzalama ve yayın
-yok; kendi makinesi ya da kurumunun kendi aynası için paket yazmak bunların
-hiçbirini gerektirmiyor.
-
-DDEV'in kayıt defteri (`addons.ddev.com`), 36 resmî ve 100+ topluluk eklentisi
-var. Container tabanlı bir araç için kullanıcının kendi compose dosyasını
-reddetmek, container tabanlı olmayı alternatifinden *daha kötü* yapan tek şey —
-ve artık reddedilmiyor.
-
-### E — Ağ
-
-**E-1, E-2 ve E-4 çıktı.** E-2'nin joker yarısı E-1'in arkasındaydı ve sonek
-eşleşmesinden bedavaya düştü — `a.b.shop.loc` de `shop.loc` de cevap alıyor.
-
-E-1'in kalan yarısı "hangi dosyaya yazılacağı" sorusuydu ve cevabı tahmin etmek
-değil **sormak** oldu: Linux'ta NetworkManager'ın dnsmasq'ı, makinenin kendi
-dnsmasq'ı, systemd-resolved — bu sırayla aranıyor, hiçbiri bulunamazsa hiçbir şey
-yazılmıyor ve satır gösteriliyor. Windows'ta mekanizma **var**: NRPT bir ad
-uzayı ile bir sunucu alıyor, yalnız o soneke uygulanıyor. Önceki turun "Windows'ta
-sonek başına mekanizma yok" cümlesi, platform hakkında değil, ne arandığı
-hakkında bir cümleymiş.
-
-Bunu, çalıştırmadan doğrulanamayacak bir dağıtıma yazmayı kabul edilebilir yapan
-şey ölçüm: değişiklik uygulandıktan sonra **makinenin kendi çözümleyicisine**
-soruluyor — sonek altındaki bir ad loopback dönmeli, ve değişiklikten önce çözülen
-genel bir ad hâlâ çözülmeli. Biri düşerse değişiklik **geri alınıyor**. Yazılan
-dosyayı geri okumak, yalnız yazmanın olduğunu kanıtlar.
-
-Aynı sınıftan iki şey daha kapandı, ikisi de "yazdık ve unuttuk" hatası:
-`/etc/resolver/test` dnsmasq'ın, Valet'in ya da bir meslektaşın betiğinin olabilir
-— üzerine yazmak bir soneki başka bir araçtan geri dönüşsüz almak demek; artık
-önce kenara kopyalanıyor, kapatınca geri konuyor. Ve sonek değişince eski dosya
-kalıyordu: `.loc` artık **reddediliyordu**, yani yukarı gidip dürüstçe düşmek
-yerine bu makinede kesiliyordu. İkisi de panelde yazıyor.
-
-Doktor sayfasına da tek satır eklendi ve yalnız tek bir durumda görünüyor:
-makine bizi soruyor, port başkasında, hiçbir ad çözülmüyor — uygulama,
-konteynerler ve proxy sapasağlam görünürken. Bunu bildiren başka hiçbir şey
-yoktu.
-
-Yolda bulunan ve ilk turun kaçırdığı hata: her REFUSED ve her NODATA, gövdesinde
-soru taşımadan başlığında "bir soru" diyordu. `dig` bunu okunan satırın bir üstünde
-söylüyordu — *"Message parser reports malformed message packet"* — ve probe yalnız
-`status:` satırına bakıyordu. Hoşgörülü bir araç yine de okur; bir stub çözümleyici
-gönderdiği soruyla eşleşmeyeni atar, ve atılan bir cevap hızlı bir hata değil, beş
-saniyelik bir zaman aşımıdır. NODATA yolu istisna da değil: her Chrome ve Safari
-sayfa yüklemesi adresten önce bir HTTPS kaydı (tip 65) soruyor.
-
-### F — Gözlemlenebilirlik: en büyük ürün boşluğu
-
-**F-3 çıktı ve tabloyu daha iyi çizerek çıkmadı.** Flame graph yığınlardan
-kurulur — her ölçüm kendi yolunu taşır, yani iki yerden çağrılan bir fonksiyon
-kendi genişlikleriyle iki kutudur — cachegrind ise *kenar* tutuyor: "A, B'yi
-çağırdı"nın her yerdeki toplamı. `profile::call_tree` bunu kendi yorumunda
-söylüyordu ve ekran dürüstçe "çağrı ağacı" diyordu. Dosyada olmayan bilgi
-düzenlemeyle geri gelmez; girdinin değişmesi gerekiyordu.
-
-Xdebug'ın diğer türü zaten var: `xdebug.mode=trace` + `trace_format=1` her
-fonksiyon **girişi ve çıkışı** için derinlikli, zaman damgalı bir satır yazıyor.
-Aradaki boşlukları o anki yığına yazmak, her ayrı yol için "bu yol yığında ne
-kadar durdu"yu veriyor — flame graph'ın genişliği tam olarak budur. Üçüncü bir
-Xdebug kipi (`trace`), onay kutusu değil: farklı dosya, farklı ayrıştırıcı,
-kaydetmesi çok daha pahalı.
-
-Çalışan yığında ölçüldü (`examples/trace_probe.rs`): iki farklı üstten çağrılan
-`slow()`, 60ms ve 10ms istenmişken **62.089µs ve 11.167µs olarak iki ayrı kutu**
-döndü. Cachegrind'in söyleyemediği cümle bu.
-
-**Yolda bulunan üç kırık — üçü de çalıştırarak, okuyarak değil:**
-
-* **Profil alma hiç dosya yazmamış.** `xdebug.output_dir` ilk günden
-  `/var/log/xdebug` diyor ve o dizini bağlamanın iki tarafında da kimse
-  oluşturmuyordu. Xdebug var olmayan dizine sessizce yazmıyor: profil aç, tetikle,
-  liste boş — hiçbir yerde hata yok. Artık her compose çağrısından önce
-  oluşturuluyor.
-* **MariaDB 12'de konuşacak istemci yokmuş.** MariaDB 11 `mysql*` sembolik
-  bağlarını kaldırdı, 12 onlarsız geliyor; `mariadb:12` konteynerinde `mariadb`
-  ve `mariadb-dump` var, `mysql` yok — uygulamanın her veritabanı özelliği ise
-  ondan `mysql` istiyordu. Dökme, geri yükleme, anlık görüntü, taşıma ve sorgu
-  günlüğü; hepsi, katalogdaki bir servis üzerinde. Birim testleri boyunca geçti,
-  çünkü onlar argüman *listesini* denetliyor ve liste, adını verdiği program için
-  doğruydu. Artık hangisinin olduğunu konteynerin kendisi seçiyor.
-* **Mongo sorgu günlüğü taze bir veritabanında hiçbir şey kaydetmiyordu, kaydedince
-  de okunmuyordu.** Profil Mongo'da veritabanı başına ve düğmeye basıldığı anda var
-  olanlara uygulanıyordu — yeni başlamış bir konteynerde hiç yok, yani anahtar
-  hiçbir şeyi açmıyor ve dürüstçe "kapalı" diyordu; üstelik günlük durum (uygulama
-  ilk yazmada veritabanını oluşturur) tam da kaçırılan durumdu. Oturumu artık
-  `admin` taşıyor ve her okuma, o sırada beliren veritabanlarını da açıyor.
-  Kaydedileni ise ham gösteriyordu: satır başına beş yüz karakter `$clusterTime`,
-  imza, oturum kimliği ve okuma tercihi, `find` ile `filter` ortada bir yerde.
-  Sürücü zarfı artık hem gösterilenden hem şekilden çıkarılıyor — tek liste, ki
-  birinde gürültü olan bir anahtar diğerinde kalmasın.
-
-`examples/querylog_probe.rs` son üçünü bulan ve bulunmuş tutan şey: ayakta olan
-her veritabanına karşı kaydı açıyor, geri geldiğinde tanıyabileceği bir soru
-soruyor — F-1'in var olma sebebi olan N+1 şekli dahil — oturumu okuyor ve her
-veritabanını bulduğu hâle geri bırakıyor.
-
-**Ölçülmeyen tek yarım Postgres:** bu çalışma alanında kurulu değil. Probe onu
-atlıyor ve atladığını yazıyor; kuruluysa aynı komut ölçer.
-
-F-6 bu bölümün *uygulama* yarısıydı ve kapandı: bir konteynerin sağlıklı olup
-olmadığı, neden durduğu (137 = bellek), kaç kez yeniden başladığı ve ne kadar
-yediği artık ekranda.
-
-### G — Veritabanları
-
-**G-4 çıktı.** `dbmove.rs`: dökme ve geri yükleme zaten vardı, olmayan şey
-"bu işe yarayacak mı" sorusunun cevabıydı. Aynı motor serbest, MySQL↔MariaDB
-uyarıyla serbest, aile değiştirmek reddediliyor — bir `mysqldump` dosyası
-Postgres girdisi değil ve `psql`'e verilmekle olmuyor; kabul etmek hedefi
-boşaltıp binlerce sözdizimi hatasıyla düşmek olurdu. Sürüm düşürme uyarılıyor,
-çünkü sessizce kırılan yön o ve kırıldığında hedef çoktan değiştirilmiş oluyor.
-
-### H — Üretim köprüsü
-
-**H-1 çıktı** (push + reçete). Zor yarısı zaten bitmişti: soyu geliştirme imajı
-olan üretim imajı, çalıştırılıp sorularak temiz olduğu kanıtlanmış. Kolay yarı
-bir kural etrafında kuruldu: **bir imaj yalnız doğrulandıktan sonra push
-ediliyor.** Registry katmanları saklar; etiketi silmek içindekini kaldırmaz ve
-paylaşılan bir registry'de birileri çoktan çekmiştir. Registry adı taşımayan
-etiket de reddediliyor — `docker push myapp:v1` giriş yapılmış hesabın altında
-Docker Hub'a gider.
-
-Kimlik bilgileri bu uygulamanın işi değil: `docker login` kullanıcınındır,
-`~/.ssh/config`'in `git.rs`'te olduğu gibi.
-
-**"Sağlayıcıdan pull" bilerek dışarıda.** `release_load` bir tarball'ı zaten
-getiriyor; bir registry'den çekmek `docker pull` ve onu bu uygulamanın içine
-sarmak, kullanıcının zaten sahip olduğu bir komutun ikinci ve daha kötü bir
-kopyası olurdu — reçete zaten imajın tam adını yazıyor.
-
-### I — Performans: Docker eleştirilerinin doğru olanı
-
-**I-1 çıktı.** Kalan iş "bir senkron katman" diye yazılıydı ve yazılan o olmadı —
-çünkü ölçüm, kazancın nerede olduğunu söyleyince tasarım değişti.
-
-`mount_bench` genel soruyu cevaplamıştı: `:cached`/`:delegated` **atıl**,
-bind→volume mesafesi metadata ve yazmada **2–3 kat**. Yeni ölçüm
-(`examples/perf_layer_bench.rs`, bu makinede, 8.000 dosyalık bir `vendor/` ile)
-özelliğin cevaplaması gereken daha dar soruyu soruyor — "kaynağım editörün
-gördüğü yerde kalırken ne kadar hızlanır":
-
-| | bind | vendor birimde | + storage/framework |
-|---|---|---|---|
-| boot (framework açılışı) | 1,47s | 0,39s — **3,8×** | 0,40s |
-| stat (ağaç yürüyüşü) | 0,42s | 0,39s | 0,34s |
-| write (istek başına yazma) | 1,14s | 1,21s — **yok** | 0,41s — **2,8×** |
-
-İki satır tasarımı belirledi: `vendor` açılışı alıyor ve yazmaya **hiçbir şey**
-yapmıyor; yazmayı alan `storage/framework`. Yani "hızlandır" diye tek bir anahtar,
-kazancın nereden geldiğini gizlerdi ve taşıdığı dizinler birinin projesi hakkında
-bir tahmin olurdu. Bu yüzden özellik bir dizin listesi.
-
-**Mutagen paketlenmedi ve uygulama içine çift yönlü senkron yazılmadı.** İkisinin
-de gerekçesi `src-tauri/src/perf.rs` başlığında: biri üç platform için ikinci bir
-ikili, diğeri yarım yapıldığında sesizce birinin dosyasını kaybeden bir sınıf
-problem. Senkrona gerek de kalmıyor: bu dizinleri host'ta kimse yazmıyor.
-
-Bedeli ekranda yazıyor — editör `vendor/`'ı artık göremez — ve `perf_export` onu
-tek tıkla host'a geri kopyalıyor (anlık görüntü olduğu söylenerek). İki uçurum da
-kapalı: taze bir birim **boş** başlar, o yüzden `perf_set` **önce** host kopyasını
-içeri alıyor ve kopyalama düşerse ayarı hiç yazmıyor; birimi silmek ise anahtarın
-yan etkisi değil, ayrı bir eylem.
-
-Çalışan Docker'a karşı doğrulandı: compose ikinci dosyanın `volumes:` listesini
-**ekliyor** (ezmiyor), ve birim bind'i alt yolda gölgeliyor — konteyner birimi
-görüyor, host kopyası olduğu yerde kalıyor, konteynerin yazdığı host'a hiç
-gitmiyor.
-
-**I-2 çıktı** (`idle.rs`). Sinyal konteyner CPU'su değil — php-fpm hizmet
-verirken de uyurken de sıfıra yakın, ağ sayaçları da sağlık kontrolü ve DNS için
-kıpırdıyor; biri kullanılan şeyi durdurur, diğeri hiçbir şeyi durdurmaz.
-Dürüst cevap proxy'nin: Traefik en son ne zaman hangi router'a yönlendirdiğini
-zaten yazıyor. Generator erişim günlüğünü **iki alan tutup gerisini atarak**
-açıyor (`RouterName`, `StartUTC`) — tek soruya bakan bir günlük, aynı zamanda
-birinin kendi makinesinde gezdiği her URL'nin kaydı olmamalı.
-
-Varsayılan **kapalı** ve günlüğün hiç anmadığı proje asla askıya alınmıyor:
-biri bunu ilk kez açtığında her şeyin durması, özelliğin olabilecek en kötü
-tanıtımı olurdu. **İstek üzerine uyandırma yok** ve nedeni yazılı: uyandırmak,
-konteyner başlarken bağlantıyı açık tutabilen bir bileşen ister; istek yolundaki
-tek şey Traefik ve o bunu yapamıyor.
-
-### K — AI katmanı
-
-**K-1 çıktı.** İki istemci eksikti ve ikisinin de gerekçesi `agents.rs`'in
-başında yazılıydı; ikisi de o gerekçeyi ortadan kaldırarak kapandı.
-
-**Codex** TOML kullanıyor ve birinin yorumlarını, anahtar sırasını, tırnak
-stilini koruyarak TOML düzenlemek `toml_edit` istiyordu — bu depoda bir bağımlılık
-ölçülen bir karardır. Ölçüldü: `toml_edit` ve `toml_writer` Tauri'nin kendi grafiği
-üzerinden **zaten `Cargo.lock`'ta ve `NOTICE.md`'de**, yani kilit dosyası iki kenar
-kazanıyor, sıfır paket. Şema da hatırlanmadı: bu makinedeki gerçek
-`~/.codex/config.toml` `[mcp_servers.node_repl]` bloğunu `command`, `args`,
-`startup_timeout_sec` ve iç içe bir `env` tablosuyla tutuyor, OpenAI'nin kendi
-tanı belgesi de aynı bloğu belgeliyor.
-
-**Zed** çalışan bir kopyaya karşı doğrulanamadığı için yoktu; hâlâ kurulu değil,
-o yüzden şema Zed'in güncel yayımlanmış belgesinden alındı: düz
-`"context_servers": { "<ad>": { "command": "…", "args": [], "env": {} } }`,
-`source` anahtarı yok. Yolu ise belgede hiç yazmıyor ve Zed bazı şeyleri
-`~/.config/zed`, bazılarını `~/Library/Application Support/Zed` altında tutuyor —
-bu yüzden **ikisine de bakılıyor**; birini seçmek makinelerin yarısında sessizce
-yanlış dosyayı yazmak olurdu.
-
-**Ölçüm bir de eskiyi buldu.** `examples/agent_config_probe.rs` modülü bu
-makinedeki **gerçek** dosyalara karşı çalıştırıyor: kopyaya kaydı yazıyor, geri
-alıyor ve sonucu orijinalle **byte byte** karşılaştırıyor. Yeni TOML yolu ilk
-denemede birebir geldi; JSON yolunun dördü gelmedi — çünkü `serde_json::Map`
-`preserve_order` olmadan bir BTreeMap ve dosyayı **alfabetik sıraya** diziyordu,
-üstelik girintiyi de kendi iki boşluğuna çeviriyordu. 58 KB'lık bir
-`~/.claude.json`'ı tek bir kayıt eklemek için baştan sona değiştirmek, modülün
-"dosyada olan her şey yerinde kalır" sözünün tam tersi. İkisi de kapandı: sıra
-korunuyor (yine sıfır yeni paket — `indexmap` zaten oradaydı) ve dosya kendi
-girintisiyle geri yazılıyor. Şimdi beş dosyanın beşi de birebir dönüyor; tek fark,
-bilerek geride bırakılan boş `mcpServers` haritası.
-
-**K-2 çıktı** (`agentctx.rs`). `agents.rs` host'taki asistanlara `stackvo-mcp`'yi
-tanıtıyor; **konteynerin içinde** koşan bir agent için hiçbir şey yapmıyordu ve
-yapamaz — `stackvo-mcp` host'ta stdio konuşuyor ve konteynerden ona giden bir
-taşıyıcı yok. Böyle bir agent'ın ihtiyacı zaten bir sunucudan küçük: hangi
-projede olduğu, sitenin adı, etrafında ne çalıştığı. Bu bir dosya.
-
-`<proje>/.stackvo/context.json`'a yazılıyor, mount edilmiyor: `volumes:`'a bir
-satır eklemek `fixtures_differential.rs`'i düşürürdü ve bu portun Bash
-üretecini yeniden ürettiği kanıtı, daha derli bir mount'tan değerli. Ayrıca
-agent'ın ilk baktığı yer zaten depo.
-
-**Ad ve adres, asla kimlik bilgisi** — ve bu bir filtreyle değil, yapıyla:
-`Service`'in id, host ve port'u var, sırrı koyacak alanı yok. Dosya birinin
-kaynak ağacına yazılıyor ve kaynak ağacı yanlışlıkla commit'lenen bir şey.
-
-**Hiçbir rakip MCP yüzeyini kontrol edilen bir kontrattan türetmiyor** — üç
-kontrat testi her aracı `contracts/ipc.json`'a çapraz kontrol ediyor, var olmayan
-bir komutu adlandıran araç build'i kırıyor. Bu gerçek bir farklılaştırıcı.
-
-### L — Onboarding
-
-**L çıktı.** Beş araç, üç ayrı şekil — ve satır zaten yarı yanlıştı: MAMP ile
-Valet `imports.rs`'te yazılıydı ama **"kendim göstereyim" yolu onları
-reddediyordu**. `imports_scan_at` beşten ikisini tanıyordu ve ekran da aynı ikisini
-sunuyordu, yani MAMP'ı `/Applications` dışında olan birine "bu, uygulamanın
-okuyabildiği bir araç değil" deniyordu. Taramanın hiç bulamayacağı iki araç
-(Valet ve Sail) için ise o yol tek yoldu.
-
-Üç şekil:
-
-* **XAMPP, Laragon, MAMP** — tek bir site dizini. Laragon ayrıca site başına bir
-  vhost yazıyor, adı oradan okunuyor.
-* **Valet** — site dizini yok: dizin *park* ediyor (her çocuğu bir site) ve tek
-  tek *link* ediyor (`Sites/` altında sembolik bağ). İkisi de, tld'si de kendi
-  `config.json`'ından okunuyor.
-* **Sail** — kurulum bile değil: her projenin *içinde* bir composer paketi.
-  Tanıtıcısı `laravel/sail` adını geçen bir `docker-compose.yml`. Bu yüzden
-  `well_known()` onun için hiçbir şey önermiyor — `~/Code` bir gelenek, makine
-  hakkında bir olgu değil — ve gösterilen yol proje de olabilir, birkaç projeyi
-  tutan klasör de.
-
-Sail aynı zamanda **ne gerektiğini söyleyen tek kaynak**: compose dosyası mysql,
-redis, meilisearch gibi servisleri sayıyor. Bunlar bu uygulamanın kataloğuna
-eşleniyor (`pgsql`→`postgres`, `mongodb`→`mongo`), karşılığı olmayan sessizce
-*atılıyor* — yerine benzeri konmuyor — ve içe aktarma neyi açması gerektiğini
-söyleyebiliyor.
-
-Ölçüldü (`examples/import_probe.rs`): beş aracın kendi dizin düzeni geçici bir
-dizinde kuruluyor ve sevk edilen tarayıcı üzerinden geçiriliyor — XAMPP kendi
-`dashboard`'ını atlıyor, Laragon'un vhost'undan `crm.test` çıkıyor, Valet'in park
-edilmiş ve link edilmiş siteleri birlikte geliyor, Sail'in `pgsql`'i `postgres`
-oluyor. Bu ölçüm bir hatayı da bulmuştu: Sail'in şablonu **dört boşluk** girintili
-ve parser iki boşluğa sabitlenmişti — hiçbir servis bulunmuyordu.
-
-### M — Küçük maddeler: on biri çıktı, biri iki parçaya ayrıldı
-
-Önceki turda dördü teslim edilmiş, sekizi için "ucuz etiketi tutmuyordu"
-denmişti. Doğruydu: ucuz değillerdi. Bu turda **maliyetleri ödendi** ve on ikisi
-de tek tek ölçüldü.
-
-| # | Madde | Durum | Nasıl |
-| --- | --- | :-: | --- |
-| M-1 | Proje favorileri | ✅ | `useFavourites` + yıldız sütunu. Tercih dosyasında, manifestoda değil: favori kişiye ait, `stackvo.json` ise commit ediliyor |
-| M-2 | Mail gönderme / relay | ✅ | Mailpit'in **release** ucu + compose overlay. Yakalayıcı her şeyi yakalamaya devam ediyor; yalnızca elle iletilen mesaj çıkıyor |
-| M-3 | Paylaşım URL'sinde QR | ✅ | Kendi kodlayıcısı. **macOS'un kendi çözücüsüne** okutuldu: yedi metnin yedisi bayt bayt aynı geri geldi |
-| M-4 | Her siteyi listeleyen açılış sayfası | ✅ | Yığının **zaten sahiplendiği** ada bir sidecar. Canlı yığında ölçüldü: `https://stackvo.loc` yazılan sayfayı döndü |
-| M-5 | Proje başına ortam değişkenleri | ✅ | `.stackvo/site.json` → compose overlay. Uygulamanın kendi `.env`'ine yazılmıyor; o dosya framework'ün |
-| M-6 | Proje başına dizin listeleme | ✅ | nginx `autoindex`, Caddy `file_server browse`. Apache ve Swoole yapamıyor ve ekran bunu **söylüyor** |
-| M-7 | Arayüz dilleri | ✅ | **Dil paketi**: config dizinine bırakılan bir JSON. Dil eklemek artık kod değişikliği değil |
-| M-8 | Alternatif yüzeyler | ◐ | Tepsi artık **pencereyi açmadan** proje başlatıp durduruyor. TUI, §5'teki A-1 kararına bağlı; PWA'nın dayanacağı HTTP yüzeyi yok |
-| M-9 | Framework komutları | ✅ | Symfony, Django, Rails ve Ruby. **B-4 kilidi değil**: her satır hâlâ derlemeye gömülü |
-| M-10 | SSH agent'ının container'a iletilmesi | ✅ | Ölçüldü: konteynerden `ssh-add -l` ajana ulaşıyor |
-| M-11 | Stripe webhook dinleyicisi | ✅ | Gerçek imajla ölçüldü — hesabın gerektirdiği yere kadar, ve o çizgi yazılı |
-| M-12 | `.loc` için OAuth callback | ✅ | Tanımı okununca küçüldü: **yönlendirme tarayıcıya gidiyor**, sağlayıcı adresi çözmüyor |
-
-**M-2 servis paketine dokunmuyor.** Mailpit ayarlarını kendi ortamından okuyor;
-bu uygulama oraya `site.rs` ve `perf.rs`'in kullandığı **compose overlay** ile
-uzanıyor — paket yeniden mühürlenmiyor, relay ayarlamamış bir çalışma alanı
-öncekiyle aynı baytları üretiyor. Yakalayıcının compose anahtarı **imajından**
-bulunuyor (`axllent/mailpit`): `.env` alanında `mailpit`, instance tablosuna
-geçmiş olanda `mailpit-1-30`. İzinli alıcı listesi Mailpit'e bir düzenli ifade
-olarak gidiyor, o yüzden noktalar kaçırılıyor — kaçırılmasa `me@test.com`,
-`me@testxcom`'a da izin verirdi ve o birinin sahip olabileceği bir adres.
-
-**M-3'ün asıl bulgusu ölçümün kendisi.** Birim testleri geçiyordu: alan
-aritmetiği, yayımlanmış Reed-Solomon örneği, biçim ve sürüm dizeleri, çerçeve.
-Sonra macOS **hiçbirini okuyamadı** — format bilgisinin ilk kopyası 8. sütun
-yerine 8. satıra yazılmıştı, yani doğrunun devriği. Maskeyi o alan söylüyor,
-dolayısıyla geri kalan her şeyin doğru olması hiçbir şeye yaramıyordu. Kendi
-beklentisine karşı sınanan bir kodlayıcı, yazarıyla hemfikir olan bir kodlayıcı.
-
-**M-4 yeni bir ad istemedi.** `core_domains` çıplak son eki zaten `/etc/hosts`'a
-yazıyor, `certs::required_domains` zaten onun için sertifika üretiyor — ve o
-adres Traefik'in 404'ünü döndürüyordu. Yani madde "yeni konteyner + DNS +
-sertifika" değil, "yığının zaten sahiplendiği ada cevap veren bir konteyner"
-çıktı. `nginx:alpine`, çünkü Alpine'ın busybox'ı `httpd` applet'i olmadan
-derlenmiş — okunarak değil çalıştırılarak bulundu: `httpd: applet not found`.
-
-**M-7'de çeviri yapılmadı ve bu bilerek.** Engel hiçbir zaman 2.000 dize
-değildi; **yeniden derleme** idi. Dil kümesi üç yerde sabitti, dolayısıyla bu
-uygulamayı gerçekten çevirebilecek kişi hiçbirine dokunamıyordu. Artık bir dil,
-config dizinine bırakılan bir dosya. Eksik dizeler İngilizce görünüyor — vue-i18n
-anahtar bazında geri düşüyor — ve ayarlar ekranı **ne kadarının çevrildiğini
-yazıyor**. Makine çevirisi yok: geri düşen bir dize dürüst, uydurulmuş bir dize
-birinin bulup inanmaması gereken bir cümle.
-
-**M-11'in ölçümü kendi hatasını buldu.** İlk hâli tünelin sidecar'ını kopyalayıp
-`--rm` kullanıyordu. Geçersiz anahtar CLI'ı çıkarıyor, `--rm` konteyneri
-**log'uyla birlikte** siliyor, `status_all` hiçbir şey bulamıyor — bu özelliğin
-en olası hatası için panel ne dinleyici ne hata ne de sebep gösteriyordu. Probe
-de bunu bir süre başarı sandı, çünkü Docker'ın kendi "No such container" mesajı
-"Error" ile başlıyor.
-
-**M-8 ikiye ayrıldı ve yarısı zaten vardı.** `closeBehaviour: tray` ve
-`startMinimized` yıllardır orada; eksik olan tepsinin **bir şey yapabilmesi**
-idi — her satır pencereyi öne getiriyordu, yani tepsi bir yüzey değil kısayoldu.
-Artık başlat/durdur pencereyi açmadan çalışıyor ve bildirim gönderiyor. Renkli
-nokta üst seviyede kaldı: "yığın ayakta mı" bir bakış sorusu ve her satıra fiil
-koymak cevabın enini iki katına çıkarırdı. TUI ikinci bir yüzey (§5, A-1); PWA
-için dayanacak bir HTTP yüzeyi yok.
-
-**M-9, B-4'ün kilidi değil.** B-4 *çalışma alanının* beyan ettiği komut; buradaki
-her satır hâlâ derlemeye gömülü ve webview yalnızca bir id gönderiyor. Rails
-`Gemfile` ile değil `bin/rails` ile bulunuyor — Gemfile en az Rails kadar sık
-Sinatra ve Jekyll demek — ve `bundle exec` ile çalışıyor: binstub yalnızca
-çalıştırma biti checkout'tan sağ çıktıysa çalışır, `bundle exec` ise bite değil
-gem'e bakar.
-
-### N — Sahada yalnız Lerd'de olan
-
-| # | Madde | Durum |
-| --- | --- | :-: |
-| N | Worktree başına ortam | ⬜ |
-
-`git worktree add` dala kendi subdomain'ini, kendi veritabanını, kendi
-`.env`'ini veriyor. Container tabanlı bir araç için Podman tabanlı olandan
-*daha* doğal — dal başına veritabanı bir volume adı, dal başına yönlendirme bir
-Traefik kuralı. Kimsenin hızlıca kopyalayamayacağı tek özellik istenirse aday bu.
-
-### Karar bekleyenler — bu turun işi değil
-
-Aşağıdakiler kod eksikliğinden değil, verilmemiş bir karardan bekliyor. Kararlar
-**§5'te**; biri verildiği gün ilgili satır buraya değil, yukarıdaki bölümüne
-geri döner.
-
-#### A — Yardımcı CLI ve host kabuğu (A-1, A-3)
+Laragon, Laradock, DDEV, XAMPP).
 
 | # | Madde | Durum | Nasıl bakıldı |
 | --- | --- | :-: | --- |
-| A-1 | Yardımcı CLI | ⬜ | `src-tauri/src/bin/` yalnızca `stackvo-mcp.rs` |
-| A-3 | Host kabuğu entegrasyonu (`stackvo php …`) | ⬜ | A-1'in arkasında |
-
-**A-2 çıktı** (⌘K / Ctrl+K komut paleti). Kalan ikisi de aynı karara bağlı ve o
-karar §5'te duruyor: bir CLI, sözleşmeyle senkron tutulacak üçüncü bir yüzey.
-
-On rakibin sekizinde CLI var. Maliyeti göründüğünden düşük: `progress.rs`'in
-`ProgressSink`'i ve `Sink::Null` sayesinde MCP yolu hiçbir Tauri tipi
-adlandırmıyor, yani ayrıştırma yapılmış — eksik olan bir argüman ayrıştırıcısı
-ve bir ilerleme yazıcısı. §5'teki karar isteniyor.
-
-#### B-4 — Kullanıcı tanımlı komut
-
-| # | Madde | Durum | Nasıl bakıldı |
-| --- | --- | :-: | --- |
-| B-4 | Kullanıcı tanımlı komut | 🔒 | §5'teki karara bağlı. B-2 ve B-3 çıktı |
-
-#### D-1 — Yerel AI servisleri
-
-| # | Madde | Durum | Nasıl bakıldı |
-| --- | --- | :-: | --- |
-| D-1 | Ollama, Qdrant, pgvector | 🔒 | §5'te **ertelendi** olarak kayıtlı, kapsam dışı değil |
-
-#### F-5 — Kendine ait REPL yüzeyi
-
-| # | Madde | Durum | Nasıl bakıldı |
-| --- | --- | :-: | --- |
-| F-5 | Kendine ait REPL yüzeyi | 🔒 | PTY üzerinden `tinker` — dürüst %90, ama tezgâh değil. `quickcmd.rs` bir uygulama içi paneli **bilerek** reddetti: "zaten yapılandırdıkları REPL'in yanında ikinci ve daha kötü bir REPL". Bunu geri almak bir karar |
-
-### Önde olan ve önde kalması gereken satırlar
-
-`sysinfo` ile gerçek host metrikleri; bayt bayt doğrulanmış generator; gözden
-geçirilmiş yetkili hosts yazımı; geliştirme imajından türeyen üretim imajı;
-container **ve** host PTY; yalnızca Laradock'un eşleştiği ağır servis kataloğu —
-Laradock'un ise hiç GUI'si yok; **28 iskelet şablonu, her kurucusu gerçek bir
-container'da ölçülmüş** (Herd `laravel new`'e dayanıyor, Laragon'un Quick app'inde
-dört giriş var); ve tek bir ortak config şekliyle altı runtime — FlyEnv 13,
-ServBay 8 iddia ediyor ama ikisi de host binary'si yönetiyor, yani sonsuza kadar
-taşıdıkları bir paketleme yükü; StackVo'nunki bir şablon.
+| C | Üçüncü taraf paket **dağıtımı** | ⛔ | **Kod tarafı kapandı** (ADR 0021): imza doğrulayıcı `signing.rs`'te ve `refresh` onu indeksi ayrıştırmadan **önce** koşuyor, anahtar rotasyonu (`known-keys.json`) ve emeklilik var, geri çekilmiş sürüm kuruluma **reddediliyor**, kurulu olanı `doctor` bildiriyor. Kalan üç şeyin üçü de kod değil: resmî anahtarın töreni (§5.3'ün arkasında), moderasyon süreci ve yayıncı kimliği kaydı. **Kurumsal ayna bugün çalışıyor** — kendi anahtarını `policy.market.additionalKeys` ile pinler |
+| D-1 | Yerel AI servisleri (Ollama, Qdrant, pgvector) | 🔒 | §5.2'de **ertelendi** olarak kayıtlı, kapsam dışı değil |
 
 ### Girilmeyecek kavgalar
 
-- **Native-binary hız savaşı.** FlyEnv "<100 ms açılış", Laragon "~10 MB RAM"
-  yayınlıyor. Kazanılamaz. Ama I-1'in ayrımı: *soğuk açılış* kaybedilen bir
-  tartışma, *dosya G/Ç* gerçek bir kusur — birincisi ikincisini görmezden
-  gelmenin bahanesi olmasın.
-- **LLM sağlayıcı proxy'si** (ServBay'in AI Gateway'i). Kapsam dışı. Yerel AI
-  *servisleri* farklı bir soru — §5.
-- **FlyEnv'in 50+ aracı** (base64, QR, regex test ediciler). Odaksız.
-- **Portable mod.** Docker bağımlılığıyla anlamsız.
-- **Laradock'un 130 servisinin peşine düşmek.** Genişliğin kendisi için
+Yeniden tartışılmaması için yazılı:
+
+* **Native-binary hız savaşı.** FlyEnv "<100 ms açılış", Laragon "~10 MB RAM"
+  yayınlıyor; kazanılamaz. Ama *soğuk açılış* ile *dosya G/Ç* ayrı sorular —
+  birincisi ikincisini görmezden gelmenin bahanesi olmasın.
+* **Çift yönlü senkron ve Mutagen paketleme** (I-1'in reddedilen yarısı).
+  Gerekçe `src-tauri/src/perf.rs` başlığında: biri üç platform için ikinci bir
+  ikili, diğeri yarım yapıldığında sessizce birinin dosyasını kaybeden bir
+  sınıf problem. Gerek de yok — birime taşınan dizinleri host'ta kimse yazmıyor.
+* **Sağlayıcı registry'sinden pull.** `docker pull`'un ikinci ve daha kötü bir
+  kopyası olurdu; reçete imajın tam adını zaten yazıyor.
+* **LLM sağlayıcı proxy'si** (ServBay'in AI Gateway'i). Kapsam dışı. Yerel AI
+  *servisleri* farklı bir soru — §5.2.
+* **FlyEnv'in 50+ aracı** (base64, QR, regex test ediciler). Odaksız.
+* **Portable mod.** Docker bağımlılığıyla anlamsız.
+* **Laradock'un 130 servisinin peşine düşmek.** Genişliğin kendisi için
   genişlik, bir kataloğun bakımsız hâle gelme yolu.
-- **Ücretli katman.** Herd $99/yıl, ServBay $59/yıl, Laragon ticarileşip
+* **Ücretli katman.** Herd $99/yıl, ServBay $59/yıl, Laragon ticarileşip
   fork'landı. EnvKit, ForgeKit ve DDEV tam oradan saldırıyor; MIT o çizginin
   doğru tarafı.
 
@@ -502,100 +62,23 @@ taşıdıkları bir paketleme yükü; StackVo'nunki bir şablon.
 
 ## 3. Mühendislik borcu — kalan
 
-Ürünün ne yapamadığı değil, **mühendisliğin** ne taşıyamadığı: aynı kod tabanı
-2100 commit, on geliştirici ve bir kurumun 300 makinesinde olduğunda ilk
-kırılacak yerler.
+Ürünün ne yapamadığı değil, **mühendisliğin** ne taşıyamadığı. Eksikler kod
+kalitesinde değil, **kalitenin kod dışına, otomatik ve devredilebilir hâle
+çıkarılmasında**: bugün 1 yazar var; ikinci geliştirici geldiği gün ya da
+altıncı ayda hafıza soluklaştığında çalışmayacak olan şey bu.
 
 | # | Madde | Durum | Nasıl bakıldı |
 | --- | --- | :-: | --- |
-| 2 | Güncelleme endpoint'i | ⛔ | `latest.json` → HTTP 404; repo yok. Sahiplik kararı |
-| 10 | `tauri-specta` ile tip üretimi | ⬜ | `specta`/`ts-rs`/`typeshare` bağımlılıkta yok |
-| 12 | E2E | 🟡 | **Webview yarısı indi**: Playwright, gerçek motorda, 10 test + dört sayfada axe; CI'da adım var. `tauri-driver` yarısı yok ve **bu makinede olamaz** — Tauri'nin kendi belgesi macOS'u desteklemediğini yazıyor |
+| 2 | Güncelleme endpoint'i | ⛔ | `tauri.conf.json` `latest.json`'a işaret ediyor → HTTP 404; repo yok. §5.3'teki sahiplik kararı |
+| 10 | `tauri-specta` ile tip üretimi | ⬜ | `specta`/`ts-rs`/`typeshare` `Cargo.toml`'da yok. ADR 0006 ölçtü ve erteledi |
+| 12 | E2E | 🟡 | **Webview yarısı indi ve genişledi**: Playwright gerçek motorda — 6 kabuk, **dokuz rotanın hepsinde** axe (tüm belge, `#app` kapsamı kaldırıldı) ve 2 RTL yerleşim testi; CI'da adım var. `tauri-driver` yarısı yok ve **bu makinede olamaz** — Tauri'nin belgesi macOS'u desteklemediğini yazıyor. Beyanın ihtiyaç duyduğu ölçüm artık burada (`docs/accessibility.md`) |
 | 21 | Sürüm kanalları, kademeli dağıtım, geri alma | ⛔ | `tauri.conf.json`'da `channel`/`rollout`/`paused` yok; #2'nin arkasında |
-| 22 | Platform kapsamı (Linux aarch64, Win ARM64) | ⬜ | dört hedef |
-| 24 | RTL | 🟡 | bağ test edilmiş; `vuetify.js`/`i18n` içinde `rtl` yapılandırması yok |
-| 25 | Erişilebilirlik beyanı (VPAT / EN 301 549) | ⬜ | Ön koşul artık var: axe dört sayfada gerçek motorda koşuyor ve ciddi/kritik sıfır. Beyanın kendisi yazılmadı |
-| 27 | `list_projects` cache | 🟡 | gizli pencerede yavaşlama kapandı; cache yok |
-| 31 | Air-gapped kurulum | 🟡 | gidiş-dönüş tam ve arayüzde; paket yolu yok |
-| 33 | Sözleşme kapısının harici bağımlılığı | 🟡 | checkout var ama **suite A hiç koşmuyor** — bu makinede de `NO_MANIFESTS` |
-| 34 | Web sürümü / HTTP ikilisi | ⬜ | `src/bin/` yalnız `stackvo-mcp.rs` |
-| 35 | Windows ve Linux dallarının çalıştırılması | ⬜ | CI üç OS'ta koşuyor; ayrıcalık yolları koşmadı |
-| 36 | `EMBEDDED`'ın servis yarısı | ⬜ | ADR 0016'dan sonra **yalnız göç için** duruyor: `handover` `.env`'i okuyor ve `SERVICE_*_ENABLE/VERSION` varsayılanlarına ihtiyaç duyuyor. Desteklenen hiçbir çalışma alanı göç bekler durumda kalmayınca gitmeli — `config.rs`'te 185 anahtarın yaklaşık yarısı |
-
-Kapananlar (kayıt için): panic hook + crash dosyası, SECURITY.md'nin ölü linki,
-README'nin iki yanlış sayısı, kapsam ölçümü, sürüm eşitlik testi, macOS imzasız
-build uyarısı, `elevate` quoting'i, sistem proxy'si, `ProgressSink`, bozuk
-tercih dosyasının yedeklenmesi, `Settings.vue`/`ProjectDetail.vue`'nun
-bölünmesi, ARCHITECTURE.md, merkezî politika katmanı, private registry ön eki,
-Docker karar katmanı, keystore ile sır yönetimi, denetim izi, `stats_history`
-kalıcılığı, mutex poisoning, performans bütçesi, gömülü PTY'nin arayüze
-bağlanması, tray etiketlerinin frontend'den beslenmesi.
-
-**Teşhis, ve hâlâ geçerli:** bu, tek bir çok iyi mühendisin yazabileceği en iyi
-kod tabanlarından biri — ve tam olarak o yüzden kurumsal değil. Eksikler kod
-kalitesinde değil, **kalitenin kod dışına, otomatik ve devredilebilir hâle
-çıkarılmasında**. Bugün 1 yazar var; ikinci geliştirici geldiği gün ya da altıncı
-ayda hafıza soluklaştığında çalışmayacak olan şey bu.
-
-### Ağacın kendisi: hangi dizin ne için, ve hangisi terk edilmiş
-
-Sorulan altı dizin, ölçülerek. Yöntem her satırda aynı: kim okuyor, ne zaman
-okuyor, ve paketlenmiş uygulamada var mı.
-
-| Dizin | Ne | Paketlenmiş uygulamada | Karar |
-| --- | --- | :-: | --- |
-| `skeleton/core/templates/services/` | 25 servis şablonu | **silindi** | ADR 0016 |
-| `skeleton/core/compose/`, `servers/` | `base.yml` ve üç sunucu config'i | **gömülü** | Kalıyor — aşağıda |
-| `tools/` | 8 Node betiği | **yok** | Geliştirme + CI. Kalıyor |
-| `contracts/` | 9 JSON + 2 md | **kısmen gömülü** | Kalıyor — aşağıda |
-| `dist/` | Vite çıktısı | — | Üretilen, `.gitignore`'da |
-
-**`tools/` yalnız geliştirme ve CI için, ve uygulamaya hiç girmiyor.** Sekizinin
-her biri bir kapı ya da bir ölçüm: `validate-contracts.mjs` (CI'ın `contracts`
-işi), `check-coverage.mjs` + `coverage-floors.mjs` (kapsam tabanları),
-`check-bundle.mjs` + `bundle-budget.mjs` (paket boyutu bütçesi),
-`generate-notice.mjs` (lisans bildirimi, `--check` ile kapı),
-`measure-env-usage.mjs`, `make-fixtures.sh`. Hiçbiri `src-tauri`'den
-çağrılmıyor ve hiçbiri bundle'a girmiyor. Silinecek bir şey yok.
-
-**`contracts/` ikiye ayrılıyor ve ikisi de gerekli.** Dördü `include_str!` ile
-**binary'ye gömülü** ve çalışma anında okunuyor: `env.schema.json`,
-`ipc.json`, `php-extensions.json`, `compose-policy.json`. Üçü yalnız kapılar
-tarafından okunuyor — `package.schema.json`, `registry.schema.json`,
-`surface.lock.json` (sonuncusu `tests/contract_version.rs`'in son yayınlanmış
-IPC yüzeyi) — yani depoda kalır, uygulamaya girmez. `project.schema.json` ikisi
-birden: `manifest.rs` ona göre yazılmış, `validate-contracts.mjs` onu okuyor.
-Terk edilmiş dosya yok.
-
-**`dist/` bir çıktı**, `.gitignore`'un 83. satırında, ve Tauri onu bundle'a
-gömüyor. Elle dokunulacak bir şey değil.
-
-#### `skeleton/core` neden gömülü kalıyor, ve `~/.stackvo` sorusunun cevabı
-
-Şablon dizini gidince `skeleton/` beş dosyaya indi: `README.md`,
-`core/compose/base.yml`, ve `core/servers/` altında nginx, caddy, frankenphp
-config'leri — 20 KB. Soru yerinde: bunlar da mı gömülü, ve
-`~/.stackvo` altında olsalar daha doğru olmaz mı?
-
-**Gömülüler**, `include_dir!` ile, ve gerekçe `skeleton.rs`'in başında yazılı:
-`bundle.resources` dosyaları çalıştırılabilirin yanına kopyalar ve
-`resolve_resource()` ile bulunur, o da `tauri dev` altında paketlenmiş
-uygulamadakinden **farklı** çözülür — yani ancak paketledikten sonra ortaya
-çıkan bir hata sınıfı, ki bulunacak en kötü zaman odur.
-
-**Ama zaten `~/.stackvo`'ya çıkarılabiliyorlar**, ve mekanizma bundan daha
-iyisi: `overridable`/`materialize`/`revert`. Varsayılan gömülü, kullanıcı bir
-dosyayı devralmak isterse tek çağrıyla diske yazılıyor, `read_template` diski
-**önce** okuyor, ve `revert` dosyayı silerek gömülü olana dönüyor. Yani
-"düzenlenebilir olsun" ile "paketlenmiş uygulama hiçbir checkout olmadan
-çalışsın" aynı anda sağlanıyor.
-
-Hepsini baştan diske yazmak ikisini birden kaybettirir: taze bir kurulum
-kopyalanmış dosyalarla başlar, `prune_pristine`'in çözdüğü "kullanıcı bunu
-düzenledi mi yoksa öylece duruyor mu" sorusu geri gelir, ve bir sürüm
-yükseltmesi kullanıcının dokunmadığı dosyaları güncelleyemez hâle gelir —
-`an_older_installs_untouched_copies_are_swept_and_edits_are_not` testi tam
-olarak o eski davranışın kaydı.
+| 22 | Platform kapsamı (Linux aarch64, Win ARM64) | 🟡 | `release.yml` artık **altı** hedef sayıyor: iki ARM satırı, çapraz derleme yerine yerel ARM koşucularıyla (`ubuntu-24.04-arm`, `windows-11-arm`), ve OS koşulları aile testine çevrildi. **Bir etiket koşana kadar doğrulanmadı** — bir geliştirici makinesinde koşucu etiketinin var olduğu da paketleyicinin orada mutlu olduğu da kanıtlanamaz; `fail-fast: false` yanlış bir tahminin diğer dördü düşürmesini engelliyor |
+| 31 | Air-gapped kurulum | 🟡 | Gidiş-dönüş tam ve arayüzde (`market.offlineBundle`, `CatalogueGate.vue`); paket yolu yok |
+| 33 | Sözleşme kapısının harici bağımlılığı | 🟡 | Checkout var ama **suite A hiç koşmuyor** — bu makinede de `NO_MANIFESTS` (`tools/validate-contracts.mjs`) |
+| 34 | Web sürümü / HTTP ikilisi | ⬜ | `src-tauri/src/bin/` iki ikili taşıyor (`stackvo-mcp`, `stackvo`) ve ikisi de HTTP konuşmuyor: biri stdio, öteki argv. §7: veri yolu tek fonksiyondan geçiyor, karşılığı olmayan dört komut orada adlandırılmış. **M-8'in PWA yarısı buna bağlı** ve tek kaydı burası — dayanacağı HTTP yüzeyi çıkmadan PWA bir madde değil, bunun sonucu |
+| 35 | Windows ve Linux dallarının çalıştırılması | 🟡 | **Hosts yarısı üç OS'ta da koşuyor**: `hosts_path()` `STACKVO_HOSTS_PATH` dikişini tanıyor ve `tests/hosts_roundtrip.rs` planı, yazmayı, geri okumayı ve kaldırmayı geçici bir dosyada baştan sona koşuyor. Bunu mümkün kılan değişiklik kendi başına da bir düzeltme: `apply` artık **yazabiliyorsa parola sormuyor**, yalnızca yazamadığında yükseliyor. Kalan yarı **yükseltmenin kendisi** — pkexec/UAC/osascript diyaloğu bir insan gerektiriyor |
+| 36 | `EMBEDDED`'ın servis yarısı | ⬜ | ADR 0016'dan sonra **yalnız göç için** duruyor: `handover` `.env`'i okuyor ve `SERVICE_*_ENABLE/VERSION` varsayılanlarına ihtiyaç duyuyor. Desteklenen hiçbir çalışma alanı göç bekler durumda kalmayınca gitmeli — `config.rs`'te 186 anahtarın yaklaşık yarısı |
 
 ---
 
@@ -603,50 +86,17 @@ olarak o eski davranışın kaydı.
 
 Karar gerektirmeyenler arasından, etki ÷ efor ile.
 
-1. **I-1'in kalanı: senkron katman.** Ölçüm indi ve soruyu kapattı:
-   bayrak değil, çünkü `:cached` ve `:delegated` atıl. Kalan iş, `bind` ile
-   `volume` arasındaki **2–3 katı** kapatacak bir alt sistem — ve o mesafe artık
-   bir tahmin değil, bu makinede iki kez ölçülmüş bir sayı. Sıranın başında
-   duruyor çünkü hâlâ listenin en sonuç doğurucu maddesi; ama artık ilk adımı
-   bir ölçüm değil bir tasarım.
-2. **#12'nin kalanı: `tauri-driver`, Linux CI'da.** Webview yarısı indi ve
-   #25'in beklediği ölçümü verdi. Kalan yarı gerçek ikilinin bir
-   sürücü altında koşması, ve o **bu makinede yazılamaz** — Tauri macOS'ta
-   desteklemiyor. Yani bu madde bir CI işi, bir masaüstü işi değil.
+1. **#12'nin kalanı: `tauri-driver`, Linux CI'da.** Webview yarısı indi,
+   #25'in beklediği ölçümü verdi ve o ölçüm dokuz rotaya genişledi. Kalan yarı
+   bir CI işi, bir masaüstü işi değil — ve macOS'ta *yazılamaz* değil,
+   **koşulamaz**: yazan kişi geçtiğini hiç göremez.
+2. **#36: `EMBEDDED`'ın servis yarısı.** Göç bitip desteklenen kurulum
+   kalmayınca 186 anahtarın yarısı gidiyor.
+3. **#22 ve #35: platform kapsamı ve ayrıcalık yollarının koşulması.** CI işi.
+4. **#31: air-gapped paket yolu.** Gidiş-dönüşün kalan ucu.
 
-**G-3, E-3, J-1/J-2 ve D-1 bu listeden çıktı** — teslim edildi ve satırları
-silindi; kayıtları `CHANGELOG.md`'de.
-
-**Sıra bittiğinde geriye kalan iki şey kod değil.** Biri §5'in altı kararı;
-öteki, §2'nin hâlâ dolu olan bölümleri — en büyüğü **F** (sorgu logu, tek istek
-zaman çizelgesi, flame graph), ve o container içinde bir toplayıcı gerektirdiği
-için ayrı bir tur.
-
-**F bölümü** en büyük ürün boşluğu olarak duruyor ve container içinde bir
-toplayıcı gerektirdiği için ayrı bir tur. **N (worktree başına ortam)** sahayla
-eşitlemek yerine önüne geçirecek tek madde, ve taban sağlamlaşınca.
-
-### S-16'nın önündeki şey bir karar, kod değil
-
-Gömülü şablonları silmek, `render_generated`'ın `.env` dalını silmek demek — ve
-o dal bugün var olan **her** çalışma alanının çalışma sebebi. Silindiği anda
-göç etmemiş bir kurulum servislerini başlatamaz hâle gelir.
-
-Göç artık mümkün (S-17: yedek, işaretleme, önizleme ve düğme) ve katalog artık
-gelebilir (S-12, S-15). Eksik olan tek şey, göçü **reddeden** bir kullanıcıya ne
-olacağı. Üç cevap var ve üçü farklı ürünler:
-
-1. **Zorunlu göç.** Yeni sürüm açılışta göçü dayatır; reddeden yığınını
-   çalıştıramaz. En temiz kod, en sert davranış.
-2. **Bir sürüm boyunca ikisi.** `.env` dalı kalır ama bir uyarı taşır ve
-   sürüm notu tarihi verir. Kod iki yol taşımaya devam eder — tam olarak
-   Faz 6'nın bitirmek istediği şey.
-3. **Sessiz göç.** Uygulama açılışta kendi göç eder. Yedek var, ama bir
-   kullanıcının servis tanımlarını sormadan değiştirmek §5'in cinsinden bir
-   karar.
-
-Bu, `docs/durum.md` §5'e ait bir soru ve orada altıncı madde olarak duruyor.
-Cevaplanmadan S-16'ya başlamak, üç davranıştan birini sessizce seçmek olur.
+Karar bekleyenler (§5) ve dışarıdan bir şey gerektirenler (#2, #21, #33) bu
+sıraya girmiyor.
 
 ---
 
@@ -655,31 +105,33 @@ Cevaplanmadan S-16'ya başlamak, üç davranıştan birini sessizce seçmek olur
 Kodla çözülmeyen maddeler. Cevaplanmadan planlanamazlar — sessizce varsayılan
 seçmek, bu listenin var olma sebebine aykırı.
 
-1. **Kullanıcı uzatma noktaları (C-1, C-2, B-4).** `quickcmd.rs`, webview'in asla
-   çalıştırılacak bir programı adlandıramayacağını savunuyor ve o gerekçe
-   sağlam. Ama o gerekçe *webview*'in seçmesine karşı; *workspace*'in diske
-   yazılmış bir dosyayla beyan etmesine karşı değil. Bir çalışma alanı kendi
-   servis şablonunu ve compose overlay'ini beyan edebilir mi? Cevap üç maddeyi
-   birden karara bağlıyor.
-2. **İkinci bir arayüz (A-1).** Bir CLI, sözleşmeyle senkron tutulacak üçüncü
-   yüzey demek. E ve F suite'leri tam da bu kaymayı durdurmak için var ve MCP
-   sunucusu desenin genişlediğini kanıtladı — ama sonradan değil, önceden
-   onaylanmaya değer.
-3. **Yerel AI servisleri (D-1).** **Ertelendi** olarak kayıtlı, kapsam dışı
+1. **Bir çalışma alanı kendi servis şablonunu beyan edebilir mi?** Sorunun
+   *komut* yarısı ADR 0020 ile cevaplandı: evet, kendi konteynerinin içinde
+   kalmak şartıyla. Bu kalanı ve **C ile karıştırılmamalı** — C üçüncü
+   tarafların paket *yayınlaması*, bu ise tek bir çalışma alanının kendi
+   servisini *tarif etmesi*. Ayrı bir soru olmasının sebebi kapsam: bir komut o
+   projenin kendi konteynerinde koşuyor, bir servis tanımı ise yığının
+   tamamına giriyor ve bir imajı, bir portu ve bir volume'ü adlandırıyor.
+2. **Yerel AI servisleri (D-1).** **Ertelendi** olarak kayıtlı, kapsam dışı
    değil. Ollama, Qdrant ve pgvector birer katalog servisi olsun mu — kapatılan
    LLM-gateway sorusundan farklı bir soru.
-4. **Güncelleme endpoint'i ve imzalama secret'ları (#2).** `latest.json` nerede
+3. **Güncelleme endpoint'i ve imzalama secret'ları (#2).** `latest.json` nerede
    yayınlanacak: `stackvo/stackvo` release'leri mi, yeni bir repo mu? Özel
    anahtar `~/.tauri/stackvo.key`'de duruyor ve repository secret'ı olarak
    eklenmesi gerekiyor; Apple/Windows secret'ları ücretli hesaplara bağlı. #21
    bunun arkasında bekliyor.
-5. **Kapsam eşiği.** Ölçüm var, kapı yok. %61.60'ı mı yoksa daha düşük bir tabanı
-   mı kilitleyeceği mühendislik değil, politika kararı.
-6. **Göç etmeyi reddeden çalışma alanı (S-16).** ✅ **Cevaplandı — ADR 0016.**
-   Zorunlu göç, bir kapının arkasında. Üç seçeneğin bedeli §4'ün sonunda
-   yazılıydı; seçilen birincisi, `CatalogueGate`'in deseniyle: plan yazılmadan
-   gösteriliyor, `.env` yedekleniyor, kapı atlanabiliyor ve öteki tarafta
-   servissiz bir uygulama var. `.env` dalı ve 25 şablon silindi.
+4. **Kapsam eşiği.** Ölçüm var, kapı yok. %61.60'ı mı yoksa daha düşük bir
+   tabanı mı kilitleyeceği mühendislik değil, politika kararı.
+
+**Cevaplananlar:**
+
+* *İkinci bir arayüz (A-1)* — ADR 0017. Üçüncü yüzey kabul edildi, MCP'nin
+  kabul edildiği şartla: her komut sözleşmedeki komutu adlandırıyor ve
+  `cli_surface.rs` çifti kontrol ediyor.
+* *Uygulama içi REPL yüzeyi (F-5)* — ADR 0022. `quickcmd.rs`'in gerekçesi geri
+  **alınmadı**; reddettiği şeyin satır satır bir REPL olduğu, kabul edilenin ise
+  düzenlenen bir parça kod olduğu ayrıldı. `tinker` hâlâ kullanıcının kendi
+  terminalini açıyor.
 
 ---
 
@@ -914,7 +366,7 @@ tabloyu kastediyor.
 - **Context:** `render_generated`'ın servis yarısı iki kaynaktan üretiyordu:
 `instances.json` yoksa `.env` ve binary'ye gömülü şablonlar, varsa tablo ve
 paket ağacı. İki dal, ikincisi yazılırken var olan her kurulum çalışmaya devam
-etsin diye vardı. §5'in altıncı maddesi soruyordu: gömülü şablonlar silinince
+etsin diye vardı. §5'in göç maddesi soruyordu: gömülü şablonlar silinince
 göçü **reddeden** kullanıcıya ne olacak — zorunlu göç, bir sürüm boyunca iki
 yol, yoksa açılışta sessiz göç.
 
@@ -964,6 +416,294 @@ ederek** kanıtlıyordu; bir taraf gidince çıktısı donduruldu
 (`tests/fixtures/golden/handover-before.yml`). Dondurulmuş taraf kayamaz —
 dürüst sınır bu, ve `ENV` ile fixture artık bir çift.
 
+### 0017 — Üçüncü yüzey kabul edildi, ama sözleşmeye bağlanarak
+
+- **Status:** accepted
+- **Context:** §5'in ikinci maddesi A-1'i kod eksikliğinden değil bir karardan
+  bekletiyordu: bir CLI, masaüstü ve MCP'den sonra **üçüncü** bir tüketici
+  demek, ve üçüncüsü `contracts/ipc.json`'dan sessizce ayrılabilecek üçüncü
+  şey. E ve F suite'leri tam da bu kaymayı durdurmak için var. Maliyet gerçek;
+  soru maliyetin ödenip ödenmeyeceğiydi.
+- **Decision:** Kabul edildi, **MCP'nin kabul edildiği şartla**: `cli::COMMANDS`
+  tablosundaki her komut, uyguladığı sözleşme komutunu adlandırıyor ve
+  `tests/cli_surface.rs` çifti çapraz kontrol ediyor. Var olmayan bir komutu
+  adlandıran satır build'i kırıyor; `mutation` bir komutun üstüne kurulup
+  "Reads" başlığı altında listelenen bir satır da.
+
+  Bir yer MCP tablosundan **daha sıkı**: orada bir araç *adına* göre dağıtılıyor,
+  yani karşılığı olmayan bir tablo satırı derleniyor ve çağrıldığında düşüyor —
+  modül bunu yazıp bir yedek dal bırakıyor. Burada tablo bir `Action` taşıyor,
+  dağıtım enum üzerinde eşleşiyor, ve dalı olmayan bir varyantı derleyici
+  reddediyor. "Listelenmiş ama uygulanmamış" diye bir durum test edilmiyor
+  çünkü o duruma varılamıyor.
+
+  Yüzeyin **aynı** olması şart değil ve olmamalı: `logs --follow` bir terminal
+  cevabı, JSON-RPC üzerinde işe yaramaz. Şart olan, ikisinin ortak bir sözleşme
+  komutu hakkında **yazıyor mu** konusunda anlaşması —
+  `the_two_surfaces_agree_about_what_writes` bunu tutuyor, çünkü aksi hâlde
+  ikisinden biri birine yalan söylüyor demektir.
+- **Consequences:** ADR 0001'in bedeli burada tahsil edildi: `&Path` ve
+  `&dyn ProgressSink` sayesinde tek bir domain fonksiyonu bile kopyalanmadı.
+  ADR 0005'in bıraktığı boşluğa dördüncü sink geldi — `cli::Narrate`, stderr'e
+  yazıyor; **stdout cevap, stderr anlatı**, yani `stackvo doctor --json | jq`
+  build günlüğü akarken çalışıyor.
+
+  Lifecycle yolundaki son Tauri bağı da koptu: `commands::run_hooks`'un gövdesi
+  `hooks::run_for_project`'e taşındı, çünkü `AppHandle`'ı yalnızca sink'i
+  kurmak için istiyordu. `stackvo stop` ile durdur düğmesi artık **aynı**
+  hook'ları çalıştırıyor; ikinci bir kopya, tek isim taşıyan iki iş olurdu.
+
+  Yazan komutlar aynı denetim izine düşüyor, `cli_` önekiyle: günlük "bu
+  makineye ne oldu" sorusunu cevaplıyor ve "biri bunu terminalde çalıştırdı"
+  cevabın bir parçası.
+
+  Ve bir yüzey daha, gerçekten çalıştırılmadan bulunamayacak bir hatayı buldu:
+  `db::targets`, `running`'i servis adına (`stackvo-mysql`) soruyordu, oysa
+  konteyner instance tablosundan geliyor (`stackvo-mysql-9-7`). Ayakta olan dört
+  veritabanı "kapalı" görünüyordu — ve dökme, geri yükleme ve anlık görüntü
+  düğmeleri bu alana bakıyor. `db::instances` hemen üstünde doğrusunu yapıyordu.
+
+### 0018 — Kabuk komutları sözleşmesiz, ve bu bir istisna değil bir sınır
+
+- **Status:** accepted
+- **Context:** A-3 (`stackvo php …`, `stackvo artisan …`) ADR 0017'nin kuralına
+  çarpıyor: her CLI komutu `contracts/ipc.json`'daki bir komutu adlandırmalı.
+  Bu komutların karşılığı **yok ve olamaz** — `quickcmd.rs`'in gerekçesi
+  yüzünden: webview asla çalıştırılacak bir programı adlandıramaz, o yüzden
+  sözleşmede program alan bir komut yok; `quickcmd_run` sabit bir katalogtan
+  **id** alıyor.
+
+  Üç yol vardı: (a) zorlama bir sözleşme komutu uydurmak, (b) bu komutları
+  kapıdan muaf tutmak, (c) sınırı kaydırıp yeni yerini yazmak.
+- **Decision:** (c). `cli::Backing` iki değer taşıyor: `Contract(ad)` ve
+  `HostShell`. `HostShell` muaf **değil**, kendi kapısı var — `cli_surface.rs`
+  dört şey doğruluyor: hepsi `docker exec` üzerinden geçiyor, hiçbiri host'ta
+  program çalıştırmıyor, hepsi *yazan* olarak sınıflanmış, ve `--help`'te ilan
+  edilen önek gerçekten çalışan argv.
+
+  Gerekçe, `quickcmd.rs`'in gerekçesinin **kapsamı**: o kural bir *webview*
+  hakkında — seçmediği kodu, yazmadığı sayfalardan çalıştıran bir şey. Terminal
+  bunun tersi: yazan kişinin zaten bir kabuğu var, ve `stackvo artisan migrate`,
+  onun yerine yazacağı `docker exec -it stackvo-shop php artisan migrate`'ten
+  **daha az** tehlikeli — çünkü bu, konteyner adını yanlış yazamaz.
+
+  **B-4 ile karıştırılmamalı** ve karıştırılması kolay: B-4 (§5.1) *çalışma
+  alanının* diske yazılmış bir dosyayla beyan ettiği komut — bir depoyu
+  klonlayan kişinin çalıştırdığı, yazarının seçtiği komut. Bu ise kullanıcının
+  o an kendi klavyesinde yazdığı komut. İkisi arasındaki fark, kimin seçtiği;
+  ve karar bekleyen o, bu değil.
+- **Consequences:** Bayrak ayrıştırması kabuk komutunun adında **duruyor**.
+  `stackvo artisan migrate --force` artisan'a bütün gidiyor; ayrıştırıcı okumaya
+  devam etseydi `--force`'u yer ve sonra ondan şikâyet ederdi — artisan'ın en sık
+  yazılan çağrısı. Bedeli: StackVo'nun kendi bayrakları komuttan **önce**
+  yazılır, `--project` dahil. Bu yüzden `--project` global bir bayrak, ve bu
+  yüzden `stackvo artisan --help` artisan'a gidiyor (`stackvo --help artisan`
+  bu uygulamanınkini basıyor, ana yardım bunu söylüyor).
+
+  Çıkış kodu aynen geçiyor: `stackvo artisan test` bir CI betiğinde, düşen bir
+  test paketi 0 dönüyorsa hiçbir işe yaramaz.
+
+  Çalışma dizini konteynerin içine eşleniyor — `app/Http`'de yazılan
+  `stackvo artisan`, konteynerde `/var/www/html/app/Http`'de koşuyor. Yalnız
+  kaynağı **mount edilen** projelerde: `generator.rs` PHP dışındaki runtime'lara
+  kaynak mount'u yazmıyor (bir bind mount `/app`'i, yani derlenmiş çıktıyı
+  gölgelerdi), o yüzden orada `-w` yok ve stderr'e tek satır uyarı düşüyor —
+  `stackvo npm install` konteynerle birlikte kaybolan bir kopyaya yazıyor.
+
+### 0019 — Bir ekran, kütüphanesi olmadan
+
+- **Status:** accepted
+- **Context:** M-8'in TUI yarısı için doğal cevap `ratatui`. Ölçüldü:
+  `Cargo.lock`'a **25 paket** giriyor (649 → 674) — bir layout çözücü, bir
+  widget kümesi, iki ayrı `unicode-width`, bir LRU önbellek, `strum`,
+  `darling`, ikinci bir `rustix`. Bu ekranın çizdiği şey bir liste, bir detay
+  satırı ve bir durum çubuğu.
+- **Decision:** Kütüphane yok. Çizim `cli::Style` ve `cli.rs`'in tablolarında
+  zaten kullanılan sütun aritmetiği; imleç, alternatif ekran ve renk birer
+  ANSI dizisi, yani metin. İşletim sistemi gerektiren tek parça ham mod, ve
+  iki yarısı da kilitte hazır: `libc` `portable-pty` üzerinden, `windows-sys`
+  Tauri üzerinden. **Sıfır yeni paket** — ölçüldü, iddia değil.
+
+  Girdi kendi thread'inde okunuyor. Ham modda stdin okuması bir tuş gelene
+  kadar bloke eder, ekranın ise tuş gelmese de yenilenmesi gerekiyor;
+  `poll`/`select` bunu Unix'te çözüp Windows için ikinci bir uygulama isterdi,
+  bir thread ve bir kanal ikisinde de dokuz satırda çözüyor.
+- **Consequences:** Bedeli `tui.rs`'in kendisi ve o bedel yazılı. Asıl risk
+  kütüphane değil, **terminalin geri verilmesi**: ham modda bırakılan bir
+  terminalde yankı yok, satır düzenleme yok, `Ctrl-C` çalışmıyor — ve kişi
+  kurtulmak için körlemesine `reset` yazıyor. Dört çıkış yolunun dördü de
+  kapalı: dönüş ve `?` için `Drop`; panic için bir hook (release'de
+  `panic = "abort"`, yani `Drop` çalışmaz); `Ctrl-C` için tuş olarak okunması,
+  çünkü ham mod onu sinyale çevirmeyi bırakıyor. Geri yükleme tek bir
+  fonksiyondan geçiyor ve kayıtlı ayarları **alıyor**, böylece hook ile `Drop`
+  ikisi birden ateşlense de bir kez çalışıyor.
+
+  Ve bu okunarak değil **çalıştırılarak** tutuluyor: `examples/tui_probe.rs`
+  gerçek bir pty açıyor, gerçek ikiliyi içinde koşturuyor, `j` ve `q`
+  gönderiyor, ve terminalin kendi ayarlarını geri okuyup yankının ve satır
+  modunun döndüğünü doğruluyor. Bu depoya bir kez ödettiği ders şuydu: bir
+  kodlayıcı kendi beklentisine karşı sınandığında yalnızca yazarıyla
+  hemfikir olur.
+
+  `cli::Backing` üçüncü bir değer kazandı: `Surface(&[…])`. Bir ekran tek bir
+  sözleşme komutunu uygulamıyor, birkaçını sürüyor — ve "hangisini uyguluyor"
+  sorusunun dürüst tek cevabı yok. İsimlerin hepsi yine kontrol ediliyor, ve
+  bir ekranın birden fazla ad taşıması testle şart koşuluyor: teki taşıyan bir
+  satır zaten `Contract` olmalıydı.
+
+### 0020 — Bir çalışma alanı kendi komutunu beyan edebilir, konteynerinin içinde
+
+- **Status:** accepted
+- **Context:** §5'in ilk maddesi B-4'ü bir karardan bekletiyordu. `quickcmd.rs`
+  webview'in asla çalıştırılacak bir programı adlandıramayacağını savunuyor ve
+  o gerekçe sağlam — ama gerekçe *webview* hakkında: seçmediği kodu, yazmadığı
+  sayfalardan çalıştıran bir yüzey. Depoya işlenmiş bir dosya o yüzey değil.
+
+  Karşı taraf da gerçek ve `hooks.rs`'in başlığında yazılı: bir depo klonlanır,
+  açılır, düğmeye basılır — ve o depoyu yazanın seçtiği komutlar çalışır. Bu,
+  kötü niyetli bir `package.json` `postinstall`'ıyla aynı şekil.
+- **Decision:** Evet, **ama yalnızca konteynerin içinde.** `stackvo.json`
+  `"commands"` taşıyor; her giriş bir id ve bir `exec` argv dizisi.
+  `host` biçimi **yok**, ve yokluğu bu maddenin neden yeni bir onay akışı
+  gerektirmediğinin tamamı: `hooks.rs`'in argümanı aynen geçerli — konteyner
+  zaten deponun kodunu çalıştırıyor, orada komut çalıştırabilen bir depo yeni
+  bir şey kazanmıyor. Bir **host** adımı ise `git clone` + düğmeyi keyfî kod
+  çalıştırmaya çeviren şeydir ve onun digest'e bağlı bir rıza kaydı zaten var.
+
+  Yani B-4 konteyner çizgisinde duruyor. Ötesine geçmek `hooks`'un `host`
+  adımı: var, soruyor, ve **ayrı** bir karar.
+
+  Üç kural daha, üçü de sessiz bir yanlışı imkânsız kılmak için:
+  **argv dizisi, asla komut dizesi** — boşluktan bölmek `sh -c "a && b"`'yi
+  dört argümana çevirir ve bu modülün tüm modeli kimsenin yeniden ayrıştırmadığı
+  bir dizi olmasıdır; **gömülü bir id devralınamaz** — `migrate` diye beyan
+  edilen bir komut reddediliyor, çünkü sessizce kazanması da kaybetmesi de aynı
+  sonuca çıkar: biri `migrate` yazan bir düğmeye basar ve başka bir şey çalışır;
+  **id dar** — küçük harf, rakam, tire, en fazla 40 karakter, çünkü id webview'e
+  gidip geri geliyor ve o yolculukta kaçırılması gereken bir değer eninde
+  sonunda kaçırılmayacaktır.
+- **Consequences:** Yüzeyin sözü bozulmadı: webview hâlâ yalnızca bir **id**
+  gönderiyor. Değişen, o id'nin nereden gelebileceği. `quickcmd::resolve` iki
+  kaynağın birleştiği tek nokta ve `Resolved` tek şekil — bu çizginin altında
+  beyan edilmiş bir komutu daha serbest davranabilecek hiçbir dal yok.
+
+  Beyan edilen komut ekranda **işaretli** (`declared`), hem panelde hem
+  `stackvo commands`'ta. Klonlanan bir depodan gelen satır, bu uygulamanın
+  gönderdiği satırdan farklı bir şey, ve basıp basmamaya karar veren kişinin
+  hangisine baktığını bilmeye hakkı var.
+
+  Manifest serileştiricisi de öğrenmek zorundaydı, ve sebebi `hooks`'unkiyle
+  aynı: bu metin her form kaydında yeniden yazılıyor, yani serileştiricinin
+  bilmediği bir alan, biri alakasız bir ayarı değiştirdiği ilk anda sessizce
+  kayboluyor. Bir projenin her gün çalıştırdığı komutu kaybetmesi, açılışta
+  sessizce göç etmeyi bırakmasıyla aynı sınıf hata —
+  `declared_commands_survive_the_editor_round_trip` bunu tutuyor.
+
+  Ve bir cümle yanlış oldu, düzeltildi: `QUICK_COMMANDS_ARE_FIXED` ipucu
+  "komutlar sabit katalogdan gelir" diyordu. Artık gelmiyor.
+
+### 0021 — Güven zincirinin ilk halkası yazıldı; eksik olan bir anahtar, bir kod değil
+
+- **Status:** accepted
+- **Context:** `market.rs` zinciri üç halka olarak tarif ediyordu ve birincisi
+  yoktu: *pinlenmiş anahtar → registry.json*. `Trust::Signed` uygulaması olmayan
+  bir şekildi, `refresh` istendiğinde "uygulanmadı" diyerek reddediyordu. Yani
+  C'nin "mimari **hazır**" cümlesi doğru değildi — hazır olduğu söylenen kapı
+  kapanamıyordu.
+- **Decision:** Doğrulayıcı yazıldı (`signing.rs`), **minisign** ile. Ölçüldü:
+  `minisign-verify` Tauri'nin güncelleyicisi üzerinden **zaten `Cargo.lock`'ta**,
+  yani sıfır yeni paket. minisign, ADR 0015'in istediği ed25519'un ta kendisi ve
+  töreni yapacak araç (`minisign -G`) var — kendi aracını gerektiren bir şema,
+  töreni hiç yapılmayan şemadır.
+
+  **Resmî anahtar gömülmedi.** `PINNED` boş ve bir test onu boş tutuyor. Sahte
+  bir anahtar koymak boşluktan kötü olurdu: sonraki her okuyucu zincirin
+  kapandığına inanırdı. Anahtarsız bir derlemede imzalı tazeleme **reddediliyor**
+  ve eksik olanın hangi yarı olduğunu söylüyor.
+
+  **Kurumsal ayna beklemiyor.** Kendi indeksini imzalar, kendi anahtarını
+  `policy.market.additionalKeys` ile pinler — o alan tam bunun için yazılmıştı
+  ve bugüne kadar hiçbir okuyucusu yoktu. Üçüncü taraf dağıtımı böylece bir kod
+  eksikliği olmaktan çıkıp bir işletme kararına dönüşüyor.
+
+  **Rotasyon baştan var, çünkü sonradan eklenemez** (ADR 0015). Makine bir
+  **küme** taşıyor; yeni anahtar, hâlihazırda güvenilen bir anahtarla imzalanmış
+  bir `known-keys.json` ile tanıtılıyor. Yapamayacağı şey de kasıtlı: sızmış bir
+  anahtar yalnızca kendini adlandıran bir belge imzalayabileceği için,
+  **emeklilik bir derlemedir** — `RETIRED`'daki bir anahtar, onu adlandıran belge
+  ne kadar geçerli imzalanmış olursa olsun geri gelmiyor, ve politika da onu geri
+  getiremiyor.
+
+  **Kaldırmanın istemci yarısı** iki parça: geri çekilmiş bir sürüm **kurulmuyor**
+  (uyarı değil, ret — ADR 0014 sürümü indekste tutuyor ki makine ne olduğunu
+  öğrenebilsin, ama yeni kurulumun devam edip etmeyeceği ayrı bir soru), ve
+  **zaten kurulmuş** olanı `doctor` bildiriyor. İkincisi olmadan birincisi
+  yarımdı: konteyner çalışmaya devam eder, yığın sağlıklı görünür, geri çekilme
+  kimsenin elle okumadığı bir indeks satırında kalır.
+- **Consequences:** İki karar yolda değişti, ikisi de yazılarak.
+
+  `allow_legacy` önce `false` idi — "iki mod farklı şey imzalıyor, ikisini de
+  kabul etmek biri üzerine yapılmış imzayı öteki için geçerli kılar" diye. Bu
+  yanlıştı: mod imza dosyasında beyan ediliyor, doğrulayıcı ona göre hash'liyor
+  ya da hash'lemiyor, ve birini öteki gibi sunmak yalnızca doğrulamayı düşürüyor.
+  Reddetmek hiçbir şey kazandırmıyor, ama eski bir `minisign` ile imzalanmış
+  kurumsal aynayı sebebi anlaşılmaz bir mesajla reddediyordu.
+
+  Ve sıralama: anahtar kontrolü, imza dosyasını getirmeden **önce** yapılıyor.
+  Önce getiriyordu, ve anahtarı olmayan bir makineye
+  `registry.json.minisig: No such file` diyordu — eksik yarısı kendi tarafındayken
+  insanı yayıncıdan imza istemeye gönderen bir cümle. Sıralamayı iddia eden bir
+  test bulmuştu, okumak değil.
+
+  Pozitif yol gerçek bir imzaya karşı sınanıyor ve vektör `minisign-verify`'ın
+  kendi testinden alındı — kendi ürettiği bir çiftle sınanan bir doğrulayıcı,
+  yalnızca minisign'ın ne olduğuna dair kendi fikriyle hemfikir olur. Bu depoya
+  o dersi QR kodlayıcı bir kez ödetmişti.
+
+### 0022 — Uygulama içi tezgâh kabul edildi; reddedilen şey satır satır REPL'di
+
+- **Status:** accepted
+- **Context:** `quickcmd.rs` uygulama içi bir REPL panelini **yazılı olarak**
+  reddetmişti: "zaten yapılandırdıkları REPL'in yanında ikinci ve daha kötü bir
+  REPL". §5.5 bunu bir görev değil bir **karar** olarak tutuyordu, çünkü yazılı
+  bir reddi bir commit sessizce geri alamaz.
+- **Decision:** Ret **doğru** ve yerinde duruyor — satır satır bir REPL için.
+  `tinker` hâlâ kullanıcının kendi terminalini açıyor. Kabul edilen şey farklı
+  bir alet: bir **parça kod**, düzenlenen ve yeniden çalıştırılan yirmi satır.
+  Terminaldeki REPL'de bu yeniden yazmaktır; burada metin kalır. İkisi
+  sıralanmıyor, kişinin ne yaptığına göre ayrılıyor — ve ekranda da öyle
+  duruyorlar: panel, terminal panelinin hemen altında.
+
+  Güvenlik modeli `quickcmd`'inkinin bir seviye altına genişletiliyor, kırılmıyor:
+  webview bir **çalıştırıcı kimliği** gönderiyor, programı yine adlandırmıyor
+  (`laravel` = `php artisan tinker --execute`, başka bir şey değil). Kod **tek
+  bir argv elemanı** ve her zaman **sonuncusu**; hiçbir yerde kabuk yok. Onay
+  kapısı gerekmiyor, çünkü kod (a) projenin **kendi konteynerinde** çalışıyor —
+  o konteyner zaten o deponun kodunu çalıştırıyor, `hooks` gerekçeyi tam olarak
+  yazıyor — ve (b) klonlanmış bir dosyadan değil, **klavyedeki kişiden** geliyor.
+  `host` çalıştırıcısı yok ve olmayacak: bu makinede çalışması gereken bir adım
+  `hooks`'un digest'e bağlı `host` adımıdır.
+- **Consequences:** İki sınır kodda, ikisi de ölçülerek.
+
+  **Süre sınırı konteynerin içinde.** Bir `docker exec` **istemcisini**
+  öldürmek, başlattığı süreci durdurmuyor — yani yalnızca uygulamanın kendi
+  saatiyle "zaman aşımı" demek, birinin konteynerinde CPU yakmaya devam eden bir
+  döngüyü sessizce bırakmak olurdu. Komut `timeout 30` ile önden sarılıyor;
+  `timeout` php, node, python, ruby ve wordpress-cli imajlarında ve bu çalışma
+  alanının kendi proje konteynerinde ölçüldü. "Baktığım her imaj" "her imaj"
+  olmadığı için imajda yoksa geri düşülüyor ve `limited` alanı hangisinin
+  olduğunu **söylüyor**.
+
+  **Başarı çıkış kodundan okunuyor, "stderr boş mu"dan değil.** PHP'nin ölümcül
+  hatası **stdout**'a yazılıyor (ölçüldü), Node'unki stderr'e. İki akış da
+  gösteriliyor; yalnızca birini gösteren bir panel, sunduğu dillerin yarısında
+  boş kalırdı.
+
+  Geçmiş **kodu saklıyor, çıktıyı değil**: parça kod kişinin kendi yazdığıdır ve
+  geri istediği şeydir, çıktı ise **uygulamanın verisidir** — `querylog`'un
+  koyduğu kural. Dosya uygulamanın kendi yapılandırma dizininde, projenin içinde
+  değil; bir checkout'a yazılan dosya birinin `git status`'ünde beliren dosyadır.
+
 ---
 
 ## 7. Ölçüm
@@ -973,13 +713,13 @@ Mekanik olarak sayılabilenler koda karşı tutuluyor:
 
 | | Sayı | Nasıl sayıldı |
 |---|---|---|
-| Toplam IPC komutu | **238** | `contracts/ipc.json` → `commands` (235 Rust + 3 `frontend-plugin`) |
-| Bunlardan `#[tauri::command]` olarak yazılmış | **234** | `commands.rs`, `#[cfg(test)]` dışı |
-| Frontend kaynak dosyası | **128** | `src/**/*.{js,vue}`, spec dosyaları hariç |
+| Toplam IPC komutu | **248** | `contracts/ipc.json` → `commands` (245 Rust + 3 `frontend-plugin`) |
+| Bunlardan `#[tauri::command]` olarak yazılmış | **244** | `commands.rs`, `#[cfg(test)]` dışı |
+| Frontend kaynak dosyası | **132** | `src/**/*.{js,vue}`, spec dosyaları hariç |
 | Bunlardan `@tauri-apps` kullanan | **20** | aynı küme içinde metin taraması |
 | **Veri katmanının geçtiği fonksiyon** | **1** (`src/lib/ipc.js` → `call()`) | `invoke(` `ipc.js` dışında **0** yerde geçiyor |
-| `ipc.js` sarmalayıcısı | **231** | `api` nesnesinin üye sayısı |
-| Rust kaynağı | **89 modül, 71.847 satır** | `src-tauri/src/*.rs` |
+| `ipc.js` sarmalayıcısı | **241** | `api` nesnesinin üye sayısı |
+| Rust kaynağı | **94 modül, 81.839 satır** | `src-tauri/src/*.rs` |
 
 Elle sınıflandırma, kapıya dahil değil — yöntemi yazılı ki bir sonraki okuyucu
 yeniden üretebilsin:
@@ -1008,17 +748,13 @@ etmiyor; ayrım Docker'da değil, **sunucunun nerede çalıştığında**.
 
 ## 8. Bu dosya nasıl doğru kalır
 
-Üç kural, ve ikisinin arkasında kapı var:
-
 1. **§5'teki karar tablosu ve §7'deki ölçüm testlerle tutuluyor.** Bir karar
    Status/Decision/Consequences taşımazsa, ya da bir sayı ağaçla uyuşmazsa,
-   build kırılır.
+   build kırılır (`architecture_claims.rs`, `platform_matrix_claims.rs`,
+   `policy_claims.rs`, `secrets_claims.rs`).
 2. **§2–§4 kapıya bağlanamaz** — "yapılmadı" ölçülemez. Elde olan tek şey her
    satırın **nasıl bakıldığını** taşıması; bir sonraki oturum tabloyu okumak
    yerine aynı kontrolü tekrarlayabilir.
 3. **Bir madde bittiğinde satırı buradan silinir** ve kaydı `CHANGELOG.md`'ye,
-   geri alınamaz bir tercih taşıyorsa §6'ya yazılır — kararı ve yolda bulunan
-   hatayı içeren cümleyle. Bu dosyanın işi kalanı göstermek; içinde biriken
-   bitmiş iş, "ne kaldı" sorusunun cevabını zorlaştırmaktan başka bir şey
-   yapmıyor. Bir sonraki okuyucunun ihtiyaç duyduğu şey ne yapıldığı değil,
-   neden öyle yapıldığı — ve o cümle §6'da ya da CHANGELOG'da duruyor.
+   geri alınamaz bir tercih taşıyorsa §6'ya yazılır. Bir sonraki okuyucunun
+   ihtiyaç duyduğu şey ne yapıldığı değil, neden öyle yapıldığı.

@@ -585,14 +585,23 @@ onUnmounted(() => {
     </v-app-bar>
 
     <!-- Primary navigation ----------------------------------------------- -->
+    <!-- Named, because there are three `<nav>` elements in this window and a
+         landmark list of "navigation, navigation, navigation" is a list nobody
+         can use. axe rates it moderate (`landmark-unique`) and it was on every
+         page. -->
+    <!-- `start`, not `left`: the position is the reading side, and in a
+         mirrored window that is the right-hand edge. `left` is where this sat
+         and it pinned the navigation to the wrong side of an RTL layout while
+         everything inside it mirrored. -->
     <v-navigation-drawer
       v-if="!chromeHidden"
-      location="left"
+      location="start"
       permanent
       :rail="rail"
       rail-width="64"
       width="180"
       class="nav-drawer border-0 elevation-6"
+      :aria-label="t('a11y.primaryNav')"
       @click="toggleDrawer('nav')"
     >
       <v-list nav class="nav-list mt-2">
@@ -676,12 +685,13 @@ onUnmounted(() => {
     <!-- Projects rail ----------------------------------------------------- -->
     <v-navigation-drawer
       v-if="!chromeHidden"
-      location="left"
+      location="start"
       permanent
       :rail="railProjects"
       rail-width="66"
       width="330"
       class="elevation-6 border-0"
+      :aria-label="t('projects.title')"
       @click="toggleDrawer('projects')"
     >
       <div v-if="!railProjects" class="px-3 pt-3 pb-2" @click.stop>
@@ -955,7 +965,7 @@ onUnmounted(() => {
 }
 
 .status-val {
-  margin-left: auto;
+  margin-inline-start: auto;
   font-weight: 600;
 }
 

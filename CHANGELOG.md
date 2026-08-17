@@ -7,6 +7,419 @@ versioning is [semver](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Two more release targets: Linux aarch64 and Windows ARM64** (§3 #22). Six
+  in the matrix instead of four, on **native ARM runners** rather than by
+  cross-compilation — a Tauri bundle is a platform installer, a `.deb`, an
+  AppImage, an MSI, and cross-building one means a second toolchain and a
+  second set of bundler quirks to keep working for a machine GitHub already
+  rents by the minute. Every `matrix.os == 'ubuntu-latest'` style condition
+  became a family test, or the new rows would have skipped the steps that make
+  their artefacts installable; the SBOM stays pinned to one target rather than
+  to the Linux family, because two attachments with one name is a collision
+  rather than a second document.
+
+  **Unverified until a tag runs it**, and the row in `docs/durum.md` says so
+  rather than moving to done. Nothing on a developer's machine can prove that a
+  runner label exists or that the bundler is happy on it. `fail-fast: false`,
+  which was already there, is what keeps a wrong guess from taking the other
+  four builds down with it.
+
+- **An accessibility statement, and the measurement that makes it true**
+  (§3 #25). [`docs/accessibility.md`](docs/accessibility.md), in the shape
+  EN 301 549 asks for: conformance status, what was measured and how, the
+  features that exist for it, and — at the same length — what it cannot claim.
+
+  The row said the prerequisite was already there: "axe runs on four pages in a
+  real engine, zero serious or critical". Both halves of that turned out to be
+  weaker than they read, and the statement could not honestly be written on top
+  of them:
+
+  - The run was **scoped to `#app`**, and Vuetify's overlay container is a
+    *sibling* of `#app` rather than a child. Every tooltip, menu, dialog and
+    side sheet in the application was outside the measurement.
+  - Those overlays were **covering the page**. A closed overlay keeps a
+    full-viewport box at `z-index: 2000`, so axe could not resolve a background
+    for anything underneath and skipped the contrast rule almost everywhere.
+    The zero was partly the page being hidden from the checker.
+  - Four of the nine routes were covered, and the four were the ones somebody
+    thought of.
+
+  All three are closed: the run is over the whole document and every route the
+  router declares, and `tests/accessibility-claims.spec.js` fails if the
+  statement, the suite and the router come apart — including if the `#app`
+  scope ever comes back. The result is **zero violations at every severity on
+  all nine routes**, which is a different sentence from the one it replaced.
+
+- **A workbench: a snippet, the application it runs inside, and what came
+  back** (F-5, ADR 0022). The row called `tinker` over the PTY "honest 90%, but
+  not a workbench", and §5.5 held the remaining tenth as a **decision** rather
+  than a task — because `quickcmd.rs` had refused an in-app REPL in writing, and
+  reversing a refusal is not something a commit does quietly.
+
+  **The refusal was right and it still stands.** A *line* REPL in a pane is
+  exactly what it described: a worse `tinker` with no readline, no history file,
+  none of the colours somebody configured, and a terminal one click away that
+  does all of it better. `tinker` still opens the user's own terminal from the
+  command list. What was accepted is the tool a line REPL cannot be: a snippet
+  is **twenty lines you edit** — write a query, run it, change line three, run
+  it again — which in a REPL is retyping. The two are not ranked, they are split
+  by what the person is doing, and on screen they sit one above the other: the
+  terminal pane, then this.
+
+  **The security model is extended one level down, not broken.** The webview
+  sends a runner **id** and a body of code; the id is what picks the program, so
+  `laravel` means `php artisan tinker --execute` and nothing else. The snippet
+  is **one argv element and always the last**, so `; rm -rf ~` is a string
+  rather than a second command. No consent gate, for two reasons that are the
+  whole argument: it runs in the project's **own container**, which already runs
+  that repository's code, and the code comes from the **person at the keyboard**
+  rather than from a file in a repository somebody cloned. There is no `host`
+  runner and there will not be one — that is `hooks`' `host` step, approved
+  against a digest first.
+
+  Six runners in two tiers, and every row says which it is: `php artisan tinker
+  --execute`, `wp eval`, `python manage.py shell -c` and `bin/rails runner` boot
+  the application; `php -r` and `node -e` are the language on its own. A pane
+  that showed them alike would let somebody debug for ten minutes before finding
+  out their models were never loaded. Laravel is offered only where
+  `composer.json` also declares `laravel/tinker`, because `--execute` is
+  Tinker's flag and a `--no-dev` install does not have it.
+
+  **Every argv was measured before it was written**, on Laravel 13.25, Django on
+  Python 3.14, Rails 8.1.3, `wordpress:cli`, and this workspace's own project
+  container. Two of those measurements changed the design. Laravel's
+  `--execute` does **not** echo the value of the last expression the way the
+  interactive REPL does — `2+3;` produces nothing — so the pane says to
+  `dump()`. And a PHP fatal is written to **stdout**, not stderr, so success is
+  read from the exit code; a pane that decided by looking at stderr would have
+  drawn a green chip over an uncaught exception, and a test now holds that.
+
+  **The limit runs inside the container.** Killing a `docker exec` client does
+  not stop what it started, so this app's own clock alone would have left a
+  snippet with a loop in it burning a CPU in somebody's container after the pane
+  said "timed out". The command is wrapped in `timeout 30` — measured present in
+  the php, node, python, ruby and wordpress-cli images and in this workspace's
+  project container, where `timeout 1 sleep 3` exits 124. "Every image I
+  checked" is not "every image", so there is a fallback and the result carries
+  `limited`, which the pane shows as a warning rather than as silence.
+
+  History keeps **the code, never the output**: a snippet is what the person
+  wrote and is the thing they want back, while the output is the application's
+  data — the rule `querylog` states. It lives in the app's own config directory
+  beside `hook-consent.json` rather than in the project, because a file written
+  into a checkout turns up in somebody's `git status`.
+
+  `examples/repl_probe.rs` runs the whole thing against the projects on the
+  machine, and it distinguishes a broken runner from a project whose
+  dependencies were never installed — on this workspace it reports the Laravel
+  runner as skipped, with `vendor/` missing as the reason, and measures the
+  other two.
+
+- **`stackvo`, a command-line interface** (A-1). Eight of the ten tools this app
+  is measured against ship one. It sat unbuilt because it is a **third surface**
+  — the window reaches the core one way, an assistant another — and a third
+  consumer is a third thing that can drift away from `contracts/ipc.json` while
+  every existing test still passes.
+
+  It is accepted on the condition the MCP server was accepted on: **every
+  command names the contract command it implements**, and `cli_surface.rs`
+  cross-checks the pair. A command naming something the contract does not
+  declare fails the build, and so does a command listed under `--help`'s
+  "Reads" heading whose contract command is a mutation — because that heading
+  is what somebody reads before typing into a machine they care about.
+
+  One part is tighter than the MCP table. A tool there dispatches on its *name*,
+  so a table entry with no matching arm compiles and fails when called; the
+  module says so and keeps a fallback for it. Here the table carries an
+  `Action`, dispatch matches on the enum, and the compiler refuses a variant
+  with no arm. There is no "listed but not implemented" state to test for
+  because there is no way to reach one.
+
+  Twenty commands: ten that read (`status`, `doctor`, `projects`, `project`,
+  `services`, `logs`, `certs`, `db`, `mail`, `mcp`) and ten that change the
+  stack (`up`, `down`, `start`, `stop`, `restart`, `generate`, `xdebug`,
+  `certs-renew`, `mcp-install`, `mcp-remove`). Every one has `--json`, so the
+  same value the table is rendered from is available to a script — the human
+  output is built *from* that value rather than from a second query, which is
+  how the two cannot come to describe different things.
+
+  **stdout is the answer, stderr is the narration.** The progress writer ADR
+  0005 left room for is the fourth sink, and it prints to stderr — so
+  `stackvo doctor --json | jq` works while a compose build is still scrolling
+  past, and a failure leaves an empty file and a non-zero status rather than a
+  file with an error message in it. The exit code distinguishes the two
+  failures a wrapper script wants to handle rather than report: 3 is "nothing is
+  set up on this machine", 4 is "Docker is not running".
+
+  **No argument-parsing dependency.** What is needed is long and short flags,
+  `--flag=x` and `--flag x`, and `--` to stop; what matters far more than the
+  shape of that code is that an unrecognised flag is an **error**. A CLI that
+  shrugs at `--tial 50` and quietly uses the default has told you it did
+  something it did not do.
+
+  **The last Tauri binding in the lifecycle path went with it.** `run_hooks`
+  needed an `AppHandle` for one reason — building the sink — so its body moved
+  to `hooks::run_for_project`, which takes the sink instead. `stackvo stop` and
+  the stop button now run the same hooks rather than being two operations
+  wearing one name. Writes land in the same audit trail, under `cli_` names:
+  the log answers "what happened to this machine", and "somebody ran this in a
+  terminal" is part of that answer.
+
+- **The package index can be verified, withdrawn versions are refused** (C).
+  `market.rs` described a chain of three links and said the first one — *a
+  pinned key → registry.json* — was missing. `Trust::Signed` was a shape with
+  no implementation, so a third-party source could be fetched but never
+  believed, and the claim that the architecture was "ready" for third-party
+  distribution was not true of a door that could not be shut.
+
+  It is now. `signing.rs` verifies a minisign signature over the index against
+  keys the machine already trusts, and `refresh` runs it **before the index is
+  parsed** — the same ordering this module already applied to a manifest, for
+  the same reason.
+
+  **Zero new packages.** minisign is ed25519 with a file format around it and
+  is what `tauri-plugin-updater` already uses, so `minisign-verify` was in
+  `Cargo.lock` already — measured, not assumed. It also means ADR 0015's key
+  ceremony has a tool that exists (`minisign -G`); a scheme needing a bespoke
+  tool is one whose ceremony never happens.
+
+  **No official key is shipped, and a test keeps it that way.** Inventing a
+  placeholder would be worse than the gap, because every later reader would
+  believe the chain was closed. A build with no key refuses a signed refresh
+  and names *that* as the missing half. An organisation running its own mirror
+  is not waiting on any of it: it signs its own index and pins its own key
+  through `policy.market.additionalKeys` — a field written for exactly this
+  and, until now, read by nothing.
+
+  **Rotation is designed in, because it cannot be added afterwards.** A machine
+  holds a *set*, and a new key arrives in a `known-keys.json` signed by one
+  already trusted. What that deliberately cannot do is remove a compromised
+  key on its own say-so — a leaked key can sign a document naming only itself —
+  so retirement is a property of a build, and a retired key cannot be brought
+  back by any document or by policy.
+
+  **Takedown has both halves.** A withdrawn version is refused at install
+  rather than warned about: ADR 0014 keeps it in the index so a machine can
+  find out what happened to one it already has, and whether a *new* install may
+  proceed is a different question. The other half is `doctor`, which lists
+  installed versions the publisher has since withdrawn — without it the
+  container keeps running, the stack looks healthy, and the withdrawal is a
+  line in an index nobody re-reads.
+
+  Two decisions changed while this was being written, both because a test
+  disagreed. Legacy minisign signatures are accepted after all — the reasoning
+  for refusing them (that the two modes sign different things) does not survive
+  contact with how the mode is declared and checked, and refusing bought
+  nothing while costing an organisation whose mirror was signed by an older
+  tool. And the pinned-key check now happens *before* the signature file is
+  fetched: fetching first told a machine with no key `registry.json.minisig: No
+  such file`, sending somebody to ask their publisher for a signature when the
+  missing half was on this side.
+
+- **A project may declare its own commands** (B-4). The catalogue is eleven
+  commands most projects have; what it cannot know is the one *this* project
+  runs every day — `artisan app:reindex`, `npm run codegen`, a `bin/` script
+  somebody wrote last week. Now `stackvo.json` can say so:
+
+  ```json
+  "commands": {
+    "reindex": { "exec": ["php", "artisan", "app:reindex"], "about": "Rebuild the search index" }
+  }
+  ```
+
+  They appear in the project pane beside the built-in ones, marked as coming
+  from the project, and in the terminal as `stackvo commands` and
+  `stackvo run <id>`.
+
+  **The security rule the catalogue existed for is intact.** The webview still
+  only ever sends an **id** — it cannot name a program, and `quickcmd::resolve`
+  is the one place either kind becomes an argv. What changed is where a command
+  may be *declared*, and `docs/durum.md` §5 had been holding exactly that
+  distinction open: the argument against a webview naming a program is about a
+  surface that runs code it did not choose, and a file committed to the
+  repository is not that surface.
+
+  **It stops at the container line, and that is why it needed no approval
+  flow.** A declared command may only be `exec` — inside the project's own
+  container. There is no `host` form. `hooks.rs` already makes the argument: a
+  container runs the repository's code anyway, so a repository able to run a
+  command in it has gained nothing, whereas a host step is what turns `git
+  clone` plus a button into arbitrary code execution — and that one has a
+  consent record keyed to a digest. Declaring `host` here is refused by name,
+  so an author is told where the real feature lives.
+
+  Three rules make a quiet mistake impossible. `exec` is an **argv array**, and
+  a command string is refused rather than split — splitting is how
+  `sh -c "a && b"` becomes four arguments. An id already in the catalogue is
+  **refused** rather than allowed to win or lose silently, because either ends
+  with somebody pressing a button labelled `migrate` that is not
+  `php artisan migrate`. And an id is lower-case letters, digits and dashes,
+  because it travels to the webview and back.
+
+  The manifest serialiser learned the block too, for the reason the hooks block
+  is written out: that text is rewritten on every form save, so a field the
+  serialiser does not know about disappears the first time somebody changes an
+  unrelated setting.
+
+- **`stackvo tui`, a terminal screen you can work in** (M-8). M-8 is
+  "alternative surfaces", and its own record already said what makes something
+  one: the tray stopped being a shortcut the day it could **act** without
+  raising the window. The same test applies here, so this is not a report —
+  it lists every project and service live, moves a cursor through them, and
+  starts and stops the row it is on. `l` shows a container's last lines, `r`
+  refreshes, `q` leaves.
+
+  **No TUI library.** Measured before deciding, the way `keyring` and
+  `toml_edit` were: `ratatui` puts **25 new packages** in `Cargo.lock`
+  (649 → 674) — a layout solver, a widget set, two `unicode-width` crates, an
+  LRU cache, `strum`, `darling`, a second `rustix` — for a list, a detail line
+  and a status bar. Drawing is `cli::Style` and the column arithmetic the CLI
+  tables already use; the cursor, the alternate screen and colour are escape
+  sequences, which are text. Raw mode is the only part that needs an operating
+  system and both halves were already in the lock file — `libc` through
+  `portable-pty`, `windows-sys` through Tauri. **Zero new packages**, measured
+  rather than claimed.
+
+  **The risk is the terminal, and it is paid for.** One left in raw mode has no
+  echo, no line editing and no working `Ctrl-C`, and the way out is typing
+  `reset` blind. All four exits are covered: `Drop` for returning and for `?`,
+  a panic hook because release builds are `panic = "abort"` and `Drop` does not
+  run, and `Ctrl-C` read as a key because raw mode stops the terminal turning
+  it into a signal. The restore goes through one function that *takes* the
+  saved settings, so a hook and a `Drop` firing together still put the terminal
+  back exactly once.
+
+  And it is held by running rather than by reading. `examples/tui_probe.rs`
+  opens a real pty, runs the real binary inside it, sends `j` and `q`, and
+  reads the terminal's own settings back to confirm echo and line mode
+  returned — eleven checks, because a screen that agreed with its own
+  expectations is the QR encoder's mistake in a new place.
+
+  `cli::Backing` gained a third value for it. A screen implements no single
+  contract command; it drives several, and every name is still checked, with a
+  test that a screen names more than one — a row that named exactly one should
+  have been a `Contract`.
+
+- **`stackvo php …`, `stackvo artisan …` — the project's container from the
+  working directory** (A-3). `cd` into a project and `stackvo php -v` reports
+  the PHP that project declares, with its extensions and its `php.ini`, from a
+  machine with no PHP installed on it. `artisan`, `composer`, `npm`, `node`, a
+  general `exec` and an interactive `shell` alongside it.
+
+  Which project comes from the working directory, matched against the real
+  project list rather than a folder name — a worktree's name lives in
+  `stackvo.local.json`, not in its directory. The **deepest** enclosing project
+  wins, because a worktree sits inside the project tree and answering with the
+  parent would migrate the wrong database while the caller stood in the feature
+  branch. `--project` names another one from anywhere.
+
+  **The subdirectory maps through.** `stackvo artisan` from `app/Http` runs in
+  `/var/www/html/app/Http`, so it behaves the way `artisan` on the host would.
+  Only where the source is mounted: `generator.rs` writes no source mount for
+  Node and the rest, because a bind mount over `/app` would shadow the built
+  output — so there is no counterpart directory to map onto, and the one line
+  that says anything written there stays in the container goes to stderr.
+
+  **Flag parsing stops at the command name.** `stackvo artisan migrate --force`
+  reaches artisan whole; a parser that kept reading would eat `--force` and then
+  complain about it, which would break the most common artisan call there is.
+  The cost is that StackVo's own flags come first — `--project` included, which
+  is why it is global — and that `stackvo artisan --help` goes to artisan.
+  `stackvo --help artisan` prints this app's, and the main help says so.
+
+  **The exit code is passed through**, because `stackvo artisan test` in a CI
+  script is worth nothing if a failing suite comes back as 0. A TTY is requested
+  only when there is one to inherit, so `echo … | stackvo php` works in a
+  pipeline and `stackvo shell` still gets a terminal.
+
+  These are the first commands with no `contracts/ipc.json` command behind them,
+  and that is a decision rather than an omission — ADR 0018. The webview may
+  never name a program to execute, so the contract has none that takes one; a
+  terminal is the opposite case, and `stackvo artisan migrate` is strictly safer
+  than the `docker exec -it stackvo-shop php artisan migrate` it replaces
+  because it cannot get the container name wrong. The exception is not a gap in
+  the gate: `Backing::HostShell` carries four assertions of its own, including
+  that every one of them runs through `docker exec` and none on the host.
+
+- **An environment per worktree** (N). `git worktree add` gives a branch its own
+  directory; this gives that directory its own hostname, its own database and
+  its own environment, so `shop.loc` and `feature-x.shop.loc` are two branches
+  of one application running at the same time. Of the ten tools this app is
+  measured against, one does this.
+
+  **A worktree is a project, and nothing below the module knows the word.** The
+  directory lands in the project tree beside its parent, and `list_projects`,
+  the renderer, the hosts writer and the certificate pick it up as they pick up
+  anything else. A parallel lifecycle for something that is already a project
+  would have been a second copy of every bug.
+
+  **Nothing is written into the checkout that git tracks**, and that constraint
+  is what the design turns on: the files in a worktree directory belong to the
+  branch, so a derived `stackvo.json` would appear as a change to whoever is
+  working on it. Identity — the name and the hostname — goes into
+  `stackvo.local.json`, the machine-local overlay that exists to be the file
+  that is never committed, and it is added to the repository's
+  `.git/info/exclude`, which is git's own per-clone ignore list rather than the
+  `.gitignore` the team shares. Everything else — the database credentials,
+  `APP_URL`, the branch name — is kept outside every checkout and reaches the
+  container through the compose overlay that per-project variables already use.
+  A branch that carries no manifest at all gets a full one derived from its
+  parent's, with the parent's extra hostnames dropped so it cannot claim them.
+
+  That cost one change in the manifest layer, and it narrows the rule as it
+  widens it: a local overlay may set `name` **only to the directory it is
+  sitting in**. Every other value is refused exactly as the whole key used to
+  be, because the hazard never changed — a project renamed locally builds one
+  image and looks for another. Restating the directory is the one thing a local
+  file can say about identity that cannot be wrong.
+
+  **The database is a database, not an instance.** A branch is not a different
+  engine, and a MySQL container per branch would spend a gigabyte of memory
+  holding a copy of one schema. So a worktree gets a database on the instance
+  that is already running — empty, or copied from the workspace's own. The copy
+  reads the source's character set on MySQL rather than taking the server
+  default: a `utf8mb4` parent copied into a server-default database produces
+  tables that compare differently, with no error anywhere and a join that
+  returns nothing as the only symptom.
+
+  **Three bugs came out of running it rather than reading it.** `git worktree
+  remove` refuses while the tree contains **untracked** files, not only modified
+  ones — and the untracked file was this app's own overlay, so a worktree with
+  no user changes could not be removed, and git's message sent you looking for
+  work you never did. The fix moves the overlay out of the way first, only when
+  git is not tracking it, and **puts it back** if git refuses anyway: without
+  that, a failed removal would strip the checkout of its name and hostname and
+  leave a project the app then reports as broken.
+
+  The second had been there for as long as the Mongo branch of `run_sql`: it
+  never passed `--authenticationDatabase=admin`, and the root account lives in
+  `admin` while mongosh authenticates against whatever database it connected to.
+  That branch could never authenticate at all. `mongodump` and `mongorestore`
+  have always carried the flag; nothing had asked Mongo a question until a
+  worktree needed to know which databases it had.
+
+  The third was an ordering one, and the sort that stays wrong for years because
+  nothing visible breaks: the compose overlay is built only for projects that
+  have a **compose service**, and a worktree gains one in the file the generate
+  writes — so rendering the overlay first produced one with the branch's
+  database credentials missing. The next `docker compose` re-rendered it and
+  quietly corrected itself.
+
+  **The database half was run against live engines**, because a `CREATE
+  DATABASE` can be right in every unit test and wrong at the server — the lesson
+  `mariadb-dump` and the QR encoder each cost this repository once. Two
+  `#[ignore]`d tests create, list and drop on MySQL 9.7, MariaDB 12.3 and
+  MongoDB 8.0, and check that the workspace's own database is refused. They do
+  not run in CI: a test that fails for the absence of Docker is one people learn
+  to ignore for real reasons too.
+
+  `APP_URL` is supplied deliberately. The branch's own `.env` names the parent's
+  hostname, and a framework generating links from it would send everybody back
+  to `shop.loc` mid-flow — the exact bug this feature would be sold as fixing.
+  The container's environment wins over the application's `.env` file, which is
+  what lets this work without M-5's rule bending: the framework's own file is
+  still never touched.
+
 - **The eight "small items" that were not small** (M-2, M-3, M-4, M-7, M-8, M-9,
   M-11, M-12). Each carried a dependency, a decision or a product surface, and
   the previous round said so and stopped. This round pays the costs.
@@ -566,6 +979,193 @@ versioning is [semver](https://semver.org/spec/v2.0.0.html).
   has read nothing.
 
 ### Fixed
+
+- **Seventeen WCAG failures, none of which any previous run could have
+  reported** (§3 #25). The corrected axe pass above found them; each is a
+  success criterion rather than a piece of advice. Closed tooltips exposed as
+  unnamed `role="tooltip"` nodes; three `<nav>` landmarks with no names; no
+  `<h1>` on any page; a table column header with no text; and nine contrast
+  failures — the page subtitle at 3.62:1, secondary text at 2.67:1, every form
+  label at 4.25:1, tile labels at 4.49:1 and footers at 3.42:1.
+
+  The last of them is the interesting one. A status colour has two jobs — a
+  fill (a dot, a chip) and text — and the palette is chosen for the first:
+  `#4CAF50` reads as running at a glance and is 2.77:1 as a sentence.
+  Darkening the palette would be wrong twice over, because a darker dot is a
+  worse dot and because `colorblind` is Okabe-Ito, whose values are the entire
+  reason somebody picks it. So `src/lib/contrast.js` derives a **text variant**
+  of each status colour against the theme's own surface, moved only far enough
+  to meet 4.5:1 and with the hue kept, and `global.css` points the text
+  utilities at it — every existing `text-success` in the application became
+  readable without one call site changing.
+
+  Derived rather than hand-picked because three palettes × four roles × two
+  themes is twenty-four values to keep right by hand, and the surface under all
+  of them is a setting. Being derived, it is also testable, and the test earned
+  its place immediately: `readable` mixed a colour and then asked for the
+  contrast of the mixture, and `parse` took strings only — so every one of
+  those questions answered `null`, which compares false against everything. The
+  loop ran its hundred steps, improved nothing, and returned its input. The
+  only symptom was axe reporting exactly the ratio it had before the fix.
+
+- **The hosts file asked for a password it did not need** (§3 #35). `apply`
+  elevated unconditionally — a polkit dialog or a UAC prompt even where the
+  file was already this process's to write: a root shell, a CI runner, a
+  machine whose administrator made `/etc/hosts` group-writable on purpose. A
+  password prompt that cannot change the outcome is one that teaches people to
+  type their password at anything that asks, which is the opposite of what a
+  single elevation point is for. It now writes directly when it can and
+  elevates only when it cannot.
+
+  Written in place rather than through `atomic::write`, which is the one place
+  in this application that rule is wrong: an atomic write replaces the inode,
+  so `/etc/hosts` would come back carrying the mode and owner of whatever this
+  process created. A hosts file that lands as `0600 developer:staff` is one the
+  next tool cannot read, and it does not announce itself.
+
+  That is also what made the row testable. `hosts_path()` now honours
+  `STACKVO_HOSTS_PATH` — the seam `STACKVO_ROOT` already is — and
+  `tests/hosts_roundtrip.rs` runs plan, write, read-back, idempotence and
+  removal against a temporary file, in its own process so no parallel test can
+  be handed the fixture. CI already runs `cargo test` on three operating
+  systems, so this closes the hosts half of "the privilege paths never ran on
+  Windows or Linux". The half that remains is the elevation dialog itself,
+  which needs a human, and the row says so rather than claiming the item.
+
+- **`list_projects` has no cache, and now there is a measurement saying it
+  should not** (§3 #27). The row stood at half done with "no cache" as the gap,
+  which is the kind of gap that is obviously worth closing until somebody looks
+  at the numbers. `examples/list_bench.rs` looks at them, and splits the call
+  into the half that grows with the workspace and the half that does not:
+
+  | | 1 project | 50 projects |
+  | --- | --- | --- |
+  | the whole call | 26.7 ms | 38.1 ms |
+  | of which the engine | 24.6 ms | 34.4 ms |
+  | the tree, by difference | 2.1 ms | 3.7 ms |
+  | per project | 2.09 ms | **0.07 ms** |
+
+  The half a cache would help is free: fifty projects cost under four
+  milliseconds of directory scanning and manifest reading. Everything else is
+  one `stackvo_containers()` call — a fixed cost — and what that call produces
+  is `running`, the one field on the row that must never be stale. It is what
+  the start, stop, rebuild and terminal buttons are enabled by. So the only
+  cache worth having is the one that would be wrong, and the reasoning now
+  lives on the function with the numbers beside it rather than in a queue.
+
+- **Right-to-left turned the app root round and left the rest of the window
+  behind** (§3 #24). The row read "no `rtl` configuration in `vuetify.js`",
+  which was wrong twice: the configuration is in `appearance.js`, where it
+  belongs, and the real gap was somewhere else again — three places, none of
+  them visible without an engine to lay the window out.
+
+  `<html>` carried no `dir`, so the document's own direction never changed. The
+  overlay container is a sibling of `#app`, so **every dialog, side sheet, menu
+  and tooltip stayed left-to-right inside a mirrored window** — the same
+  structural fact that had been hiding half the axe run. And both navigation
+  drawers were pinned to `location="left"`, a physical side, so the primary
+  navigation sat on the wrong edge for a right-to-left reader while its own
+  contents mirrored.
+
+  Setting `dir` on the document settles the first two at once, because
+  `direction` inherits and the overlay container is a child of `body`. The
+  drawers now say `start` and the side sheet `end`. Twenty-two physical CSS
+  properties across fourteen files became logical ones —
+  `margin-left: auto` is the "push the rest to the far side" idiom, and in a
+  mirrored window the far side is the other one. `tests/e2e/rtl.e2e.js`
+  measures the result with boxes; the jsdom test that already held the wiring
+  now also holds the attribute.
+
+- **The query log's Postgres half had never run, and three separate things had
+  to be true before it could** (F-1). §2 carried the row as half-done with the
+  reason "this workspace has no Postgres installed; the probe skips it and says
+  so". A Postgres was installed. The probe stopped skipping, and what it found
+  was not one gap but three, each of which alone was enough to make the pane
+  show "recording" over an empty list — the worst shape a diagnostic can fail
+  in, because it looks exactly like a page that ran no queries.
+
+  **One: nothing could log in.** `db::settings` resolved the user and password
+  out of `.env`, and after ADR 0016 a workspace is installed from packages — a
+  package stores `USER` on the instance and renders it into the compose file, so
+  `.env` holds nothing for it. Every caller fell through to a hardcoded default,
+  which for Postgres is `postgres`: an account the container does not have,
+  because the image created the one the manifest named. `psql -U postgres`
+  against this workspace answers `FATAL: role "postgres" does not exist`, and
+  that was the reply the query log, dump, restore and snapshot all got. It now
+  resolves through the manifest's `connection` block — `userSetting`,
+  `passwordSetting`, `databaseSetting` — which is the package contract saying
+  which setting is the login, then the keystore, then `.env`, then the manifest
+  default. `.env` sits in the **middle** deliberately: putting the package first
+  would hand a migrated workspace's dump the manifest's default password instead
+  of the real one in `.env`, which is the same bug facing the other way.
+
+  `settings_for_instance` was reading the instance's settings map with the
+  `.env` key — `instance.settings.get("SERVICE_POSTGRES_USER")` for a map whose
+  key is `USER` — so it matched nothing on every workspace and was `settings`
+  with a different container name. Same fix, same place.
+
+  **Two: it was reading the wrong file.** `read` pulled the container's log
+  stream, which is correct for a stock `postgres` image and wrong for every
+  Postgres this app installs: the packaged `postgresql.conf` sets
+  `logging_collector = on`, and a collector takes stderr out of the stream and
+  writes it to a file under the data directory. `docker logs` on a four-hour-old
+  container held the startup banner and one line saying the log went elsewhere.
+  It now asks the server — `pg_current_logfile('stderr')` — and reads the file
+  from inside the container, falling back to the stream when there is no
+  collector. That answers log rotation too, which a hardcoded path would not.
+
+  **Three: the format was pinned by half.** `log_statement` and
+  `log_line_prefix` were pinned, `log_destination` was not — so a workspace
+  configured for `csvlog` or `jsonlog` writes the same statements in a shape the
+  parser cannot read, and unlike a wrong prefix that is invisible in everything
+  the pane shows. Now pinned with the other two and reset with them.
+
+  The `%n` epoch escape was the one thing here that looked like a version risk,
+  so it was measured rather than assumed: `postgres:12` — the oldest version the
+  catalogue offers — and `postgres:14` both write it. An escape a server did not
+  understand would be dropped silently, which is the same empty-list failure
+  again.
+
+  Every statement this module sends Postgres now carries a
+  `/* stackvo:querylog */` comment and is filtered on that, rather than on a
+  keyword list that had to grow with each new statement. That list also matched
+  every `SHOW` — including the reader's own, hidden in order to conceal the
+  tool's one.
+
+  Verified by `examples/querylog_probe.rs` against the live stack rather than
+  against fixtures: `mysql:9.7`, `mariadb:12.3`, `postgres:14` and `mongo:8.0`
+  each switched on, asked an N+1 of five, and reported the group.
+
+- **"Start again" did nothing on Postgres, and was hidden so it would not
+  show.** The log belongs to the server and this app must not rewrite it — true,
+  and the wrong conclusion was drawn from it. "Cannot delete" is not "cannot
+  start again". `clear` now writes a **watermark** statement, and the reader
+  drops everything above it on the next read: the person pressing the button
+  gets what they meant, and the server's log is left exactly as it was. Stopping
+  writes it too, so a session no longer opens on the previous one's statements.
+
+  The probe checks it, because this is the one operation whose failure is
+  invisible from the caller's side — a `clear` that returns `Ok(())` having done
+  nothing looks identical to one that worked.
+
+  What the watermark cannot do is take the statements off the server's disk, and
+  recording on Postgres puts every one of them there. The pane says so, beside
+  the switch, while it is recording — the moment somebody decides whether to
+  record against a database holding real rows.
+
+- **Every database reported itself stopped while it was running.**
+  `db::targets` asked the engine about the **service** name — `stackvo-mysql` —
+  but the container comes from the instance table and is called
+  `stackvo-mysql-9-7`. There has been no `stackvo-mysql` since instances landed,
+  so the lookup missed every time and `running` was false for all four engines
+  with all four up. That field is what the dump, restore, snapshot and query-log
+  controls are disabled by, so the feature was unreachable on a working stack.
+  `db::instances`, immediately above it, had always asked by container name.
+
+  Found by running the new CLI rather than by reading: `stackvo db` printed four
+  engines as down while `docker ps` listed them up. Nothing in the unit tests
+  could have caught it — they check the argument list, and the argument list was
+  correct for the container it named.
 
 - **The contract gate's service suite checked a directory ADR 0016 deleted.**
   Suite C was built entirely around `skeleton/core/templates/services/` — one

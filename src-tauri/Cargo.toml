@@ -7,9 +7,14 @@ license = "MIT"
 edition = "2021"
 rust-version = "1.82"
 
-# Two binaries live here — the app and `stackvo-mcp` — and `tauri dev` runs a
-# bare `cargo run`, which refuses to guess. Naming the app here keeps that
-# working; the MCP server is reached with an explicit `--bin stackvo-mcp`.
+# Three binaries live here — the app, `stackvo-mcp` and `stackvo` — and `tauri
+# dev` runs a bare `cargo run`, which refuses to guess. Naming the app here
+# keeps that working; the other two are reached with an explicit `--bin`.
+#
+# Neither of the two is bundled with the app: `tauri.conf.json` declares no
+# `externalBin` and `release.yml` does not build them, so both are `cargo build
+# --release --bin …`. `agents::binary` searches rather than assumes for exactly
+# that reason, and the CLI section of README.md says the same.
 default-run = "stackvo-desktop"
 
 [lib]
@@ -140,6 +145,7 @@ notify = "8"
 # Real PTYs on the host. node-pty could only reach containers because it ran
 # inside one; this can open a host shell in a project directory too.
 portable-pty = "0.9"
+
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tracing-appender = "0.2.5"
@@ -179,11 +185,42 @@ time = { version = "0.3.44", default-features = false, features = ["parsing"] }
 # the company proxy — so `mail::client` builds with `no_proxy()`. Read that
 # comment before adding a second reqwest caller.
 reqwest = { version = "0.13.3", default-features = false, features = ["json", "rustls", "system-proxy"] }
+# Verifying the package index's signature (C, ADR 0015).
+#
+# Measured before adding, like every other line here: **zero new packages.**
+# minisign is ed25519 with a file format around it, and it is what
+# `tauri-plugin-updater` already uses to check a downloaded binary — so this
+# crate is in `Cargo.lock` and in `NOTICE.md` already, and taking it directly
+# adds a dependency edge and nothing else.
+#
+# It also means the key ceremony ADR 0015 describes has a tool that exists:
+# `minisign -G`, or Tauri's own signer. A scheme needing a bespoke tool is one
+# whose ceremony never happens.
+minisign-verify = "0.2.5"
 
 # Desktop-only plugins: single-instance and autostart are meaningless on mobile.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
+# Raw mode for `stackvo tui` (M-8), and nothing else.
+#
+# Measured before adding, and the measurement is the decision: `ratatui` — the
+# obvious way to build a terminal screen — puts **25 new packages** in
+# `Cargo.lock` (649 → 674): a layout solver, a widget set, two unicode-width
+# crates, an LRU cache, strum, darling, a second rustix. What `tui.rs` draws is
+# a list, a detail line and a status bar, with the same column arithmetic
+# `cli.rs` already uses for its tables.
+#
+# These two add **zero packages**. `libc` is already built through
+# `portable-pty` and `windows-sys` through Tauri; both gain a dependency edge
+# and nothing else. They are here for one call each — `tcsetattr` and
+# `SetConsoleMode` — because taking the terminal out of line mode is the one
+# part of a terminal screen that is not text.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Console", "Win32_Foundation"] }
 
 [features]
 default = []

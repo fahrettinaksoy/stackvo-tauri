@@ -4532,6 +4532,8 @@ dependencies = [
  "futures-util",
  "include_dir",
  "keyring",
+ "libc",
+ "minisign-verify",
  "notify",
  "portable-pty",
  "reqwest",
@@ -4556,6 +4558,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "windows-sys 0.59.0",
  "x509-parser",
  "zip",
 ]

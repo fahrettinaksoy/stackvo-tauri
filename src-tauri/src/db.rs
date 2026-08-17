@@ -365,6 +365,7 @@ pub fn suggested_filename(service: &str, kind: Kind, stamp: &str) -> String {
 // ------------------------------------------------------------------- I/O
 
 /// Everything this module needs to talk to one engine, resolved from `.env`.
+#[derive(Clone)]
 struct Settings {
     kind: Kind,
     container: String,
@@ -416,6 +417,13 @@ pub fn container_of(root: &Path, service: &str) -> String {
 /// settings map, but the root password of a *migrated* instance is the one in
 /// `.env` — the handover deliberately left it there — so the per-instance value
 /// wins and `.env` is the fallback rather than the other way round.
+///
+/// This used to read the instance's settings map with the **`.env` key** —
+/// `instance.settings.get("SERVICE_POSTGRES_USER")` — and an instance stores
+/// `USER`, the key its package declares. So the lookup matched nothing on every
+/// workspace and this function was `settings` with a different container name.
+/// It now resolves through the manifest's `connection` block, the same as
+/// [`declared`], which is the only thing that knows which setting is the login.
 fn settings_for_instance(root: &Path, id: &str) -> Result<Settings> {
     let table = crate::instances::Table::load(root)?;
     let instance = table
@@ -425,19 +433,143 @@ fn settings_for_instance(root: &Path, id: &str) -> Result<Settings> {
     let mut settings = settings(root, &instance.service)?;
     settings.container = instance.container();
 
+    let env = crate::config::Env::load(root)?;
     let keys = settings.kind.keys();
-    let pick = |key: Option<&str>| -> Option<String> {
-        key.and_then(|k| instance.settings.get(k))
-            .filter(|v| !v.is_empty())
-            .cloned()
-    };
-    if let Some(user) = pick(keys.user) {
+    let (user, password, database) = declared_for(root, instance);
+
+    if let Some(user) = user.or_env(keys.user.and_then(|k| env.get(k))) {
         settings.user = user;
     }
-    if let Some(database) = pick(keys.database) {
+    if let Some(password) = password.or_env(env.get(keys.password)) {
+        settings.password = Some(password);
+    }
+    if let Some(database) = database.or_env(keys.database.and_then(|k| env.get(k))) {
         settings.database = Some(database);
     }
     Ok(settings)
+}
+
+/// One credential, from the two places a **package** can answer it.
+///
+/// Separate fields rather than one resolved string because the order matters
+/// and it is not the obvious one — see [`Value::or_env`].
+#[derive(Default)]
+struct Value {
+    /// What the instance table holds, or what the keystore holds for it.
+    stored: Option<String>,
+    /// What the manifest says the container runs with when nothing is stored.
+    default: Option<String>,
+}
+
+impl Value {
+    /// Stored, then `.env`, then the package's default.
+    ///
+    /// `.env` sits in the **middle** on purpose. Putting the package first
+    /// throughout would have been simpler and would have regressed every
+    /// migrated workspace: a handover leaves the real password in `.env`, the
+    /// manifest declares a default of `stackvo`, and a resolver that preferred
+    /// the manifest would hand a dump the wrong password with no error anybody
+    /// could read. Putting `.env` first is the mirror of that bug on a workspace
+    /// installed from packages. Stored beats both because it is the only one of
+    /// the three that somebody typed for *this* instance.
+    fn or_env(self, env: Option<&str>) -> Option<String> {
+        self.stored
+            .or_else(|| env.filter(|v| !v.is_empty()).map(str::to_string))
+            .or(self.default)
+            .filter(|v| !v.is_empty())
+    }
+}
+
+/// What the package and the instance table say this service is running with.
+///
+/// The whole reason this exists: after ADR 0016 a workspace is installed from
+/// packages, and a package does not write `SERVICE_POSTGRES_USER` into `.env` —
+/// it stores `USER` on the instance and renders it into the compose file. So
+/// `.env` holds nothing for it, and every caller of [`run_sql`] was falling
+/// through to `default_user`, which for Postgres is `postgres`: an account the
+/// container does not have, because the image created the one the manifest
+/// named. Measured rather than reasoned about — `psql -U postgres` against this
+/// workspace's own Postgres answers `FATAL: role "postgres" does not exist`,
+/// which is what the query log, dump, restore and snapshot all got.
+///
+/// The manifest's `connection` block is what maps a role onto a setting key:
+/// `userSetting`, `passwordSetting`, `databaseSetting`. Read from there rather
+/// than by stripping a `SERVICE_<NAME>_` prefix off the `.env` key, because the
+/// prefix rule is a coincidence of how the keys were named and the block is the
+/// package contract saying which setting is the login.
+///
+/// Every failure here is `None` rather than an error: no table, no market, no
+/// manifest and no `connection` block all mean the same thing to the caller —
+/// this workspace answers from `.env`, the way it did before packages.
+fn declared(root: &Path, service: &str) -> (Value, Value, Value) {
+    let nothing = || (Value::default(), Value::default(), Value::default());
+
+    let Ok(table) = crate::instances::Table::load(root) else {
+        return nothing();
+    };
+    // The first instance of that service, which is the same rule
+    // `container_of` follows — and it has to be, or the credentials would
+    // belong to one container and the exec to another.
+    let Some(instance) = table.instances.iter().find(|i| i.service == service) else {
+        return nothing();
+    };
+    declared_for(root, instance)
+}
+
+/// The same three values for one **instance** rather than for a service.
+fn declared_for(root: &Path, instance: &crate::instances::Instance) -> (Value, Value, Value) {
+    let nothing = || (Value::default(), Value::default(), Value::default());
+
+    let Ok(tree) = crate::pkg::Tree::open(&crate::market::dir(root)) else {
+        return nothing();
+    };
+    let Ok(manifest) = tree.load(&instance.service, &instance.version) else {
+        return nothing();
+    };
+    let Some(conn) = manifest.connection.as_ref() else {
+        return nothing();
+    };
+
+    let value = |key: Option<&String>| -> Value {
+        let Some(key) = key else {
+            return Value::default();
+        };
+        let Some(setting) = manifest.settings.iter().find(|s| &s.key == key) else {
+            return Value::default();
+        };
+        Value {
+            stored: instance
+                .settings
+                .get(key)
+                .cloned()
+                .or_else(|| {
+                    instance
+                        .secret_refs
+                        .get(key)
+                        .and_then(|reference| crate::secrets::entry_of(reference))
+                        // A keystore that cannot be reached is not a reason to
+                        // fail: the manifest default below is what the container
+                        // was started with when nothing was ever stored, and it
+                        // is a better answer than no answer.
+                        .and_then(|entry| crate::secrets::read(entry).ok().flatten())
+                })
+                .filter(|v| !v.is_empty()),
+            default: setting.default_text().filter(|v| !v.is_empty()),
+        }
+    };
+
+    let mut user = value(conn.user_setting.as_ref());
+    if user.default.is_none() {
+        // A package with no `userSetting` — MySQL and MariaDB, which publish
+        // only a root password — still names the account it runs as.
+        user.default = conn.default_user.clone();
+    }
+    let mut database = value(conn.database_setting.as_ref());
+    if database.default.is_none() {
+        database.default = conn.default_database.clone();
+    }
+
+    (user, value(conn.password_setting.as_ref()), database)
 }
 
 fn settings(root: &Path, service: &str) -> Result<Settings> {
@@ -451,25 +583,16 @@ fn settings(root: &Path, service: &str) -> Result<Settings> {
 
     let env = crate::config::Env::load(root)?;
     let keys = kind.keys();
+    let (user, password, database) = declared(root, service);
 
     Ok(Settings {
         kind,
         container: container_of(root, service),
-        user: keys
-            .user
-            .and_then(|k| env.get(k))
-            .filter(|v| !v.is_empty())
-            .unwrap_or(default_user(kind))
-            .to_string(),
-        password: env
-            .get(keys.password)
-            .filter(|v| !v.is_empty())
-            .map(str::to_string),
-        database: keys
-            .database
-            .and_then(|k| env.get(k))
-            .filter(|v| !v.is_empty())
-            .map(str::to_string),
+        user: user
+            .or_env(keys.user.and_then(|k| env.get(k)))
+            .unwrap_or_else(|| default_user(kind).to_string()),
+        password: password.or_env(env.get(keys.password)),
+        database: database.or_env(keys.database.and_then(|k| env.get(k))),
     })
 }
 
@@ -485,7 +608,15 @@ pub async fn targets(root: &Path) -> Result<Vec<DbTarget>> {
 
         // Listed even when it is not running: "why is the button disabled" is
         // a question the row itself should answer.
-        let running = crate::engine::inspect(service)
+        //
+        // Asked of `settings.container`, not of `service`. Those were the same
+        // string while a service meant one container, and the instance table
+        // ended that: the container is `stackvo-mysql-9-7` and `stackvo-mysql`
+        // does not exist, so asking by service name reported every running
+        // database as stopped — and this is the field the dump, restore and
+        // snapshot buttons are disabled by. Found by `stackvo db` printing four
+        // engines as down while `docker ps` listed them up.
+        let running = crate::engine::inspect(&settings.container)
             .await
             .map(|d| d.running)
             .unwrap_or(false);
@@ -535,13 +666,63 @@ fn exec_args(settings: &Settings, interactive: bool) -> Vec<String> {
 ///
 /// `-N -B`: no column headers and tab-separated, which is the format
 /// `querylog::parse_rows` reads. The statement itself is always one of this
-/// app's own constants — nothing a user typed reaches it — so there is no
-/// quoting problem to solve, and adding a parameter binding layer for four
-/// fixed statements would be machinery with no user.
+/// app's own constants — so there is no quoting problem to solve, and adding a
+/// parameter binding layer for four fixed statements would be machinery with no
+/// user.
+///
+/// The one statement that is not a constant is the per-worktree
+/// `CREATE DATABASE` below, and it is built from a name that
+/// [`is_valid_database_name`] has already reduced to `[a-z0-9_]`. That check is
+/// the reason the rule above still holds rather than an exception to it: a name
+/// that could carry a quote, a semicolon or a backtick never reaches here.
 pub async fn run_sql(root: &Path, service: &str, sql: &str) -> Result<String> {
-    let settings = settings(root, service)?;
+    run_sql_with(&settings(root, service)?, sql).await
+}
 
-    let mut args = exec_args(&settings, false);
+/// The last `lines` lines of a file **inside** a container.
+///
+/// Here rather than in `engine.rs` for the reason [`run_sql`] gives: this module
+/// already owns the `docker exec` arrangement, and `engine.rs` talks to the
+/// daemon through bollard, where an exec is a create-start-attach dance for what
+/// is one line here.
+///
+/// It exists for one caller — the Postgres half of the query log. Postgres with
+/// `logging_collector = on` does not write to the container's stdout at all, so
+/// `engine::logs_tail` returns the startup banner and the line *saying* the log
+/// went elsewhere. See [`crate::querylog::pg_log_path_sql`].
+pub async fn read_tail(container: &str, path: &str, lines: u32) -> Result<String> {
+    let out = tokio::process::Command::new("docker")
+        .args([
+            "exec",
+            container,
+            "tail",
+            "-n",
+            &lines.to_string(),
+            "--",
+            path,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| Error::io("running docker exec", e))?;
+
+    if !out.status.success() {
+        let text = String::from_utf8_lossy(&out.stderr);
+        let reason = text
+            .lines()
+            .rfind(|l| !l.trim().is_empty())
+            .unwrap_or("the container could not read that file");
+        return Err(Error::new(Code::IoError, reason.trim().to_string()));
+    }
+    // Lossy for the same reason `logs_tail` is: a log file is whatever the
+    // server wrote into it, and one statement holding a byte that is not UTF-8
+    // must not throw away the other four hundred.
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+async fn run_sql_with(settings: &Settings, sql: &str) -> Result<String> {
+    let mut args = exec_args(settings, false);
     match settings.kind {
         Kind::Mysql | Kind::Mariadb => {
             args.extend(mysql_family(
@@ -585,6 +766,15 @@ pub async fn run_sql(root: &Path, service: &str, sql: &str) -> Result<String> {
                 args.push("-p".to_string());
                 args.push(password.clone());
             }
+            // Where the account actually lives. `MONGO_INITDB_ROOT_USERNAME`
+            // creates the user in `admin`, and mongosh's default auth source is
+            // whichever database it connected to — `test` — so without this the
+            // root credentials are checked against a database that has never
+            // heard of them and every statement comes back as an auth failure.
+            // `dump_args` and `restore_args` have always passed it; this branch
+            // did not, and nothing exercised it until a worktree needed to ask
+            // Mongo which databases it has.
+            args.push("--authenticationDatabase=admin".to_string());
             args.push("--eval".to_string());
             args.push(sql.to_string());
         }
@@ -610,13 +800,360 @@ pub async fn run_sql(root: &Path, service: &str, sql: &str) -> Result<String> {
         let reason = text
             .lines()
             .filter(|l| !l.contains("Using a password on the command line"))
-            .filter(|l| !l.trim().is_empty())
-            .next_back()
+            .rfind(|l| !l.trim().is_empty())
             .unwrap_or("the database refused the statement");
         return Err(Error::new(Code::IoError, reason.trim().to_string()));
     }
 
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+// ------------------------------------------------- databases on one instance
+//
+// N. A worktree gets its own database on an instance that already exists,
+// rather than an instance of its own: a branch is not a different engine, and a
+// second MySQL per branch would cost a gigabyte of RAM to hold a schema copy.
+
+/// How a project's container reaches one instance, from inside the network.
+///
+/// Deliberately not [`DbTarget`]: that one answers "which engines can this
+/// workspace dump" for four pickers, and every field on it is about the host
+/// side. This is the other direction — what to put in `DB_HOST` and `DB_PORT`
+/// so that an application inside a container can connect — and those two are
+/// **not** the host's published port. A worktree that was handed `127.0.0.1` and
+/// the host port would reach its own container's loopback and nothing else.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Connection {
+    pub instance: String,
+    pub service: String,
+    pub kind: Kind,
+    /// The container's name, which is also the name it answers to on the
+    /// network — see [`crate::instances::Instance::aliases`].
+    pub host: String,
+    /// The engine's own port, inside the network.
+    pub port: u16,
+    pub user: String,
+    /// Never serialised. The struct crosses the IPC boundary in
+    /// `worktree_plan`, and a preview of what would be created has no business
+    /// carrying the root password to a webview.
+    #[serde(skip)]
+    pub password: Option<String>,
+    /// The database this instance is configured with, when it has one. The
+    /// source a copy reads from, and the stem a worktree's name is built on.
+    pub database: Option<String>,
+}
+
+/// The port an engine listens on inside the network, which is fixed by the
+/// image and never the host port the instance publishes.
+pub fn default_port(kind: Kind) -> u16 {
+    match kind {
+        Kind::Mysql | Kind::Mariadb => 3306,
+        Kind::Postgres => 5432,
+        Kind::Mongo => 27017,
+    }
+}
+
+/// The scheme a URL-shaped setting (`DATABASE_URL`) uses for this engine.
+pub fn url_scheme(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Mysql => "mysql",
+        Kind::Mariadb => "mysql",
+        Kind::Postgres => "pgsql",
+        Kind::Mongo => "mongodb",
+    }
+}
+
+/// Everything needed to reach one instance from a container.
+pub fn connection(root: &Path, instance_id: &str) -> Result<Connection> {
+    let table = crate::instances::Table::load(root)?;
+    let instance = table
+        .get(instance_id)
+        .ok_or_else(|| Error::not_found(format!("instance {instance_id}")))?;
+    let settings = settings_for_instance(root, instance_id)?;
+
+    Ok(Connection {
+        instance: instance.id.clone(),
+        service: instance.service.clone(),
+        kind: settings.kind,
+        host: instance.container(),
+        port: default_port(settings.kind),
+        user: settings.user.clone(),
+        password: settings.password.clone(),
+        database: settings.database.clone(),
+    })
+}
+
+/// Names this app will never create, drop or hand to a project.
+///
+/// Every engine keeps its own catalogue in a database, and a `DROP DATABASE
+/// mysql` is not a mistake anybody recovers from by pressing undo. The list is
+/// checked on the way *in* rather than trusted to the derivation, because the
+/// derivation takes a branch name and a branch may be called `sys`.
+const RESERVED_DATABASES: [&str; 10] = [
+    "mysql",
+    "sys",
+    "information_schema",
+    "performance_schema",
+    "postgres",
+    "template0",
+    "template1",
+    "admin",
+    "local",
+    "config",
+];
+
+/// Is this a database name this app is willing to build a statement from?
+///
+/// Narrow on purpose, and narrower than any of the four engines would accept.
+/// The name is interpolated into `CREATE DATABASE`, so the guarantee wanted here
+/// is not "the engine will parse it" but "there is nothing in it to escape":
+/// lower-case letters, digits and underscore, beginning with a letter.
+///
+/// 63 characters because that is the shortest of the four limits — PostgreSQL's
+/// identifier length. MySQL allows 64 and Mongo 63 bytes; taking the smallest
+/// means a name derived once works on whichever engine the workspace has.
+pub fn is_valid_database_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 63
+        && name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && !RESERVED_DATABASES.contains(&name)
+}
+
+fn checked_database(name: &str) -> Result<()> {
+    if !is_valid_database_name(name) {
+        return Err(Error::new(
+            Code::InvalidInput,
+            format!("\"{name}\" is not a database name this app will create"),
+        )
+        .with_hint(crate::hints::DATABASE_NAME_CHARSET));
+    }
+    Ok(())
+}
+
+/// The same instance, addressed as one particular database on it.
+fn on_database(mut settings: Settings, database: &str) -> Settings {
+    settings.database = Some(database.to_string());
+    settings
+}
+
+/// Every database on this instance, as the engine lists them.
+///
+/// System catalogues included — this is what the engine has, and filtering here
+/// would make "does this name already exist" answer no for a name that cannot
+/// be created.
+pub async fn databases(root: &Path, instance_id: &str) -> Result<Vec<String>> {
+    let settings = settings_for_instance(root, instance_id)?;
+
+    let sql = match settings.kind {
+        Kind::Mysql | Kind::Mariadb => "SHOW DATABASES",
+        Kind::Postgres => "SELECT datname FROM pg_database",
+        // `.join` rather than a returned array: `run_sql` hands back whatever
+        // the client printed, and mongosh prints a JS array with quotes and
+        // commas in it. One name per line is the shape the other three give.
+        Kind::Mongo => "db.adminCommand({listDatabases:1}).databases.map(d=>d.name).join('\\n')",
+    };
+
+    Ok(run_sql_with(&settings, sql)
+        .await?
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+/// Create a database on this instance, or report that it was already there.
+///
+/// `Ok(false)` means nothing was created and nothing was wrong: the name
+/// already existed, or the engine is MongoDB, which has no `CREATE DATABASE` at
+/// all — a Mongo database begins existing when something writes to it, and
+/// pretending otherwise here would mean either a lie or a collection this app
+/// invented in somebody's data.
+///
+/// `like` names a database whose character set the new one should match. It
+/// matters for exactly the reason it is easy to skip: a worktree copied from a
+/// `utf8mb4` parent into a server-default database gets tables that compare
+/// differently, and the symptom is a join that returns nothing with no error
+/// anywhere. MySQL and MariaDB are asked; PostgreSQL takes the encoding from
+/// the template it copies and there is nothing to carry over.
+pub async fn create_database(
+    root: &Path,
+    instance_id: &str,
+    name: &str,
+    like: Option<&str>,
+) -> Result<bool> {
+    checked_database(name)?;
+    let settings = settings_for_instance(root, instance_id)?;
+
+    if settings.kind == Kind::Mongo {
+        return Ok(false);
+    }
+    if databases(root, instance_id)
+        .await?
+        .iter()
+        .any(|existing| existing == name)
+    {
+        return Ok(false);
+    }
+
+    let sql = match settings.kind {
+        Kind::Mysql | Kind::Mariadb => {
+            let collation = match like {
+                Some(source) => charset_of(&settings, source).await,
+                None => None,
+            };
+            match collation {
+                Some((charset, collate)) => {
+                    format!("CREATE DATABASE `{name}` CHARACTER SET {charset} COLLATE {collate}")
+                }
+                // The default for every server in the catalogue, and the one
+                // answer that is right for a name, an emoji and a Turkish `ı`
+                // alike. Stated rather than inherited: a server started with an
+                // older `my.cnf` still defaults to latin1.
+                None => format!(
+                    "CREATE DATABASE `{name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+                ),
+            }
+        }
+        Kind::Postgres => format!("CREATE DATABASE \"{name}\""),
+        Kind::Mongo => unreachable!("returned above"),
+    };
+
+    run_sql_with(&settings, &sql).await?;
+    Ok(true)
+}
+
+/// The character set and collation a database was created with, when the engine
+/// will say. `None` on anything unexpected — a missing answer here costs a
+/// default, and refusing to create the database over it would be worse.
+async fn charset_of(settings: &Settings, database: &str) -> Option<(String, String)> {
+    if !is_valid_database_name(database) {
+        return None;
+    }
+    let sql = format!(
+        "SELECT DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM \
+         information_schema.SCHEMATA WHERE SCHEMA_NAME = '{database}'"
+    );
+    let out = run_sql_with(settings, &sql).await.ok()?;
+    let mut parts = out.split_whitespace();
+    let charset = parts.next()?.to_string();
+    let collate = parts.next()?.to_string();
+
+    // Read back out of the answer rather than trusted: this goes straight into
+    // a statement, and `information_schema` is a table like any other.
+    let ok = |v: &str| !v.is_empty() && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    (ok(&charset) && ok(&collate)).then_some((charset, collate))
+}
+
+/// Drop a database, or report that there was none.
+///
+/// Refuses the instance's *configured* database as well as the reserved names.
+/// That is the one deletion a worktree teardown could plausibly reach by
+/// accident — a worktree whose record was hand-edited to name the parent's
+/// database — and it is the deletion nobody has a copy of.
+pub async fn drop_database(root: &Path, instance_id: &str, name: &str) -> Result<bool> {
+    checked_database(name)?;
+    let settings = settings_for_instance(root, instance_id)?;
+
+    if settings.database.as_deref() == Some(name) {
+        return Err(Error::new(
+            Code::InvalidInput,
+            format!("\"{name}\" is this instance's own database and is not a worktree's to drop"),
+        ));
+    }
+    if !databases(root, instance_id)
+        .await?
+        .iter()
+        .any(|existing| existing == name)
+    {
+        return Ok(false);
+    }
+
+    match settings.kind {
+        Kind::Mysql | Kind::Mariadb => {
+            run_sql_with(&settings, &format!("DROP DATABASE `{name}`")).await?;
+        }
+        Kind::Postgres => {
+            // `WITH (FORCE)` disconnects whatever is still attached, which on a
+            // worktree being torn down is its own application container. Without
+            // it PostgreSQL refuses while any session is open and the teardown
+            // fails on the last step. It arrived in PostgreSQL 13, so an older
+            // server is retried plainly rather than left unable to drop
+            // anything.
+            let forced = format!("DROP DATABASE \"{name}\" WITH (FORCE)");
+            if run_sql_with(&settings, &forced).await.is_err() {
+                run_sql_with(&settings, &format!("DROP DATABASE \"{name}\"")).await?;
+            }
+        }
+        Kind::Mongo => {
+            run_sql_with(
+                &settings,
+                &format!("db.getSiblingDB('{name}').dropDatabase()"),
+            )
+            .await?;
+        }
+    }
+    Ok(true)
+}
+
+/// Copy one database on an instance into another on the same instance.
+///
+/// Through a file, for the reason `dbmove` gives at length: a pipe leaves a
+/// half-populated target with nothing to retry from. The file lands in the
+/// system temp directory and is removed on both paths — unlike a move, a failed
+/// *copy* has lost nothing, because the source is still there.
+///
+/// MongoDB is refused rather than approximated. The other three name a source
+/// database in `.env` and there is something to copy; Mongo publishes no
+/// database name at all (`EnvKeys.database` is `None` for it), so there is no
+/// source to read, and a copy that quietly copied nothing would look like it
+/// worked.
+pub async fn copy_database<F>(
+    root: &Path,
+    instance_id: &str,
+    from: &str,
+    to: &str,
+    mut on_line: F,
+) -> Result<u64>
+where
+    F: FnMut(String) + Send + Clone + 'static,
+{
+    checked_database(from)?;
+    checked_database(to)?;
+
+    let settings = settings_for_instance(root, instance_id)?;
+    if settings.kind == Kind::Mongo {
+        return Err(Error::new(
+            Code::Unsupported,
+            "MongoDB publishes no database name for this workspace, so there is nothing to copy from"
+                .to_string(),
+        )
+        .with_hint(crate::hints::MONGO_HAS_NO_SOURCE_DATABASE));
+    }
+
+    let staging = std::env::temp_dir().join(format!("stackvo-worktree-{from}-{to}.sql"));
+    let _ = std::fs::remove_file(&staging);
+
+    on_line(format!("copying {from} into {to}"));
+
+    let out = async {
+        dump_with(
+            on_database(settings.clone(), from),
+            from,
+            &staging,
+            on_line.clone(),
+        )
+        .await?;
+        restore_with(on_database(settings.clone(), to), to, &staging, on_line).await
+    }
+    .await;
+
+    let _ = std::fs::remove_file(&staging);
+    out
 }
 
 /// Read the database out into `path`.
@@ -779,6 +1316,77 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// N. The port a container reaches the engine on inside the network, which
+    /// is the engine's own and never the host port the instance publishes.
+    ///
+    /// Getting this wrong is not a compile error and not a test failure
+    /// anywhere else: the worktree comes up, the application starts, and the
+    /// first query fails with a connection refused that reads as "the database
+    /// is down" rather than "we told it the wrong number".
+    #[test]
+    fn the_port_handed_to_a_container_is_the_engines_own() {
+        assert_eq!(default_port(Kind::Mysql), 3306);
+        assert_eq!(default_port(Kind::Mariadb), 3306);
+        assert_eq!(default_port(Kind::Postgres), 5432);
+        assert_eq!(default_port(Kind::Mongo), 27017);
+    }
+
+    #[test]
+    fn a_url_shaped_setting_names_the_scheme_its_driver_expects() {
+        assert_eq!(url_scheme(Kind::Mysql), "mysql");
+        // MariaDB speaks the MySQL protocol and every client library that
+        // parses one of these expects `mysql://`.
+        assert_eq!(url_scheme(Kind::Mariadb), "mysql");
+        assert_eq!(url_scheme(Kind::Postgres), "pgsql");
+        assert_eq!(url_scheme(Kind::Mongo), "mongodb");
+    }
+
+    /// The gate between a derived name and a statement built by formatting.
+    ///
+    /// Everything this accepts is interpolated into `CREATE DATABASE` unquoted,
+    /// so the test is not "does the engine like it" — it is "is there anything
+    /// in it to escape".
+    #[test]
+    fn a_database_name_has_nothing_in_it_to_escape() {
+        for good in ["shop", "shop_feature_x", "a1_2", "w_2fa"] {
+            assert!(is_valid_database_name(good), "{good}");
+        }
+
+        for bad in [
+            "",
+            "1shop",        // must begin with a letter
+            "Shop",         // upper case would need quoting on Postgres
+            "shop-feature", // a hyphen needs quoting in every statement
+            "shop feature",
+            "shop`; DROP DATABASE x;--",
+            "shop\"",
+            "shop'",
+            &"a".repeat(64), // one over the shortest engine limit
+        ] {
+            assert!(!is_valid_database_name(bad), "{bad:?} was accepted");
+        }
+    }
+
+    /// A branch may be called `sys`, and the derivation would happily produce a
+    /// name that is an engine's own catalogue. Refused on the way in rather
+    /// than trusted to the caller, because `DROP DATABASE mysql` is not a
+    /// mistake anybody undoes.
+    #[test]
+    fn the_engines_own_databases_are_never_accepted() {
+        for reserved in RESERVED_DATABASES {
+            assert!(!is_valid_database_name(reserved), "{reserved}");
+        }
+    }
+
+    /// The password crosses to Mongo on a command line — this module says so
+    /// rather than hiding it — but the account it belongs to lives in `admin`,
+    /// and a statement that does not say so cannot authenticate at all.
+    #[test]
+    fn a_mongo_statement_names_the_database_the_account_lives_in() {
+        let args = dump_args(Kind::Mongo, "root", None);
+        assert!(args.contains(&"--authenticationDatabase=admin".to_string()));
+    }
 
     #[test]
     fn only_the_four_shipped_engines_are_recognised() {

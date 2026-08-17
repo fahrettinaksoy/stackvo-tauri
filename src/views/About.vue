@@ -142,6 +142,6 @@ const LINKS = [
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.75rem;
   line-height: 1.5;
-  text-align: left;
+  text-align: start;
 }
 </style>

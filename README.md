@@ -128,6 +128,103 @@ warnings` and `cargo fmt --check`. The Rust toolchain is pinned in
 `src-tauri/rust-toolchain.toml`, so a new stable release cannot turn the build
 red without a commit.
 
+### Driving it from a terminal
+
+`stackvo` is a command-line interface over the same core the window drives.
+
+```bash
+cargo build --release --bin stackvo
+stackvo status
+stackvo logs shop --follow
+stackvo doctor --json | jq '.ports[] | select(.state != "ok")'
+```
+
+Twenty commands, split in `--help` into the ten that read and the ten that
+change the stack. Every one takes `--json`, and the table you see is rendered
+*from* that value rather than from a second query, so the two cannot come to
+describe different things.
+
+**stdout is the answer, stderr is the narration.** A compose build scrolls past
+on stderr while `--json` stays clean on stdout, and a failure leaves stdout
+empty with a non-zero status. The exit code separates the two failures a script
+wants to handle rather than report: `3` is "nothing is set up on this machine",
+`4` is "Docker is not running"; `2` is a bad command line and `1` is everything
+else.
+
+An unrecognised flag is an **error**, not a shrug — a tool that ignores
+`--tial 50` and uses the default has told you it did something it did not do.
+
+**Where packages come from, and how you know.** The index is checked before it
+is parsed — a minisign signature over `registry.json`, against keys the machine
+already trusts, then a sha256 per manifest, then a sha256 per file. No official
+key is pinned yet (the ceremony is an open decision), so a stock build says so
+rather than pretending; an organisation running its own mirror signs its own
+index and pins its own key with `policy.market.additionalKeys`, and gets the
+whole chain today. Keys rotate through a `known-keys.json` signed by a key
+already trusted, and a key retired by a build cannot be brought back by any
+document. A version its publisher has withdrawn is refused at install, and
+`stackvo doctor` lists withdrawn versions this machine already has.
+
+**The commands this project runs.** The built-in catalogue is what most
+projects have; a project declares the rest in its own `stackvo.json`:
+
+```json
+"commands": {
+  "reindex": { "exec": ["php", "artisan", "app:reindex"], "about": "Rebuild the search index" }
+}
+```
+
+`stackvo commands` lists both, `stackvo run reindex` runs one, and the project
+pane shows them together with the declared ones marked. They run **in the
+project's container and nowhere else** — there is no `host` form, which is why
+this needed no approval prompt: a container already runs the repository's code.
+A step that has to touch your machine is a hook, where it is approved against a
+digest first.
+
+**A screen, when one command at a time is not what you want.**
+
+```bash
+stackvo tui
+```
+
+Every project and service, live, with the cursor on one of them: enter starts
+or stops it, `l` shows its last lines, `q` leaves. There is no TUI library
+behind it — `ratatui` was measured at 25 new packages for a list, a detail line
+and a status bar, so the drawing is the same column arithmetic the tables use
+and raw mode is one call each to `libc` and `windows-sys`, both already in the
+lock file. `examples/tui_probe.rs` runs it in a real pty and reads the
+terminal's settings back afterwards, because the failure mode of getting this
+wrong is somebody's shell.
+
+**The project's container, from the working directory.** `cd` into a project and:
+
+```bash
+stackvo php -v          # the PHP that project declares, on a host with none
+stackvo artisan migrate --force
+stackvo composer install
+stackvo shell           # an interactive shell in the container
+stackvo exec <program>  # anything else
+```
+
+Which project comes from the working directory — matched against the real
+project list rather than a folder name, deepest first, so a worktree wins over
+the project it sits inside. `--project` names another from anywhere. Standing in
+`app/Http` runs there, in `/var/www/html/app/Http`, so it behaves the way the
+command would on the host.
+
+Everything after the command name is passed on untouched, which is what makes
+`artisan migrate --force` work — so StackVo's own flags go before it, and
+`stackvo --help artisan` (rather than `stackvo artisan --help`, which reaches
+artisan) prints this app's usage. The exit code is passed through, so
+`stackvo artisan test` means what it says in a CI script.
+
+Like the MCP tool table, every command names the `contracts/ipc.json` command it
+implements, and `cli_surface.rs` cross-checks the pair: a command naming
+something the contract does not declare fails the build, and so does a command
+listed under "Reads" whose contract command is a mutation. Dispatch matches on
+an enum rather than on the command's name, so a command in the table with no
+implementation does not compile.
+
 ### Driving it from an AI assistant
 
 `stackvo-mcp` is an MCP server over the same core the app drives, so an
@@ -139,20 +236,20 @@ lines — without a window open.
 cargo build --release --bin stackvo-mcp
 ```
 
-Then **Settings → AI assistants**, which lists Claude Code, Claude Desktop,
-Cursor, Windsurf, VS Code and the Gemini CLI, says which of them are on this
-machine and which already point at the server, and registers it in one click.
+Then **Settings → AI assistants**, which lists all eight — Claude Code, Claude
+Desktop, Cursor, Windsurf, VS Code, the Gemini CLI, Codex and Zed — says which
+of them are on this machine and which already point at the server, and
+registers it in one click. `stackvo mcp` prints the same table in a terminal
+and `stackvo mcp-install <id>` does the same write.
+
 It reads each client's own configuration file, inserts a single `stackvo` entry
 and writes it back, so every other server in that file survives; a copy is kept
-beside it as `.stackvo-backup` first. A file that is JSON _with comments_ — VS
-Code's format — is reported rather than rewritten, with the block to paste,
-because stripping the comments to make the edit possible would delete the
-reader's own notes.
-
-Codex and Zed are not in that list on purpose: Codex configures itself in TOML,
-which needs a format-preserving editor rather than a serialiser, and Zed's
-`context_servers` shape could not be verified against a running copy. Both take
-the block by hand:
+beside it as `.stackvo-backup` first. Codex is TOML and is edited with a
+format-preserving editor rather than a serialiser, so comments, key order and
+quoting come back as they were. A file that is JSON _with comments_ — VS Code's
+format — is reported rather than rewritten, with the block to paste, because
+stripping the comments to make the edit possible would delete the reader's own
+notes:
 
 ```json
 { "mcpServers": { "stackvo": { "command": "/path/to/stackvo-mcp" } } }
@@ -174,7 +271,7 @@ guarding nothing. Generating the list outright was the obvious move and is the
 wrong one: dispatch cannot be generated, so a generated list advertises tools
 that fail when called.
 
-**Not exposed:** the rest of the mutating surface. 57 of the 234 commands take
+**Not exposed:** the rest of the mutating surface. 60 of the 244 commands take
 an `AppHandle` because they report progress through Tauri's event system, and a
 stdio subprocess has no app to emit into. Decoupling that is a refactor of its
 own; pretending otherwise would mean advertising `project_build` and having it
@@ -321,9 +418,14 @@ decisions only the owner can take — are in §5.
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — the map: the four bands of the Rust
   side, the one request flow worth knowing, and what the front end's panes and
   composables are for.
-- **[docs/durum.md](docs/durum.md)** — the one document under `docs/`: what is
-  done, what is left, and the ten numbered decisions with their consequences.
-  Comments in the source say "ADR 0005"; that is §6 of this file.
+- **[docs/durum.md](docs/durum.md)** — what is left, what is waiting on a
+  decision, and the numbered decisions with their consequences. Comments in the
+  source say "ADR 0005"; that is §6 of this file. Finished work leaves it — the
+  record is `CHANGELOG.md` and the git history.
+- **[docs/accessibility.md](docs/accessibility.md)** — the conformance
+  statement, in the shape EN 301 549 asks for. Every number in it is reproduced
+  by `npm run test:e2e`, and a test fails if the statement and the routes it
+  claims come apart.
 - **E — IPC surface.** Every command in `contracts/ipc.json` must be registered
   in `src-tauri/src/lib.rs` and wrapped in `src/lib/ipc.js`.
 - **F — reachability.** Every wrapper must be called by some view or store, and

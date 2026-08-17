@@ -38,16 +38,26 @@
   font-weight: 600;
 }
 
+/* No opacity. At 0.7 this was 4.49:1 against the card — a WCAG AA failure by
+   one hundredth, which is the kind that survives every review because it looks
+   fine. The uppercase tracking is what makes it read as a label; it does not
+   need to be faint as well. */
 .detail-content .tile-label {
   font-size: 0.72rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  opacity: 0.7;
+  color: rgb(var(--v-theme-on-surface));
+  opacity: var(--v-medium-emphasis-opacity);
 }
 
+/* 0.6 was 3.42:1. Same rule as the label above: the emphasis variable is the
+   one number in this application that decides whether secondary text is
+   readable, so secondary text should be drawn with it rather than with a
+   figure typed at the call site. */
 .detail-content .tile-foot {
   font-size: 0.72rem;
-  opacity: 0.6;
+  color: rgb(var(--v-theme-on-surface));
+  opacity: var(--v-medium-emphasis-opacity);
 }
 
 .detail-content .metric-tile {
@@ -134,7 +144,7 @@
    ragged edge, and unselectable so copying the file does not copy them. */
 .detail-content .df-no {
   flex: 0 0 32px;
-  text-align: right;
+  text-align: end;
   opacity: 0.38;
   user-select: none;
 }
@@ -152,7 +162,7 @@
 .detail-content .heat-hours {
   position: relative;
   height: 16px;
-  margin-left: 64px;
+  margin-inline-start: 64px;
   font-size: 0.68rem;
   opacity: 0.6;
 }
@@ -172,7 +182,7 @@
   flex: 0 0 56px;
   font-size: 0.7rem;
   opacity: 0.65;
-  text-align: right;
+  text-align: end;
 }
 
 .detail-content .heat-cells {

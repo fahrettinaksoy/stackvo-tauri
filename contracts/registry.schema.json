@@ -176,6 +176,15 @@
                   "type": "string",
                   "format": "date",
                   "description": "Lifted from the manifest's support block, so the picker can grey a version out without fetching it."
+                },
+                "revoked": {
+                  "type": "boolean",
+                  "description": "Withdrawn by the publisher. A MARKING, never a deletion: a version removed from the index would leave every machine that installed it holding an instances.json entry pointing at nothing, with no way to find out what happened (ADR 0014). A client refuses to install a revoked version and reports one it already has."
+                },
+                "revokedReason": {
+                  "type": "string",
+                  "maxLength": 500,
+                  "description": "Why, in the publisher's own words, shown verbatim. A withdrawal nobody can read the reason for is one people work around."
                 }
               }
             }

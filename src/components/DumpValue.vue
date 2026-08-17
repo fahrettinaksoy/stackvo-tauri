@@ -134,7 +134,7 @@ function keyClass(item) {
   color: inherit;
   font: inherit;
   cursor: pointer;
-  text-align: left;
+  text-align: start;
 }
 
 .twist:hover .chev {
@@ -155,8 +155,8 @@ function keyClass(item) {
 /* One indent per level, drawn as a rule: at four levels the eye needs the line
    to tell which key a value belongs to, and whitespace alone stops working. */
 .children {
-  margin-left: 6px;
-  padding-left: 10px;
+  margin-inline-start: 6px;
+  padding-inline-start: 10px;
   border-left: thin solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
 

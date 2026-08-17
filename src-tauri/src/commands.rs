@@ -253,6 +253,31 @@ pub async fn projects_list(state: State<'_, AppState>) -> Result<Vec<Project>> {
 
 /// The command's logic, free of Tauri `State` so it can be exercised from tests
 /// and from the `diagnose` example.
+///
+/// ## There is no cache here, and that is the measured answer rather than an
+/// omission
+///
+/// §3 #27 carried "no cache" as a gap for a long time. `examples/list_bench.rs`
+/// is what settles it, and the split it prints is the whole argument:
+///
+/// | | 1 project | 50 projects |
+/// | --- | --- | --- |
+/// | the whole call | 26.7 ms | 38.1 ms |
+/// | of which the engine | 24.6 ms | 34.4 ms |
+/// | the tree, by difference | 2.1 ms | 3.7 ms |
+/// | per project | 2.09 ms | **0.07 ms** |
+///
+/// The half that grows with the workspace is free — fifty projects cost under
+/// four milliseconds of directory scanning and manifest reading. Everything
+/// else is one `stackvo_containers()` call, and that is a fixed cost that does
+/// not care how many projects there are.
+///
+/// So a cache could only usefully hold the engine's answer, and the engine's
+/// answer is `running` — the one field on this row that must never be stale.
+/// It is what the start, stop, rebuild and terminal buttons are enabled by, and
+/// a row that says "running" about a container that stopped ten seconds ago is
+/// worse than a row that took twenty-five milliseconds to fetch. Re-run the
+/// bench before reopening this.
 pub async fn list_projects(root: &std::path::Path) -> Result<Vec<Project>> {
     let projects_dir = crate::workspace::require_projects_root(root)?;
 
@@ -308,6 +333,7 @@ pub async fn list_projects(root: &std::path::Path) -> Result<Vec<Project>> {
                         }],
                         warnings: Vec::new(),
                         hooks: Default::default(),
+                        commands: Default::default(),
                         local: Vec::new(),
                     },
                 ));
@@ -1169,8 +1195,12 @@ use tauri::AppHandle;
 
 /// Shared body for the six start/stop/restart commands, which differ only by
 /// verb, subject kind and event prefix.
+///
+/// `pub(crate)` for the CLI, which drives the same three verbs through the same
+/// validation and the same events — with [`crate::cli::Narrate`] where the
+/// window passes its own sink.
 #[tracing::instrument(skip(sink, phase), fields(action = phase.pending))]
-async fn lifecycle(
+pub(crate) async fn lifecycle(
     sink: &dyn crate::progress::ProgressSink,
     kind: &'static str,
     id: &str,
@@ -1803,48 +1833,19 @@ pub async fn compose_down(app: AppHandle, state: State<'_, AppState>) -> Result<
 /// that started is started, and reporting the start as failed because a
 /// convenience afterwards did not work would leave nobody able to tell which
 /// half broke. The failure is emitted on the hook's own events and logged here.
+/// The window's way of asking for a project's hooks: build the sink, then hand
+/// off to the Tauri-free body in [`crate::hooks::run_for_project`].
+///
+/// It used to be that body. It moved so the CLI could run the *same* hooks
+/// rather than a second copy — `stackvo stop` and the stop button now differ in
+/// where the progress goes and in nothing else.
 async fn run_hooks(
     app: &AppHandle,
     root: &std::path::Path,
     name: &str,
     event: crate::hooks::Event,
 ) {
-    let dir = match workspace::project_dir(root, name) {
-        Ok(dir) => dir,
-        Err(_) => return,
-    };
-    // The effective manifest, deliberately: `stackvo.local.json` may override
-    // hooks the same way it overrides anything else, and a machine that wants
-    // a different post-start step is exactly the case B-2 exists for.
-    let Ok(manifest) = manifest::read(&dir.join("stackvo.json"), name) else {
-        return;
-    };
-    if manifest.hooks.is_empty() {
-        return;
-    }
-
-    let consent = crate::hooks::consent_path()
-        .map(|path| crate::hooks::read_consent(&path))
-        .unwrap_or_default();
-
-    let operation_id = events::next_operation_id("hook");
-    if let Err(e) = crate::hooks::run(
-        &events::sink(app),
-        crate::hooks::Run {
-            operation_id: &operation_id,
-            project: name,
-            dir: &dir,
-            container: &format!("stackvo-{}", name.to_ascii_lowercase()),
-            hooks: &manifest.hooks,
-            event,
-            policy: crate::policy::current().hooks(),
-            consent: &consent,
-        },
-    )
-    .await
-    {
-        tracing::warn!(project = name, event = event.key(), error = %e.message, "a hook failed");
-    }
+    crate::hooks::run_for_project(&events::sink(app), root, name, event).await
 }
 
 /// What would run for a project's hooks, and what would not.
@@ -4395,10 +4396,12 @@ pub async fn quick_command_run(
     id: String,
 ) -> Result<Option<String>> {
     let root = state.root()?;
-    let spec = crate::quickcmd::resolve(&id)?;
 
-    // Validated before the container name is built from it, as everywhere else.
+    // Validated before the container name is built from it, as everywhere else,
+    // and before the manifest is read for a declared command — resolving one
+    // means reading a file under a path built from this name.
     workspace::project_dir(&root, &name)?;
+    let spec = crate::quickcmd::resolve(&root, &name, &id)?;
     let container = crate::engine::container_name(&name);
 
     // `docker exec` needs something to exec into. Without this the failure is
@@ -4419,7 +4422,7 @@ pub async fn quick_command_run(
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
         });
-        crate::pty::open_external_command(&container, spec, preferred.as_deref())?;
+        crate::pty::open_external_command(&container, &spec, preferred.as_deref())?;
         return Ok(None);
     }
 
@@ -4427,13 +4430,13 @@ pub async fn quick_command_run(
     // thing in this app. Reported under the `build:` family because that is the
     // one the project detail page already listens to for its own operations.
     let operation_id = events::next_operation_id("cmd");
-    let argv = crate::quickcmd::exec_argv(&container, spec);
+    let argv = crate::quickcmd::exec_argv(&container, &spec);
 
     events::emit(
         &app,
         "build:start",
         serde_json::json!({
-            "project": name, "operationId": operation_id, "command": spec.display
+            "project": name, "operationId": operation_id, "command": spec.display.clone()
         }),
     );
 
@@ -4458,6 +4461,71 @@ pub async fn quick_command_run(
     });
 
     Ok(Some(operation_id))
+}
+
+// ------------------------------------------------------------ the workbench
+
+/// The runners this project has the files for (F-5).
+#[tauri::command]
+pub fn repl_runners(state: State<'_, AppState>, name: String) -> Result<Vec<crate::repl::Runner>> {
+    crate::repl::for_project(&state.root()?, &name)
+}
+
+/// Run one snippet against the booted application, and hand back everything
+/// about the run.
+///
+/// The frontend sends a runner **id** and a body of code. The id is what picks
+/// the program — `laravel` means `php artisan tinker --execute` and nothing
+/// else — so the rule `quickcmd` states survives: the webview picks, it never
+/// names. The code is one argv element and never meets a shell.
+///
+/// Audited like every other write, and by id rather than by content: the
+/// snippet is the person's own text and belongs in the pane's history, not in
+/// a log somebody else reads.
+#[tauri::command]
+pub async fn repl_run(
+    state: State<'_, AppState>,
+    name: String,
+    runner: String,
+    code: String,
+) -> Result<crate::repl::Run> {
+    let root = state.root()?;
+    workspace::project_dir(&root, &name)?;
+    let run = crate::repl::run(&root, &name, &runner, &code).await;
+    crate::audit::record_with(
+        "repl_run",
+        &name,
+        if run.is_ok() {
+            crate::audit::Outcome::Ok
+        } else {
+            crate::audit::Outcome::Failed
+        },
+        // The runner and the size, never the snippet: it is the person's own
+        // text and it can hold anything they pasted into it, which is the rule
+        // `env_set` above follows about values.
+        Some(format!("{runner}, {} bytes", code.len())),
+    );
+    run
+}
+
+/// What this project has run before, newest first.
+#[tauri::command]
+pub fn repl_history(state: State<'_, AppState>, name: String) -> Result<Vec<crate::repl::Snippet>> {
+    let root = state.root()?;
+    workspace::project_dir(&root, &name)?;
+    Ok(crate::repl::history(&name))
+}
+
+/// Forget them.
+#[tauri::command]
+pub fn repl_history_clear(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<Vec<crate::repl::Snippet>> {
+    let root = state.root()?;
+    workspace::project_dir(&root, &name)?;
+    crate::repl::forget(&name);
+    Ok(crate::repl::history(&name))
 }
 
 // -------------------------------------------------------------- dev server
@@ -6008,6 +6076,27 @@ pub async fn project_delete(
             }
         }
 
+        // A worktree reached through the ordinary Delete button.
+        //
+        // `worktree_remove` is the path that offers the branch and the database
+        // as separate decisions; this one is the general Delete, and it must not
+        // silently do either. What it does have to do is stop claiming the
+        // project is still a worktree — a record left behind keeps offering to
+        // drop a database for a directory that is gone, and git keeps a
+        // registration that locks the branch to a path nothing is at.
+        //
+        // The database is deliberately left alone and said so in the log: this
+        // command's whole contract is that `remove_files` is the only thing that
+        // destroys anything the user made, and a branch's data is exactly that.
+        if let Some(record) = crate::worktree::forget(&root, &name) {
+            tracing::info!(
+                worktree = %name, branch = %record.branch,
+                database = ?record.database.as_ref().map(|d| &d.name),
+                "a worktree was deleted through the project path; its branch and \
+                 any database it was given were left in place"
+            );
+        }
+
         // App-owned output, removed either way. `remove_files` is about the
         // user's code; a rendered Dockerfile and a container log directory for
         // a project that no longer exists are neither code nor the user's.
@@ -6836,6 +6925,1111 @@ pub async fn project_clone(
         "name": name,
         "hasManifest": has_manifest,
     }))
+}
+
+// -------------------------------------------------------------- worktrees (N)
+//
+// The commands are thin, as everything in this file is: the derivations, the
+// git calls and the record live in `crate::worktree`, the database work in
+// `crate::db`, and what is left here is argument checking, the order the steps
+// run in, and the rollback when one of them fails.
+
+/// What a worktree would be given.
+///
+/// A plan-then-apply pair, the same shape as `hosts_plan`/`hosts_apply` and
+/// `db_move_plan`/`db_move_apply`, and for the sharper version of their reason:
+/// this creates a directory, a hostname, a container and a database, and the
+/// only moment those can be argued with is before they exist. Every refusal is
+/// a sentence rather than a boolean, because "cannot" with no reason is the
+/// message people file bugs about.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreePlan {
+    pub parent: String,
+    pub branch: String,
+    /// Whether the branch would be created rather than checked out.
+    pub new_branch: bool,
+    pub name: String,
+    pub path: String,
+    pub domain: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub database: Option<PlannedDatabase>,
+    pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
+    pub possible: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlannedDatabase {
+    pub instance: String,
+    pub service: String,
+    pub name: String,
+    /// Whether it would be copied from [`Self::source`] rather than created
+    /// empty.
+    pub seed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+/// What a project can say about worktrees before anybody opens a dialog.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeSupport {
+    pub git_available: bool,
+    /// Is this project's directory a git repository at all?
+    pub repository: bool,
+    /// Is it itself a linked worktree, as git sees it?
+    pub linked: bool,
+    /// This app's own record, when the project is a worktree it created.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record: Option<crate::worktree::Record>,
+    /// What this worktree's container is actually given, when it is one.
+    ///
+    /// Beside the record rather than derived in the pane, because half of it is
+    /// not in the record at all: the database credentials are computed from the
+    /// instance on every render. This is the only place the connection a branch
+    /// is running on can be seen, and the password in it is masked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_env: Option<std::collections::BTreeMap<String, String>>,
+    /// The domain a new worktree's hostname would be built under.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_branch: Option<String>,
+    pub branches: Vec<WorktreeBranch>,
+    /// The database instances a worktree could be given a database on.
+    pub instances: Vec<crate::db::DbInstance>,
+    /// Why worktrees are unavailable here, when they are.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The worktrees of this project that this app knows about.
+    pub worktrees: Vec<WorktreeRow>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeBranch {
+    pub name: String,
+    /// Already checked out somewhere — git allows a branch in one working tree
+    /// at a time, so this is the difference between an option and a refusal.
+    pub checked_out: bool,
+    pub current: bool,
+}
+
+/// A recorded worktree, with what is true of it right now.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeRow {
+    #[serde(flatten)]
+    pub record: crate::worktree::Record,
+    /// Is the directory still there?
+    pub exists: bool,
+    /// Uncommitted work that a removal would discard. `None` when git could not
+    /// say — the third answer `crate::git::is_ignored` also gives.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dirty: Option<bool>,
+    /// The project is registered here but git no longer has a worktree at that
+    /// path — usually because somebody deleted the folder by hand.
+    pub orphaned: bool,
+}
+
+/// The project directory of a name, and its effective manifest.
+fn project_with_manifest(
+    root: &std::path::Path,
+    name: &str,
+) -> Result<(std::path::PathBuf, Manifest)> {
+    let dir = workspace::project_dir(root, name)?;
+    if !dir.is_dir() {
+        return Err(Error::not_found(format!("project {name}")));
+    }
+    let manifest = manifest::read(&dir.join(manifest::FILE), name)?;
+    Ok((dir, manifest))
+}
+
+/// Every hostname the workspace already answers on.
+///
+/// Read off the manifests rather than off the running containers: a project
+/// that is stopped still owns its name, and a worktree given a hostname a
+/// stopped project holds would take it over the moment both were started —
+/// which Traefik reports as nothing at all.
+fn claimed_domains(root: &std::path::Path) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    let Some(projects) = workspace::projects_root(root) else {
+        return out;
+    };
+    let Ok(entries) = std::fs::read_dir(&projects) else {
+        return out;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !path.join(manifest::FILE).is_file() {
+            continue;
+        }
+        let Ok(m) = manifest::read(&path.join(manifest::FILE), name) else {
+            continue;
+        };
+        out.extend(m.domain.iter().map(|d| d.to_ascii_lowercase()));
+        out.extend(m.aliases.iter().map(|a| a.to_ascii_lowercase()));
+    }
+    out
+}
+
+/// The rows for a set of records, with what git says about each.
+fn worktree_rows(records: &[crate::worktree::Record]) -> Vec<WorktreeRow> {
+    records
+        .iter()
+        .map(|record| {
+            let dir = std::path::PathBuf::from(&record.path);
+            let exists = dir.is_dir();
+            WorktreeRow {
+                record: record.clone(),
+                exists,
+                dirty: exists.then(|| crate::worktree::is_dirty(&dir)).flatten(),
+                // git's registration outlives the directory, so "the folder is
+                // gone" and "git has forgotten it" are different states and the
+                // repair for each is different. `||` short-circuits, which is
+                // load-bearing: asking git about a directory that is not there
+                // is a subprocess for a question already answered.
+                orphaned: !exists || !crate::worktree::is_repository(&dir),
+            }
+        })
+        .collect()
+}
+
+/// Can this project have worktrees, and what does git already have?
+#[tauri::command]
+pub async fn worktree_support(state: State<'_, AppState>, name: String) -> Result<WorktreeSupport> {
+    let root = state.root()?;
+    let (dir, manifest) = project_with_manifest(&root, &name)?;
+
+    let table = crate::worktree::Table::load(&root)?;
+    let record = table.get(&name).cloned();
+    let children: Vec<crate::worktree::Record> = table.of_parent(&name).cloned().collect();
+
+    let git_available = crate::git::available();
+    let repository = git_available && crate::worktree::is_repository(&dir);
+    let linked = repository && crate::worktree::is_linked_worktree(&dir);
+
+    // The branches that are already checked out somewhere, by name. git will
+    // refuse a second checkout of one, and a dialog that offered it anyway
+    // would fail at the last step of a flow the user had already committed to.
+    let taken: std::collections::BTreeSet<String> = if repository {
+        crate::worktree::checkouts(&dir)
+            .into_iter()
+            .filter_map(|c| c.branch)
+            .collect()
+    } else {
+        std::collections::BTreeSet::new()
+    };
+    let current = repository
+        .then(|| crate::worktree::current_branch(&dir))
+        .flatten();
+
+    let branches = if repository {
+        crate::worktree::branches(&dir)
+            .into_iter()
+            .map(|branch| WorktreeBranch {
+                checked_out: taken.contains(&branch),
+                current: Some(&branch) == current.as_ref(),
+                name: branch,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    // Stopped instances included, and marked. "Why is the list empty" is a
+    // worse question than "why is that one greyed out", and the second has an
+    // answer on the row itself.
+    let instances = crate::db::instances(&root).await.unwrap_or_default();
+
+    let reason = if !git_available {
+        Some("git is not installed on this machine.".to_string())
+    } else if !repository {
+        Some(format!(
+            "{name} is not a git repository, so there are no branches to give an environment to."
+        ))
+    } else if linked {
+        Some(format!(
+            "{name} is itself a worktree. Create the next one from the project it came from."
+        ))
+    } else if manifest.domain.is_none() {
+        Some(format!(
+            "{name} has no `domain` in its manifest, and a worktree's hostname is built under it."
+        ))
+    } else {
+        None
+    };
+
+    let effective_env = record
+        .as_ref()
+        .map(|record| masked_worktree_env(crate::worktree::env_for(&root, record)));
+
+    Ok(WorktreeSupport {
+        git_available,
+        repository,
+        linked,
+        record,
+        effective_env,
+        domain: manifest.domain.clone(),
+        current_branch: current,
+        branches,
+        instances,
+        reason,
+        worktrees: worktree_rows(&children),
+    })
+}
+
+/// Every worktree in the workspace.
+///
+/// A separate command from `worktree_support` even though the support payload
+/// carries one project's children, because the two answer different questions:
+/// this one is what the projects list needs to say "branch of shop" on a row,
+/// and asking it per project would be one command per row.
+#[tauri::command]
+pub fn worktree_list(state: State<'_, AppState>) -> Result<Vec<WorktreeRow>> {
+    let root = state.root()?;
+    Ok(worktree_rows(
+        &crate::worktree::Table::load(&root)?.worktrees,
+    ))
+}
+
+/// How a worktree was asked for, once the arguments have been read.
+struct WorktreeRequest {
+    branch: String,
+    new_branch: bool,
+    name: Option<String>,
+    /// `none`, `create` or `copy`.
+    database: String,
+    instance: Option<String>,
+}
+
+impl WorktreeRequest {
+    /// Read the options object, defaulting every field.
+    ///
+    /// One loose `serde_json::Value` rather than six named arguments: the
+    /// contract calls it `options` and the shape is a form's, so a field added
+    /// next year is a default here rather than a signature change that every
+    /// caller has to be edited for.
+    fn read(branch: String, options: Option<serde_json::Value>) -> Self {
+        let options = options.unwrap_or(serde_json::Value::Null);
+        let string = |key: &str| {
+            options
+                .get(key)
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+        };
+
+        Self {
+            branch: branch.trim().to_string(),
+            new_branch: options
+                .get("newBranch")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            name: string("name"),
+            database: string("database").unwrap_or_else(|| "none".to_string()),
+            instance: string("instance"),
+        }
+    }
+}
+
+/// Work out what creating this worktree would do, and refuse it here if it
+/// cannot be done.
+async fn plan_worktree(
+    root: &std::path::Path,
+    parent: &str,
+    request: &WorktreeRequest,
+) -> Result<WorktreePlan> {
+    let (dir, manifest) = project_with_manifest(root, parent)?;
+
+    let mut warnings: Vec<String> = Vec::new();
+    let refuse = |plan: WorktreePlan, why: String| WorktreePlan {
+        refused: Some(why),
+        possible: false,
+        ..plan
+    };
+
+    // Everything derivable before any refusal, so a refused plan still shows
+    // what it *would* have been — a dialog that blanks out when it says no
+    // makes the reason harder to act on, not easier.
+    let slug = crate::worktree::slug(&request.branch);
+    let name = match (&request.name, &slug) {
+        (Some(given), _) => workspace::canonical_name(given),
+        (None, Some(slug)) => crate::worktree::project_name(parent, slug),
+        (None, None) => String::new(),
+    };
+    let label = crate::worktree::domain_label(parent, &name);
+    let parent_domain = manifest.domain.clone().unwrap_or_default();
+    let domain = crate::worktree::domain(&parent_domain, &label);
+
+    let mut plan = WorktreePlan {
+        parent: parent.to_string(),
+        branch: request.branch.clone(),
+        new_branch: request.new_branch,
+        name: name.clone(),
+        path: workspace::projects_root(root)
+            .map(|p| p.join(&name).display().to_string())
+            .unwrap_or_default(),
+        domain: domain.clone(),
+        database: None,
+        warnings: Vec::new(),
+        refused: None,
+        possible: false,
+    };
+
+    // ---- the ground it stands on -----------------------------------------
+    if !crate::git::available() {
+        return Ok(refuse(plan, "git is not installed on this machine.".into()));
+    }
+    if !crate::worktree::is_repository(&dir) {
+        return Ok(refuse(plan, format!("{parent} is not a git repository.")));
+    }
+    if crate::worktree::is_linked_worktree(&dir) {
+        return Ok(refuse(
+            plan,
+            format!(
+                "{parent} is itself a worktree; create the next one from the project it came from."
+            ),
+        ));
+    }
+    if manifest.domain.is_none() {
+        return Ok(refuse(
+            plan,
+            format!("{parent} has no `domain` in its manifest to build a hostname under."),
+        ));
+    }
+
+    // ---- the branch -------------------------------------------------------
+    if request.branch.is_empty() {
+        return Ok(refuse(plan, "No branch was named.".into()));
+    }
+    if !crate::worktree::is_valid_branch_name(&dir, &request.branch) {
+        return Ok(refuse(
+            plan,
+            format!(
+                "git will not accept \"{}\" as a branch name.",
+                request.branch
+            ),
+        ));
+    }
+
+    let checkouts = crate::worktree::checkouts(&dir);
+    let branch_exists = crate::worktree::branches(&dir).contains(&request.branch);
+    if request.new_branch && branch_exists {
+        return Ok(refuse(
+            plan,
+            format!("a branch called \"{}\" already exists.", request.branch),
+        ));
+    }
+    if !request.new_branch && !branch_exists {
+        return Ok(refuse(
+            plan,
+            format!(
+                "there is no branch called \"{}\"; tick \"create the branch\" to make one.",
+                request.branch
+            ),
+        ));
+    }
+    if checkouts
+        .iter()
+        .any(|c| c.branch.as_deref() == Some(request.branch.as_str()))
+    {
+        return Ok(refuse(
+            plan,
+            format!(
+                "\"{}\" is already checked out in another worktree; git allows a branch in one working tree at a time.",
+                request.branch
+            ),
+        ));
+    }
+
+    // ---- the name and the hostname ---------------------------------------
+    if name.is_empty() {
+        return Ok(refuse(
+            plan,
+            format!(
+                "\"{}\" has no letters or digits to build a name from; give the worktree a name of its own.",
+                request.branch
+            ),
+        ));
+    }
+    if !workspace::is_safe_name(&name) {
+        return Ok(refuse(
+            plan,
+            format!("\"{name}\" is not a name a project directory can have."),
+        ));
+    }
+    // Through the same gate every other creation path uses, so a name that
+    // escapes the project tree is refused here rather than at `create_dir_all`.
+    let path = workspace::project_dir(root, &name)?;
+    plan.path = path.display().to_string();
+    if path.exists() {
+        return Ok(refuse(plan, format!("projects/{name} already exists.")));
+    }
+    if !crate::hosts::is_valid_domain(&domain) {
+        return Ok(refuse(
+            plan,
+            format!("\"{domain}\" is not a hostname; the branch produces a label a resolver would refuse."),
+        ));
+    }
+    if claimed_domains(root).contains(&domain.to_ascii_lowercase()) {
+        return Ok(refuse(
+            plan,
+            format!("another project already answers on {domain}."),
+        ));
+    }
+
+    // Matched by the parent's own wildcard, which is not a conflict Traefik
+    // reports: it has two routers for one name and answers with whichever it
+    // ranks higher. Said out loud rather than refused — a wildcard alias is a
+    // deliberate arrangement and this hostname is still the more specific rule.
+    if manifest
+        .aliases
+        .iter()
+        .any(|alias| alias.strip_prefix("*.") == Some(parent_domain.as_str()))
+    {
+        warnings.push(format!(
+            "{parent} also answers on *.{parent_domain}, so {domain} matches two routes; the exact one wins, but the wildcard will not stop answering."
+        ));
+    }
+
+    // ---- the database -----------------------------------------------------
+    match request.database.as_str() {
+        "none" => {}
+        mode @ ("create" | "copy") => {
+            let instances = crate::db::instances(root).await.unwrap_or_default();
+            let chosen = match &request.instance {
+                Some(id) => instances.iter().find(|i| &i.id == id),
+                // The first database instance in the table, which is the order
+                // `instances.json` keeps and therefore the order the Market
+                // installed them in.
+                None => instances.first(),
+            };
+
+            let Some(instance) = chosen else {
+                return Ok(refuse(
+                    plan,
+                    match &request.instance {
+                        Some(id) => format!("there is no database instance called \"{id}\"."),
+                        None => "no database instance is installed to create one on.".into(),
+                    },
+                ));
+            };
+            if !instance.running {
+                return Ok(refuse(
+                    plan,
+                    format!(
+                        "{} is not running; a database cannot be created on a stopped engine.",
+                        instance.id
+                    ),
+                ));
+            }
+
+            let connection = crate::db::connection(root, &instance.id)?;
+            let stem = connection.database.clone().unwrap_or_else(|| parent.into());
+            let database = crate::worktree::database_name(&stem, &label);
+
+            if !crate::db::is_valid_database_name(&database) {
+                return Ok(refuse(
+                    plan,
+                    format!("\"{database}\" is not a database name this app will create."),
+                ));
+            }
+
+            let seed = mode == "copy";
+            if seed {
+                if instance.kind == crate::db::Kind::Mongo {
+                    return Ok(refuse(
+                        plan,
+                        "MongoDB publishes no database name for this workspace, so there is nothing to copy from.".into(),
+                    ));
+                }
+                if connection.database.is_none() {
+                    return Ok(refuse(
+                        plan,
+                        format!("{} has no database configured to copy from.", instance.id),
+                    ));
+                }
+            }
+            if instance.kind == crate::db::Kind::Mongo {
+                warnings.push(format!(
+                    "MongoDB has no CREATE DATABASE; {database} begins existing the first time the branch writes to it."
+                ));
+            }
+
+            // Asked of the engine rather than assumed: a name left behind by a
+            // worktree somebody removed by hand is the case this catches, and
+            // creating "on top of" it would hand the branch somebody else's
+            // data without saying so.
+            if crate::db::databases(root, &instance.id)
+                .await
+                .unwrap_or_default()
+                .iter()
+                .any(|existing| existing == &database)
+            {
+                warnings.push(format!(
+                    "{database} already exists on {}; it will be used as it is rather than created.",
+                    instance.id
+                ));
+            }
+
+            plan.database = Some(PlannedDatabase {
+                instance: instance.id.clone(),
+                service: instance.service.clone(),
+                name: database,
+                seed,
+                source: seed.then(|| connection.database.clone()).flatten(),
+            });
+        }
+        other => {
+            return Ok(refuse(
+                plan,
+                format!("\"{other}\" is not a way to give a worktree a database."),
+            ));
+        }
+    }
+
+    plan.warnings = warnings;
+    plan.possible = true;
+    Ok(plan)
+}
+
+/// What creating this worktree would do. No side effects.
+#[tauri::command]
+pub async fn worktree_plan(
+    state: State<'_, AppState>,
+    name: String,
+    branch: String,
+    options: Option<serde_json::Value>,
+) -> Result<WorktreePlan> {
+    let root = state.root()?;
+    plan_worktree(&root, &name, &WorktreeRequest::read(branch, options)).await
+}
+
+/// Give a branch an environment of its own.
+///
+/// The order of the steps is the design. git first, because it is the only one
+/// that can fail for a reason nobody can predict from the plan; the manifest
+/// second, so the directory is a project before anything looks for it; the
+/// database third, because it is the slowest and the one whose failure should
+/// not cost the checkout; the record last, so a half-built worktree is never
+/// recorded as a built one.
+///
+/// Every step that fails rolls back the ones before it, which for this feature
+/// means removing the checkout git made. A worktree half created is worse than
+/// none: it is a directory that looks like a project, holds a branch git will
+/// not check out anywhere else, and has nothing to remove it with.
+#[tauri::command]
+pub async fn worktree_create(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    branch: String,
+    options: Option<serde_json::Value>,
+) -> Result<String> {
+    let root = state.root()?;
+    let request = WorktreeRequest::read(branch, options);
+    let plan = plan_worktree(&root, &name, &request).await?;
+
+    // The plan's own sentence, with no hint attached. Each of these already
+    // names the branch, the hostname or the directory that caused it and says
+    // what to do about it — "tick create the branch to make one" is the whole
+    // guidance, and a catalogued hint underneath would either repeat it or
+    // contradict it, because one hint cannot be right for eleven refusals.
+    if let Some(why) = plan.refused {
+        return Err(Error::new(Code::Conflict, why));
+    }
+
+    let parent_dir = workspace::project_dir(&root, &name)?;
+    let worktree = std::path::PathBuf::from(&plan.path);
+    // Held on the *new* project, not the parent: the parent stays startable,
+    // buildable and editable while a branch of it is being checked out, and the
+    // one thing that must not happen twice is two creations of one name.
+    let _busy = state.inflight.acquire(format!("project:{}", plan.name))?;
+
+    let operation_id = events::next_operation_id("worktree");
+    events::emit(&app, "project:creating", SubjectEvent::project(&plan.name));
+
+    // Owned rather than borrowing, and `Clone`, because `copy_database` takes
+    // the callback by value and drives it across await points on another task —
+    // the same shape `db_operation` builds for the same reason.
+    let progress = {
+        let app = app.clone();
+        let id = operation_id.clone();
+        let subject = plan.name.clone();
+        move |line: String| {
+            events::emit(
+                &app,
+                "scaffold:progress",
+                serde_json::json!({
+                    "operationId": id, "subject": subject, "line": line,
+                }),
+            );
+        }
+    };
+
+    let mut created_database: Option<(String, String)> = None;
+
+    let outcome = async {
+        // ---- 1. the checkout ---------------------------------------------
+        runner::run_operation(
+            &events::sink(&app),
+            runner::Operation {
+                operation_id: &operation_id,
+                subject: &plan.name,
+                // The scaffold events, as `project_clone` uses: this is the
+                // same step of the same flow — put code in a directory — and
+                // the console already subscribes to them.
+                progress_event: "scaffold:progress",
+                finished_event: "scaffold:done",
+                program: "git",
+                args: &crate::worktree::add_args(&worktree, &plan.branch, plan.new_branch),
+                cwd: &parent_dir,
+                env: &crate::git::CLONE_ENV,
+            },
+        )
+        .await?;
+
+        // ---- 2. the manifest ---------------------------------------------
+        //
+        // Two cases, and the difference is whether the branch carries a
+        // manifest of its own. With one, the file is the branch's and must not
+        // be touched, so identity goes into the machine-local overlay beside
+        // it. Without one, there is nothing to conflict with and a full
+        // manifest derived from the parent's is written — which is what makes
+        // this work on a repository that has not adopted StackVo on that
+        // branch yet.
+        if worktree.join(manifest::FILE).is_file() {
+            manifest::write_local(
+                &worktree,
+                &plan.name,
+                &crate::worktree::local_overlay(&plan.name, &plan.domain),
+            )?;
+            if crate::worktree::exclude_local_file(&worktree) {
+                progress(format!(
+                    "{} added to the repository's local exclude list",
+                    manifest::LOCAL_FILE
+                ));
+            }
+        } else {
+            let mut derived =
+                manifest::read_committed(&parent_dir.join(manifest::FILE), &plan.name)?;
+            derived.name = plan.name.clone();
+            derived.domain = Some(plan.domain.clone());
+            // The parent's extra hostnames are the parent's. A worktree that
+            // inherited them would claim the same names and take the routes.
+            derived.aliases.clear();
+            derived.lan_share = false;
+            manifest::write(&worktree.join(manifest::FILE), &derived)?;
+            progress(format!(
+                "{} has no {}, so one was written from {name}'s",
+                plan.branch,
+                manifest::FILE
+            ));
+        }
+
+        // ---- 3. the database ---------------------------------------------
+        if let Some(database) = &plan.database {
+            let fresh = crate::db::create_database(
+                &root,
+                &database.instance,
+                &database.name,
+                database.source.as_deref(),
+            )
+            .await?;
+            if fresh {
+                created_database = Some((database.instance.clone(), database.name.clone()));
+                progress(format!(
+                    "created {} on {}",
+                    database.name, database.instance
+                ));
+            }
+
+            if let Some(source) = &database.source {
+                crate::db::copy_database(
+                    &root,
+                    &database.instance,
+                    source,
+                    &database.name,
+                    progress.clone(),
+                )
+                .await?;
+            }
+        }
+
+        // ---- 4. the record ------------------------------------------------
+        let mut table = crate::worktree::Table::load(&root)?;
+        table.insert(crate::worktree::Record {
+            name: plan.name.clone(),
+            parent: name.clone(),
+            branch: plan.branch.clone(),
+            domain: plan.domain.clone(),
+            path: worktree.display().to_string(),
+            database: plan.database.as_ref().map(|d| crate::worktree::Database {
+                instance: d.instance.clone(),
+                name: d.name.clone(),
+                seeded_from: d.source.clone(),
+            }),
+            env: std::collections::BTreeMap::new(),
+            created_at: crate::snapshot::now_rfc3339(),
+        })?;
+        table.save(&root)?;
+
+        // ---- 5. the stack -------------------------------------------------
+        //
+        // The generate first, then the overlay, and that order is not
+        // interchangeable: `site::entries` only emits a block for a project
+        // that has a *compose service*, and the worktree gains one in the file
+        // this generate writes. Rendering the overlay first would produce one
+        // with the branch's database credentials missing from it.
+        //
+        // `runner` re-renders the overlay before every compose command anyway,
+        // so the wrong order would not have broken anything a user could see —
+        // it would have written a stale file that the next `up` silently
+        // corrected, which is the kind of thing that stays wrong for years.
+        generate(&app, &root, &operation_id, "projects").await?;
+        crate::site::sync(&root);
+        Ok::<(), Error>(())
+    }
+    .await;
+
+    match &outcome {
+        Ok(()) => {
+            crate::audit::record_with(
+                "worktree_create",
+                &plan.name,
+                crate::audit::Outcome::Ok,
+                Some(format!("branch {} of {name}", plan.branch)),
+            );
+            events::emit(&app, "project:created", SubjectEvent::project(&plan.name));
+        }
+        Err(e) => {
+            rollback_worktree(&root, &parent_dir, &worktree, &plan.name, &created_database).await;
+            events::emit(
+                &app,
+                "project:error",
+                SubjectEvent::project(&plan.name).error(e.message.clone()),
+            );
+        }
+    }
+
+    // The two the rest of the machine shares, on success only — the same pair
+    // and the same reasoning as `project_create`.
+    if outcome.is_ok() {
+        if let Ok(m) = manifest::read(&worktree.join(manifest::FILE), &plan.name) {
+            sync_project_host(&app, &m).await;
+        }
+        sync_certificate(&app, &state, &root).await;
+    }
+
+    outcome.map(|_| operation_id)
+}
+
+/// Undo as much of a failed creation as can be undone, and say what could not.
+///
+/// Best effort, and loud about it. Every step here is one whose failure is
+/// survivable — a directory left behind, a database left empty — and none is
+/// worth turning a failed create into an error about the cleanup instead of
+/// about the cause.
+async fn rollback_worktree(
+    root: &std::path::Path,
+    parent_dir: &std::path::Path,
+    worktree: &std::path::Path,
+    name: &str,
+    database: &Option<(String, String)>,
+) {
+    // The record first: a record pointing at a directory being removed is the
+    // one piece of state another command could read mid-rollback.
+    let mut table = crate::worktree::Table::load(root).unwrap_or_default();
+    if table.remove(name).is_some() {
+        let _ = table.save(root);
+    }
+
+    // Only a database this creation made. One that was already there belongs to
+    // whatever put it there, and dropping it would be this app deleting data on
+    // the way out of a failure.
+    if let Some((instance, database)) = database {
+        match crate::db::drop_database(root, instance, database).await {
+            Ok(true) => tracing::info!(%database, "the worktree's new database was dropped"),
+            Ok(false) => {}
+            Err(e) => tracing::warn!(
+                %database, error = %e.message,
+                "the worktree's new database could not be dropped and is still there"
+            ),
+        }
+    }
+
+    if worktree.is_dir() {
+        // `--force`, because the checkout git just made is untouched work by
+        // definition: nobody has had the chance to edit it between the failure
+        // and here, and without the flag git refuses over the very files it
+        // wrote itself.
+        if let Err(e) = crate::worktree::remove(parent_dir, worktree, true) {
+            tracing::warn!(
+                path = %worktree.display(), error = %e.message,
+                "the worktree directory could not be removed and is still there"
+            );
+        }
+    }
+    crate::worktree::prune(parent_dir);
+}
+
+/// Take a worktree away, and everything it was given.
+///
+/// Four things can go, and each is a separate decision the screen asks before
+/// this runs: the checkout (always — a worktree without its directory is not a
+/// thing), its uncommitted changes (`force`), its database (`dropDatabase`) and
+/// its branch (`deleteBranch`).
+///
+/// The order is the reverse of creation, with one exception: the containers go
+/// first. Docker holds the directory open through its bind mount, and on macOS
+/// and Windows a `git worktree remove` while a container has the tree mounted
+/// fails on files the container is writing.
+#[tauri::command]
+pub async fn worktree_remove(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    options: Option<serde_json::Value>,
+) -> Result<String> {
+    let root = state.root()?;
+    let options = options.unwrap_or(serde_json::Value::Null);
+    let flag = |key: &str| options.get(key).and_then(|v| v.as_bool()).unwrap_or(false);
+    let (force, drop_database, delete_branch) =
+        (flag("force"), flag("dropDatabase"), flag("deleteBranch"));
+
+    let table = crate::worktree::Table::load(&root)?;
+    let record = table
+        .get(&name)
+        .cloned()
+        .ok_or_else(|| Error::not_found(format!("worktree {name}")))?;
+
+    let _busy = state.inflight.acquire(format!("project:{name}"))?;
+    let worktree = std::path::PathBuf::from(&record.path);
+    let parent_dir = workspace::project_dir(&root, &record.parent)?;
+
+    let manifest = manifest::read(&worktree.join(manifest::FILE), &name).ok();
+    let operation_id = events::next_operation_id("worktree");
+    events::emit(&app, "project:deleting", SubjectEvent::project(&name));
+
+    let outcome = async {
+        // ---- 1. what Docker holds -----------------------------------------
+        remove_project_containers(&name).await;
+        match engine::remove_project_images(&name).await {
+            Ok(removed) if !removed.is_empty() => {
+                tracing::info!(worktree = %name, images = ?removed, "worktree images removed")
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(worktree = %name, error = %e.message, "worktree images not removed")
+            }
+        }
+
+        // ---- 2. the database ----------------------------------------------
+        //
+        // Before the checkout, because it is the step with a reason to refuse:
+        // a database that will not drop should leave the worktree in place to
+        // try again from, rather than leaving a database nothing points at.
+        if drop_database {
+            if let Some(database) = &record.database {
+                match crate::db::drop_database(&root, &database.instance, &database.name).await {
+                    Ok(true) => tracing::info!(database = %database.name, "worktree database dropped"),
+                    Ok(false) => tracing::info!(database = %database.name, "there was no such database"),
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+
+        // ---- 3. the checkout -----------------------------------------------
+        //
+        // Through git while there is a repository to ask. There may not be: a
+        // parent deleted before its worktrees leaves records whose branch and
+        // registration have nowhere left to live, and refusing to clean those
+        // up would make a deleted project into a permanent stuck row. So the
+        // fallback removes the directory outright and says which of the two
+        // happened, rather than reporting "git refused" for a repository that
+        // is not there.
+        let repository = crate::worktree::is_repository(&parent_dir);
+        if repository {
+            if worktree.is_dir() {
+                crate::worktree::remove(&parent_dir, &worktree, force)?;
+            }
+            // Whether or not the directory was there: git's registration
+            // outlives it, and a worktree somebody deleted by hand leaves one
+            // behind that keeps its branch locked to a path that is gone.
+            crate::worktree::prune(&parent_dir);
+
+            if delete_branch && !crate::worktree::delete_branch(&parent_dir, &record.branch) {
+                tracing::warn!(branch = %record.branch, "the branch was not deleted");
+            }
+        } else {
+            tracing::warn!(
+                parent = %record.parent,
+                "the parent repository is gone; the worktree directory was removed \
+                 directly and git has nothing left to prune"
+            );
+            if worktree.is_dir() {
+                remove_project_dir(&worktree)
+                    .await
+                    .map_err(|e| Error::io("removing the worktree directory", e))?;
+            }
+        }
+
+        // ---- 4. the record and what this app generated ---------------------
+        let mut table = crate::worktree::Table::load(&root)?;
+        table.remove(&name);
+        table.save(&root)?;
+
+        for output in [
+            root.join("generated/projects").join(&name),
+            root.join("logs/projects").join(&name),
+        ] {
+            if output.is_dir() {
+                if let Err(e) = remove_project_dir(&output).await {
+                    tracing::warn!(path = %output.display(), error = %e, "generated output not removed");
+                }
+            }
+        }
+
+        // The same order as creation, and for the mirror of the same reason:
+        // the overlay is built from the services the generated compose file
+        // lists, so it has to be rendered after the file that no longer lists
+        // this one.
+        generate(&app, &root, &operation_id, "projects").await?;
+        crate::site::sync(&root);
+        Ok(())
+    }
+    .await;
+
+    match &outcome {
+        Ok(()) => {
+            crate::audit::record_with(
+                "worktree_remove",
+                &name,
+                crate::audit::Outcome::Ok,
+                Some(format!(
+                    "branch {}{}{}",
+                    record.branch,
+                    if drop_database {
+                        ", database dropped"
+                    } else {
+                        ""
+                    },
+                    if delete_branch {
+                        ", branch deleted"
+                    } else {
+                        ""
+                    }
+                )),
+            );
+            events::emit(&app, "project:deleted", SubjectEvent::project(&name));
+        }
+        Err(e) => events::emit(
+            &app,
+            "project:error",
+            SubjectEvent::project(&name).error(e.message.clone()),
+        ),
+    }
+
+    if outcome.is_ok() {
+        if let Some(manifest) = &manifest {
+            drop_project_host(&app, manifest).await;
+        }
+        sync_certificate(&app, &state, &root).await;
+    }
+
+    outcome.map(|_| operation_id)
+}
+
+/// Set the environment variables one worktree's container is given.
+///
+/// A worktree's own file rather than the project's `.stackvo/site.json`, and
+/// that is the whole reason this command exists: `site.json` is inside the
+/// checkout, and on a worktree the checkout is a branch somebody else is
+/// working on. Writing there would show up in their `git status`.
+///
+/// The database credentials are not settable here and are not in the answer as
+/// something to edit — they are derived from the instance on every render, so a
+/// copy stored here would be one that goes stale the day the password changes.
+/// A variable of the same name typed here still wins, which is what makes it an
+/// override rather than a locked field.
+#[tauri::command]
+pub async fn worktree_env_set(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    env: std::collections::BTreeMap<String, String>,
+) -> Result<serde_json::Value> {
+    let root = state.root()?;
+    let _busy = state.inflight.acquire(format!("project:{name}"))?;
+
+    for (key, value) in &env {
+        crate::site::checked_key(key)?;
+        crate::site::checked_value(value)?;
+    }
+
+    let mut table = crate::worktree::Table::load(&root)?;
+    let record = table
+        .worktrees
+        .iter_mut()
+        .find(|w| w.name == name)
+        .ok_or_else(|| Error::not_found(format!("worktree {name}")))?;
+    record.env = env;
+    let record = record.clone();
+    table.save(&root)?;
+
+    let operation_id = events::next_operation_id("worktree");
+    generate(&app, &root, &operation_id, "projects").await?;
+    crate::site::sync(&root);
+    events::emit(&app, "site:changed", serde_json::json!({ "project": name }));
+
+    // What the container will actually be given, derived rather than echoed
+    // back: the pane shows the database variables it did not type beside the
+    // ones it did, which is the only place the credentials a branch is running
+    // on are visible at all — with the password masked, as every other surface
+    // in this app shows one. `env_reveal` is the command that exists for the
+    // times somebody genuinely needs the value.
+    Ok(serde_json::json!({
+        "env": record.env,
+        "effective": masked_worktree_env(crate::worktree::env_for(&root, &record)),
+    }))
+}
+
+/// The derived environment with its one secret replaced.
+///
+/// Both places it appears: the variable itself and the copy inside
+/// `DATABASE_URL`, which is the one that gets forgotten — the first version of
+/// this masked `DB_PASSWORD` and shipped the same password one line below it.
+///
+/// The URL keeps its shape rather than being dropped, for the reason
+/// `connect.rs` gives about its own mask: the string on screen has to still be
+/// the string being described, or nobody can tell which host it names.
+fn masked_worktree_env(
+    env: std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeMap<String, String> {
+    let password = env.get("DB_PASSWORD").cloned();
+    env.into_iter()
+        .map(|(key, value)| {
+            let value = match (key.as_str(), &password) {
+                ("DB_PASSWORD", _) => crate::config::MASK.to_string(),
+                ("DATABASE_URL", Some(password)) if !password.is_empty() => {
+                    // The URL carries it percent-encoded, so that is the form
+                    // to look for.
+                    value.replace(&crate::worktree::url_encoded(password), crate::config::MASK)
+                }
+                _ => value,
+            };
+            (key, value)
+        })
+        .collect()
 }
 
 // ----------------------------------------------------------------- workers

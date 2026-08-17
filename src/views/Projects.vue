@@ -42,6 +42,26 @@ const deleteFiles = ref(false);
  */
 
 /**
+ * Which of these projects are worktrees, by name (N).
+ *
+ * Read once for the page rather than joined into `projects_list`: a worktree is
+ * a project and the list has no business carrying a second identity for it, but
+ * a row that does not say `branch of shop` leaves two unrelated-looking entries
+ * where there is one application on two branches.
+ *
+ * Failure is silence. This is a label; a workspace whose worktree file cannot
+ * be read should still show its projects.
+ */
+const worktrees = ref(new Map());
+async function loadWorktrees() {
+  try {
+    worktrees.value = new Map(asList(await api.worktreeList()).map((w) => [w.name, w]));
+  } catch {
+    worktrees.value = new Map();
+  }
+}
+
+/**
  * Rows grouped by parent domain, but only where a parent means something.
  *
  * The rule itself lives in `manifest.js` so it can be tested on its own; what
@@ -59,6 +79,7 @@ const rows = computed(() => {
     const parent = parentDomain(p.domain, app.tld);
     return {
       ...p,
+      worktree: worktrees.value.get(p.name) ?? null,
       // `null` when it stands alone, which is the table's own escape hatch: a
       // group with a null value has its header skipped and its rows always
       // flattened. Giving each one its own key instead made a group of one —
@@ -122,7 +143,17 @@ const sortBy = [
 ];
 
 const headers = computed(() => [
-  { title: '', key: 'favourite', sortable: false, align: 'center', width: 44 },
+  // Named even though the column shows a star and no text. An empty `<th>` is
+  // a column a screen reader announces as nothing while reading every cell
+  // under it — axe's `empty-table-header`. `.visually-hidden` keeps the header
+  // row looking exactly as it did.
+  {
+    title: t('projectsView.colFavourite'),
+    key: 'favourite',
+    sortable: false,
+    align: 'center',
+    width: 44,
+  },
   { title: t('projectsView.colDomain'), key: 'domain', sortable: true, align: 'start' },
   { title: t('projectsView.colRuntime'), key: 'runtime', sortable: true, align: 'start' },
   { title: t('projectsView.colServer'), key: 'server', sortable: true, align: 'start' },
@@ -502,8 +533,15 @@ onMounted(async () => {
   inventory.loadProjects();
   loadAdoptable();
   loadImports();
+  loadWorktrees();
 
-  const offRefresh = await listenAll(REFRESH_TRIGGERS, () => inventory.loadProjects());
+  const offRefresh = await listenAll(REFRESH_TRIGGERS, () => {
+    inventory.loadProjects();
+    // A worktree arriving or leaving is a project arriving or leaving, and it
+    // travels on the same events — so the badge is refreshed by the same nudge
+    // rather than by a second subscription that could drift out of step.
+    loadWorktrees();
+  });
 
   // The watcher reports a manifest change; it does not regenerate. Rebuilding a
   // container under someone who is mid-edit is worse than the staleness.
@@ -1047,6 +1085,15 @@ onUnmounted(() => teardown?.());
           </tr>
         </template>
 
+        <!-- The column shows a star and no words, and an empty `<th>` is a
+             column a screen reader announces as nothing while reading every
+             cell under it (axe's `empty-table-header`). The name is rendered
+             and hidden rather than left out, so the header row looks exactly as
+             it did. -->
+        <template #header.favourite>
+          <span class="visually-hidden">{{ t('projectsView.colFavourite') }}</span>
+        </template>
+
         <template #item.favourite="{ item }">
           <v-btn
             icon
@@ -1080,6 +1127,20 @@ onUnmounted(() => teardown?.());
             >
               {{ item.domain }}
             </button>
+
+            <!-- N. Without this the list shows `shop` and `shop-feature-x` as
+                 two unrelated siblings, which is exactly the confusion
+                 worktrees would otherwise introduce. -->
+            <v-chip
+              v-if="item.worktree"
+              size="x-small"
+              variant="tonal"
+              label
+              prepend-icon="mdi-source-branch"
+              data-test="worktree-badge"
+            >
+              {{ t('projectsView.worktreeOf', { parent: item.worktree.parent }) }}
+            </v-chip>
 
             <!-- A domain with no hosts entry cannot resolve. The web UI could
                  detect this; here the icon is also the fix. -->
@@ -1131,7 +1192,7 @@ onUnmounted(() => teardown?.());
               </span>
             </v-tooltip>
           </div>
-          <span v-else class="text-grey">—</span>
+          <span v-else class="text-medium-emphasis">—</span>
         </template>
 
         <template #item.runtime="{ item }">

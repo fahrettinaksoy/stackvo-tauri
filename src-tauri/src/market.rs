@@ -9,7 +9,7 @@
 //! ## The chain, and which link this module owns
 //!
 //! ```text
-//!   a pinned key          →  registry.json          (trust, not yet written)
+//!   a pinned key          →  registry.json          (crate::signing)
 //!   registry.json         →  manifest.json          (here)
 //!   manifest.json         →  every file it ships    (pkg::verify)
 //! ```
@@ -20,17 +20,25 @@
 //! parsed by code that trusts its shape, and the cheapest way to keep that
 //! trust honest is to compare the bytes first.
 //!
-//! ## What is missing, and it is the first link
+//! ## The first link exists now, and what is still missing is a key
 //!
-//! Nothing verifies a **signature** yet, because there is no key to verify
-//! against: ADR 0015 says the registry gets its own ed25519 key, and
-//! `docs/durum.md` §5 records the ceremony that would produce one as an open
-//! decision. Writing a placeholder key here would be worse than the gap — it
-//! would make every later reader believe the chain was closed.
+//! [`crate::signing`] verifies a minisign signature over `registry.json`
+//! against keys this machine already trusts, and [`refresh`] runs it before
+//! the index is parsed — the same ordering this module applies to a manifest,
+//! for the same reason.
 //!
-//! So [`Trust`] is the shape of that link, `Trust::Unsigned` is the only value
-//! it can take today, and [`refresh`] **refuses** when a caller asks for a
-//! signed index.
+//! What is **not** here is the official key. ADR 0015 gives the registry its
+//! own ed25519 pair and `docs/durum.md` §5 still holds the ceremony that would
+//! produce one as an open decision, so `signing::PINNED` is empty and a signed
+//! refresh on a stock build is refused **naming that** as the missing half.
+//! Shipping a placeholder would be worse than the gap: every later reader
+//! would believe the chain was closed.
+//!
+//! An organisation running its own mirror is not waiting on any of that. It
+//! signs its own index and names its own key in
+//! `policy.market.additionalKeys`, and gets the whole chain today — which is
+//! what makes third-party distribution an operational decision rather than a
+//! missing feature.
 //!
 //! Faz 5 has since landed [`HttpSource`], and that changes who this costs. A
 //! directory the user picked is trusted on the strength of where it came from,
@@ -88,6 +96,18 @@ pub struct VersionRow {
     pub support: String,
     #[serde(default)]
     pub eol_date: Option<String>,
+    /// Withdrawn by the publisher: the client-side half of a takedown (C).
+    ///
+    /// A **marking**, never a deletion, and ADR 0014 is why: a version that
+    /// disappeared from the index would leave every machine that installed it
+    /// holding an `instances.json` entry pointing at nothing, with no way to
+    /// find out what happened. Marked, the machine can say it.
+    #[serde(default)]
+    pub revoked: bool,
+    /// Why, in the publisher's own words. Shown verbatim — a takedown nobody
+    /// can read the reason for is one people work around.
+    #[serde(default)]
+    pub revoked_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -579,10 +599,12 @@ pub enum Trust {
     /// why `HttpSource` will not accept `http://`, and why
     /// `policy.market.requireSignature` exists for anybody who needs more.
     Unsigned,
-    /// Require a signature from a pinned key. **Not implemented**, and
-    /// [`refresh`] says so rather than quietly downgrading — a security check
-    /// that silently does nothing is worse than one that is absent, because
-    /// the absent one is visible.
+    /// Require a signature from a key this machine already trusts.
+    ///
+    /// Implemented by [`crate::signing`]. On a build with no key pinned and no
+    /// policy key, [`refresh`] refuses and says *that* is what is missing —
+    /// rather than quietly downgrading, because a security check that silently
+    /// does nothing is worse than one that is absent.
     Signed,
 }
 
@@ -684,16 +706,37 @@ pub fn refresh(
     trust: Trust,
     previous: Option<&Registry>,
 ) -> Result<Registry> {
+    let bytes = source.fetch("registry.json")?;
+
+    // The first link of the chain, and the order matters: the bytes are
+    // checked before they are parsed, exactly as `manifestSha256` is checked
+    // before a manifest is parsed. A document is parsed by code that trusts
+    // its shape, and the cheapest way to keep that trust honest is to settle
+    // where the bytes came from first.
     if trust == Trust::Signed {
-        return Err(Error::new(
-            Code::Unsupported,
-            "signature verification is not implemented: no registry key is pinned, and \
-             ADR 0015's key ceremony is still an open decision. Refusing rather than \
-             accepting an unsigned index under a name that promises otherwise",
-        ));
+        let keys = crate::signing::Keys::pinned()
+            .with_policy(&crate::policy::current().market().additional_keys);
+
+        // The keys are checked **before** the signature file is fetched, and
+        // the order is not cosmetic. Fetching first meant a machine with no
+        // pinned key was told `registry.json.minisig: No such file` — which
+        // sends somebody to the publisher to ask for a signature that would
+        // not have helped, when the missing half is on this side. Found by a
+        // test written to assert the order rather than by reading.
+        if keys.is_empty() {
+            return Err(Error::new(
+                Code::Unsupported,
+                "a signed index was asked for and no registry key is pinned in this build",
+            )
+            .with_hint(crate::hints::NO_REGISTRY_KEY));
+        }
+
+        let signature =
+            String::from_utf8_lossy(&source.fetch("registry.json.minisig")?).to_string();
+        let by = keys.verify(&bytes, &signature)?;
+        tracing::info!(source = %source.describe(), key = %by.id(), "index signature verified");
     }
 
-    let bytes = source.fetch("registry.json")?;
     let registry: Registry = serde_json::from_slice(&bytes).map_err(|e| {
         Error::new(
             Code::InvalidManifest,
@@ -785,6 +828,25 @@ pub fn install(
         Error::not_found(format!("{service}@{version} in the index"))
             .with_hint(crate::hints::PACKAGE_NOT_IN_REGISTRY)
     })?;
+
+    // The publisher's own withdrawal, before the organisation's list and before
+    // anything is fetched — the client half of a takedown (C).
+    //
+    // Refused rather than merely marked on screen. ADR 0014 keeps a withdrawn
+    // version *in* the index precisely so a machine can find out what happened
+    // to something it already installed; that is a different question from
+    // whether a new install may go ahead, and answering both with a warning
+    // would make the withdrawal advisory.
+    if row.revoked {
+        return Err(Error::new(
+            Code::Forbidden,
+            match &row.revoked_reason {
+                Some(reason) => format!("{service}@{version} was withdrawn: {reason}"),
+                None => format!("{service}@{version} was withdrawn by its publisher"),
+            },
+        )
+        .with_hint(crate::hints::PACKAGE_VERSION_REVOKED));
+    }
 
     // The organisation's list, before anything is fetched. Passed in rather
     // than read from the global: this is the function that puts somebody else's
@@ -1108,13 +1170,112 @@ mod tests {
 
     /// A security check that silently does nothing is worse than one that is
     /// absent, because the absent one is visible.
+    ///
+    /// The refusal moved rather than went away (C): it used to be "not
+    /// implemented", and it is now "this build pins no key". The verifier is
+    /// real — `signing.rs` proves it against a signature it did not make — and
+    /// what is missing is the ceremony that produces the official key, which
+    /// `docs/durum.md` §5 still holds open.
     #[test]
     fn asking_for_a_signed_index_is_refused_rather_than_downgraded() {
         let root = scratch("signed");
         let source = LocalSource::new(publish(&root, 1));
         let err = refresh(&root, &source, Trust::Signed, None).unwrap_err();
         assert_eq!(err.code, Code::Unsupported);
-        assert!(err.message.contains("ADR 0015"), "{}", err.message);
+        assert!(err.message.contains("no registry key"), "{}", err.message);
+    }
+
+    /// And it fails on the **key**, not on the signature file being absent —
+    /// the check that a machine with a key would get as far as looking for one.
+    #[test]
+    fn a_signed_refresh_asks_for_the_key_before_the_signature_file() {
+        let root = scratch("signed-order");
+        let dir = publish(&root, 1);
+        assert!(
+            !dir.join("registry.json.minisig").exists(),
+            "the fixture publishes no signature"
+        );
+        let err = refresh(&root, &LocalSource::new(&dir), Trust::Signed, None).unwrap_err();
+        assert_eq!(
+            err.code,
+            Code::Unsupported,
+            "a missing key is reported before a missing signature: {}",
+            err.message
+        );
+    }
+
+    /// The client half of a takedown (C): a withdrawn version does not install.
+    ///
+    /// Refused rather than warned about. ADR 0014 keeps a withdrawn version in
+    /// the index so a machine can find out what happened to one it already
+    /// has; whether a *new* install may proceed is a different question, and
+    /// answering both with a warning would make the withdrawal advisory.
+    #[test]
+    fn a_withdrawn_version_is_refused_with_the_publishers_reason() {
+        let root = scratch("revoked");
+        let source = LocalSource::new(publish(&root, 1));
+        let mut registry = refresh(&root, &source, Trust::Unsigned, None).unwrap();
+
+        // Installing it is fine until the publisher says otherwise.
+        let market = crate::policy::Market::default();
+        assert!(install(&root, &source, &registry, "mysql", "8.0", &market).is_ok());
+
+        registry.packages[0].versions[0].revoked = true;
+        registry.packages[0].versions[0].revoked_reason =
+            Some("a bad image tag shipped in this build".into());
+
+        let err = install(&root, &source, &registry, "mysql", "8.0", &market).unwrap_err();
+        assert_eq!(err.code, Code::Forbidden);
+        assert!(err.message.contains("bad image tag"), "{}", err.message);
+        assert!(err.message.contains("withdrawn"), "{}", err.message);
+    }
+
+    /// Withdrawn with no reason given is still withdrawn.
+    #[test]
+    fn a_withdrawal_with_no_reason_still_refuses() {
+        let root = scratch("revoked-bare");
+        let source = LocalSource::new(publish(&root, 1));
+        let mut registry = refresh(&root, &source, Trust::Unsigned, None).unwrap();
+        registry.packages[0].versions[0].revoked = true;
+
+        let err = install(
+            &root,
+            &source,
+            &registry,
+            "mysql",
+            "8.0",
+            &crate::policy::Market::default(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, Code::Forbidden);
+    }
+
+    /// A withdrawal is checked before the organisation's own list, and both
+    /// before anything is fetched: the order is what keeps a refusal from
+    /// depending on a network call.
+    #[test]
+    fn a_withdrawal_is_refused_even_where_the_source_is_gone() {
+        let root = scratch("revoked-offline");
+        let source = LocalSource::new(publish(&root, 1));
+        let mut registry = refresh(&root, &source, Trust::Unsigned, None).unwrap();
+        registry.packages[0].versions[0].revoked = true;
+
+        let gone = LocalSource::new(root.join("nowhere-at-all"));
+        let err = install(
+            &root,
+            &gone,
+            &registry,
+            "mysql",
+            "8.0",
+            &crate::policy::Market::default(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.code,
+            Code::Forbidden,
+            "not an I/O error: {}",
+            err.message
+        );
     }
 
     #[test]

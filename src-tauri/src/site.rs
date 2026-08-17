@@ -277,6 +277,17 @@ fn escape(value: &str) -> String {
 }
 
 /// Every project with variables **and** a compose service to set them on.
+///
+/// Two sources, laid one over the other. `.stackvo/site.json` is what the
+/// project itself declares and travels with a clone; a worktree's record is
+/// what *this machine* gave one branch, and it is deliberately not in the
+/// checkout — see [`crate::worktree`] for why nothing may be written into a
+/// worktree's directory that git would notice.
+///
+/// The worktree's values win where the two name the same variable. That is the
+/// order the specificity implies: a per-branch database is a narrower statement
+/// than the project's own default, and the person who created the worktree said
+/// so more recently than the person who committed `site.json`.
 fn entries(root: &Path) -> Vec<Entry> {
     let Some(projects) = crate::workspace::projects_root(root) else {
         return Vec::new();
@@ -289,6 +300,10 @@ fn entries(root: &Path) -> Vec<Entry> {
         std::fs::read_to_string(root.join("generated").join("docker-compose.projects.yml"))
             .unwrap_or_default();
     let services = crate::xdebug::generated_services(&compose);
+
+    // Once, not per project: a workspace with forty projects and two worktrees
+    // would otherwise read and parse the same file forty times.
+    let worktrees = crate::worktree::Table::load(root).unwrap_or_default();
 
     let mut out = Vec::new();
     for item in dir.flatten() {
@@ -303,12 +318,16 @@ fn entries(root: &Path) -> Vec<Entry> {
             continue;
         }
         let config = read(root, &name);
-        if config.env.is_empty() && !config.ssh_agent {
+        let mut env = config.env;
+        if let Some(record) = worktrees.get(&name) {
+            env.extend(crate::worktree::env_for(root, record));
+        }
+        if env.is_empty() && !config.ssh_agent {
             continue;
         }
         out.push(Entry {
             service: name,
-            env: config.env,
+            env,
             ssh_agent: config.ssh_agent,
         });
     }
