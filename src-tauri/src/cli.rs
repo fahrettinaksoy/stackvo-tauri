@@ -104,6 +104,9 @@ pub enum Action {
     CertsRenew,
     McpInstall,
     McpRemove,
+    /// `stackvo market-bundle <dir>` — the catalogue, for a machine with no
+    /// network (§3 #31).
+    MarketBundle,
     /// `stackvo artisan migrate` — a fixed program, the rest of the line handed
     /// to it (A-3).
     Passthrough,
@@ -562,6 +565,23 @@ pub const COMMANDS: &[Command] = &[
         prefix: &[],
         flags: &[],
         summary: "Take the stackvo entry back out of one assistant's configuration.",
+    },
+    // §3 #31. A terminal command rather than a button, and the reason is who
+    // does it: somebody at a connected machine writing a catalogue onto a
+    // removable disk to carry to one that has no network. That is an operator's
+    // errand — scriptable, repeatable, run over ssh as often as not — and the
+    // window is not where it happens.
+    Command {
+        name: "market-bundle",
+        action: Action::MarketBundle,
+        backing: Backing::Contract("market_bundle"),
+        writes: true,
+        args: "<directory>",
+        arity: (1, 1),
+        prefix: &[],
+        flags: &[],
+        summary: "Write the catalogue and every package into one directory, for a machine \
+                  with no network. Point `market.offlineBundle` at it there.",
     },
     Command {
         name: "commands",
@@ -1746,6 +1766,28 @@ pub async fn run(parsed: &Parsed, sink: &dyn ProgressSink, style: &Style) -> Res
             value(json!({ "client": client, "path": path? }))
         }
 
+        Action::MarketBundle => {
+            let destination = parsed.args[0].clone();
+
+            // The remembered source, exactly as `commands::market_bundle`
+            // takes it: a bundle is a copy of the catalogue this machine is
+            // actually using, and a second way of choosing one would be a
+            // second answer to "what is in it".
+            let outcome = (|| -> crate::error::Result<crate::market::Bundled> {
+                let Some(reference) = crate::market::remembered(&root)? else {
+                    return Err(crate::error::Error::new(
+                        crate::error::Code::NotFound,
+                        "no source is remembered — run a refresh first",
+                    ));
+                };
+                let source = crate::market::open(&root, &reference)?;
+                crate::market::bundle(source.as_ref(), std::path::Path::new(&destination))
+            })();
+
+            audit("cli_market_bundle", &destination, outcome.is_ok());
+            value(serde_json::to_value(outcome?).unwrap_or(json!({})))
+        }
+
         Action::McpRemove => {
             let client = parsed.args[0].clone();
             let path = crate::agents::uninstall(&client);
@@ -1844,6 +1886,44 @@ pub fn render(action: Action, value: &Value, style: &Style) -> String {
             str_at(value, "client").unwrap_or("?"),
             str_at(value, "path").unwrap_or("?")
         ),
+        Action::MarketBundle => {
+            let n = |key: &str| value.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+            // Whole mebibytes, one decimal. The number answers "will this fit
+            // on the disk I am holding", and a byte count does not.
+            let mib = n("bytes") as f64 / (1024.0 * 1024.0);
+            let mut out = format!(
+                "{} {} packages, {} versions, {} files, {mib:.1} MiB\n",
+                style.ok("bundled"),
+                n("packages"),
+                n("versions"),
+                n("files"),
+            );
+
+            // Both of these are things the person walking away from the network
+            // needs to have read, so they are printed rather than left in the
+            // JSON for a caller that may not look.
+            if !value
+                .get("signed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                out.push_str(
+                    "  no registry.json.minisig — a machine whose policy sets \
+                     requireSignature will refuse this bundle\n",
+                );
+            }
+            for skipped in value
+                .get("skipped")
+                .and_then(|v| v.as_array())
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+            {
+                if let Some(line) = skipped.as_str() {
+                    out.push_str(&format!("  not carried: {line}\n"));
+                }
+            }
+            out
+        }
         // A shell command has no result of its own to render: the program's
         // own output went straight to the terminal and its exit code is the
         // answer. Reached only if one of them ever returns `Outcome::Value`,

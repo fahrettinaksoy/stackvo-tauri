@@ -68,6 +68,42 @@ export function overExtensionLimit(form, catalog) {
 export const LANG_RUNTIMES = ['python', 'go', 'ruby', 'rust', 'bun', 'deno'];
 
 /**
+ * How each runtime is drawn, and what it is called.
+ *
+ * Here rather than in a view because two places draw it — the projects table
+ * and the rail down the side of every page — and they had drifted into the
+ * same wrong answer independently: both were `runtime === 'node' ? node : php`,
+ * written when there were two runtimes, so a Go project showed a PHP elephant
+ * in the table *and* in the rail. One list is what stops the third place from
+ * inventing a third version of it.
+ *
+ * `bun` and `deno` have no glyph of their own in Material Design Icons and take
+ * the generic one rather than borrowing Node's — they are not Node, and a
+ * hexagon on a Deno project is a worse answer than a neutral mark.
+ */
+export const RUNTIME_LOOK = {
+  php: { icon: 'mdi-language-php', label: 'PHP' },
+  node: { icon: 'mdi-nodejs', label: 'Node' },
+  python: { icon: 'mdi-language-python', label: 'Python' },
+  go: { icon: 'mdi-language-go', label: 'Go' },
+  ruby: { icon: 'mdi-language-ruby', label: 'Ruby' },
+  rust: { icon: 'mdi-language-rust', label: 'Rust' },
+  bun: { icon: 'mdi-code-braces', label: 'Bun' },
+  deno: { icon: 'mdi-code-braces', label: 'Deno' },
+};
+
+/**
+ * The glyph and name for a runtime, including one this build has not heard of.
+ *
+ * An unknown runtime is named rather than guessed at: it means the catalogue
+ * moved ahead of the interface, and printing what the manifest actually says is
+ * the only honest answer available.
+ */
+export function runtimeLook(runtime) {
+  return RUNTIME_LOOK[runtime] ?? { icon: 'mdi-help-circle-outline', label: runtime };
+}
+
+/**
  * Each lang runtime's ecosystem defaults — the same values the Rust side
  * (`manifest::lang_defaults`) applies when a field is omitted, repeated here
  * so the form shows what will actually run instead of empty inputs.

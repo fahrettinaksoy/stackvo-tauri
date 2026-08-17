@@ -153,12 +153,38 @@ pub fn run(argv: &[&str]) -> Result<bool> {
             .with_hint(crate::hints::INSTALL_POLKIT)
         })?;
 
-    match output.status.code() {
+    polkit_outcome(
+        output.status.code(),
+        &String::from_utf8_lossy(&output.stderr),
+    )
+}
+
+/// What polkit's exit code means, as a value rather than as a control flow.
+///
+/// Split out of [`run`] for the reason §3 #35 exists: the dialog needs a human,
+/// and *this* does not. Inline, the one part of the Linux path that decides
+/// whether a cancelled prompt is an error could only ever be exercised by
+/// somebody sitting in front of a polkit agent — so it never was, on a platform
+/// nobody here develops on.
+///
+/// 126 and 127 are polkit's own: "the dialog was dismissed" and "not
+/// authorised". Both are answers, and both have to arrive as `Ok(false)` — the
+/// same value macOS returns for Cancel — because a caller that treats them as
+/// failures puts a red error on screen for somebody who simply changed their
+/// mind. `None` is the process dying on a signal, which is neither an answer
+/// nor a permission problem, and is reported rather than swallowed.
+///
+/// Compiled on every platform even though only Linux calls it, on the same
+/// terms as [`base64_utf16`] below: a branch that is only compiled where nobody
+/// runs it is a branch that is wrong in the release.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn polkit_outcome(code: Option<i32>, stderr: &str) -> Result<bool> {
+    match code {
         Some(0) => Ok(true),
         Some(126) | Some(127) => Ok(false),
         _ => Err(Error::new(
             Code::PermissionDenied,
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            stderr.trim().to_string(),
         )),
     }
 }
@@ -198,16 +224,9 @@ pub fn run_powershell(script: &str) -> Result<bool> {
         ));
     }
 
-    let encoded = base64_utf16(script);
-    let outer = format!(
-        "$ErrorActionPreference = 'Stop'; \
-         $p = Start-Process powershell \
-           -ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','{encoded}' \
-           -Verb RunAs -Wait -WindowStyle Hidden -PassThru; \
-         exit $p.ExitCode"
-    );
+    let outer = uac_script(&base64_utf16(script));
 
-    let output = std::process::Command::new("powershell")
+    let output = std::process::Command::new(powershell_program())
         .args(["-NoProfile", "-NonInteractive", "-Command", &outer])
         .output()
         .map_err(|e| Error::io("running powershell", e))?;
@@ -217,7 +236,7 @@ pub fn run_powershell(script: &str) -> Result<bool> {
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    if stderr.contains("canceled") || stderr.contains("cancelled") {
+    if is_cancellation(&stderr) {
         return Ok(false);
     }
 
@@ -225,6 +244,45 @@ pub fn run_powershell(script: &str) -> Result<bool> {
         Code::PermissionDenied,
         format!("Elevation failed: {}", stderr.trim()),
     ))
+}
+
+/// The outer shell's line, built from an already-encoded script.
+///
+/// Named for the same reason [`JOIN_ARGV`] is: the test below asserts on the
+/// shipped text rather than on a copy, and every flag in it is load-bearing.
+/// `-Verb RunAs` is the UAC prompt; without `-Wait` this returns before the
+/// elevated shell has done anything and the caller reads a hosts file that has
+/// not been written yet; without `-PassThru` there is no process object and
+/// `$p.ExitCode` is `$null`, so `exit` sends 0 and every failure reads as
+/// success. `-WindowStyle Hidden` keeps a console window from flashing up in
+/// front of a windowed app.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn uac_script(encoded: &str) -> String {
+    format!(
+        "$ErrorActionPreference = 'Stop'; \
+         $p = Start-Process powershell \
+           -ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','{encoded}' \
+           -Verb RunAs -Wait -WindowStyle Hidden -PassThru; \
+         exit $p.ExitCode"
+    )
+}
+
+/// Did the person dismiss the UAC prompt?
+///
+/// A dismissed prompt throws in the *outer* shell rather than returning an exit
+/// code, so this is read out of a message — the one place in this module where
+/// a decision rests on prose. Both spellings are matched because the string
+/// comes from Windows and its own components disagree: the Win32 error is "The
+/// operation was canceled by the user" with one `l`, and PowerShell's wrapper
+/// has been seen to render it with two.
+///
+/// Lowercased first. `Start-Process` surfaces the message inside its own
+/// `Exception calling …` envelope, and the capitalisation of what it quotes is
+/// not this app's to predict.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn is_cancellation(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    lower.contains("canceled") || lower.contains("cancelled")
 }
 
 /// Can this machine put up an authentication prompt at all?
@@ -240,9 +298,7 @@ pub fn available() -> bool {
     }
     #[cfg(target_os = "linux")]
     {
-        std::env::var_os("PATH")
-            .map(|path| std::env::split_paths(&path).any(|dir| dir.join("pkexec").exists()))
-            .unwrap_or(false)
+        polkit_on(std::env::var_os("PATH").as_deref())
     }
     #[cfg(windows)]
     {
@@ -254,6 +310,53 @@ pub fn available() -> bool {
     }
 }
 
+/// Which PowerShell to run, and the seam that makes the UAC path testable.
+///
+/// `STACKVO_POWERSHELL` is the same kind of seam `STACKVO_HOSTS_PATH` is, for
+/// the same reason and with one extra: without it the only way to exercise this
+/// function is to raise a real UAC prompt, and there is nobody at a CI runner
+/// to answer one.
+///
+/// ## Why this is a variable and the Linux side is a `PATH` entry
+///
+/// The asymmetry is deliberate, and it is about what happens when the stub is
+/// *not* found. `pkexec` is resolved by `execvp`, which walks `PATH` in order —
+/// unambiguous, so `tests/elevate_probe.rs` puts a stub first and that is that.
+/// Windows resolution is not one rule: the loading directory, the current
+/// directory, `System32` and `PATH` all take part, and Rust's own search does
+/// not match `CreateProcess`'s exactly. A stub that lost that race would not
+/// fail the test — it would run **real** PowerShell, which would put a UAC
+/// prompt on a machine with nobody at it and hang the job until it timed out.
+///
+/// A named variable cannot lose a race. It is read on every call rather than
+/// cached, exactly as `hosts_path()` is: a test that set it after this module
+/// had been touched once would otherwise be talking to the real shell.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn powershell_program() -> String {
+    match std::env::var("STACKVO_POWERSHELL") {
+        Ok(from_env) if !from_env.trim().is_empty() => from_env.trim().to_string(),
+        _ => "powershell".to_string(),
+    }
+}
+
+/// Is `pkexec` on this `PATH`?
+///
+/// Takes the value rather than reading the environment, and that is the whole
+/// difference between a function this repository can test and one it cannot:
+/// `std::env::set_var` is process-global, so a test that pointed the real
+/// `PATH` at a fixture would be a test that could change what a parallel test
+/// sees. Given the string, both answers are reachable on any platform.
+///
+/// `exists` rather than an executable-bit check: a `pkexec` on `PATH` that
+/// cannot be executed is a broken installation, and [`run`] reports that with
+/// the error the failed spawn actually produced. Deciding it here would mean
+/// drawing no button and explaining nothing.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn polkit_on(path: Option<&std::ffi::OsStr>) -> bool {
+    path.map(|path| std::env::split_paths(path).any(|dir| dir.join("pkexec").exists()))
+        .unwrap_or(false)
+}
+
 /// UTF-16LE, then base64 — what PowerShell's `-EncodedCommand` expects.
 ///
 /// Written out rather than pulled in: this is the only base64 in the app, and a
@@ -262,8 +365,14 @@ pub fn available() -> bool {
 /// everywhere even though only Windows calls it, because an encoder that is
 /// only exercised on the platform nobody develops on is one that is wrong for a
 /// release.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn base64_utf16(script: &str) -> String {
+///
+/// `pub` for that last sentence rather than because anything outside calls it.
+/// `tests/elevate_probe.rs` decodes what this produces with an independently
+/// written decoder, and it does that on **every** platform — which is the only
+/// coverage the Windows elevation path gets from the machine it is developed
+/// on, since `cargo check --target x86_64-pc-windows-msvc` cannot run here
+/// (`aws-lc-sys` wants the Windows SDK to build its C).
+pub fn base64_utf16(script: &str) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     let bytes: Vec<u8> = script
@@ -293,6 +402,125 @@ fn base64_utf16(script: &str) -> String {
         });
     }
     out
+}
+
+/// The parts of the two branches this machine cannot show a dialog for.
+///
+/// §3 #35 says the remaining half of the Windows and Linux paths "needs a
+/// human", and for the *prompt* that is true and permanent. It was never true
+/// of everything around the prompt: which exit code means "cancelled", whether
+/// the outer PowerShell line still carries `-Wait`, whether a machine without
+/// polkit is detected before a button is drawn. Every one of those is a
+/// decision made before or after the panel appears, and every one of them used
+/// to be unreachable from a test only because it was written inline.
+///
+/// The macOS half of this module has had exactly this arrangement since it was
+/// written — `joined()` runs the shipped `JOIN_ARGV` through a real `osascript`
+/// with the privileged line swapped out. This is the same idea for the other
+/// two.
+#[cfg(test)]
+mod branch_tests {
+    use super::*;
+
+    #[test]
+    fn a_dismissed_polkit_dialog_is_an_answer_and_not_a_fault() {
+        // 126 is dismissed, 127 is not authorised. A caller that treated either
+        // as an error would put a red banner in front of somebody who changed
+        // their mind — and on this platform nobody here can watch that happen.
+        assert!(!polkit_outcome(Some(126), "").expect("dismissed is not an error"));
+        assert!(!polkit_outcome(Some(127), "").expect("unauthorised is not an error"));
+    }
+
+    #[test]
+    fn polkit_success_is_the_only_success() {
+        assert!(polkit_outcome(Some(0), "").expect("zero is success"));
+
+        let error = polkit_outcome(Some(1), "cp: /etc/hosts: Read-only file system")
+            .expect_err("a non-zero, non-polkit code is a failure");
+        assert_eq!(error.code, Code::PermissionDenied);
+        // The message the tool produced, not one this module made up: it is the
+        // only thing that says *why*, and it goes on screen.
+        assert!(error.message.contains("Read-only file system"), "{error}");
+    }
+
+    #[test]
+    fn a_signal_is_reported_rather_than_read_as_cancellation() {
+        // `None` is the process killed rather than exited. Folding it into the
+        // 126/127 arm would turn an OOM-killed elevation into a silent "the
+        // user said no", and the hosts file would be left half written with
+        // nothing on screen.
+        let error = polkit_outcome(None, "").expect_err("a signal is not an answer");
+        assert_eq!(error.code, Code::PermissionDenied);
+    }
+
+    #[test]
+    fn the_uac_line_keeps_the_four_flags_that_make_it_correct() {
+        let script = uac_script("QQA=");
+
+        assert!(script.contains("-Verb RunAs"), "no UAC prompt: {script}");
+        // Without `-Wait` the caller reads a hosts file that has not been
+        // written yet; without `-PassThru` there is no `$p`, so `$p.ExitCode`
+        // is `$null`, `exit` sends 0, and every failure reads as success.
+        assert!(script.contains("-Wait"), "{script}");
+        assert!(script.contains("-PassThru"), "{script}");
+        assert!(script.contains("exit $p.ExitCode"), "{script}");
+        // The encoded form is the whole defence against the three parsers
+        // between here and the elevated shell.
+        assert!(script.contains("-EncodedCommand"), "{script}");
+        assert!(
+            script.contains("QQA="),
+            "the script did not travel: {script}"
+        );
+    }
+
+    #[test]
+    fn both_spellings_of_a_cancelled_uac_prompt_are_understood() {
+        // Windows spells it with one `l`; PowerShell's wrapper has been seen to
+        // render it with two. A branch that knew only one spelling would report
+        // a dismissed prompt as a permission failure half the time.
+        assert!(is_cancellation("The operation was canceled by the user."));
+        assert!(is_cancellation("The operation was cancelled by the user."));
+        // Case comes out of an `Exception calling …` envelope this app does not
+        // control.
+        assert!(is_cancellation("Operation was CANCELED by the user"));
+        assert!(!is_cancellation("Access is denied"));
+        assert!(!is_cancellation(""));
+    }
+
+    /// The seam defaults to the real shell, and a blank value is not a program.
+    ///
+    /// Asserted because the failure is silent in the worst direction: an empty
+    /// `STACKVO_POWERSHELL` left in an environment would make this app try to
+    /// spawn `""`, and the error a user would see is about a program with no
+    /// name rather than about a variable somebody exported.
+    #[test]
+    fn the_powershell_seam_falls_back_to_the_real_one() {
+        // Read rather than set: this runs beside every other test in the
+        // process and `set_var` is process-wide. The default branch is the one
+        // every machine takes, and it is the one worth pinning.
+        assert_eq!(powershell_program(), "powershell");
+    }
+
+    #[test]
+    fn a_machine_without_polkit_is_told_apart_from_one_with_it() {
+        let dir = std::env::temp_dir().join(format!("stackvo-polkit-{}", std::process::id()));
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).expect("a fixture directory");
+
+        let empty = std::ffi::OsString::from(bin.as_os_str());
+        assert!(
+            !polkit_on(Some(&empty)),
+            "an empty directory answered yes, so the check answers yes to anything"
+        );
+
+        std::fs::write(bin.join("pkexec"), "#!/bin/sh\n").expect("a fixture pkexec");
+        assert!(polkit_on(Some(&empty)));
+
+        // No `PATH` at all is a machine that cannot be asked, not one that can.
+        assert!(!polkit_on(None));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]

@@ -266,12 +266,12 @@ mod tests {
     /// never a public address and never a name the app would reject.
     #[test]
     fn this_machine_answers_with_something_usable_or_nothing() {
-        match address() {
-            Some(ip) => {
-                assert!(is_lan(ip), "{ip} was offered and is not a private address");
-                assert!(crate::hosts::is_valid_domain(&domain_for("shop", ip)));
-            }
-            None => {} // offline, or behind no router — both legitimate
+        // `if let` rather than a `match` with an empty `None` arm: no answer is
+        // the legitimate case here — offline, or behind no router — and an arm
+        // that does nothing reads as one somebody forgot to fill in.
+        if let Some(ip) = address() {
+            assert!(is_lan(ip), "{ip} was offered and is not a private address");
+            assert!(crate::hosts::is_valid_domain(&domain_for("shop", ip)));
         }
     }
 }

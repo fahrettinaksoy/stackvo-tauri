@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { createI18n } from 'vue-i18n';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { trayLabels } from '@/lib/trayLabels.js';
@@ -84,6 +85,63 @@ describe('the tray label catalog', () => {
           expect(text, `${name} ${path} keeps ${placeholder}`).toContain(placeholder);
         }
       }
+    }
+  });
+
+  /**
+   * And the placeholders survive the **translator**, not just the file.
+   *
+   * This is the test the two above look like they already were, and were not.
+   * Both hand `trayLabels` a `t` of `(key) => key`, which returns the path and
+   * interpolates nothing — so the catalogue was checked, the Rust boundary was
+   * checked, and the function in between was never run with the thing it is
+   * given in production.
+   *
+   * What it does is not neutral. vue-i18n substitutes a named placeholder with
+   * **no matching parameter** for the empty string rather than leaving it
+   * alone, so every label built to reach Rust with a hole in it arrived with
+   * the hole already closed:
+   *
+   * ```text
+   * '{name}: durdur'         → ': durdur'
+   * 'Konteynerler: {count}'  → 'Konteynerler: '
+   * ```
+   *
+   * The tray drew a Start/stop submenu of rows that said `: başlat` and
+   * `: durdur`, five of them, in a menu whose only job is to say which project.
+   * A real `createI18n` is the cheapest thing that would have said so.
+   */
+  it('keeps them through a real translator, in both locales', () => {
+    for (const locale of ['en', 'tr']) {
+      const i18n = createI18n({
+        legacy: false,
+        locale,
+        fallbackLocale: 'en',
+        messages: { en, tr },
+      });
+      const labels = trayLabels(i18n.global.t);
+
+      const expected = {
+        startProject: ['{name}'],
+        stopProject: ['{name}'],
+        containers: ['{count}'],
+        more: ['{count}'],
+        runningSummary: ['{running}', '{total}'],
+      };
+
+      for (const [key, placeholders] of Object.entries(expected)) {
+        for (const placeholder of placeholders) {
+          expect(labels[key], `${locale} ${key} reaches Rust with ${placeholder}`).toContain(
+            placeholder
+          );
+        }
+      }
+
+      // And the words around them are the locale's, rather than the key or the
+      // English fallback — an identity substitution that stopped translating
+      // would satisfy every assertion above.
+      expect(labels.stopProject).not.toBe('tray.stopProject');
+      expect(labels.stopProject).toBe(lookup(locale === 'tr' ? tr : en, 'tray.stopProject'));
     }
   });
 });

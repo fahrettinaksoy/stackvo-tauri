@@ -175,21 +175,65 @@ const healthDots = computed(() => {
 });
 
 /**
- * "5 services · 11 end-of-life", for the row that holds them.
+ * What the ⓘ on a category or service row has to say, one fact per entry.
  *
- * Built here rather than in the template because it is the button's accessible
- * name as well as its tooltip, and a sentence assembled twice in two places is
- * a sentence that will come apart in one of them. A tooltip is the only place
- * this text now lives on screen — so the `aria-label` carrying the same words
- * is not a nicety, it is the reader who never hovers.
+ * A list rather than a sentence. These were joined with middots — "5 versions ·
+ * 2 end-of-life · Runs more than one version" — which reads as one statement
+ * and is three: a count, a subset of that count, and a property of the service
+ * that has nothing to do with either. Stacked, each is found by looking rather
+ * than by parsing, and the glyph beside it says which kind of fact it is
+ * before the words do.
  */
-function countLabel(item) {
-  const parts =
-    item.kind === 'category'
-      ? [t('marketView.serviceCount', { n: item.group.packages.length }), item.group.hidden]
-      : [t('marketView.versionCount', { n: item.entry.versions.length }), item.entry.hidden];
-  return parts[1] ? `${parts[0]} · ${t('marketView.hiddenCount', { n: parts[1] })}` : parts[0];
+function countFacts(item) {
+  const facts = [];
+
+  if (item.kind === 'category') {
+    facts.push({
+      icon: 'mdi-cube-outline',
+      text: t('marketView.serviceCount', { n: item.group.packages.length }),
+    });
+    if (item.group.hidden) {
+      facts.push({
+        icon: 'mdi-clock-alert-outline',
+        text: t('marketView.hiddenCount', { n: item.group.hidden }),
+      });
+    }
+    return facts;
+  }
+
+  facts.push({
+    icon: 'mdi-tag-outline',
+    text: t('marketView.versionCount', { n: item.entry.versions.length }),
+  });
+  if (item.entry.hidden) {
+    facts.push({
+      icon: 'mdi-clock-alert-outline',
+      text: t('marketView.hiddenCount', { n: item.entry.hidden }),
+    });
+  }
+  // Here rather than on a glyph of its own beside the name. A row with two
+  // information buttons on it invites the question of which one holds the
+  // information, and in a quarter-width column the two took the room the
+  // service name needed.
+  if (item.entry.multiple) {
+    facts.push({ icon: 'mdi-layers-triple-outline', text: t('marketView.multiVersion') });
+  }
+  return facts;
 }
+
+/**
+ * The same facts on one line, for the button's accessible name.
+ *
+ * A screen reader is read a name, not a layout, so the stacking that helps the
+ * eye is nothing to it. Derived from the same list rather than assembled
+ * separately: a sentence built twice in two places is a sentence that comes
+ * apart in one of them — and a tooltip is the only place this text lives on
+ * screen, so the label is not a nicety, it is the reader who never hovers.
+ */
+const countLabel = (item) =>
+  countFacts(item)
+    .map((fact) => fact.text)
+    .join(' · ');
 
 /** The glyph for each of the three depths. */
 const NODE_ICON = {
@@ -315,6 +359,37 @@ const summaryOf = (entry) => entry.summary?.[locale.value] ?? entry.summary?.en 
 
 const supportColour = (support) =>
   ({ supported: 'success', deprecated: 'warning', eol: 'error' })[support] ?? 'default';
+
+/**
+ * A glyph per state, not one glyph in three colours.
+ *
+ * The mark is small and the state is the whole of what it says, so colour
+ * cannot be the only thing carrying it — that is WCAG 1.4.1, and it is also
+ * simply how this list is read: somebody scanning for the version that stopped
+ * being patched should not have to resolve a hue to find it.
+ */
+const supportIcon = (support) =>
+  ({
+    supported: 'mdi-check-circle',
+    deprecated: 'mdi-alert-circle',
+    eol: 'mdi-close-circle',
+  })[support] ?? 'mdi-help-circle';
+
+/**
+ * Everything the mark stands for, on one line, for its accessible name.
+ *
+ * Both facts used to be printed into the row itself. The date is the widest
+ * thing in a column a quarter of the window wide, and for a supported version
+ * it is a year a decade out — a number that decides nothing and pushes the ones
+ * that do decide something off the end of the row. The tooltip stacks them; a
+ * screen reader gets them joined, because it is read a name and not a layout.
+ */
+function supportLabel(version) {
+  const state = t(`marketView.support.${version.support}`);
+  return version.eolDate
+    ? `${state} · ${t('marketView.supportUntil', { date: version.eolDate })}`
+    : state;
+}
 </script>
 
 <template>
@@ -694,21 +769,42 @@ const supportColour = (support) =>
                     >
                       {{ t('marketView.recommended') }}
                     </v-chip>
-                    <!-- With the date when there is one. "End of life" alone
-                         reads the same for a version that stopped being
-                         patched two years ago and one that stops next month,
-                         and the index has been carrying `eolDate` all along. -->
-                    <v-chip
+                    <!-- A mark, with the sentence on hover. This was a chip
+                         printing "Supported · 2032-04-30" into every row: the
+                         date is the widest thing in a column a quarter of the
+                         window wide, and on a supported version it is a year a
+                         decade away — it decides nothing and it crowds out the
+                         version number, which decides everything.
+
+                         A button rather than a coloured span, for the reason
+                         every other glyph in this file is one: a tooltip on
+                         something unfocusable is a tooltip the keyboard cannot
+                         reach, and the `aria-label` is what a screen reader
+                         gets instead of a shape. `.stop` because the row opens
+                         on click and reading a date is not asking for that. -->
+                    <v-btn
+                      icon
                       size="x-small"
-                      variant="tonal"
-                      class="ml-2"
+                      variant="text"
+                      class="ml-1"
                       :color="supportColour(item.version.support)"
+                      :aria-label="supportLabel(item.version)"
+                      @click.stop
                     >
-                      {{ t(`marketView.support.${item.version.support}`) }}
-                      <template v-if="item.version.eolDate">
-                        · {{ item.version.eolDate }}
-                      </template>
-                    </v-chip>
+                      <v-icon size="small">{{ supportIcon(item.version.support) }}</v-icon>
+                      <v-tooltip activator="parent" location="top">
+                        <div class="tip-line">
+                          <v-icon size="x-small">{{ supportIcon(item.version.support) }}</v-icon>
+                          <span>{{ t(`marketView.support.${item.version.support}`) }}</span>
+                        </div>
+                        <div v-if="item.version.eolDate" class="tip-line">
+                          <v-icon size="x-small">mdi-calendar-range-outline</v-icon>
+                          <span>{{
+                            t('marketView.supportUntil', { date: item.version.eolDate })
+                          }}</span>
+                        </div>
+                      </v-tooltip>
+                    </v-btn>
                     <!-- What it costs to fetch, before deciding to. Also
                          already on the wire and never shown. -->
                     <span
@@ -718,27 +814,14 @@ const supportColour = (support) =>
                       {{ bytes(item.version.sizeBytes) }}
                     </span>
                   </template>
+                  <!-- Just the name. "Runs more than one version" used to be a
+                       glyph of its own here, next to the count glyph, so a
+                       service row carried two buttons that both meant "here is
+                       something about this service" — and in a quarter-width
+                       column those two took the room the name needed. It says
+                       the same thing inside the count's tooltip now. -->
                   <template v-else-if="item.kind === 'service'">
                     <span class="font-weight-medium">{{ item.title }}</span>
-                    <!-- Was a chip reading "Runs more than one version", which in
-                       a quarter-width column pushed the service name onto two
-                       lines and hyphenated it — "Apache Cassan-dra". The fact
-                       is worth one glyph and a hover; the name is worth the
-                       room. -->
-                    <v-btn
-                      v-if="item.entry.multiple"
-                      icon
-                      size="x-small"
-                      variant="text"
-                      class="ml-1"
-                      :aria-label="t('marketView.multiVersion')"
-                      @click.stop
-                    >
-                      <v-icon size="small">mdi-layers-triple-outline</v-icon>
-                      <v-tooltip activator="parent" location="top">
-                        {{ t('marketView.multiVersion') }}
-                      </v-tooltip>
-                    </v-btn>
                   </template>
                   <span v-else>{{ item.title }}</span>
 
@@ -771,8 +854,14 @@ const supportColour = (support) =>
                     @click.stop
                   >
                     <v-icon size="small">mdi-information-outline</v-icon>
+                    <!-- One fact per line. The `aria-label` above carries the
+                         same facts joined into one string, because a screen
+                         reader is read a name and not a layout. -->
                     <v-tooltip activator="parent" location="top">
-                      {{ countLabel(item) }}
+                      <div v-for="fact in countFacts(item)" :key="fact.text" class="tip-line">
+                        <v-icon size="x-small">{{ fact.icon }}</v-icon>
+                        <span>{{ fact.text }}</span>
+                      </div>
                     </v-tooltip>
                   </v-btn>
                 </template>
@@ -889,7 +978,6 @@ const supportColour = (support) =>
                 <tr>
                   <th>{{ t('marketView.colInstance') }}</th>
                   <th>{{ t('marketView.colContainer') }}</th>
-                  <th>{{ t('marketView.colPorts') }}</th>
                   <th class="text-center">{{ t('marketView.colStopStart') }}</th>
                   <th class="text-center">{{ t('marketView.colRestart') }}</th>
                   <th class="text-center">{{ t('marketView.colOpen') }}</th>
@@ -916,23 +1004,15 @@ const supportColour = (support) =>
                     </v-chip>
                   </td>
                   <td class="font-mono text-caption">{{ instance.container }}</td>
-                  <!-- With the handle, not just the number. `Object.values`
-                       threw away the half that says what a port is for, so
-                       MinIO read as "9000, 9001" and which of them is the
-                       console was a question the table could not answer. -->
-                  <td class="font-mono text-caption">
-                    <template v-if="Object.keys(instance.ports ?? {}).length">
-                      <!-- Along the row rather than stacked down it. A service
-                           with two ports — RabbitMQ's broker and its management
-                           UI — was the one row in the table twice the height of
-                           the others, which reads as the row being special
-                           rather than as it having one more number. -->
-                      <span v-for="(port, handle, i) in instance.ports" :key="handle">
-                        <span v-if="i" class="text-disabled"> · </span>{{ handle }}: {{ port }}
-                      </span>
-                    </template>
-                    <template v-else>—</template>
-                  </td>
+                  <!-- The ports are not here any more. They were the widest
+                       column in a table that already scrolled sideways — a
+                       service with two of them, RabbitMQ's broker and its
+                       management UI, printed `amqp: 5672 · management: 15672`
+                       into every row — and they are read once, when something
+                       is being connected to, rather than scanned down the
+                       column. The ⓘ at the end of the row opens the sheet that
+                       has them, next to the connection string they belong
+                       with. -->
                   <!-- Stop and start the container, which is a different act
                        from the On/Off beside it: this one leaves the instance
                        enabled and the compose file alone. Start only offers
@@ -1041,27 +1121,54 @@ const supportColour = (support) =>
                         {{ healthDots[instance.id].label }}
                       </v-tooltip>
                     </span>
+                    <!-- The word is in the tooltip, like every other button in
+                         this row. "ENABLED" and "DISABLED" printed into the
+                         cell made this the one column whose width was set by a
+                         translation, and the glyph and the colour already say
+                         which state it is in — the text was the same fact a
+                         third time.
+
+                         The label still says the *state*, not the action, and
+                         that is deliberate: this button reads "on" and turns it
+                         off, which is how a toggle works, and a tooltip reading
+                         "Disable" over a green tick would be a button that
+                         disagrees with itself. -->
                     <v-btn
                       v-if="instance.enabled"
+                      icon
                       size="small"
                       color="success"
                       variant="tonal"
+                      :aria-label="t('marketView.enabled')"
                       :loading="market.working.value === instance.id"
                       @click="market.disable(instance.id)"
                     >
-                      <v-icon start>mdi-check-circle</v-icon>{{ t('marketView.enabled') }}
+                      <v-icon>mdi-check-circle</v-icon>
+                      <v-tooltip activator="parent" location="top">
+                        {{ t('marketView.enabled') }}
+                      </v-tooltip>
                     </v-btn>
-                    <v-btn
-                      v-else
-                      size="small"
-                      color="grey"
-                      variant="tonal"
-                      :disabled="!instance.packagePresent"
-                      :loading="market.working.value === instance.id"
-                      @click="market.enable(instance.id)"
-                    >
-                      <v-icon start>mdi-power</v-icon>{{ t('marketView.disabled') }}
-                    </v-btn>
+                    <!-- The span carries the tooltip: a disabled button emits
+                         no pointer events, and a package whose files have gone
+                         is exactly when somebody wants to know what the greyed
+                         button would have done. -->
+                    <span v-else>
+                      <v-btn
+                        icon
+                        size="small"
+                        color="grey"
+                        variant="tonal"
+                        :disabled="!instance.packagePresent"
+                        :aria-label="t('marketView.disabled')"
+                        :loading="market.working.value === instance.id"
+                        @click="market.enable(instance.id)"
+                      >
+                        <v-icon>mdi-power</v-icon>
+                      </v-btn>
+                      <v-tooltip activator="parent" location="top">
+                        {{ t('marketView.disabled') }}
+                      </v-tooltip>
+                    </span>
                   </td>
                   <!-- Icons with the label in a tooltip. Four labelled buttons
                        wrapped onto three lines in a five-column table; as
@@ -1174,6 +1281,25 @@ const supportColour = (support) =>
 </template>
 
 <style scoped>
+/* One fact of a tooltip, on its own line with its glyph.
+ *
+ * `align-items: start` rather than `center`: a fact long enough to wrap should
+ * hang under its own first line, not centre the glyph against two lines of
+ * text. `white-space: nowrap` is deliberately absent — Vuetify bounds the
+ * tooltip and a fact that wraps is still a fact you can read. */
+.tip-line {
+  display: flex;
+  align-items: start;
+  gap: 6px;
+  line-height: 1.5;
+}
+
+/* The glyph sits on the text's baseline rather than on the line box's top. */
+.tip-line .v-icon {
+  margin-top: 2px;
+  flex: 0 0 auto;
+}
+
 /* Takes the room the card has and scrolls inside it, rather than letting the
    flex column distribute a fixed height across children that each wanted more.
    `min-height: 0` is the half that is easy to leave out and is the half that

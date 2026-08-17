@@ -193,15 +193,29 @@ pub fn threshold_seconds(root: &Path) -> Result<u64> {
 mod tests {
     use super::*;
 
-    fn workspace(lines: &[&str]) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "stackvo-idle-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+    /// A workspace with an access log in it, in a directory named after the
+    /// test that asked for one.
+    ///
+    /// **Named, not timestamped**, and that is a bug fix rather than a style
+    /// preference. This used to build the path from
+    /// `SystemTime::now().as_nanos()`, on the reasonable-sounding argument that
+    /// a nanosecond clock cannot hand out the same value twice. It can: the
+    /// value is quantised to a microsecond on macOS — every reading ends in
+    /// `000` — and `cargo test` starts these nine tests on parallel threads
+    /// inside the same one. Two of them got the same directory, the second
+    /// `fs::write` replaced the first's log, and whichever test read afterwards
+    /// asserted against the other's fixture.
+    ///
+    /// It presented as a flake that only ever failed in a full run: alone, or
+    /// filtered to this module, the tests are far enough apart to get distinct
+    /// readings. A clock is not an identity.
+    ///
+    /// `remove_dir_all` first, as `market::tests::scratch` does, so a run does
+    /// not inherit whatever a killed one left behind. The name makes a stray
+    /// directory say which test made it, which a timestamp never could.
+    fn workspace(name: &str, lines: &[&str]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("stackvo-idle-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("generated/traefik/log")).unwrap();
         std::fs::write(log_path(&dir), lines.join("\n") + "\n").unwrap();
         dir
@@ -213,11 +227,14 @@ mod tests {
 
     #[test]
     fn the_last_request_per_router_is_read_out_of_the_log() {
-        let dir = workspace(&[
-            &entry("shop@docker", "2026-08-15T10:00:00Z"),
-            &entry("blog@docker", "2026-08-15T10:05:00Z"),
-            &entry("shop@docker", "2026-08-15T10:10:00Z"),
-        ]);
+        let dir = workspace(
+            "last-seen",
+            &[
+                &entry("shop@docker", "2026-08-15T10:00:00Z"),
+                &entry("blog@docker", "2026-08-15T10:05:00Z"),
+                &entry("shop@docker", "2026-08-15T10:10:00Z"),
+            ],
+        );
         let seen = last_seen(&dir);
         assert_eq!(seen.len(), 2);
         assert!(seen["shop"] > seen["blog"], "{seen:?}");
@@ -229,10 +246,13 @@ mod tests {
     /// last-seen time backwards.
     #[test]
     fn an_out_of_order_line_does_not_move_the_answer_backwards() {
-        let dir = workspace(&[
-            &entry("shop@docker", "2026-08-15T10:10:00Z"),
-            &entry("shop@docker", "2026-08-15T10:00:00Z"),
-        ]);
+        let dir = workspace(
+            "out-of-order",
+            &[
+                &entry("shop@docker", "2026-08-15T10:10:00Z"),
+                &entry("shop@docker", "2026-08-15T10:00:00Z"),
+            ],
+        );
         let seen = last_seen(&dir);
         assert_eq!(seen["shop"], 1786788600, "should be the 10:10 entry");
         let _ = std::fs::remove_dir_all(&dir);
@@ -242,12 +262,15 @@ mod tests {
     /// is routinely half a line.
     #[test]
     fn a_torn_or_unparseable_line_is_skipped_rather_than_failing_the_read() {
-        let dir = workspace(&[
-            &entry("shop@docker", "2026-08-15T10:00:00Z"),
-            "{\"RouterName\":\"blog@doc",
-            "not json at all",
-            r#"{"RouterName":"blog@docker"}"#,
-        ]);
+        let dir = workspace(
+            "torn-line",
+            &[
+                &entry("shop@docker", "2026-08-15T10:00:00Z"),
+                "{\"RouterName\":\"blog@doc",
+                "not json at all",
+                r#"{"RouterName":"blog@docker"}"#,
+            ],
+        );
         let seen = last_seen(&dir);
         assert_eq!(seen.len(), 1, "only the complete line counts: {seen:?}");
         let _ = std::fs::remove_dir_all(&dir);
@@ -273,7 +296,10 @@ mod tests {
     /// reported with the feature off.
     #[test]
     fn with_the_threshold_off_the_idle_time_is_still_reported() {
-        let dir = workspace(&[&entry("shop@docker", "2026-08-15T10:00:00Z")]);
+        let dir = workspace(
+            "threshold-off",
+            &[&entry("shop@docker", "2026-08-15T10:00:00Z")],
+        );
         // 10:00 plus ten minutes.
         let out = assess(&dir, &[("shop".into(), true)], 0, 1786788600);
         assert_eq!(out[0].seconds, Some(600));
@@ -283,7 +309,10 @@ mod tests {
 
     #[test]
     fn a_project_past_the_threshold_is_suspendable() {
-        let dir = workspace(&[&entry("shop@docker", "2026-08-15T10:00:00Z")]);
+        let dir = workspace(
+            "past-threshold",
+            &[&entry("shop@docker", "2026-08-15T10:00:00Z")],
+        );
         let out = assess(&dir, &[("shop".into(), true)], 300, 1786788600);
         assert!(out[0].suspendable);
         let _ = std::fs::remove_dir_all(&dir);
@@ -293,7 +322,10 @@ mod tests {
     /// and having everything stop at once.
     #[test]
     fn a_project_the_log_has_never_mentioned_is_not_suspendable() {
-        let dir = workspace(&[&entry("blog@docker", "2026-08-15T10:00:00Z")]);
+        let dir = workspace(
+            "never-mentioned",
+            &[&entry("blog@docker", "2026-08-15T10:00:00Z")],
+        );
         let out = assess(&dir, &[("shop".into(), true)], 60, 1786788600);
         assert_eq!(out[0].seconds, None);
         assert!(!out[0].suspendable);
@@ -302,7 +334,10 @@ mod tests {
 
     #[test]
     fn a_stopped_project_is_not_in_the_answer_at_all() {
-        let dir = workspace(&[&entry("shop@docker", "2026-08-15T10:00:00Z")]);
+        let dir = workspace(
+            "stopped-project",
+            &[&entry("shop@docker", "2026-08-15T10:00:00Z")],
+        );
         let out = assess(&dir, &[("shop".into(), false)], 60, 1786788600);
         assert!(out.is_empty());
         let _ = std::fs::remove_dir_all(&dir);

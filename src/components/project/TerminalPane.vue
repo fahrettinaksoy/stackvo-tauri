@@ -1,5 +1,5 @@
 <script setup>
-import { onBeforeUnmount, ref, shallowRef, watch } from 'vue';
+import { nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useAppearanceStore } from '@/stores/appearance';
 import { useTerminal } from '@/composables/useTerminal';
@@ -70,11 +70,22 @@ async function start() {
   });
   const fitAddon = new FitAddon();
   instance.loadAddon(fitAddon);
-  instance.open(host.value);
-  fitAddon.fit();
 
+  // Visible before it is opened, and this order is the whole of it.
+  //
+  // The host is `v-show="term"`, so it stays `display: none` until the line
+  // below runs — and an element with no layout box has no size to read.
+  // `fit()` derives the row count by measuring the host, so opening first
+  // measured a zero-height box: the count it settled on was whatever the
+  // observer rescued a frame later, always about one row too many for the
+  // space, and the bottom line of every session was drawn half outside the
+  // box that `overflow: hidden` then cut in half.
   term.value = instance;
   fit.value = fitAddon;
+  await nextTick();
+
+  instance.open(host.value);
+  fitAddon.fit();
 
   // Keystrokes go straight through. The shell, not this pane, decides what a
   // character means — echo, line editing and control sequences are all its.

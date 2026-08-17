@@ -39,7 +39,8 @@ const englishStrings = computed(() => count(i18n.global.getLocaleMessage('en')))
 
 function count(value) {
   if (typeof value === 'string') return 1;
-  if (value && typeof value === 'object') return Object.values(value).reduce((n, v) => n + count(v), 0);
+  if (value && typeof value === 'object')
+    return Object.values(value).reduce((n, v) => n + count(v), 0);
   return 0;
 }
 
@@ -155,7 +156,13 @@ onMounted(loadPacks);
         variant="outlined"
         style="max-width: 220px"
       />
-      <v-btn size="small" variant="tonal" :disabled="!newTag.trim()" :loading="busy" @click="startPack">
+      <v-btn
+        size="small"
+        variant="tonal"
+        :disabled="!newTag.trim()"
+        :loading="busy"
+        @click="startPack"
+      >
         {{ t('settings.packStart') }}
       </v-btn>
     </div>

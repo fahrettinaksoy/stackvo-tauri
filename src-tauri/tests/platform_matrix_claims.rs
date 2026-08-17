@@ -26,6 +26,7 @@
 //! *means*, and a test that pretended to settle them would be a worse lie than
 //! the stale number this file exists to prevent.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 fn repo_root() -> PathBuf {
@@ -242,6 +243,10 @@ fn invoke_appears_in_exactly_one_file() {
 /// version of this sentence and nobody could check it. If one of these is
 /// renamed, the paragraph that lists them becomes wrong here rather than
 /// quietly.
+///
+/// This checks the four are still there. [`no_fifth_command_has_quietly_become_desktop_only`]
+/// checks that a fifth has not appeared, which is the direction that actually
+/// goes wrong.
 #[test]
 fn the_desktop_only_commands_are_still_called_that() {
     let doc = document();
@@ -296,6 +301,36 @@ fn the_rust_source_size_is_current() {
     );
 }
 
+/// The size of the deletion §3 #36 is waiting to make.
+///
+/// In §7 rather than beside the item, and the placement is the argument §8
+/// makes: §3 cannot be gated, because "not done" is not a property of the code.
+/// A *count* is, and this one had already drifted — the row said "roughly half
+/// of 186" for three rounds while the real figure was 150, four fifths. The
+/// difference is the difference between a tidy-up and a fifth of the constant
+/// table, and it is exactly the kind of number that only stays right if
+/// something recomputes it.
+#[test]
+fn the_two_halves_of_the_embedded_defaults_are_current() {
+    let doc = document();
+
+    assert_states(
+        &doc,
+        stackvo_desktop_lib::config::SETTINGS.len(),
+        "embedded settings that stay",
+    );
+    assert_states(
+        &doc,
+        stackvo_desktop_lib::config::LEGACY_SERVICES.len(),
+        "embedded defaults that exist only for the migration",
+    );
+    assert_states(
+        &doc,
+        stackvo_desktop_lib::config::EMBEDDED.len(),
+        "embedded defaults in total",
+    );
+}
+
 /// The source with every top-level `#[cfg(test)]` item removed.
 ///
 /// The same indentation-based scan as `readme_claims.rs` and
@@ -317,4 +352,127 @@ fn production_regions(src: &str) -> String {
 
     kept.push_str(&src[from..]);
     kept
+}
+
+/// The desktop-only set is derived, not remembered. §3 #34.
+///
+/// The test above holds the four names the document lists. It cannot fail when
+/// a **fifth** appears, and that is the only direction this ever goes: somebody
+/// adds a command that relabels the tray or drives the window, and §7's
+/// paragraph — the one a web version would be planned from — quietly becomes a
+/// list of four out of five.
+///
+/// So the set is computed. A command has no web counterpart when it reaches the
+/// tray, the updater or a window, either in its own body or through a helper in
+/// this same file: `window_close_action` does nothing itself and hands off to
+/// `apply_close`, so a scan that did not follow one call would have missed it.
+///
+/// ## Why three and not four
+///
+/// `updates_check` is one of the contract's three `frontend-plugin` commands —
+/// it is `tauri-plugin-updater`'s, not this crate's, so it has no
+/// `#[tauri::command]` here to find. Asserting it separately would be asserting
+/// that a dependency still exists; §7 names it because a *reader* planning a
+/// web build needs to know about it, and that is prose rather than a scan.
+///
+/// ## Comments are stripped first, and the first version did not
+///
+/// It reported `locale_get`, which does nothing of the kind: it calls
+/// `preferred_locale`, whose comment explains that the tray reads the same
+/// preference. Same lesson as `policy_claims.rs` — a gate that reads prose is
+/// answering a question about the documentation.
+#[test]
+fn no_fifth_command_has_quietly_become_desktop_only() {
+    let source = read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src/commands.rs"));
+    let source = production_regions(&source);
+    let code: String = source
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Every top-level function in the file, by name, so a command that hands
+    // off can be followed one step.
+    let mut bodies: BTreeMap<String, String> = BTreeMap::new();
+    for (offset, _) in code
+        .match_indices("\nfn ")
+        .chain(code.match_indices(" fn "))
+    {
+        let after = &code[offset..];
+        let Some(rest) = after.split_once("fn ").map(|(_, rest)| rest) else {
+            continue;
+        };
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_')
+            .collect();
+        if name.is_empty() {
+            continue;
+        }
+        let start = offset + (after.len() - rest.len());
+        let end = code[start..]
+            .find("\n}\n")
+            .map(|i| start + i)
+            .unwrap_or(code.len());
+        bodies
+            .entry(name)
+            .or_insert_with(|| code[start..end].to_string());
+    }
+
+    /// The window, the tray and the updater: the three things a browser tab is
+    /// not. Spelled as they appear in this crate rather than as Tauri names
+    /// them, because a command reaches them through this app's own modules.
+    const DESKTOP: [&str; 6] = [
+        "tray",
+        "updater",
+        "Updater",
+        "TrayIcon",
+        "WebviewWindow",
+        "get_webview_window",
+    ];
+
+    fn reaches(name: &str, bodies: &BTreeMap<String, String>, seen: &mut BTreeSet<String>) -> bool {
+        if !seen.insert(name.to_string()) {
+            return false;
+        }
+        let Some(body) = bodies.get(name) else {
+            return false;
+        };
+        if DESKTOP.iter().any(|needle| body.contains(needle)) {
+            return true;
+        }
+        // One call deep, and then as deep as that goes. Cheap because the set
+        // of functions in one file is small and `seen` stops the cycles.
+        bodies
+            .keys()
+            .filter(|callee| callee.as_str() != name && body.contains(&format!("{callee}(")))
+            .any(|callee| reaches(callee, bodies, seen))
+    }
+
+    let mut found = BTreeSet::new();
+    for chunk in code.split("\n#[tauri::command").skip(1) {
+        let Some(rest) = chunk.split_once("fn ").map(|(_, rest)| rest) else {
+            continue;
+        };
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_')
+            .collect();
+        if reaches(&name, &bodies, &mut BTreeSet::new()) {
+            found.insert(name);
+        }
+    }
+
+    let declared: BTreeSet<String> = ["tray_relabel", "updater_status", "window_close_action"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+
+    assert_eq!(
+        found, declared,
+        "the set of commands that reach the tray, the window or the updater has \
+         changed. §7 of docs/durum.md lists the commands a web build cannot \
+         have, and that list is what anybody planning §3 #34 reads — add the \
+         name there and here, or find out why this one needs a window."
+    );
 }

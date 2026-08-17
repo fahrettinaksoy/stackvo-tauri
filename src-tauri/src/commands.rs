@@ -243,6 +243,13 @@ pub struct Project {
     /// moment a regenerate makes it untrue.
     pub generated_stale: bool,
     pub ports: Vec<Port>,
+    /// Whether the code came out of a repository, and which one.
+    ///
+    /// `None` is a directory that was never versioned. `Some` with no `remote`
+    /// is local history and no upstream — a distinction worth keeping, because
+    /// "somebody cloned this" and "somebody started this here" are different
+    /// answers to where a project came from.
+    pub git: Option<crate::git::Checkout>,
 }
 
 #[tauri::command]
@@ -334,6 +341,7 @@ pub async fn list_projects(root: &std::path::Path) -> Result<Vec<Project>> {
                         warnings: Vec::new(),
                         hooks: Default::default(),
                         commands: Default::default(),
+                        sidecars: Default::default(),
                         local: Vec::new(),
                     },
                 ));
@@ -378,6 +386,7 @@ pub async fn list_projects(root: &std::path::Path) -> Result<Vec<Project>> {
                 runtime: m.runtime.clone(),
                 manifest_valid: m.valid,
                 generated_stale: crate::doctor::project_generated_is_stale(root, &dir_name),
+                git: crate::git::checkout(&path),
                 name: dir_name,
                 manifest: m,
                 domain_configured,
@@ -956,9 +965,9 @@ pub struct Catalog {
     pub max_extensions: usize,
 }
 
-/// Every runtime the Rust generator can build. The Bash CLI still knows only
-/// php and node; since Sprint 17 the app generates for itself, so the four
-/// lang runtimes exist here first (C-02, closed).
+/// Every runtime the generator can build. The Bash CLI it replaced knew only
+/// php and node; since Sprint 17 the app generates for itself, so the six
+/// other runtimes exist here first and nowhere else (C-02, closed).
 const IMPLEMENTED_RUNTIMES: [&str; 8] =
     ["php", "node", "python", "go", "ruby", "rust", "bun", "deno"];
 
@@ -8838,9 +8847,9 @@ pub fn secrets_status(state: State<'_, AppState>) -> Result<serde_json::Value> {
 
 /// Move one credential out of `.env` and into the keystore.
 ///
-/// Deliberately one key at a time and never automatic. The Bash CLI reads
-/// `.env` directly and would take `keychain:…` for the password itself, so this
-/// is a decision with a consequence somebody has to be told about — see
+/// Deliberately one key at a time and never automatic. Anything that reads
+/// `.env` directly takes `keychain:…` for the password itself, so this is a
+/// decision with a consequence somebody has to be told about — see
 /// [`crate::secrets`] and ADR 0010. A sweep that moved every credential at
 /// once would be the same decision made silently, twelve times.
 #[tauri::command]
@@ -9658,12 +9667,16 @@ pub async fn sample_container_stats(app: &AppHandle) {
 
 // ---------------------------------------------------------------- generator preview
 
-/// Render a project's Dockerfile with the Rust generator, without writing it.
+/// Render a project's Dockerfile, without writing it.
 ///
-/// The Bash generator remains the one that actually produces build inputs; this
-/// is the port running alongside it so its output can be compared before it
-/// takes over. Strict mode is the point: where Bash silently drops an
-/// incompatible extension, this refuses and says which one.
+/// What the build would use, answered from the manifest rather than from
+/// whatever is currently on disk — so an edit can be looked at before anything
+/// is regenerated.
+///
+/// Strict mode is the second reason it exists. The generator that writes the
+/// real file drops an extension it cannot build and carries on; strict refuses
+/// and says which one. Both answers are worth having, which is why the caller
+/// picks.
 #[tauri::command]
 pub fn project_dockerfile_preview(
     state: State<'_, AppState>,
@@ -9694,7 +9707,8 @@ pub fn project_dockerfile_preview(
     let rendered = crate::generator::render_from_manifest(&m, &opts, strict)
         .map_err(|e| Error::new(Code::Unsupported, e))?;
 
-    // What Bash would drop without telling anyone.
+    // What a non-strict render drops without telling anyone — which is what
+    // the file on disk was written by.
     let skipped = m
         .php
         .as_ref()
@@ -9702,8 +9716,14 @@ pub fn project_dockerfile_preview(
         .map(|plan| plan.skipped)
         .unwrap_or_default();
 
-    // Where the Bash generator puts its version, so the two can be diffed.
-    let bash_path = if m.runtime != "php" {
+    // The file this project would actually be built from, so the render above
+    // can be diffed against it. Note what the diff means: both sides come from
+    // the same generator, so a difference is the file on disk being stale —
+    // the manifest changed and nothing has regenerated since — and never a
+    // disagreement between two implementations. It was one, once: this
+    // compared against what a Bash generator had written, and reported it in
+    // those terms long after that generator stopped existing.
+    let generated_path = if m.runtime != "php" {
         workspace::project_dir(&root, &name)?.join("Dockerfile")
     } else {
         root.join("generated/projects")
@@ -9719,8 +9739,11 @@ pub fn project_dockerfile_preview(
         "skipped": skipped.into_iter().map(|(ext, reason)| {
             serde_json::json!({ "extension": ext, "reason": reason })
         }).collect::<Vec<_>>(),
-        "bashOutputPath": bash_path.display().to_string(),
-        "matchesBashOutput": std::fs::read_to_string(&bash_path)
+        "generatedPath": generated_path.display().to_string(),
+        // Only meaningful for the non-strict render, which is the mode the file
+        // on disk was written in. A strict render differs from it by design, so
+        // the caller does not ask this question in strict mode.
+        "matchesGenerated": std::fs::read_to_string(&generated_path)
             .map(|existing| existing == rendered)
             .unwrap_or(false),
     }))
@@ -9728,14 +9751,18 @@ pub fn project_dockerfile_preview(
 
 // ---------------------------------------------------------------- generator verification
 
-/// Render every generated file with the Rust generator and compare it against
-/// what the Bash generator actually wrote.
+/// Render every generated file and compare it against what is on disk.
 ///
-/// This is the migration path, not a curiosity. The Rust port cannot replace
-/// the Bash generator on the strength of a fixture suite alone — fixtures cover
-/// the cases someone thought to write down. This runs the comparison against
-/// the user's real projects and real `.env`, so a divergence shows up on their
-/// machine before anything depends on it.
+/// A drift check. A workspace goes out of step in two ordinary ways — somebody
+/// edits a generated file by hand, or a manifest changes and nothing
+/// regenerates — and neither leaves a mark anywhere else: the stack keeps
+/// running from files that no longer describe what the app thinks it is
+/// running.
+///
+/// It was a migration gate first, comparing a Rust port against the Bash
+/// generator it was written to replace, and that is where the shape came from.
+/// The Bash generator is gone; the comparison outlived it because "does disk
+/// match what we would write" is worth asking on its own.
 ///
 /// Reads only. It never writes a generated file.
 #[tauri::command]
@@ -9914,8 +9941,8 @@ pub fn render_generated(root: &std::path::Path) -> Result<Rendered> {
                 Err(e) => errors.push((format!("{name}/Dockerfile"), e)),
             }
 
-            // A node build context must never swallow host node_modules; the
-            // Bash generator rewrites this beside the Dockerfile on every run.
+            // A node build context must never swallow host node_modules, so
+            // this is rewritten beside the Dockerfile on every run.
             let dockerignore = match m.runtime.as_str() {
                 "node" => Some(generator::NODE_DOCKERIGNORE),
                 other => generator::lang_dockerignore(other),
@@ -10167,7 +10194,11 @@ pub fn verify_generator(root: &std::path::Path) -> Result<serde_json::Value> {
         "files": files,
         "matched": matched,
         "differed": differed,
-        "readyToTakeOver": differed == 0,
+        // Named for the question it answers now. It was `readyToTakeOver` —
+        // the gate for a port replacing the generator it was compared against —
+        // and kept that name for months after there was nothing left to take
+        // over from.
+        "inSync": differed == 0,
         // Surfaced here because the desktop app can say the routing is broken;
         // StackVo itself never does. See CONFLICTS.md C-20.
         "warnings": generator_warnings(root),
@@ -10239,9 +10270,9 @@ pub fn write_generated(
 ) -> Result<serde_json::Value> {
     let (rendered, errors) = render_generated(root)?;
 
-    // The directories Bash's generators mkdir before writing. The log trees
-    // matter beyond the writes below: the generated compose mounts them, and
-    // compose does not create host directories for bind mounts.
+    // Made before anything is written into them. The log trees matter beyond
+    // the writes below: the generated compose mounts them, and compose does not
+    // create host directories for bind mounts.
     for dir in [
         "generated/projects",
         "generated/configs",
@@ -10984,6 +11015,67 @@ pub async fn market_probe(state: State<'_, AppState>, location: String) -> Resul
             hint_key: e.hint_key.map(str::to_string),
         },
     })
+}
+
+/// Write a catalogue and every package into one directory, for a machine that
+/// has no network.
+///
+/// §3 #31. The reading half has been shipped since `LocalSource`:
+/// `market.offlineBundle` points at a directory and everything is read from it
+/// with the same verification as from the network. Nothing could **write** one,
+/// so the only way to get a bundle was to clone the packages repository and
+/// hope its layout was the layout the client reads — which is not an install
+/// path, it is a guess that happens to work.
+///
+/// The source is the remembered one rather than an argument: a bundle is a copy
+/// of the catalogue this machine is actually using, and letting a caller name a
+/// different source here would produce a bundle whose contents nobody on this
+/// machine has ever verified.
+///
+/// Blocking, for the reason the refresh is: an HTTPS source blocks on the
+/// runtime handle and cannot do that from a runtime thread.
+#[tauri::command]
+pub async fn market_bundle(
+    state: State<'_, AppState>,
+    destination: String,
+) -> Result<crate::market::Bundled> {
+    let root = state.root()?;
+    let Some(reference) = crate::market::remembered(&root)? else {
+        return Err(Error::new(
+            Code::NotFound,
+            "no source is remembered — refresh the catalogue first",
+        ));
+    };
+
+    let dest = std::path::PathBuf::from(&destination);
+    let out = tauri::async_runtime::spawn_blocking(move || -> Result<crate::market::Bundled> {
+        let source = crate::market::open(&root, &reference)?;
+        crate::market::bundle(source.as_ref(), &dest)
+    })
+    .await
+    .map_err(|e| {
+        Error::new(
+            Code::IoError,
+            format!("the bundle could not be written: {e}"),
+        )
+    })?;
+
+    // Into the audit trail, on the same terms as every other writing command:
+    // the log answers "what happened to this machine", and "somebody copied the
+    // whole catalogue onto a removable disk" is part of that answer. Recorded
+    // for the failure too — a bundle that was attempted and refused is the
+    // interesting half.
+    crate::audit::record(
+        "market_bundle",
+        &destination,
+        if out.is_ok() {
+            crate::audit::Outcome::Ok
+        } else {
+            crate::audit::Outcome::Failed
+        },
+    );
+
+    out
 }
 
 // ---------------------------------------------------------------- handover

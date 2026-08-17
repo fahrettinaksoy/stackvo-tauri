@@ -97,6 +97,85 @@
       "default": [],
       "description": "OPTIONAL. The backing services this project needs, by catalog id — the half of an environment definition that a teammate gets by cloning the repository. The authoritative list of ids is contracts/env.schema.json → services and is deliberately NOT repeated here: two lists of what a service is called is how one of them goes stale. An id this version of StackVo does not know is a WARNING and not an error — the project still builds, and the declaration is reported as unmet rather than silently dropped. NO VERSIONS: a service has exactly one SERVICE_<NAME>_VERSION for the whole workspace, so a project pinning one would silently change every other project's database. project_requirements plans this and project_requirements_apply enables it, through the same plan-then-apply path a preset import uses."
     },
+    "sidecars": {
+      "type": "object",
+      "maxProperties": 8,
+      "description": "Containers this project needs that the catalogue does not have (§5.1). A **sidecar**, not a service: it is rendered into this project's own compose block, it comes up and goes down with the project's profile, and it is NOT an entry in instances.json. Two clones of the same repository under different project names get two separate containers with two separate volumes and cannot collide, because every name here is derived from the project's name rather than declared. Kept apart from `services`, which names a catalogue id — a *need* the machine satisfies from packages. This describes a container the repository brought with it. Reaching the host is deliberately absent: no host port, no host path. ADR 0020's argument — the container already runs the repository's code — does not carry over to a NEW image, so anything that reaches out of the project's own network belongs behind a consent gate and is refused until that gate exists.",
+      "propertyNames": {
+        "pattern": "^[a-z0-9-]{1,40}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "image"
+        ],
+        "properties": {
+          "image": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 200,
+            "pattern": "^[a-z0-9][a-z0-9._/-]*:[a-zA-Z0-9._-]+$",
+            "description": "The image to run, WITH a tag. A tag is required for the reason ADR 0014 gives about `latest`: an untagged image moves under somebody who pulled it last month, and a repository that pins its own PHP version has no business leaving this one floating."
+          },
+          "about": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "One line shown beside it, so a person reading the project's page knows what the extra container is for."
+          },
+          "command": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Overrides the image's own command, as an argv ARRAY and never a string — the same rule `commands` follows, for the same reason: nothing here re-splits a line."
+          },
+          "env": {
+            "type": "object",
+            "maxProperties": 64,
+            "propertyNames": {
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "description": "Environment for the container. Committed to the repository, so it is for configuration and not for secrets — the same file everybody on the team can read."
+          },
+          "volumes": {
+            "type": "array",
+            "maxItems": 8,
+            "uniqueItems": true,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "path"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9-]{1,40}$",
+                  "description": "A handle, not a volume name. The real Docker volume is `stackvo-<project>-<sidecar>-<name>`, derived so two clones cannot share one."
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "pattern": "^/",
+                  "description": "Where it is mounted INSIDE the container. An absolute container path; there is no host path form, because a repository that could name one could mount the directory above itself."
+                }
+              }
+            },
+            "description": "Named volumes this container keeps state in. Docker volumes only — a host bind mount is the thing this format refuses."
+          }
+        }
+      }
+    },
     "hooks": {
       "type": "object",
       "additionalProperties": false,

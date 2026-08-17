@@ -430,18 +430,39 @@ export default {
     searchPlaceholder: 'Proje ara...',
     colDomain: 'Alan Adı',
     colRuntime: 'Çalışma Ortamı',
+    colRepo: 'Repo',
+    filter: {
+      all: 'Hepsi',
+      running: 'Çalışan',
+      stopped: 'Durmuş',
+      unbuilt: 'Derlenmemiş',
+      favourites: 'Yalnızca favoriler',
+      title: 'Süzgeçler',
+      status: 'Durum',
+      clear: 'Süzgeçleri temizle',
+    },
+    repoLocal: 'Git deposu — uzak sunucusu yok',
     colServer: 'Sunucu',
     colConfiguration: 'Yapılandırma',
     colStopStart: 'Durdur/Başlat',
     colRestart: 'Yeniden Başlat',
-    colRebuild: 'Yeniden Derle',
     rebuild: 'Yeniden derle',
-    rebuildHint:
-      'Dockerfile’ı stackvo.json’dan yeniden üretir, imajı derler ve konteyneri yeniden yaratır. Yeniden başlatmak bunların hiçbirini yapmaz.',
     colTerminal: 'Terminal',
     colOpen: 'Tarayıcıda aç',
     colDetail: 'Detay',
     colDelete: 'Sil',
+    colMore: 'İşlemler',
+    // Satır sonundaki üç nokta menüsü. Sütun başlıkları bir sütunu adlandırır
+    // ("Durdur/Başlat"); bunlar tek bir eylemi adlandırır, çünkü menüde o an
+    // yapılabilecek olan hangisiyse yalnızca o görünür.
+    menu: {
+      build: 'Derle',
+      start: 'Başlat',
+      stop: 'Durdur',
+      restart: 'Yeniden başlat',
+      apply: 'Değişiklikleri uygula',
+      fixHosts: 'hosts kaydını ekle',
+    },
     // Her biri projenin adını taşıyor. Yirmi satırlık bir tabloda her butonun
     // "Sil" demesi, ekran okuyucu kullanıcısına hangi projeyi kaldırmak üzere
     // olduğunu söylemez.
@@ -454,8 +475,8 @@ export default {
       restart: '{name} projesini yeniden başlat',
       open: '{name} projesini tarayıcıda aç',
       detail: '{name} projesinin ayrıntılarını aç',
-      delete: '{name} projesini sil',
       fixHosts: '{name} için hosts kaydı ekle',
+      more: '{name} için işlemler',
     },
     default: 'Varsayılan',
     noDnsRecord: 'hosts kaydı yok',
@@ -482,6 +503,18 @@ export default {
       'Bu indeks {sequence}, burada olan {current}. Çekmek reddedilirdi: geriye giden bir indeks, geri çekilmiş bir sürümün geri gelme yoludur.',
     failed: 'Orada bir katalog okunamadı',
     resolved: '{url} adresinden çekildi',
+    bundleTitle: 'Hava boşluklu paket',
+    bundleWhat:
+      'Bu katalogu ve bütün paketleri tek klasöre yazın, ağı olmayan bir makineye götürmek için. O makineyi bu klasöre yöneltin — StackVo içinde hiçbir servis taşımıyor, yani bir katalogun oraya ulaşmasının başka yolu yok.',
+    bundleAction: 'Paket yaz…',
+    bundleNeedsCatalogue:
+      'Önce bir katalog çekin — paket, bu makinenin kullandığı katalogun kopyasıdır.',
+    bundleDone: 'Yazıldı: {packages} paket, {versions} sürüm, {files} dosya, {size}.',
+    bundleUnsigned:
+      'Yanında imza gitmedi. İmzalı katalog şart koşan bir makine bu paketi reddeder.',
+    bundleSkipped: 'Taşınmadı, çünkü yayıncı geri çekti:',
+    bundleNext:
+      'Öteki makinede bu klasörü katalog adresi olarak seçin — ya da market.offlineBundle’ı ona ayarlayın.',
   },
   marketView: {
     createTitle: 'Yeni instance: {id}',
@@ -509,6 +542,7 @@ export default {
     eolWhy:
       'Desteği bitmiş sürümler çalışmaya devam eder — üretici yama vermeyi bırakmıştır, bu bozuk olmakla aynı şey değildir. Katalogdan değil, aşağıdaki listelerden tutulurlar: .env’inde o sürüm yazan bir çalışma alanının göç edebilmesi gerekiyor, ve bir sürümü düşürebilen bir indeks, birinin çalışan servisinin kaynağını kaybettiği indekstir.',
     recommended: 'Önerilen',
+    supportUntil: 'Destek bitişi: {date}',
     support: {
       supported: 'Destekli',
       deprecated: 'Kullanımdan kalkıyor',
@@ -526,7 +560,6 @@ export default {
       'Yukarıdan bir paket kurun, sonra ondan bir örnek ekleyin. Bir servisin iki sürümü yan yana çalışabilir; her biri kendi verisi ve kendi portuyla.',
     colInstance: 'Örnek',
     colContainer: 'Konteyner Adı',
-    colPorts: 'Portlar',
     colStopStart: 'Durdur/Başlat',
     colRestart: 'Yeniden Başlat',
     colOpen: 'Tarayıcıda aç',
@@ -722,7 +755,8 @@ export default {
       'Proje dizininizde StackVo’nun yönettiği bir proje bulunmuyor. Yeni bir tane oluşturun ya da mevcut bir klasörü buraya taşıyıp sahiplendirin.',
     noMatch: 'Eşleşen proje yok',
     noMatchText: '“{term}” aramasıyla eşleşen bir proje bulunamadı.',
-    clearSearch: 'Aramayı temizle',
+    noMatchFilter: 'Seçili süzgeçlere uyan bir proje yok.',
+    clearSearch: 'Aramayı ve süzgeçleri temizle',
     running: 'Çalışıyor',
     stopped: 'Durdu',
     notBuilt: 'Derlenmedi',
@@ -877,19 +911,29 @@ export default {
     pick: '{tool} klasörünü göster',
     notThere: 'O klasör bir {source} kurulumuna benzemiyor.',
     sizeAtLeast: 'en az {size}',
+    colSite: 'Site',
+    colDetected: 'Algılanan',
+    colDomain: 'Alan adı',
+    colSize: 'Boyut',
+    colAction: 'İçe aktar',
   },
   unmanaged: {
     title: 'Sahiplenilmemiş kod',
     review: 'Sahiplenilecek klasörler ve siteler',
     explain:
-      'Bu makinede olup StackVo’nun çalıştırmadığı kod: projects/ altında stackvo.json dosyası olmayan klasörler ve XAMPP ya da Laragon’a ait siteler.',
+      'Bu makinede olup StackVo’nun çalıştırmadığı kod: proje klasörünüzde stackvo.json dosyası olmayan klasörler ve XAMPP ya da Laragon’a ait siteler.',
     waiting: '{n} tane bekliyor.',
     nothing: 'Bekleyen bir şey yok.',
     pickExplain: 'Yalnızca alışılmış kurulum yolları tarandı. Başka bir yeri gösterin.',
-    none: 'Bir şey bulunamadı. projects/ altındaki her klasörün stackvo.json dosyası var ve bu araçların normalde kurulduğu yerlerde XAMPP ya da Laragon sitesi görülmedi.',
+    none: 'Bir şey bulunamadı. Proje klasörünüzdeki her klasörün stackvo.json dosyası var ve bu araçların normalde kurulduğu yerlerde XAMPP ya da Laragon sitesi görülmedi.',
   },
   adopt: {
-    found: 'projects/ altındaki {n} klasörün stackvo.json dosyası yok.',
+    found: 'Buradaki {n} klasörün stackvo.json dosyası yok.',
+    where: '{path} içinde tarandı',
+    colFolder: 'Klasör',
+    colDetected: 'Algılanan',
+    colEvidence: 'Neye göre algılandı',
+    colAction: 'Sahiplen',
     from: '{files} dosyasından algılandı',
     noEvidence: 'tanınan bir şey yok — varsayılanlar kullanılacak',
     action: 'Sahiplen',
@@ -957,7 +1001,8 @@ export default {
     clear: 'Gelen kutusunu boşalt',
     release: 'Gönder',
     releaseTo: 'Bu mesajı şuraya ilet',
-    releaseHint: 'Gerçek bir adres ya da virgülle ayrılmış birkaç adres. Kopyası yakalayıcıda kalır.',
+    releaseHint:
+      'Gerçek bir adres ya da virgülle ayrılmış birkaç adres. Kopyası yakalayıcıda kalır.',
     released: 'Gönderildi.',
     relayTitle: 'Aktarım sunucusu',
     relayOff: 'Ayarlanmadı — gönderme reddedilir.',
@@ -976,9 +1021,12 @@ export default {
     relayFrom: 'Gönderen',
     relayFromHint: 'Sağlayıcılar sahibi olmadıkları bir gönderen adresini reddeder.',
     relayAllowed: 'Yalnızca şuraya gönderilebilsin',
-    relayAllowedHint: 'Virgülle ayırın. Boş bırakmak “her yere” demektir; bu da tek yazım hatası uzaklıktadır.',
-    relayNoKeystore: 'Bu makinede anahtar deposu yok, parola saklanamaz. Parola istemeyen bir sunucu kullanın.',
-    relayRestart: 'Yakalayıcı bunları yeniden oluşturulduğunda okur — kaydettikten sonra yığını yeniden başlatın.',
+    relayAllowedHint:
+      'Virgülle ayırın. Boş bırakmak “her yere” demektir; bu da tek yazım hatası uzaklıktadır.',
+    relayNoKeystore:
+      'Bu makinede anahtar deposu yok, parola saklanamaz. Parola istemeyen bir sunucu kullanın.',
+    relayRestart:
+      'Yakalayıcı bunları yeniden oluşturulduğunda okur — kaydettikten sonra yığını yeniden başlatın.',
     deleteOne: 'Bu mesajı sil',
     confirmClear:
       'Yakalanan tüm mesajlar silinecek. Posta yakalayıcı bir çöp kutusudur, yedeği yoktur.',
@@ -1503,7 +1551,7 @@ export default {
     startup: 'Başlangıç ve kapatma',
     startupDesc: 'Uygulama açılırken ve kapanırken ne olsun',
     compose: 'Konteynerler',
-    generatorDesc: 'Rust üretecinin çıktısını Bash üreteciyle karşılaştırır',
+    generatorDesc: 'Diskteki dosyaları üreticinin yazacağıyla karşılaştırır',
     updatesDesc: 'İmzalı sürüm denetimi ve kurulum',
 
     theme: 'Tema',
@@ -1511,7 +1559,8 @@ export default {
     packProgress: '{total} dizeden {done} tanesi ({percent}%) — kalanı İngilizce görünür',
     packRemove: 'Kaldır',
     packTag: 'Dil etiketi',
-    packHint: 'de, fr ya da pt-BR gibi bir etiket. Çevirebileceğiniz bir dosya oluşturur; çevrilmeyen dizeler İngilizce kalır.',
+    packHint:
+      'de, fr ya da pt-BR gibi bir etiket. Çevirebileceğiniz bir dosya oluşturur; çevrilmeyen dizeler İngilizce kalır.',
     packStart: 'Çeviri başlat',
     preferences: 'Tercihler',
     stackSub: 'Compose seviyesinde: yeniden üretir ve konteynerleri yeniden kurar.',
@@ -1922,7 +1971,8 @@ export default {
     saveKey: 'Sakla',
     clearKey: 'Kaldır',
     path: 'İletilecek yol',
-    needsRunning: 'Önce projeyi başlatın — aksi hâlde her olay iletilemez ve Stripe bu başarısızlıkları kaydeder.',
+    needsRunning:
+      'Önce projeyi başlatın — aksi hâlde her olay iletilemez ve Stripe bu başarısızlıkları kaydeder.',
     connecting: 'Stripe’a bağlanılıyor…',
     secretIs: 'Bu oturumun webhook imza gizi:',
     start: 'Dinle',
@@ -1935,7 +1985,8 @@ export default {
     path: 'Geri dönüş yolu',
     local: 'Yerel adres',
     public: 'Genel adres',
-    noTunnel: 'Çalışan tünel yok, bu yüzden genel adres de yok. Sağlayıcı yereli reddederse yukarıdaki Paylaş bölümünden bir tünel başlatın.',
+    noTunnel:
+      'Çalışan tünel yok, bu yüzden genel adres de yok. Sağlayıcı yereli reddederse yukarıdaki Paylaş bölümünden bir tünel başlatın.',
     takesLocal: 'Yerel yeterli',
     takesPublic: 'Genel gerekiyor',
   },
@@ -2174,7 +2225,7 @@ export default {
   detail: {
     openFolder: 'Klasörü aç',
     dockerfileDesc: 'Rust üreteci bu projeyi nasıl render ediyor — dosyaya yazmadan.',
-    compatHint: 'Bash bugün ne yazıyorsa onu üretir; kurulamayan eklentiler sessizce atlanır.',
+    compatHint: 'Üreticinin gerçekte yazdığı hâli; kurulamayan eklentiler sessizce atlanır.',
     strictHint: 'Kurulamayan bir eklenti varsa üretmeyi reddeder ve hangisi olduğunu söyler.',
     notBuilt: 'Konteyner henüz derlenmedi; log akışı için önce derleyin.',
     openInEditor: 'Editörde aç',
@@ -2188,11 +2239,11 @@ export default {
     dockerfile: 'Dockerfile',
     image: 'İmaj',
     state: 'Durum',
-    matchesBash: 'Bash çıktısıyla birebir aynı',
-    differsFromBash: 'Bash çıktısından farklı',
+    matchesGenerated: 'Üretilmiş dosya güncel',
+    generatedStale: 'Üretilmiş dosya bayat — yeniden üretin',
     strict: 'Katı',
-    compat: 'Uyumlu',
-    silentlySkipped: 'Bash bunları sessizce atlıyor',
+    compat: 'Üretilen',
+    silentlySkipped: 'Normal render bunları sessizce atlıyor',
   },
 
   // Suggestions, keyed by `hintKey` on the error the Rust side raised.
@@ -2216,7 +2267,7 @@ export default {
       "StackVo'nun kuracağı boş bir klasör seçin ya da hâlihazırda yönettiği bir klasörü gösterin.",
     projectNameCharset:
       'Adlar harf, rakam, nokta, alt çizgi ve tire içerebilir; harf veya rakamla başlamalıdır.',
-    pathLeavesProjects: 'projects/ dizininin dışına çıkan bir yol üzerinde işlem yapılmıyor.',
+    pathLeavesProjects: 'Proje klasörünün dışına çıkan bir yol üzerinde işlem yapılmıyor.',
     onlyProjectFolders: 'Yalnızca seçili çalışma alanı içindeki proje klasörleri açılabilir.',
     adoptInstead: 'Bunun yerine projeyi devralın — manifesti yazan yol odur.',
     fixOrAdopt: 'Dosyayı düzeltin ya da silip klasörü devralın.',
@@ -2349,6 +2400,8 @@ export default {
     packageRefusedByPolicy:
       "Bu paket, StackVo'nun bir pakete vermediği bir şey istiyor. Yayınlayan kişiye bildirin.",
     packageNotInRegistry: 'Katalogu yenileyin, ya da listelediği bir sürüm seçin.',
+    bundleNeedsAnEmptyDirectory:
+      'Henüz var olmayan bir dizin seçin, ya da boş bir tane — başkasının dosyalarının üstüne yazılmış bir paket, kimsenin içeriğinden emin olamayacağı bir pakettir.',
     registryWentBackwards:
       'Bu kaynağın sunduğu katalog, burada olandan daha eski. Kullanmadan önce kaynağı kontrol edin.',
     registryUnreachable:

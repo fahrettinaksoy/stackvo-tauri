@@ -156,3 +156,50 @@ describe.each(FAMILIES)('the $name panes', ({ dir, sheet, view, ancestor, chrome
     expect(overlap, 'the view still defines classes the shared sheet owns').toEqual([]);
   });
 });
+
+/**
+ * Every pair of stacked cards is spaced, not just the pairs that happen to be
+ * the same kind of card.
+ *
+ * The rule was `.pane + .pane`, and `RequirementsPane` is the one pane on the
+ * configuration tab that is not a `.pane` — it renders a `SettingsGroup`, whose
+ * card is `.group`. Sitting between the configuration card and the manifest
+ * card, it broke the adjacency on both sides at once, and the tab shipped as
+ * three bordered boxes stacked edge to edge.
+ *
+ * Read from the source for the reason the rest of this file is: jsdom applies
+ * no stylesheet, so a mount assertion cannot see a margin either way.
+ */
+describe('cards stacked on a project-detail tab', () => {
+  const css = readFileSync('src/styles/project-panes.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+
+  /** The selectors of every rule that sets a top margin between siblings. */
+  const spaced = css
+    .split('}')
+    .filter((chunk) => /margin-top/.test(chunk))
+    .flatMap((chunk) => chunk.slice(0, chunk.indexOf('{')).split(','))
+    .map((selector) => selector.trim());
+
+  const CARDS = ['pane', 'group'];
+
+  it.each(CARDS.flatMap((first) => CARDS.map((second) => [first, second])))(
+    'a .%s followed by a .%s',
+    (first, second) => {
+      const wanted = new RegExp(`\\.${first}\\s*\\+\\s*\\.${second}$`);
+      expect(
+        spaced.some((selector) => wanted.test(selector)),
+        `nothing spaces a .${first} from the .${second} under it`
+      ).toBe(true);
+    }
+  );
+
+  /**
+   * And the pane that made the exception is still the exception — if it ever
+   * becomes a `.pane` like its neighbours, this test is the thing that says the
+   * `.group` half of the rule has stopped earning its place.
+   */
+  it('is the shape RequirementsPane actually renders', () => {
+    const source = readFileSync('src/components/project/RequirementsPane.vue', 'utf8');
+    expect(source).toContain('<SettingsGroup');
+  });
+});

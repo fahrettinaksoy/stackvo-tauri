@@ -1,36 +1,37 @@
-//! The generator's output, frozen, with nothing on the machine required.
+//! One guard on the render, with nothing on the machine required.
 //!
-//! ## What this replaces
+//! ## What is left here, and what used to be
 //!
-//! `real_checkout.rs` carried a byte-for-byte comparison against files the
-//! retired Bash generator had written into a checkout on disk. It was the only
-//! coverage the service configs and `docker-compose.dynamic.yml` had, and it
-//! was worth exactly as much as the checkout it found — which, on a machine
-//! where nobody had cloned StackVo, was nothing: `checkout()` returned `None`
-//! and all seventeen tests in that file returned `ok` without asserting
-//! anything. A guard that silently stops guarding is worse than one that was
-//! never written, because the count still says seventeen.
+//! This file was a golden suite. It froze twenty-five assembled service blocks,
+//! the awk filter that trimmed them, the harvested volumes section and six
+//! config renders — and it froze them because `real_checkout.rs` had been
+//! comparing against a checkout that, on a machine where nobody had cloned
+//! StackVo, was simply absent: seventeen tests returned `ok` without asserting
+//! anything.
 //!
-//! ## What it is, honestly
+//! **ADR 0016 deleted what those goldens froze.** `skeleton/core/templates/
+//! services/` left the binary with the `.env` render branch, so
+//! `docker-compose.dynamic.yml` is no longer assembled from templates at all —
+//! it comes from the instance table and the package tree, whose own hashes
+//! `pkg::verify` checks on every read. A golden file of an output nothing
+//! produces is not a weakened guard; it is a fixture that can only ever be
+//! deleted or lied to.
 //!
-//! These files were produced by this renderer and reviewed once. They are not
-//! an independent oracle — the Bash generator that was one is gone, and the
-//! fixtures it did leave behind (`tests/fixtures/probe-*`, `traefik/`,
-//! `docker-compose.projects.yml`) still anchor the Dockerfiles, the routers and
-//! the projects compose file in `fixtures_differential.rs`. What is frozen here
-//! is the *rest*: twenty-five assembled service blocks, the awk filter that
-//! trims them, the harvested volumes section and six config renders. Their
-//! value is that a change to any of it shows up as a reviewable diff instead of
-//! reaching a running container.
+//! What survives is the one assertion that was never about the frozen bytes:
+//! the render must carry nothing from the machine that ran it. That failure
+//! mode outlived the templates, because every remaining template still
+//! interpolates the same four process-derived variables.
 //!
-//! ## Regenerating
+//! The regeneration machinery went with the fixtures. It was three functions —
+//! `updating`, `check`, `first_difference` — that nothing called after the
+//! goldens were removed, and which `cargo clippy -- -D warnings` had been
+//! reporting as dead ever since. If a golden is wanted again, it should be
+//! written for what the renderer produces *now* rather than restored from the
+//! shape of an output that is gone.
 //!
-//! ```sh
-//! STACKVO_GOLDEN_UPDATE=1 cargo test --test golden_render
-//! ```
-//!
-//! Then read `git diff`. That diff is the whole point: it is the change to
-//! every container the app produces, stated in full, before it ships.
+//! `tests/fixtures/golden/overrides.env` stays: [`variables`] reads it, and it
+//! is what makes this test's input a fixed workspace rather than this one.
+//! `handover-before.yml` beside it belongs to `handover_equivalence.rs`.
 
 use stackvo_desktop_lib::{config::Env, skeleton, template};
 use std::path::{Path, PathBuf};
@@ -45,65 +46,6 @@ const NO_WORKSPACE: &str = "/stackvo-golden-render-no-such-workspace";
 
 fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden")
-}
-
-fn updating() -> bool {
-    std::env::var_os("STACKVO_GOLDEN_UPDATE").is_some()
-}
-
-/// Compare against the frozen file, or rewrite it when regenerating.
-fn check(name: &str, rendered: &str) {
-    let path = golden_dir().join(name);
-
-    if updating() {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).expect("creating the golden directory");
-        }
-        std::fs::write(&path, rendered).expect("writing the golden file");
-        eprintln!("updated {name} ({} bytes)", rendered.len());
-        return;
-    }
-
-    let expected = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!(
-            "{name} has no golden file ({e}). Create it with STACKVO_GOLDEN_UPDATE=1 and read the diff."
-        )
-    });
-
-    if rendered == expected {
-        return;
-    }
-
-    // A whole-file dump buries the one line that matters, and these files run
-    // to hundreds of lines.
-    panic!(
-        "{name} differs from the golden file{}\n\n\
-         If the change is intended: STACKVO_GOLDEN_UPDATE=1 cargo test --test golden_render",
-        first_difference(rendered, &expected)
-    );
-}
-
-fn first_difference(ours: &str, theirs: &str) -> String {
-    let a: Vec<&str> = ours.lines().collect();
-    let b: Vec<&str> = theirs.lines().collect();
-
-    for i in 0..a.len().max(b.len()) {
-        let (ours, theirs) = (a.get(i), b.get(i));
-        if ours != theirs {
-            return format!(
-                " at line {}:\n  rendered: {:?}\n  golden:   {:?}",
-                i + 1,
-                ours.unwrap_or(&"<end of file>"),
-                theirs.unwrap_or(&"<end of file>")
-            );
-        }
-    }
-
-    format!(
-        " — same lines, different bytes ({} vs {})",
-        ours.len(),
-        theirs.len()
-    )
 }
 
 /// The frozen settings, merged over the embedded defaults exactly as a real

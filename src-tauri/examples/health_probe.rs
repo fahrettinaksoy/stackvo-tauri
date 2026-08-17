@@ -84,7 +84,7 @@ fn main() {
     });
 
     match run(&packages, only.as_deref()) {
-        Ok(failed) if failed == 0 => println!("\nevery declared healthcheck reported healthy"),
+        Ok(0) => println!("\nevery declared healthcheck reported healthy"),
         Ok(failed) => {
             eprintln!("\n{failed} service(s) did not report healthy");
             std::process::exit(1);
@@ -148,7 +148,7 @@ fn run(packages: &Path, only: Option<&[String]>) -> Result<usize, String> {
         results.push((
             service.clone(),
             version,
-            outcome.unwrap_or_else(|e| Outcome::NeverStarted(e)),
+            outcome.unwrap_or_else(Outcome::NeverStarted),
         ));
     }
 
@@ -384,7 +384,6 @@ fn provider_of(registry: &market::Registry, dependency: &pkg::Dependency) -> Opt
 /// manifest towards a shorter grace period than the software needs.
 fn await_health(container: &str, budget: u64) -> Result<u64, String> {
     let started = std::time::Instant::now();
-    let mut last = String::from("starting");
     loop {
         let status = docker_output(&[
             "inspect",
@@ -405,11 +404,19 @@ fn await_health(container: &str, budget: u64) -> Result<u64, String> {
                 )
             }
             "gone" => return Err(format!("the container is not there ({})", tail(container))),
-            other => last = other.to_string(),
+            // `starting`, or anything the engine grows later. Not an outcome —
+            // the loop is what decides, on the budget below.
+            _ => {}
         }
 
         if started.elapsed().as_secs() >= budget {
-            return Err(format!("still {last} after {budget}s; {}", why(container)));
+            // `status`, not a variable carried from the arm above: the two were
+            // always the same string, and the copy could only ever be the one
+            // that went stale.
+            return Err(format!(
+                "still {status} after {budget}s; {}",
+                why(container)
+            ));
         }
         std::thread::sleep(std::time::Duration::from_secs(3));
     }

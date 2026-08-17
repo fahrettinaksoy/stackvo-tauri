@@ -226,3 +226,90 @@ fn only_the_command_layer_names_a_tauri_handle() {
          test, the `diagnose` example, or the MCP surface: {offenders:?}"
     );
 }
+
+/// A clock is not an identity, and a test fixture must not use one as one.
+///
+/// Four test helpers built a temp directory out of
+/// `SystemTime::now().as_nanos()`, on the reading that a nanosecond clock
+/// cannot hand out the same value twice. It can. macOS quantises the reading to
+/// a microsecond — every value ends in `000` — and `cargo test` runs test
+/// functions on parallel threads, so two of them inside the same microsecond
+/// got the same directory. The second `fs::write` replaced the first's fixture
+/// and whichever test read afterwards asserted against the other one's data.
+///
+/// It cost more to find than to fix, because of how it presented: `cargo test`
+/// failed, `cargo test <that test>` passed, and which test failed moved between
+/// runs. That is the signature of shared state, and the shared state was a name
+/// that looked unique.
+///
+/// The replacement is what `market::tests::scratch` already did: name the
+/// directory after the test, scope it to the pid, and remove it first. A stray
+/// directory then says which test left it, which a timestamp never could.
+///
+/// Scoped to the fixture idiom rather than banning the call: `as_nanos` is a
+/// duration measurement in plenty of places and this is not about those. What
+/// is refused is a **path** built from a clock.
+#[test]
+fn no_test_fixture_builds_its_directory_out_of_a_clock() {
+    let mut offenders = Vec::new();
+
+    for dir in ["src", "tests", "examples"] {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|x| x != "rs") {
+                continue;
+            }
+            // This file, because the needles are in it as string literals — it
+            // is the only place in the tree where `temp_dir()` and `as_nanos()`
+            // appear together and mean nothing. Excluded by name rather than by
+            // being clever about how the literals are spelled: a scanner that
+            // hides its own needles is one nobody can grep for.
+            if path
+                .file_name()
+                .is_some_and(|n| n == "architecture_claims.rs")
+            {
+                continue;
+            }
+            // Comment lines dropped first, and `policy_claims.rs` already paid
+            // for this lesson: its first version searched a whole file and was
+            // satisfied by a path sitting in the documentation twenty lines
+            // above the parser. Here it is the reverse and worse — the note
+            // explaining *why* this rule exists sits directly above the code it
+            // fixed, so a scanner that reads prose reports every file that has
+            // been fixed.
+            let text: String = read(&path)
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            // The two have to appear in the same `format!` for this to be the
+            // bug: a file that measures a duration somewhere and builds a temp
+            // path somewhere else is not doing anything wrong. Read per
+            // statement rather than per file, splitting on the `;` that ends
+            // one — cheap, and precise enough that it has no false positive in
+            // this tree.
+            for statement in text.split(';') {
+                if statement.contains("temp_dir()")
+                    && (statement.contains("as_nanos()")
+                        || statement.contains("as_micros()")
+                        || statement.contains("as_millis()"))
+                {
+                    offenders.push(path.file_name().unwrap().to_string_lossy().to_string());
+                    break;
+                }
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "these build a temp path from a clock, which is not unique across \
+         parallel test threads — name the directory after the test and scope \
+         it to the pid, as `market::tests::scratch` does: {offenders:?}"
+    );
+}

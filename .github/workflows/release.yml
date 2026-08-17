@@ -4,6 +4,28 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      # §3 #22. The six-target matrix was "unverified until a tag runs it", and
+      # a tag could not run it: `preflight` fails without the signing secrets,
+      # and those are §5.3's decision rather than anybody's afternoon. So the
+      # two ARM rows — whose only open question is whether the runner label
+      # exists and the bundler is happy on it — were waiting behind a question
+      # about key custody they have nothing to do with.
+      #
+      # A rehearsal separates them. It builds every target, runs the suite on
+      # each, produces the bundles and publishes **nothing**: no release, no
+      # tag, no attestation, no updater manifest. The artifacts land on the run
+      # page for somebody to look at.
+      #
+      # Defaulted to `true`, and that is a change of behaviour worth stating: a
+      # hand-started run used to go straight to `tauri-action` with
+      # `tagName: <branch>`, which drafts a release named after a branch. That
+      # was never what a person clicking "Run workflow" from a feature branch
+      # meant. Publishing is now the deliberate answer rather than the quiet one.
+      rehearsal:
+        description: 'Rehearsal — build every target, publish nothing'
+        type: boolean
+        default: true
 
 # The updater only accepts a bundle signed with the private half of the key
 # compiled into the app. That key is a repository secret and never appears in
@@ -25,7 +47,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # A rehearsal signs nothing, so a missing signing key is not a reason to
+      # stop it. Said out loud rather than skipped silently: the whole point of
+      # this job is that an unsignable release must never look like a signable
+      # one, and a job that goes green with its checks switched off is exactly
+      # that unless the run page says which mode it was in.
+      - name: Rehearsal — the signing checks below do not apply
+        if: ${{ inputs.rehearsal }}
+        run: |
+          echo "::notice::Rehearsal run. Every target is built and nothing is published."
+          echo "The signing preflight is skipped because a rehearsal produces no signed artifact."
+
       - name: The updater public key must be present
+        if: ${{ !inputs.rehearsal }}
         run: |
           pubkey=$(node -p "require('./src-tauri/tauri.conf.json').plugins?.updater?.pubkey ?? ''")
           if [ -z "$pubkey" ]; then
@@ -36,6 +70,7 @@ jobs:
           fi
 
       - name: The signing secrets must be set
+        if: ${{ !inputs.rehearsal }}
         env:
           KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
@@ -71,9 +106,14 @@ jobs:
           # bundler quirks to keep working, for a machine GitHub already
           # rents by the minute.
           #
-          # UNVERIFIED until a tag runs it. Nothing on a developer's machine
-          # can prove a runner label exists or that the bundler is happy on it,
-          # and saying so here is better than a comment that implies otherwise.
+          # Nothing on a developer's machine can prove a runner label exists or
+          # that the bundler is happy on it. What used to follow from that was
+          # "unverified until a tag runs it" — and a tag could not run it,
+          # because `preflight` refuses without signing secrets that are §5.3's
+          # decision. The `rehearsal` input above is the way out: it builds all
+          # six and publishes nothing, so these two rows can be answered without
+          # anybody deciding where a private key lives.
+          #
           # `fail-fast: false` above is what keeps a wrong guess from taking the
           # other four builds down with it.
           - os: ubuntu-24.04-arm
@@ -248,13 +288,34 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           args: --target ${{ matrix.target }}
-          tagName: ${{ github.ref_name }}
-          releaseName: StackVo ${{ github.ref_name }}
+          # Empty in a rehearsal, and an empty `tagName` is what makes
+          # `tauri-action` build without touching a release — the bundle is
+          # produced, nothing is uploaded, no tag is created.
+          #
+          # Written as `!x && y || ''` rather than the more obvious
+          # `x && '' || y`, because the latter is a trap: `''` is falsy, so the
+          # `||` fires and the rehearsal publishes under the branch name. This
+          # form has no falsy left operand on the publishing path.
+          tagName: ${{ !inputs.rehearsal && github.ref_name || '' }}
+          releaseName: ${{ !inputs.rehearsal && format('StackVo {0}', github.ref_name) || '' }}
           releaseDraft: true
           prerelease: false
           # tauri-action writes latest.json alongside the artifacts; the
           # endpoint in tauri.conf.json has to point at wherever it is served.
           includeUpdaterJson: true
+
+      # What a rehearsal is for: the bundle each target actually produced,
+      # downloadable from the run page. The two ARM rows are the reason — a
+      # `.deb` and an `.msi` that exist are the only proof that the runner
+      # label resolved and the bundler ran there.
+      - name: Keep the rehearsal bundles
+        if: ${{ inputs.rehearsal }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rehearsal-${{ matrix.target }}
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/
+          if-no-files-found: error
+          retention-days: 7
 
       # ---------------------------------------------------------------- trust
       #
@@ -266,7 +327,13 @@ jobs:
 
       # Cryptographic proof of which workflow, commit and runner produced each
       # file, verifiable with `gh attestation verify <file> --repo <owner>/<repo>`.
+      # Not in a rehearsal. An attestation is a signed statement that these
+      # bytes are a release of this project, and a rehearsal's bytes are not —
+      # they are a build nobody published, from a branch, possibly unsigned.
+      # Attesting them would put exactly the kind of provenance a security
+      # review trusts on an artifact that has none of the guarantees.
       - name: Attest what built these artifacts
+        if: ${{ !inputs.rehearsal }}
         uses: actions/attest-build-provenance@v2
         with:
           # `artifactPaths` is a JSON array; the action takes a comma- or

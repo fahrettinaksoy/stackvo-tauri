@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, toRef, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { useContainerStats } from '@/composables/useContainerStats';
@@ -263,6 +263,30 @@ async function applyManifest() {
 watch(sections, (available) => {
   if (!available.some((s) => s.key === section.value)) section.value = 'indicator';
 });
+
+/**
+ * Every section opens at its own top.
+ *
+ * One scrolling element serves all of them, so the position carried over: a
+ * long tab left it a thousand pixels down, and the next tab — often shorter
+ * than that — rendered its content above the viewport and arrived looking
+ * blank. The rail said one thing had been selected and the panel showed the
+ * end of it, or nothing.
+ *
+ * After the DOM has the new section in it. Resetting before that sets the
+ * offset on the old, taller content, and the browser clamps it right back when
+ * the shorter one replaces it.
+ *
+ * `scrollTop`, not `scrollTo` — jsdom implements the property and not the
+ * method, so the method threw inside a watcher on every mount test while the
+ * suite stayed green and only stderr said so.
+ */
+const contentEl = ref(null);
+watch(section, () =>
+  nextTick(() => {
+    if (contentEl.value) contentEl.value.scrollTop = 0;
+  })
+);
 
 async function act(fn) {
   error.value = null;
@@ -662,15 +686,24 @@ onUnmounted(() => {
         <v-icon>mdi-restart</v-icon>
         <v-tooltip activator="parent" location="bottom">{{ t('actions.restart') }}</v-tooltip>
       </v-btn>
+      <!-- The one button in this bar that had no tooltip, and the one where a
+           misread glyph costs the most. `icon` moves to the flag form with the
+           glyph in the slot: the prop form is read only while the default slot
+           is empty, and a tooltip is slot content. -->
       <v-btn
-        icon="mdi-delete"
+        icon
         variant="tonal"
         size="small"
         elevation="0"
         color="error"
         :aria-label="t('projectsView.colDelete')"
         @click="act((n) => api.projectDelete(n, false))"
-      />
+      >
+        <v-icon>mdi-delete</v-icon>
+        <v-tooltip activator="parent" location="bottom">
+          {{ t('projectsView.colDelete') }}
+        </v-tooltip>
+      </v-btn>
 
       <v-divider vertical class="mx-3 my-3" />
 
@@ -690,7 +723,11 @@ onUnmounted(() => {
     </v-toolbar>
 
     <div class="detail-body">
-      <div class="detail-content" :class="{ 'detail-content--flush': section === 'logs' }">
+      <div
+        ref="contentEl"
+        class="detail-content"
+        :class="{ 'detail-content--flush': section === 'logs' }"
+      >
         <ErrorAlert :error="error" type="error" closable class="mb-4" @close="error = null" />
 
         <div v-if="loading" class="d-flex justify-center py-16">
@@ -995,10 +1032,26 @@ onUnmounted(() => {
   padding: 16px;
 }
 
-/* The log view fills and scrolls itself; the page must not scroll it too. */
+/* The log view fills and scrolls itself; the page must not scroll it too.
+ *
+ * The padding stays, unlike the first version of this rule. Running the log
+ * viewport to the raw edges of the window made it the only tab that was not a
+ * card on a page — the same content, framed like a different application. What
+ * has to go is only the page's own scrolling: the viewer has a toolbar, a
+ * search field and a live tail, and a second scrollbar around all of it is a
+ * scrollbar that fights the one you want. */
 .detail-content--flush {
   overflow: hidden;
-  padding: 0;
+  display: flex;
+}
+
+/* And the card it now sits in, which is the height of whatever is left of the
+   window rather than of the log file. `min-height: 0` on both halves is what
+   lets a flex child be shorter than its content — without it the viewport
+   grows to the full log and the fixed frame is a frame around nothing. */
+.detail-content--flush > * {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .detail-nav {

@@ -12,6 +12,7 @@ import { useAppearanceStore } from '@/stores/appearance';
 import { setLocale } from '@/i18n';
 import { api } from '@/lib/ipc';
 import { listenAll, REFRESH_TRIGGERS } from '@/lib/events';
+import { runtimeLook } from '@/lib/manifest';
 import OperationConsole from '@/components/OperationConsole.vue';
 import { toasts } from '@/lib/toast';
 import { notify } from '@/lib/notify';
@@ -449,89 +450,131 @@ onUnmounted(() => {
              these operate on everything, so they live in the global bar rather
              than the navigation drawer. -->
         <v-divider vertical class="mx-4 my-3"></v-divider>
+        <!-- `title` was the browser's own tooltip: a different shape, a
+             different delay and a different place from every other hint in
+             this application, and on a disabled button it does not appear at
+             all — which is exactly when "why can I not press this" is asked.
+             `aria-label` keeps the accessible name that `title` was quietly
+             providing.
+
+             `icon` as a bare flag with the glyph in the slot. Vuetify reads
+             `icon="mdi-…"` only while the default slot is empty, and a tooltip
+             *is* slot content — the prop form renders a blank button and
+             nothing complains. `button-icons.spec.js` holds that rule. -->
         <v-btn
-          icon="mdi-play-circle-outline"
+          icon
           variant="elevated"
           elevation="0"
           color="success"
           class="mr-2"
-          :title="t('quickActions.startAll')"
+          :aria-label="t('quickActions.startAll')"
           :disabled="commandLoading || !app.engineUp"
           :loading="stackActionKey === 'start'"
           @click="stackAction(() => api.containersStartAll(), 'start')"
-        />
+        >
+          <v-icon>mdi-play-circle-outline</v-icon>
+          <v-tooltip activator="parent" location="bottom">
+            {{ t('quickActions.startAll') }}
+          </v-tooltip>
+        </v-btn>
         <v-btn
-          icon="mdi-stop-circle-outline"
+          icon
           variant="elevated"
           elevation="0"
           color="error"
           class="mr-2"
-          :title="t('quickActions.stopAll')"
+          :aria-label="t('quickActions.stopAll')"
           :disabled="commandLoading || !app.engineUp"
           :loading="stackActionKey === 'stop'"
           @click="stackAction(() => api.containersStopAll(), 'stop')"
-        />
+        >
+          <v-icon>mdi-stop-circle-outline</v-icon>
+          <v-tooltip activator="parent" location="bottom">
+            {{ t('quickActions.stopAll') }}
+          </v-tooltip>
+        </v-btn>
         <v-btn
-          icon="mdi-restart"
+          icon
           variant="elevated"
           elevation="0"
           color="warning"
-          :title="t('quickActions.restart')"
+          :aria-label="t('quickActions.restart')"
           :disabled="commandLoading || !app.engineUp"
           :loading="stackActionKey === 'restart'"
           @click="stackAction(() => api.containersRestartAll(), 'restart')"
-        />
+        >
+          <v-icon>mdi-restart</v-icon>
+          <v-tooltip activator="parent" location="bottom">
+            {{ t('quickActions.restart') }}
+          </v-tooltip>
+        </v-btn>
 
         <v-spacer />
 
         <!-- Labelled with its own keys rather than an icon alone: a magnifier
              in a toolbar is read as "search this page", which is not what this
              does. -->
+        <!-- The one button in the bar that is not round, and it has to line up
+             with the ones that are. Vuetify gives an icon button
+             `--v-btn-height + 4px` at comfortable density and a text button
+             plain `--v-btn-height`, so this sat four pixels shorter than its
+             neighbours and read as slightly sunken. -->
         <v-btn
           variant="tonal"
           elevation="0"
-          class="mr-2"
+          class="mr-2 bar-pill"
           prepend-icon="mdi-console-line"
-          :title="t('palette.title')"
+          :aria-label="t('palette.title')"
           @click="paletteOpen = true"
         >
           {{ paletteKeys }}
+          <v-tooltip activator="parent" location="bottom">{{ t('palette.title') }}</v-tooltip>
         </v-btn>
         <v-btn
           icon
           variant="tonal"
           elevation="0"
           class="mr-2"
-          :title="t('app.documentation')"
+          :aria-label="t('app.documentation')"
           @click="openUrl('https://stackvo.github.io/stackvo')"
         >
           <v-icon>mdi-book-open-variant</v-icon>
+          <v-tooltip activator="parent" location="bottom">{{ t('app.documentation') }}</v-tooltip>
         </v-btn>
         <v-btn
           icon
           variant="tonal"
           elevation="0"
           class="mr-2"
-          title="GitHub"
+          aria-label="GitHub"
           @click="openUrl('https://github.com/stackvo/stackvo')"
         >
           <v-icon>mdi-github</v-icon>
+          <v-tooltip activator="parent" location="bottom">GitHub</v-tooltip>
         </v-btn>
         <v-btn
           icon
           variant="tonal"
           elevation="0"
           class="mr-2"
-          :title="t('app.buyMeCoffee')"
+          :aria-label="t('app.buyMeCoffee')"
           @click="openUrl('https://buymeacoffee.com/fahrettinaksoy')"
         >
           <v-icon>mdi-coffee</v-icon>
+          <v-tooltip activator="parent" location="bottom">{{ t('app.buyMeCoffee') }}</v-tooltip>
         </v-btn>
 
         <v-menu>
           <template #activator="{ props }">
-            <v-btn icon variant="tonal" elevation="0" v-bind="props" :title="t('app.socialMedia')">
+            <v-btn
+              icon
+              variant="tonal"
+              elevation="0"
+              v-bind="props"
+              :aria-label="t('app.socialMedia')"
+            >
               <v-icon>mdi-share-variant</v-icon>
+              <v-tooltip activator="parent" location="bottom">{{ t('app.socialMedia') }}</v-tooltip>
             </v-btn>
           </template>
           <v-list>
@@ -554,9 +597,10 @@ onUnmounted(() => {
               elevation="0"
               class="mr-2"
               v-bind="props"
-              :title="t('app.language')"
+              :aria-label="t('app.language')"
             >
               <v-icon>mdi-translate</v-icon>
+              <v-tooltip activator="parent" location="bottom">{{ t('app.language') }}</v-tooltip>
             </v-btn>
           </template>
           <v-list density="compact" class="px-2 py-2">
@@ -576,10 +620,11 @@ onUnmounted(() => {
           variant="tonal"
           elevation="0"
           class="mr-5"
-          :title="t('app.toggleTheme')"
+          :aria-label="t('app.toggleTheme')"
           @click="toggleTheme"
         >
           <v-icon>{{ isDark ? 'mdi-weather-sunny' : 'mdi-weather-night' }}</v-icon>
+          <v-tooltip activator="parent" location="bottom">{{ t('app.toggleTheme') }}</v-tooltip>
         </v-btn>
       </v-defaults-provider>
     </v-app-bar>
@@ -604,6 +649,11 @@ onUnmounted(() => {
       :aria-label="t('a11y.primaryNav')"
       @click="toggleDrawer('nav')"
     >
+      <!-- The name, while the drawer is a rail.
+           Vuetify hides a list item's title at rail width, so collapsed these
+           were seven unlabelled glyphs and the only way to learn one was to
+           press it and see where you landed. Expanded the title is on the row,
+           so the tooltip would be the same word twice. -->
       <v-list nav class="nav-list mt-2">
         <v-list-item
           v-for="item in NAV"
@@ -614,7 +664,11 @@ onUnmounted(() => {
           :title="t(item.label)"
           :active="route.path === item.to"
           @click.stop="router.push(item.to)"
-        />
+        >
+          <v-tooltip v-if="rail" activator="parent" location="end">
+            {{ t(item.label) }}
+          </v-tooltip>
+        </v-list-item>
       </v-list>
 
       <!-- Everything below the destinations lives in the drawer's append slot,
@@ -677,7 +731,14 @@ onUnmounted(() => {
             :prepend-icon="rail ? 'mdi-chevron-right' : 'mdi-chevron-left'"
             :title="rail ? t('nav.expand') : t('nav.collapse')"
             @click.stop="toggleDrawer('nav')"
-          />
+          >
+            <!-- The one whose label matters most while it is hidden: a chevron
+                 on the floor of a collapsed rail is the control that undoes the
+                 collapse, and nothing said so. -->
+            <v-tooltip v-if="rail" activator="parent" location="end">
+              {{ t('nav.expand') }}
+            </v-tooltip>
+          </v-list-item>
         </v-list>
       </template>
     </v-navigation-drawer>
@@ -761,11 +822,17 @@ onUnmounted(() => {
           @click.stop="router.push(`/projects/${project.name}`)"
         >
           <template #prepend>
+            <!-- The runtime it actually is. This was
+                 `runtime === 'node' ? node : php`, written when there were two
+                 runtimes, so every Go, Python, Ruby, Rust, Bun and Deno project
+                 in the rail wore a PHP elephant — the same wrong answer the
+                 projects table gave, arrived at independently. Both read one
+                 list now. -->
             <v-icon
               size="32"
               :color="project.running ? 'success' : ''"
               :class="{ 'project-icon--stopped': !project.running }"
-              >{{ project.runtime === 'node' ? 'mdi-nodejs' : 'mdi-language-php' }}</v-icon
+              >{{ runtimeLook(project.runtime).icon }}</v-icon
             >
           </template>
 
@@ -773,9 +840,19 @@ onUnmounted(() => {
             {{ project.domain || project.name }}
           </v-list-item-title>
 
+          <!-- Collapsed, the row is one glyph and the domain is hidden with the
+               title — so the rail became a column of identical marks with no
+               way to tell one project from the next. The runtime is in here
+               too, because that is the other thing the glyph was trying to say
+               and the one it says least clearly. -->
+          <v-tooltip v-if="railProjects" activator="parent" location="end">
+            {{ project.domain || project.name }}
+            <span class="text-medium-emphasis"> · {{ runtimeLook(project.runtime).label }} </span>
+          </v-tooltip>
+
           <template #append>
-            <!-- A broken manifest is visible right here rather than only in the
-                 list view; the Bash generator drops such projects silently. -->
+            <!-- A broken manifest is visible right here rather than only in
+                 the list view; the render drops such projects silently. -->
             <v-icon v-if="!project.manifestValid" size="16" color="error" class="mr-1">
               mdi-file-alert-outline
             </v-icon>
@@ -854,19 +931,33 @@ onUnmounted(() => {
       <template #append>
         <v-divider />
         <v-list nav>
+          <!-- These two were given `undefined` titles at rail width rather
+               than left to Vuetify's hiding, so collapsed they carried no text
+               at all — not even for a screen reader. The tooltip is the name
+               back, and `aria-label` is the half a tooltip cannot do. -->
           <v-list-item
             rounded="lg"
             prepend-icon="mdi-plus"
             :title="railProjects ? undefined : t('newProject.title')"
+            :aria-label="railProjects ? t('newProject.title') : undefined"
             :disabled="!app.hasWorkspace"
             @click.stop="app.newProjectOpen = true"
-          />
+          >
+            <v-tooltip v-if="railProjects" activator="parent" location="end">
+              {{ t('newProject.title') }}
+            </v-tooltip>
+          </v-list-item>
           <v-list-item
             rounded="lg"
             :prepend-icon="railProjects ? 'mdi-chevron-right' : 'mdi-chevron-left'"
             :title="railProjects ? undefined : t('nav.collapse')"
+            :aria-label="railProjects ? t('nav.expand') : undefined"
             @click.stop="toggleDrawer('projects')"
-          />
+          >
+            <v-tooltip v-if="railProjects" activator="parent" location="end">
+              {{ t('nav.expand') }}
+            </v-tooltip>
+          </v-list-item>
         </v-list>
       </template>
     </v-navigation-drawer>
@@ -936,6 +1027,13 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* Matches the icon buttons beside it. Derived from the same variable rather
+   than typed as a pixel count, so a density change moves all of them together
+   instead of moving the round ones and leaving this one behind. */
+.bar-pill {
+  height: calc(var(--v-btn-height) + 4px);
+}
+
 .nav-list {
   padding-top: 2px;
 }

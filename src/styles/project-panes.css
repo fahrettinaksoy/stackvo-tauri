@@ -24,7 +24,24 @@
   padding: 16px;
 }
 
-.detail-content .pane + .pane {
+/* Between two group cards, whichever kind each one is.
+ *
+ * This was `.pane + .pane`, and one pane on the configuration tab is not a
+ * `.pane`: `RequirementsPane` renders a `SettingsGroup`, whose card is
+ * `.group`. It sits between the configuration card and the manifest card, so
+ * it broke *both* adjacencies at once — the tab shipped as three bordered
+ * boxes stacked edge to edge while every other tab was spaced, and the rule
+ * looked correct because the exception is a class name in another component.
+ *
+ * Spelled out rather than folded into one `:is()`: the guard in
+ * `pane-styles.spec.js` reads every selector in this file and checks it is
+ * nested under the page, and it splits on commas — a comma inside `:is()`
+ * leaves it holding half a selector. Four lines the test can actually read
+ * beat one it has to be taught about. */
+.detail-content .pane + .pane,
+.detail-content .pane + .group,
+.detail-content .group + .pane,
+.detail-content .group + .group {
   margin-top: 16px;
 }
 

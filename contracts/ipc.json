@@ -1156,6 +1156,16 @@
       "why": "Fetch one package, verify it whole, and put it where the renderer looks.",
       "notes": "The manifest is refused as BYTES when it does not hash to what the index says — before any field of it is read. The package is unpacked into a scratch directory, verified, and only then moved into place: a half-written package is the one failure a client cannot recover from on its own. Refused before any byte is fetched when policy.market.allowedPackages excludes the service, and after the manifest is parsed when policy.market.allowedRegistries excludes its image's registry — the second needs the manifest, which is why it is not beside the first."
     },
+    "market_bundle": {
+      "new": true,
+      "kind": "mutation",
+      "args": {
+        "destination": "string — a directory that does not exist yet, or an empty one"
+      },
+      "returns": "Bundled",
+      "why": "Write everything an air-gapped machine needs into one directory, on a machine that still has a network. ADR 0011 makes market.offlineBundle the only way a catalogue reaches a machine with no network, and until now nothing could produce one — the consuming half shipped without the producing half (§3 #31).",
+      "notes": "The output is a source: `LocalSource` reads it and the far end cannot tell it from a checkout, so `market_refresh` against it and then `market_install` complete the round trip. registry.json is copied byte for byte rather than re-serialised, because the signature is over the bytes (ADR 0015) and manifestSha256 chains from them. Every manifest is verified against the index while bundling — the same check `market_install` makes, moved to the machine with a person at it rather than the one with no network. A withdrawn version keeps its index row and loses its files: ADR 0014 keeps the row so the far end can learn what happened, and market_install refuses to install one before fetching anything. A destination that is not empty is refused; a failed bundle is removed rather than left looking whole. The tar named in servis-market-mimarisi.md §9 is a packaging of this directory, not a second mechanism."
+    },
     "market_probe": {
       "new": true,
       "kind": "query",
@@ -3676,6 +3686,14 @@
       "required": "DependencyRow[]",
       "optional": "DependencyRow[]",
       "unmetDependencies": "string[] — the subject of every required dependency that is unprovided or stopped"
+    },
+    "Bundled": {
+      "packages": "number — services the index lists",
+      "versions": "number — versions whose files were carried; lower than the index's total when something was withdrawn",
+      "files": "number — files written, index and package.json included",
+      "bytes": "number — their total size, so the person choosing a stick knows",
+      "skipped": "string[] — versions deliberately not carried, each with its reason. Empty is the normal case; a non-empty list is a fact the person carrying the bundle should read before they walk away from the network",
+      "signed": "boolean — whether registry.json.minisig travelled with it. A machine whose policy sets requireSignature refuses a bundle without one, and this is where that is cheap to find out"
     },
     "SourceProbe": {
       "location": "string — exactly what was asked for",

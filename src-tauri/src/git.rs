@@ -249,9 +249,210 @@ pub fn is_ignored(path: &std::path::Path) -> Option<bool> {
     }
 }
 
+/// What a project directory is, as far as git is concerned.
+///
+/// `None` from [`checkout`] means "not a repository"; a `Checkout` with no
+/// `remote` means "a repository somebody ran `git init` in". Those are two
+/// different answers and the table says so — a project with local history and
+/// no upstream is not the same as a directory that was never versioned.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Checkout {
+    /// The `origin` remote, verbatim.
+    ///
+    /// Read out of `.git/config` rather than by running `git remote get-url`.
+    /// This is called once per project on every list, and spawning a
+    /// subprocess per row turns a directory listing into twenty forks — on a
+    /// page that reloads whenever a container changes state.
+    pub remote: Option<String>,
+}
+
+/// Is this a repository, and where did it come from?
+///
+/// Filesystem only, so it costs a stat and at most one small file read, and it
+/// answers on a machine with no git installed — which is the right behaviour:
+/// the `.git` directory is what makes it a checkout, not the presence of the
+/// tool that made it.
+pub fn checkout(dir: &std::path::Path) -> Option<Checkout> {
+    let dot = dir.join(".git");
+    if !dot.exists() {
+        return None;
+    }
+
+    Some(Checkout {
+        remote: config_dir(&dot).and_then(|d| origin_in(&d.join("config"))),
+    })
+}
+
+/// Where the `config` of this checkout lives.
+///
+/// For an ordinary clone that is `.git` itself. For a **worktree** `.git` is a
+/// file reading `gitdir: /path/to/main/.git/worktrees/<name>`, and the config
+/// belongs to the main repository — the worktree's own gitdir holds a
+/// `commondir` pointing back at it. Worth following rather than giving up on:
+/// this app creates worktrees itself, so they are not an exotic case here, and
+/// reporting "no remote" for every one of them would be reporting a difference
+/// that does not exist.
+fn config_dir(dot: &std::path::Path) -> Option<std::path::PathBuf> {
+    if dot.is_dir() {
+        return Some(dot.to_path_buf());
+    }
+
+    let pointer = std::fs::read_to_string(dot).ok()?;
+    let gitdir = std::path::PathBuf::from(pointer.trim().strip_prefix("gitdir:")?.trim());
+
+    // `commondir` is relative to the gitdir when it is relative at all.
+    match std::fs::read_to_string(gitdir.join("commondir")) {
+        Ok(common) => {
+            let common = std::path::Path::new(common.trim());
+            Some(if common.is_absolute() {
+                common.to_path_buf()
+            } else {
+                gitdir.join(common)
+            })
+        }
+        // A `gitdir:` file that is not a worktree — a submodule, say. Its own
+        // directory is then the config's.
+        Err(_) => Some(gitdir),
+    }
+}
+
+/// The `url` of the `origin` remote in a git config file.
+///
+/// Hand-scanned rather than parsed as INI, because git's config is not INI —
+/// it has subsection names in quotes, and a general parser would be a
+/// dependency and a set of edge cases in exchange for one field.
+fn origin_in(config: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(config).ok()?;
+    let mut in_origin = false;
+
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            // Both spellings git writes: `[remote "origin"]` from a clone, and
+            // the section-header form some tools produce.
+            in_origin = line.replace(char::is_whitespace, "") == "[remote\"origin\"]";
+            continue;
+        }
+        if !in_origin {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("url") {
+            let value = value.trim_start();
+            if let Some(value) = value.strip_prefix('=') {
+                return Some(value.trim().to_string()).filter(|v| !v.is_empty());
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A scratch directory of our own, removed first so a failed run does not
+    /// poison the next one.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("stackvo-git-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Three answers, not two: never versioned, versioned with no upstream, and
+    /// cloned from somewhere. The middle one is the one a boolean would lose.
+    #[test]
+    fn a_repository_without_a_remote_is_still_a_repository() {
+        let dir = scratch("plain");
+
+        assert_eq!(checkout(&dir), None, "a bare directory is not a checkout");
+
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::write(
+            dir.join(".git/config"),
+            "[core]\n\trepositoryformatversion = 0\n",
+        )
+        .unwrap();
+        assert_eq!(checkout(&dir), Some(Checkout { remote: None }));
+
+        std::fs::write(
+            dir.join(".git/config"),
+            "[core]\n\tbare = false\n[remote \"origin\"]\n\turl = git@example.com:a/b.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n",
+        )
+        .unwrap();
+        assert_eq!(
+            checkout(&dir).unwrap().remote.as_deref(),
+            Some("git@example.com:a/b.git")
+        );
+    }
+
+    /// Not `origin`, and not a key that merely starts with `url`.
+    #[test]
+    fn only_the_origin_remotes_url_counts() {
+        let dir = scratch("remotes");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::write(
+            dir.join(".git/config"),
+            "[remote \"upstream\"]\n\turl = git@example.com:upstream/b.git\n\
+             [remote \"origin\"]\n\turlsomething = no\n\turl = git@example.com:mine/b.git\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            checkout(&dir).unwrap().remote.as_deref(),
+            Some("git@example.com:mine/b.git"),
+            "the first url in the file won rather than origin's"
+        );
+    }
+
+    /// A worktree's `.git` is a *file*, and its config belongs to the main
+    /// repository. This app creates worktrees itself, so reporting "no remote"
+    /// for every one of them would be inventing a difference.
+    #[test]
+    fn a_worktree_reports_the_repository_it_belongs_to() {
+        let root = scratch("worktree");
+        let main = root.join("main");
+        let wt = root.join("feature");
+        std::fs::create_dir_all(main.join(".git/worktrees/feature")).unwrap();
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(
+            main.join(".git/config"),
+            "[remote \"origin\"]\n\turl = https://example.com/a/b.git\n",
+        )
+        .unwrap();
+        // What git actually writes into both files.
+        std::fs::write(main.join(".git/worktrees/feature/commondir"), "../..\n").unwrap();
+        std::fs::write(
+            wt.join(".git"),
+            format!(
+                "gitdir: {}\n",
+                main.join(".git/worktrees/feature").display()
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            checkout(&wt).unwrap().remote.as_deref(),
+            Some("https://example.com/a/b.git")
+        );
+    }
+
+    /// Nothing here runs git, so the answer must not depend on it being
+    /// installed — and a checkout copied onto a machine without git is still a
+    /// checkout.
+    #[test]
+    fn a_malformed_config_says_no_remote_rather_than_no_repository() {
+        let dir = scratch("garbage");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::write(
+            dir.join(".git/config"),
+            "\u{0}not\nan\nini\n[remote \"origin\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(checkout(&dir), Some(Checkout { remote: None }));
+    }
 
     #[test]
     fn the_scp_form_every_forge_copy_button_produces() {

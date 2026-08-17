@@ -1285,6 +1285,10 @@ pub struct ComposeProject<'a> {
     /// Swoole, which is its own HTTP server).
     pub node_port: Option<u16>,
     pub php_version: Option<&'a str>,
+    /// Containers this repository declared (§5.1), in the order it declared
+    /// them. Empty for every project that has not asked for one, which is
+    /// every project that existed before the field did.
+    pub sidecars: &'a crate::sidecar::Declared,
 }
 
 /// Traefik uses dots as separators in router names, so a project called
@@ -1431,6 +1435,88 @@ pub fn render_compose_service(
     out
 }
 
+/// One declared container, as its own compose service.
+///
+/// Beside the project rather than inside it, and sharing the project's
+/// **profile** — which is the whole of "it lives and dies with the project".
+/// `--profile project-shop` brings both up; stopping shop stops both.
+///
+/// Everything a repository could have used to reach past its own project is
+/// absent by construction rather than by filtering: there is no `ports:` key
+/// written here at all, and the only mounts are Docker volumes whose names this
+/// function derives. `sidecar::parse` refuses the declarations that would have
+/// wanted them, so this renders what is left and needs no second opinion.
+fn render_sidecar(project: &str, id: &str, sidecar: &crate::sidecar::Sidecar) -> String {
+    use std::fmt::Write as _;
+
+    let container = crate::sidecar::container_name(project, id);
+    let mut out = String::new();
+
+    // The service key is the container name, not the bare id: compose keys are
+    // file-wide, and two projects each declaring `search` would otherwise be
+    // one key written twice — the second silently replacing the first.
+    let _ = write!(
+        out,
+        "  {container}:\n    profiles: [\"projects\", \"project-{project}\"]\n    image: {}\n    container_name: \"{container}\"\n    restart: unless-stopped\n",
+        sidecar.image
+    );
+
+    if !sidecar.command.is_empty() {
+        let argv: Vec<String> = sidecar
+            .command
+            .iter()
+            .map(|a| format!("\"{}\"", a.replace('\\', "\\\\").replace('"', "\\\"")))
+            .collect();
+        let _ = writeln!(out, "    command: [{}]", argv.join(", "));
+    }
+
+    if !sidecar.env.is_empty() {
+        out.push_str("    environment:\n");
+        for (key, value) in &sidecar.env {
+            // Quoted always. An unquoted `yes`, `no` or `8108` is a boolean or
+            // a number to YAML, and an environment variable that arrives as
+            // `true` where the file said `yes` is a bug nobody looks for here.
+            let _ = writeln!(
+                out,
+                "      {key}: \"{}\"",
+                value.replace('\\', "\\\\").replace('"', "\\\"")
+            );
+        }
+    }
+
+    if !sidecar.volumes.is_empty() {
+        out.push_str("    volumes:\n");
+        for volume in &sidecar.volumes {
+            let _ = writeln!(
+                out,
+                "      - {}:{}",
+                crate::sidecar::volume_name(project, id, &volume.name),
+                volume.path
+            );
+        }
+    }
+
+    out.push_str("    networks:\n      - stackvo-net\n");
+    out
+}
+
+/// Every Docker volume the declared containers need, in the order they appear.
+///
+/// Compose requires a named volume to be declared at the top level as well as
+/// mounted, so a file that only mounted them would fail to start with a message
+/// about a volume rather than about the project that asked for it.
+fn sidecar_volumes(projects: &[&ComposeProject]) -> Vec<String> {
+    let mut out = Vec::new();
+    for project in projects {
+        for (id, sidecar) in project.sidecars.iter() {
+            for volume in &sidecar.volumes {
+                out.push(crate::sidecar::volume_name(project.name, id, &volume.name));
+            }
+        }
+    }
+    out
+}
+
 /// Render the whole `docker-compose.projects.yml`.
 ///
 /// Services are emitted in name order, which is what the Bash generator's
@@ -1466,12 +1552,29 @@ pub fn render_compose_projects(
     let mut sorted: Vec<&ComposeProject> = projects.iter().collect();
     sorted.sort_by_key(|p| p.name);
 
-    for project in sorted {
+    for project in &sorted {
         out.push('\n');
         out.push_str(&render_compose_service(project, host_root, projects_root));
+        for (id, sidecar) in project.sidecars.iter() {
+            out.push('\n');
+            out.push_str(&render_sidecar(project.name, id, sidecar));
+        }
     }
 
     out.push_str("\n\nnetworks:\n  stackvo-net:\n    external: true\n");
+
+    // Only when something asked for one. An empty `volumes:` key is the same
+    // null-versus-empty-mapping trap the `services:` key above already has a
+    // comment about, and this file reaches it on every workspace that declares
+    // no sidecar — which is every workspace today.
+    let volumes = sidecar_volumes(&sorted);
+    if !volumes.is_empty() {
+        out.push_str("\nvolumes:\n");
+        for name in volumes {
+            out.push_str(&format!("  {name}:\n"));
+        }
+    }
+
     out
 }
 
@@ -1490,6 +1593,7 @@ pub fn compose_projects_from<'a>(manifests: &'a [(String, Manifest)]) -> Vec<Com
                     runtime_server: None,
                     node_port: m.node.as_ref().map(|n| n.port),
                     php_version: None,
+                    sidecars: &m.sidecars,
                 }
             } else if crate::manifest::LANG_RUNTIMES.contains(&m.runtime.as_str()) {
                 // Structurally a node project as compose sees it: snapshot
@@ -1501,6 +1605,7 @@ pub fn compose_projects_from<'a>(manifests: &'a [(String, Manifest)]) -> Vec<Com
                     runtime_server: None,
                     node_port: m.lang.as_ref().map(|l| l.port),
                     php_version: None,
+                    sidecars: &m.sidecars,
                 }
             } else {
                 ComposeProject {
@@ -1510,6 +1615,7 @@ pub fn compose_projects_from<'a>(manifests: &'a [(String, Manifest)]) -> Vec<Com
                     runtime_server: Server::parse(m.server.as_deref().unwrap_or("nginx")),
                     node_port: None,
                     php_version: m.php.as_ref().map(|p| p.version.as_str()),
+                    sidecars: &m.sidecars,
                 }
             })
         })
@@ -1769,6 +1875,7 @@ mod tests {
             warnings: vec![],
             hooks: Default::default(),
             commands: Default::default(),
+            sidecars: Default::default(),
             local: Vec::new(),
         }
     }
@@ -2230,5 +2337,119 @@ mod tests {
         let compat = resolve("8.4", &exts(&["mbstirng"]), false).unwrap();
         assert!(compat.docker_ext.contains(&"mbstirng".to_string()));
         assert!(resolve("8.4", &exts(&["mbstirng"]), true).is_err());
+    }
+
+    // ------------------------------------------------ declared sidecars (§5.1)
+
+    /// Build a manifest with the given `sidecars` block, through the real
+    /// parser — so this test cannot pass against a shape `sidecar::parse` would
+    /// have refused.
+    fn with_sidecars(name: &str, block: &str) -> Manifest {
+        let raw = format!(
+            r#"{{"name":"{name}","domain":"{name}.loc","runtime":"php",
+                 "sidecars":{block},"php":{{"version":"8.4"}}}}"#
+        );
+        let json: serde_json::Value = serde_json::from_str(&raw).expect("the fixture is JSON");
+        crate::manifest::normalize(&json, &raw, name)
+    }
+
+    #[test]
+    fn a_declared_container_is_rendered_beside_its_project_and_shares_its_profile() {
+        let m = with_sidecars(
+            "shop",
+            r#"{"search":{"image":"typesense/typesense:27.1",
+                          "command":["--data-dir","/data"],
+                          "env":{"TYPESENSE_API_KEY":"dev"},
+                          "volumes":[{"name":"data","path":"/data"}]}}"#,
+        );
+        assert!(m.warnings.is_empty(), "{:?}", m.warnings);
+
+        let manifests = vec![("shop".to_string(), m)];
+        let projects = compose_projects_from(&manifests);
+        let out = render_compose_projects(&projects, "/app", "/code");
+
+        // The service key is the container name, not the bare id: two projects
+        // each declaring `search` would otherwise be one key written twice.
+        assert!(out.contains("  stackvo-shop-search:\n"), "{out}");
+        assert!(out.contains("image: typesense/typesense:27.1"), "{out}");
+        assert!(out.contains(r#"command: ["--data-dir", "/data"]"#), "{out}");
+
+        // The profile is the project's own. This is the whole of "it lives and
+        // dies with the project" — no extra machinery, the mechanism the
+        // project blocks already use.
+        assert!(
+            out.contains(r#"profiles: ["projects", "project-shop"]"#),
+            "{out}"
+        );
+
+        // Quoted, because an unquoted `dev` is fine and an unquoted `yes` is a
+        // boolean — and the failure would be an environment variable that
+        // arrives as `true`.
+        assert!(out.contains(r#"TYPESENSE_API_KEY: "dev""#), "{out}");
+
+        // The volume is mounted under a derived name and declared at the top
+        // level, which compose requires and which a mount-only render would
+        // fail on with a message about a volume rather than about the project.
+        assert!(out.contains("- stackvo-shop-search-data:/data"), "{out}");
+        assert!(
+            out.contains("\nvolumes:\n  stackvo-shop-search-data:\n"),
+            "{out}"
+        );
+
+        // And no host port reaches the file, ever.
+        assert!(!out.contains("ports:"), "{out}");
+    }
+
+    /// The property the whole design rests on: two clones cannot collide.
+    #[test]
+    fn two_clones_of_one_repository_get_two_containers_and_two_volumes() {
+        let block = r#"{"search":{"image":"a/b:1","volumes":[{"name":"data","path":"/data"}]}}"#;
+        let manifests = vec![
+            ("shop".to_string(), with_sidecars("shop", block)),
+            ("shop2".to_string(), with_sidecars("shop2", block)),
+        ];
+        let projects = compose_projects_from(&manifests);
+        let out = render_compose_projects(&projects, "/app", "/code");
+
+        for name in [
+            "stackvo-shop-search",
+            "stackvo-shop2-search",
+            "stackvo-shop-search-data",
+            "stackvo-shop2-search-data",
+        ] {
+            assert!(out.contains(name), "{name} missing from:\n{out}");
+        }
+
+        // Every compose key appears once. A duplicate would be YAML the second
+        // copy silently wins, which is how one project would end up running the
+        // other's container.
+        for key in ["  stackvo-shop-search:", "  stackvo-shop2-search:"] {
+            assert_eq!(
+                out.matches(key).count(),
+                1,
+                "{key} is written twice:\n{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_workspace_that_declares_nothing_renders_exactly_what_it_did_before() {
+        // The regression that matters most: every existing project has no
+        // `sidecars` block, and an empty `volumes:` key is the same
+        // null-versus-empty-mapping failure the `services:` key already carries
+        // a comment about.
+        let raw = r#"{"name":"shop","domain":"shop.loc","runtime":"php","php":{"version":"8.4"}}"#;
+        let json: serde_json::Value = serde_json::from_str(raw).expect("the fixture is JSON");
+        let m = crate::manifest::normalize(&json, raw, "shop");
+        let manifests = vec![("shop".to_string(), m)];
+        let projects = compose_projects_from(&manifests);
+        let out = render_compose_projects(&projects, "/app", "/code");
+
+        assert!(!out.contains("volumes:\n\n"), "{out}");
+        assert!(
+            !out.contains("\nvolumes:\n"),
+            "an empty volumes key was written:\n{out}"
+        );
+        assert!(out.trim_end().ends_with("external: true"), "{out}");
     }
 }

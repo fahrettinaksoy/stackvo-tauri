@@ -476,15 +476,17 @@ pub fn version_dir(root: &Path, category: &str, service: &str, version: &str) ->
 mod tests {
     use super::*;
 
+    /// The clock is gone from this on purpose — see `idle.rs`'s `workspace`.
+    ///
+    /// `SystemTime::now().as_nanos()` reads as a unique value and is not one:
+    /// it is quantised to a microsecond, and parallel test threads inside the
+    /// same one collide. It was harmless here because `name` was already doing
+    /// the work, which is exactly how the idiom spread to two helpers where
+    /// `name` was absent and the collision was real.
     fn temp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "stackvo-authoring-{name}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("stackvo-authoring-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

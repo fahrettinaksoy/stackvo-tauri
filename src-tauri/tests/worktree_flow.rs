@@ -378,7 +378,7 @@ fn uncommitted_work_stops_a_removal_until_it_is_asked_for() {
     assert_eq!(worktree::is_dirty(&dir), Some(true));
 
     let err = worktree::remove(&parent, &dir, false).expect_err("a dirty worktree was removed");
-    assert_eq!(err.hint_key.as_deref(), Some("worktreeIsDirty"), "{err:?}");
+    assert_eq!(err.hint_key, Some("worktreeIsDirty"), "{err:?}");
     assert!(dir.exists(), "the work was thrown away");
 
     // A refused removal leaves the worktree as capable as it was. Removal moves

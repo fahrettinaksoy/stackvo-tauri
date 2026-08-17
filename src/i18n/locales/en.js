@@ -438,18 +438,39 @@ export default {
     searchPlaceholder: 'Search projects...',
     colDomain: 'Domain',
     colRuntime: 'Runtime',
+    colRepo: 'Repo',
+    filter: {
+      all: 'All',
+      running: 'Running',
+      stopped: 'Stopped',
+      unbuilt: 'Not built',
+      favourites: 'Starred only',
+      title: 'Filters',
+      status: 'Status',
+      clear: 'Clear filters',
+    },
+    repoLocal: 'A git repository with no remote',
     colServer: 'Server',
     colConfiguration: 'Configuration',
     colStopStart: 'Stop/Start',
     colRestart: 'Restart',
-    colRebuild: 'Rebuild',
     rebuild: 'Rebuild',
-    rebuildHint:
-      'Regenerate the Dockerfile from stackvo.json, build the image, and recreate the container. Restart does none of these.',
     colTerminal: 'Terminal',
     colOpen: 'Open in the browser',
     colDetail: 'Detail',
     colDelete: 'Delete',
+    colMore: 'Actions',
+    // The overflow menu at the end of a row. A column heading names a column
+    // ("Stop/Start"); these name one act, because the menu shows only the one
+    // that is available right now.
+    menu: {
+      build: 'Build',
+      start: 'Start',
+      stop: 'Stop',
+      restart: 'Restart',
+      apply: 'Apply the changes',
+      fixHosts: 'Add the hosts entry',
+    },
     // Every one of these carries the project's name. A table of twenty rows
     // whose every button announces "Delete" gives a screen reader user no way
     // to tell which project they are about to remove.
@@ -462,8 +483,8 @@ export default {
       restart: 'Restart {name}',
       open: 'Open {name} in the browser',
       detail: 'Open the details of {name}',
-      delete: 'Delete {name}',
       fixHosts: 'Add a hosts entry for {name}',
+      more: 'Actions for {name}',
     },
     default: 'Default',
     noDnsRecord: 'No hosts entry',
@@ -492,6 +513,18 @@ export default {
       'This index is {sequence} and the one already here is {current}. Fetching it would be refused: an index that goes backwards is how a withdrawn version comes back.',
     failed: 'Could not read a catalogue there',
     resolved: 'Fetched from {url}',
+    bundleTitle: 'Offline bundle',
+    bundleWhat:
+      'Write this catalogue and every package into one folder, to carry to a machine with no network. Point that machine at the folder — StackVo ships no services inside itself, so this is the only way one ever gets a catalogue.',
+    bundleAction: 'Write a bundle…',
+    bundleNeedsCatalogue:
+      'Fetch a catalogue first — a bundle is a copy of the one this machine is using.',
+    bundleDone: 'Written: {packages} package(s), {versions} version(s), {files} files, {size}.',
+    bundleUnsigned:
+      'No signature travelled with it. A machine whose policy requires a signed catalogue will refuse this bundle.',
+    bundleSkipped: 'Not carried, because the publisher withdrew them:',
+    bundleNext:
+      'On the other machine, choose this folder as the catalogue address — or set market.offlineBundle to it.',
   },
   marketView: {
     createTitle: 'New instance: {id}',
@@ -519,6 +552,7 @@ export default {
     eolWhy:
       'End-of-life versions still run — upstream has stopped patching them, which is a different thing from broken. They are kept out of the lists below rather than out of the catalogue: a workspace whose .env names one has to be able to migrate, and an index that could drop a version is one where somebody’s running service loses its source.',
     recommended: 'Recommended',
+    supportUntil: 'Support ends {date}',
     support: {
       supported: 'Supported',
       deprecated: 'Deprecated',
@@ -535,7 +569,6 @@ export default {
       'Install a package above, then add an instance of it. Two versions of one service can run side by side, each with its own data and its own port.',
     colInstance: 'Instance',
     colContainer: 'Container name',
-    colPorts: 'Ports',
     colStopStart: 'Stop/Start',
     colRestart: 'Restart',
     colOpen: 'Open in browser',
@@ -742,7 +775,8 @@ export default {
       'Your project directory holds nothing StackVo manages. Create one, or move an existing folder here and adopt it.',
     noMatch: 'No matching projects',
     noMatchText: 'Nothing matched “{term}”.',
-    clearSearch: 'Clear search',
+    noMatchFilter: 'No project matches the filters you have on.',
+    clearSearch: 'Clear search and filters',
     running: 'Running',
     stopped: 'Stopped',
     notBuilt: 'Not built',
@@ -893,19 +927,29 @@ export default {
     pick: 'Point at a {tool} folder',
     notThere: 'That folder does not look like a {source} installation.',
     sizeAtLeast: 'at least {size}',
+    colSite: 'Site',
+    colDetected: 'Detected',
+    colDomain: 'Domain',
+    colSize: 'Size',
+    colAction: 'Import',
   },
   unmanaged: {
     title: 'Unmanaged code',
     review: 'Folders and sites to take over',
     explain:
-      'Code on this machine that StackVo is not running: folders under projects/ with no stackvo.json, and sites belonging to XAMPP or Laragon.',
+      'Code on this machine that StackVo is not running: folders in your project directory with no stackvo.json, and sites belonging to XAMPP or Laragon.',
     waiting: '{n} waiting.',
     nothing: 'Nothing waiting.',
     pickExplain: 'Only the usual install paths were scanned. Point at another one.',
-    none: 'Nothing found. Every folder under projects/ has a stackvo.json, and no XAMPP or Laragon sites were seen where those tools normally install.',
+    none: 'Nothing found. Every folder in your project directory has a stackvo.json, and no XAMPP or Laragon sites were seen where those tools normally install.',
   },
   adopt: {
-    found: '{n} folder(s) under projects/ have no stackvo.json.',
+    found: '{n} folder(s) here have no stackvo.json.',
+    where: 'scanned under {path}',
+    colFolder: 'Folder',
+    colDetected: 'Detected',
+    colEvidence: 'Detected from',
+    colAction: 'Adopt',
     from: 'detected from {files}',
     noEvidence: 'nothing recognisable — defaults will be used',
     action: 'Adopt',
@@ -996,9 +1040,12 @@ export default {
     relayFrom: 'Send as',
     relayFromHint: 'Providers reject a sender address they do not own.',
     relayAllowed: 'Only allow sending to',
-    relayAllowedHint: 'Comma separated. Empty means anywhere, which is one typo away from a real customer.',
-    relayNoKeystore: 'This machine has no keystore, so a password cannot be stored. Use a relay that needs none.',
-    relayRestart: 'The catcher picks these up when it is recreated — restart the stack after saving.',
+    relayAllowedHint:
+      'Comma separated. Empty means anywhere, which is one typo away from a real customer.',
+    relayNoKeystore:
+      'This machine has no keystore, so a password cannot be stored. Use a relay that needs none.',
+    relayRestart:
+      'The catcher picks these up when it is recreated — restart the stack after saving.',
     deleteOne: 'Delete this message',
     confirmClear:
       'This deletes every captured message. A mail catcher is a bin, so there is no backup.',
@@ -1531,7 +1578,7 @@ export default {
     startup: 'Startup and shutdown',
     startupDesc: 'What happens when the app opens and closes',
     compose: 'Containers',
-    generatorDesc: "Compares the Rust generator's output against the Bash one",
+    generatorDesc: 'Compares what is on disk against what the generator would write',
     updatesDesc: 'Signed release check and install',
 
     theme: 'Theme',
@@ -1539,7 +1586,8 @@ export default {
     packProgress: '{done} of {total} strings ({percent}%) — the rest falls back to English',
     packRemove: 'Remove',
     packTag: 'Language tag',
-    packHint: 'A tag like de, fr or pt-BR. Starts a file you can translate; untranslated strings stay English.',
+    packHint:
+      'A tag like de, fr or pt-BR. Starts a file you can translate; untranslated strings stay English.',
     packStart: 'Start a translation',
     preferences: 'Preferences',
     stackSub: 'Compose level: regenerates and recreates containers.',
@@ -1954,7 +2002,8 @@ export default {
     saveKey: 'Store',
     clearKey: 'Remove',
     path: 'Forward to path',
-    needsRunning: 'Start the project first — otherwise every event fails to deliver and Stripe records the failures.',
+    needsRunning:
+      'Start the project first — otherwise every event fails to deliver and Stripe records the failures.',
     connecting: 'Connecting to Stripe…',
     secretIs: 'Webhook signing secret for this session:',
     start: 'Listen',
@@ -1963,17 +2012,18 @@ export default {
   oauth: {
     title: 'OAuth callback',
     explain:
-      'The redirect URI to paste into a provider\'s console. A redirect is sent to the browser, not fetched by the provider — so the local address works for the flow itself. What differs is whether the provider will accept the string when you register it.',
+      "The redirect URI to paste into a provider's console. A redirect is sent to the browser, not fetched by the provider — so the local address works for the flow itself. What differs is whether the provider will accept the string when you register it.",
     path: 'Callback path',
     local: 'Local address',
     public: 'Public address',
-    noTunnel: 'No tunnel is running, so there is no public address. Start one in Share above if a provider refuses the local one.',
+    noTunnel:
+      'No tunnel is running, so there is no public address. Start one in Share above if a provider refuses the local one.',
     takesLocal: 'Local works',
     takesPublic: 'Needs public',
   },
   landing: {
     title: 'Landing page',
-    explain: 'One page listing every project and service, on this workspace\'s own address.',
+    explain: "One page listing every project and service, on this workspace's own address.",
     counts: '{projects} projects, {services} services',
     start: 'Serve it',
     stop: 'Stop',
@@ -2206,7 +2256,7 @@ export default {
     openFolder: 'Open folder',
     dockerfileDesc: 'How the Rust generator renders this project — without writing the file.',
     compatHint:
-      'Reproduces what Bash writes today; extensions that cannot build are dropped silently.',
+      'What the generator actually writes; extensions that cannot build are dropped silently.',
     strictHint: 'Refuses to render when an extension cannot build, and says which one.',
     notBuilt: 'The container has not been built yet; build it to stream logs.',
     openInEditor: 'Open in editor',
@@ -2220,11 +2270,11 @@ export default {
     dockerfile: 'Dockerfile',
     image: 'Image',
     state: 'State',
-    matchesBash: 'Identical to the Bash output',
-    differsFromBash: 'Differs from the Bash output',
+    matchesGenerated: 'The generated file is up to date',
+    generatedStale: 'The generated file is out of date — regenerate',
     strict: 'Strict',
-    compat: 'Compat',
-    silentlySkipped: 'Bash drops these without saying so',
+    compat: 'As written',
+    silentlySkipped: 'A normal render drops these without saying so',
   },
 
   // Suggestions, keyed by `hintKey` on the error the Rust side raised.
@@ -2246,7 +2296,7 @@ export default {
     chooseWorkspace: 'Choose an empty folder for StackVo to set up, or one it already manages.',
     projectNameCharset:
       'Names may contain letters, digits, dot, underscore and dash, and must start with a letter or digit.',
-    pathLeavesProjects: 'Refusing to operate on a path that leaves projects/.',
+    pathLeavesProjects: 'Refusing to operate on a path that leaves the project directory.',
     onlyProjectFolders: 'Only project folders inside the selected workspace can be opened.',
     adoptInstead: 'Adopt it instead — that is the path that writes one.',
     fixOrAdopt: 'Fix the file, or delete it and adopt the folder instead.',
@@ -2370,6 +2420,8 @@ export default {
     packageRefusedByPolicy:
       'This package asks for something StackVo does not let a package have. Report it to whoever published it.',
     packageNotInRegistry: 'Refresh the catalogue, or pick a version it lists.',
+    bundleNeedsAnEmptyDirectory:
+      'Choose a directory that does not exist yet, or an empty one — a bundle written over other files is one nobody can account for.',
     registryWentBackwards:
       'The catalogue this source serves is older than the one already here. Check the source before using it.',
     registryUnreachable:

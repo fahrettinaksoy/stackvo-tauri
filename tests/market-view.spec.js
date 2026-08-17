@@ -516,13 +516,17 @@ describe('the market page', () => {
 
   /// Every instance is one row of one line.
   ///
-  /// A service with two ports — RabbitMQ's broker and its management UI — put
-  /// them on two lines, and that row stood at twice the height of the others;
-  /// the container names and three of the column headings wrapped as well, so
-  /// the table had rows of three different heights and the eye lost the one it
-  /// was reading. The cell content is asserted here; the `nowrap` that stops
-  /// the rest is read from the source, because jsdom applies no stylesheet.
-  it('keeps an instance on one line however many ports it has', async () => {
+  /// A service with two ports — RabbitMQ's broker and its management UI — used
+  /// to print both into a column of their own, which made that row twice the
+  /// height of the others and the widest thing in a table that already scrolled
+  /// sideways. The column is gone; the ports are in the detail sheet, beside
+  /// the connection string they belong with.
+  ///
+  /// Both halves are asserted, because dropping the column is only half a fix:
+  /// the container names and three of the headings wrapped as well, and the
+  /// `nowrap` that stops them is read from the source — jsdom applies no
+  /// stylesheet, so nothing mounted can see a wrap either way.
+  it('keeps an instance on one line, and does not print its ports', async () => {
     api.instanceList.mockResolvedValue([
       { ...INSTANCES[0], id: 'rabbitmq-4', ports: { main: 5672, mgmt: 15672 } },
     ]);
@@ -530,12 +534,9 @@ describe('the market page', () => {
     const page = mountPage();
     await flushPromises();
 
-    const cells = page.findAll('.instances-table tbody td');
-    const ports = cells.find((c) => c.text().includes('5672'));
-    expect(ports.text()).toContain('main: 5672');
-    expect(ports.text()).toContain('mgmt: 15672');
-    // Stacked, each port was a block of its own. Inline, they are spans.
-    expect(ports.findAll('div')).toHaveLength(0);
+    const table = page.get('.instances-table');
+    expect(table.text(), 'the ports column is back').not.toContain('5672');
+    expect(table.text()).toContain('rabbitmq-4');
 
     const style = readFileSync('src/views/Market.vue', 'utf8');
     const rule =
@@ -680,7 +681,13 @@ describe('the market page', () => {
     // The status button, which is what switches an instance on since the table
     // gained the Services page's columns — the switch it replaced carried the
     // same refusal.
-    const off = page.findAll('button').filter((b) => b.text() === 'OFF');
+    //
+    // Found by its accessible name rather than by its text: the word moved into
+    // a tooltip when the column stopped printing "ON"/"OFF" into every row, and
+    // the `aria-label` is now the only place it is spelled out for a reader who
+    // never hovers. Which makes this two assertions in one — the button refuses,
+    // and it still says what it is.
+    const off = page.findAll('button').filter((b) => b.attributes('aria-label') === 'OFF');
     expect(off).toHaveLength(1);
     expect(off[0].attributes('disabled')).toBeDefined();
   });

@@ -110,6 +110,42 @@ async function pickFolder() {
     await test();
   }
 }
+
+/**
+ * Write an offline bundle (§3 #31).
+ *
+ * Here rather than on the Market page, and for the same reason the address
+ * field is: "where do packages come from" is a setting, and producing a bundle
+ * is the other end of that one question. The Market page is about which
+ * services exist.
+ *
+ * It is a folder picker and no text field, deliberately. The destination has
+ * to be empty and `market_bundle` refuses one that is not — a typed path is
+ * the way to discover that by having it refused, and a picker is the way to
+ * make a new folder while choosing.
+ */
+const bundled = ref(null);
+
+async function writeBundle() {
+  const chosen = await open({ directory: true, multiple: false });
+  if (typeof chosen !== 'string') return;
+
+  busy.value = 'bundle';
+  error.value = null;
+  bundled.value = null;
+  try {
+    bundled.value = await api.marketBundle(chosen);
+  } catch (e) {
+    error.value = e;
+  } finally {
+    busy.value = null;
+  }
+}
+
+/** Whole mebibytes, one decimal — the number answers "will this fit". */
+const bundleSize = computed(() =>
+  bundled.value ? `${(bundled.value.bytes / (1024 * 1024)).toFixed(1)} MiB` : ''
+);
 </script>
 
 <template>
@@ -232,6 +268,68 @@ async function pickFolder() {
       <div v-if="translated" class="text-caption mt-2 font-mono">
         {{ t('catalogueSettings.resolved', { url: probe.resolved }) }}
       </div>
+    </v-alert>
+
+    <!-- The other end of the same question: getting this catalogue to a
+         machine that cannot fetch one (§3 #31). ADR 0011 makes this the only
+         way such a machine ever has services at all, which is why it is a
+         section here and not an advanced menu. -->
+    <v-divider class="my-6" />
+
+    <div class="text-subtitle-2 mb-1">{{ t('catalogueSettings.bundleTitle') }}</div>
+    <div class="text-caption text-medium-emphasis mb-3">
+      {{ t('catalogueSettings.bundleWhat') }}
+    </div>
+
+    <v-btn
+      variant="tonal"
+      prepend-icon="mdi-package-variant-closed"
+      :loading="busy === 'bundle'"
+      :disabled="!fetched || !!busy"
+      @click="writeBundle"
+    >
+      {{ t('catalogueSettings.bundleAction') }}
+    </v-btn>
+
+    <!-- Why the button is off, rather than a button that does nothing. A
+         bundle is a copy of the catalogue this machine fetched, so there has
+         to be one. -->
+    <div v-if="!fetched" class="text-caption text-medium-emphasis mt-2">
+      {{ t('catalogueSettings.bundleNeedsCatalogue') }}
+    </div>
+
+    <v-alert
+      v-if="bundled"
+      :type="bundled.signed ? 'success' : 'warning'"
+      variant="tonal"
+      density="compact"
+      class="mt-3"
+    >
+      <div class="text-subtitle-2 mb-1">
+        {{
+          t('catalogueSettings.bundleDone', {
+            packages: bundled.packages,
+            versions: bundled.versions,
+            files: bundled.files,
+            size: bundleSize,
+          })
+        }}
+      </div>
+
+      <!-- Both of these are facts the person carrying the bundle needs before
+           they walk away from the network, so they are on the screen rather
+           than in a field somebody may not open. -->
+      <div v-if="!bundled.signed" class="text-caption">
+        {{ t('catalogueSettings.bundleUnsigned') }}
+      </div>
+      <div v-if="bundled.skipped?.length" class="text-caption mt-1">
+        {{ t('catalogueSettings.bundleSkipped') }}
+        <ul class="pl-4">
+          <li v-for="line in bundled.skipped" :key="line">{{ line }}</li>
+        </ul>
+      </div>
+
+      <div class="text-caption mt-2">{{ t('catalogueSettings.bundleNext') }}</div>
     </v-alert>
   </div>
 </template>
