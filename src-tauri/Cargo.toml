@@ -133,7 +133,7 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # alternative and is the wrong kind of clever: an implementation that is subtly
 # wrong does not fail here, it fails as "this package is corrupt" on somebody
 # else's machine.
-sha2 = "0.10"
+sha2 = "0.11"
 # `io-std` is for the MCP server, which speaks JSON-RPC over stdin and stdout.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "io-util", "io-std"] }
 thiserror = "2"
