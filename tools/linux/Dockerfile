@@ -43,4 +43,20 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+# Cross-compiling to Windows, so `windows-latest` stops being a thing only CI
+# can answer. `cargo-xwin` downloads Microsoft's own SDK headers and import
+# libraries and points clang at them — which is what makes `aws-lc-sys` build,
+# and `aws-lc-sys` needing `windows.h` is the reason `cargo check --target
+# x86_64-pc-windows-msvc` fails on a Mac.
+#
+# `check`, not `test`: the tests cannot RUN here, and the errors this is for
+# are the ones that stop the build before a test exists. Two of them have
+# already been found this way — a `flate2` with no compression backend, and a
+# Docker connector gated to the wrong platform.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      clang llvm lld \
+    && rm -rf /var/lib/apt/lists/*
+RUN rustup target add x86_64-pc-windows-msvc \
+    && cargo install cargo-xwin --locked
+
 WORKDIR /repo

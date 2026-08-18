@@ -789,21 +789,44 @@ pub async fn start(port: u16) -> crate::error::Result<Bound> {
 
 /// Stop it, and forget the token with it.
 ///
-/// Aborting the accept loop drops the listener, which closes the port. An
-/// in-flight request on its own task is not waited for: it holds a token that
-/// was already checked, and the alternative — a stop that blocks until every
-/// connection finishes — is a stop somebody presses twice.
+/// ## `abort()` is a request, and this waits for it to be honoured
+///
+/// Aborting the accept loop drops the listener, which closes the port — but
+/// `JoinHandle::abort` is not synchronous. It marks the task for cancellation
+/// and returns; the future is dropped, and the listener with it, whenever the
+/// runtime next polls it. So a `stop()` that returned straight after the abort
+/// was telling the caller something not yet true: the port kept accepting
+/// connections for a moment afterwards.
+///
+/// That was not a theory. `a_surface_starts_once_answers_and_stops_for_good`
+/// connects to the address after stopping and expects to be refused, and it
+/// failed on Linux and macOS runners in turn while passing on this machine —
+/// the shape of a race, not of a broken assertion.
+///
+/// So the abort is followed by a bounded wait for the task to actually finish.
+/// A stop that has not stopped is worth a millisecond.
+///
+/// An in-flight request on its own task is still not waited for: it holds a
+/// token that was already checked, and a stop that blocked until every
+/// connection finished is a stop somebody presses twice.
 pub fn stop() -> bool {
     let Ok(mut guard) = RUNNING.lock() else {
         return false;
     };
-    match guard.take() {
-        Some(running) => {
-            running.task.abort();
-            true
-        }
-        None => false,
+    let Some(running) = guard.take() else {
+        return false;
+    };
+
+    running.task.abort();
+
+    // Bounded, because a runtime that is not polling at all must not hang a
+    // command. A second is far beyond what dropping a listener takes and far
+    // below anything a person would call a freeze.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    while !running.task.is_finished() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
+    true
 }
 
 /// Start the surface, and keep serving until the process ends.

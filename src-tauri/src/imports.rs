@@ -1007,6 +1007,10 @@ volumes:
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("Sites")).unwrap();
         std::fs::write(dir.join("config.json"), config).unwrap();
+        // `name` is read only by the symlink below, which Windows does not
+        // have — the fixture there is the parked directory alone. Found by
+        // `tools/linux/run.sh --windows`, where `-D warnings` makes it an error.
+        #[cfg_attr(not(unix), allow(unused_variables))]
         for (name, target) in links {
             let target = dir.join(target);
             std::fs::create_dir_all(&target).unwrap();

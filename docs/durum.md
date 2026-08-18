@@ -77,7 +77,7 @@ altıncı ayda hafıza soluklaştığında çalışmayacak olan şey bu.
 | 31 | Air-gapped kurulum | 🟡 | **Paket yolu yazıldı.** Okuyan yarı `LocalSource`'tan beri vardı; **yazan** yarı yoktu — bir paketi üretmenin tek yolu paket deposunu klonlayıp düzeninin istemcinin okuduğu düzen olmasını ummaktı, ki bu bir kurulum yolu değil işe yarayan bir tahmin. `market::bundle` indeksi ve her paketi tek dizine yazıyor; çıktı **bir kaynak**: uzak uç `market_refresh` + `market_install`'ı ondan koşuyor ve bir checkout'tan ayırt edemiyor (test bunu iki ayrı çalışma alanıyla uçtan uca koşturuyor). `registry.json` **bayt bayt** kopyalanıyor — imza baytların üstünde (ADR 0015) ve `manifestSha256` onlardan zincirleniyor. Her manifest **burada**, ağı olan makinede doğrulanıyor; geri çekilmiş sürüm satırını koruyup dosyalarını bırakıyor (ADR 0014). Yüzey: `stackvo market-bundle <dizin>` — bir düğme değil, çünkü bunu yapan kişi ssh'tan koşan bir operatör. §9'un `stackvo-packages.tar`'ı bu dizinin **paketlenmesi**, ikinci bir mekanizma değil. **GUI karşılığı da var**: Ayarlar → Katalog panelinde bir klasör seçici; paket yazılınca boyutu MiB olarak, imzasızsa uyarıyı ve taşınmayan sürümleri yayıncının kendi sözleriyle gösteriyor — ikisi de koridoru yürümeden önce okunması gereken şeyler. Kalan: tar'ı üreten adım elle (`tar -cf … -C <dizin> .`) |
 | 33 | Sözleşme kapısının harici bağımlılığı | ✅ | **Kusur bir yapılandırma değil bir tasarım sorunuydu.** Suite A `<root>/projects/` altındaki `stackvo.json`'ları okuyor; ne CI'nın checkout'unda ne de bir geliştiricinin makinesinde öyle bir şey var — yani manifest yarısı **hiçbir makinede, bir kez bile** koşmamıştı. Doğrulayıcının kendi girdisi yoktu, dolayısıyla koşup koşmaması yanında ne bulunduğuna bağlıydı. `tools/fixtures/validator-workspace/` o girdi: dört proje, **üçü kasten bozuk** (geçersiz sürüm, matriste olmayan eklenti, Bash çıkarıcısının sessizce düşüreceği bir ad), ve `tests/validate-contracts.spec.js` ürettiği kodları **tam olarak** doğruluyor. **Koşturmak iki ölü kontrol buldu**, ikisi de doğrulayıcının içinde: `EMBEDDED` kazıyıcısı düz bir dizi bekleyen bir regex'ti ve #36'nın bölmesiyle o gün eşleşmeyi bırakmıştı — **boş küme** döndürüyor, 20 anahtar yeniden "`.env`'de yok" diye raporlanıyordu; onarıldığında da yalnız **anahtar adlarını** okuyordu, oysa `.env` yalnızca bir ayar *değiştiğinde* yazılıyor, yani dokunulmamış bir çalışma alanında her proje "listede olmayan" bir PHP koşuyor görünüyordu. Uyarılar 21 → 1 |
 | 34 | Web sürümü / HTTP ikilisi | ✅ | **Karar (ADR 0026), politika, taşıma ve arayüz.** Loopback, token, salt-okunur, artı keystore'a ulaşan sorguların reddi. **İkinci bir dispatcher yazılmadı**: `mcp.rs`'in araç tablosu zaten her aracı bir sözleşme komutuna bağlıyor, ve bir araç tele ancak **iki politika da izin verirse** çıkıyor — `!writes` ve `exposable(command)` — böylece keystore kuralı, keystore'dan hiç bahsetmeyen bir tabloya ulaşıyor (7 araç; `stackvo_doctor` dahil değil, çünkü `doctor` birkaç çağrı ötede keystore'a ulaşıyor). Soket ~40 satır `tokio::net`; `axum` tek metot, tek yol, tek başlık için fazla. **Varsayılan kapalı** ve Ayarlar'da bir panelden açılıyor: haberi olunmayan bir dinleyici, kapatılmayan dinleyicidir. Token **bir kez** dönüyor — `websurface_status` onu taşımıyor ve taşıyamaz, çünkü taşısaydı sonraki her çağırana verirdi ve bunların ilki yüzeyin kendisi. Soket testleri iki gerçek açık buldu: hiçbir şey göndermeyen istemci görevi süresiz tutuyordu (slowloris → 5 sn okuma süresi), ve `stop` gerçekten portu bırakıyor mu (bırakıyor, test bağlanmayı deneyerek doğruluyor). 24 + 9 + 8 test |
-| 35 | Windows ve Linux dallarının çalıştırılması | 🟡 | **Linux yarısı artık koştu — ve koşturmak, koşmadığı için görünmeyen bir şeyi buldu: bu depo Linux'ta hiç derlenmiyordu.** `certs.rs`'in `#[cfg(not(target_os = "macos"))] ca_trusted`'ı `ca_common_name`'i çağırıyor ve o fonksiyon **hiçbir yerde tanımlı değildi**; macOS'ta dal derlenmediği için `cargo check` sessizdi. Artı üç `-D warnings` hatası (`menu.rs`'te yalnız macOS blokunda kullanılan `Submenu` ve `product`, `agents.rs`'te yalnız iki platformda gereken bir `mut`). Yani CI'nın Linux `build` job'ı da kırmızıydı. Onarıldı; `ca_common_name` bilerek `cfg` dışında — onu görünmez kılan şey tam olarak bir cfg kapısıydı. **`tests/elevate_probe.rs` Linux'ta geçiyor**: sahte `pkexec` `PATH`'te, gerçek `apply → elevate::run` zinciri, 126 iptal olarak okunuyor. Bunu mümkün kılan `tools/linux/` — CI'nın ortamını bir konteynerde yeniden kuruyor (aynı taban, aynı paketler, `rust-toolchain.toml`'dan pinlenmiş sürüm). Kalan: **Windows dalı**, ki o hâlâ burada derlenemiyor (`aws-lc-sys` Windows SDK'sı) |
+| 35 | Windows ve Linux dallarının çalıştırılması | 🟢 | **İkisi de koşuyor artık, ve ikisi de koşarken derlenmediklerini gösterdi.** Linux: `certs.rs`'in `not(macos)` dalı var olmayan bir fonksiyonu çağırıyordu; `elevate_probe` ve `hosts_roundtrip` konteynerde geçiyor. **Windows dalı da artık tip kontrolünden geçiyor** — `cargo check --target x86_64-pc-windows-msvc` bu makinede `aws-lc-sys`'in `windows.h`'ında düşüyordu, `cargo-xwin` Microsoft'un SDK'sını indirip clang'i ona yönlendirerek tam o engeli kaldırıyor (`tools/linux/run.sh --windows`). İlk koşuda üç şey çıktı: `flate2`'nin sıkıştırma arka ucu hiç seçilmiyordu (`zip`'i `default-features = false` ile alıyoruz ve `deflate-flate2` arka uç seçmiyor; macOS/Linux'ta grafın başka bir yeri tesadüfen açıyordu), `Docker::connect_with_unix` **Windows'ta yok** ve koşulsuz çağrılıyordu (eksik olan Windows kolu olduğu için öteki iki platformda derleniyordu), ve iki `unused` uyarısı — CI clippy'yi `-D warnings` ile koşuyor. Kalan: testlerin Windows'ta **koşması** (tip kontrolü koşma değildir) |
 | 36 | `EMBEDDED`'ın servis yarısı | 🟡 | ADR 0016'dan sonra **yalnız göç için** duruyor. `config.rs` `SETTINGS` (36, kalan) ve `LEGACY_SERVICES` (150, gidecek) taşıyor — "yaklaşık yarısı" yanlıştı, **beşte dördü**. Okuyan dört modül `legacy_env_claims.rs` ile kilitli. **Tarih artık verildi: 0.4.0** (§5). Ve düzyazı değil bir kapı: uygulama 0.4.0'a çıktığı ve sabit hâlâ orada olduğu an build kırılıyor; tarihin 1.0.0'a ötelenmesi de kırıyor. Kalan: **o gün silmek** |
 | 37 | Testin gerçek keystore'a dokunması | ✅ | **Tam Rust koşusu askıda kalıyordu ve sebebi bir testti.** `env_writer`'ın `a_moved_key_is_taken_out_of_the_file_patch`'i `redirect_moved_keys` üzerinden **gerçek macOS Keychain'ine** yazıyor; macOS, soran ikili değiştiğinde izin soruyor — ki `cargo build` sonrası her seferinde değişiyor — ve cevaplayan olmayınca test süresiz bekliyor, bütün koşuyu da beraberinde götürüyor. Testin kendi yorumu "geliştirici makinesinde başarılı olur" diyordu; olmuyordu. Var olduğundan beri böyleydi ve görünmemesinin sebebi belirli: **asılan bir süit, yavaş bir süite benzer.** Çözüm bir env değişkeni **değil** — `hosts.rs`'in `STACKVO_HOSTS_PATH`'i ve `elevate.rs`'in `STACKVO_POWERSHELL`'i doğru şekilde, ama burada aynı desen *parolaları* yayınlanmış bir ikilide OS keystore'undan başka bir yere taşıyan bir değişken olurdu. `cfg(test)` kullanıldı: derleyici zorluyor, yayınlanan yapının ulaşabileceği ikinci bir arka uç yok ve bir unit test'in gerçek olana yolu yok. `cfg_regions.rs` üç işlemin **her birini ayrı ayrı** kontrol ediyor — ilk sürümü dosyayı bir dizgi torbası gibi okuyordu ve `write` kapısını kaybetmişken geçiyordu, çünkü `read` hâlâ taşıyordu |
 
@@ -984,6 +984,35 @@ sürüm ve bir göç notu olurdu. Bunu şimdi yapmanın sebebi bu.
 
 ---
 
+### 0030 — CI'nın sorduğu her şey önce burada sorulur
+
+- **Status:** accepted
+- **Context:** `ci.yml`'deki her iş yerelde koşturulabilirdi ve üç tur boyunca
+  hiçbiri koşturulmadı: push gidiyor, kırmızı koşu geliyor, bir sonraki
+  değişiklik bir log ekran görüntüsünden yazılıyordu. `tools/linux/` tam bunun
+  için yazılmıştı ve kullanılmadı.
+- **Decision:** `tools/before-push.sh` — CI'nın sorduğu her soruyu, aynı sırayla,
+  push'tan önce sorar. `--all` Linux ve Windows geçişlerini de konteynerde
+  koşturur. Windows tip kontrolü `cargo-xwin` ile mümkün: `cargo check --target
+  x86_64-pc-windows-msvc` bu makinede `aws-lc-sys`'in `windows.h`'ında düşüyor,
+  `cargo-xwin` Microsoft'un SDK'sını indirip clang'i ona yönlendirerek tam o
+  engeli kaldırıyor.
+- **Consequences:** O üç turda CI'ya ulaşan dört hatanın **dördü de** burada
+  bulunabilirdi. Çalışma alanı varsayan bir soket testi — çalışma alanı olmayan
+  herhangi bir makinede `cargo test`. Arka ucu olmayan `flate2` ve yanlış
+  platforma açık bir Docker bağlayıcısı — `--windows`. Port kapanmadan dönen bir
+  `stop()` — `cargo test`, ama **birinci** koşuda değil üçüncüde, ki bir yarışın
+  görüntüsü tam olarak budur.
+
+  Windows tip kontrolü **koşma değildir** ve öyle sayılmıyor: derlenmeyen kodu
+  bulur, yanlış davranan kodu bulmaz. §3 #35'in kalan yarısı hâlâ bu.
+
+  Betiğin varsayılanı hızlı küme (~5 dk); `--all` konteyneri bir kez derliyor,
+  sonrası birkaç dakika. Varsayılanın hızlı olması kasıtlı: koşulmayan bir kapı
+  kapı değildir, ve bu deponun tekrar tekrar öğrendiği şey de o (ADR 0028).
+
+---
+
 ## 7. Ölçüm
 
 Mekanik olarak sayılabilenler koda karşı tutuluyor:
@@ -997,7 +1026,7 @@ Mekanik olarak sayılabilenler koda karşı tutuluyor:
 | Bunlardan `@tauri-apps` kullanan | **20** | aynı küme içinde metin taraması |
 | **Veri katmanının geçtiği fonksiyon** | **1** (`src/lib/ipc.js` → `call()`) | `invoke(` `ipc.js` dışında **0** yerde geçiyor |
 | `ipc.js` sarmalayıcısı | **246** | `api` nesnesinin üye sayısı |
-| Rust kaynağı | **97 modül, 85.774 satır** | `src-tauri/src/*.rs` |
+| Rust kaynağı | **97 modül, 85.831 satır** | `src-tauri/src/*.rs` |
 | Gömülü varsayılan — **kalan** | **36** | `config.rs` → `SETTINGS` |
 | Gömülü varsayılan — **yalnız göç için** | **150** | `config.rs` → `LEGACY_SERVICES`; toplam **186** |
 
