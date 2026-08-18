@@ -705,7 +705,7 @@ Counted from 601 Rust crates and 42 npm packages.
 | entities | 7.0.1 | BSD-2-Clause |
 | estree-walker | 2.0.2 | MIT |
 | magic-string | 0.30.21 | MIT |
-| nanoid | 3.3.16 | MIT |
+| nanoid | 3.3.18 | MIT |
 | picocolors | 1.1.1 | ISC |
 | pinia | 2.3.1 | MIT |
 | postcss | 8.5.23 | MIT |
