@@ -221,16 +221,16 @@ impl Sampler {
                 // become right later.
                 if self.breakdown_untrusted {
                     self.breakdown = None;
-                } else if breakdown_is_credible(
-                    100.0 - breakdown.idle,
-                    self.system.global_cpu_usage(),
-                ) {
+                } else if breakdown_is_credible(&breakdown, self.system.global_cpu_usage()) {
                     self.breakdown = Some(breakdown);
                 } else {
                     tracing::info!(
                         cpu_time_busy = 100.0 - breakdown.idle,
+                        accounted =
+                            breakdown.user + breakdown.nice + breakdown.system + breakdown.idle,
                         per_core_average = self.system.global_cpu_usage(),
-                        "the CPU-time split disagrees with per-core usage; not reporting it"
+                        "the CPU-time split does not account for the whole second, or \
+                         disagrees with per-core usage; not reporting it"
                     );
                     self.breakdown_untrusted = true;
                     self.breakdown = None;
@@ -408,9 +408,26 @@ impl Default for Sampler {
 /// windows that do not line up would have to allow. In points it is 28 apart,
 /// which nothing sane calls agreement. The measured disagreements are 28 and
 /// 12 points; ordinary window skew on this machine is 1 to 5.
-fn breakdown_is_credible(busy: f32, reference: f32) -> bool {
+fn breakdown_is_credible(breakdown: &CpuBreakdown, reference: f32) -> bool {
     const TOLERANCE: f32 = 10.0;
-    (busy - reference).abs() <= TOLERANCE
+
+    // The four parts have to BE the whole. `CPULoad` carries more than these —
+    // interrupt time, and on a virtualised host the kernel also accounts for
+    // steal and iowait — so a machine where those are non-trivial hands back
+    // four numbers that add up to less than a hundred. A CI runner produced
+    // 94.16, and the dashboard would have drawn four slices, labelled them a
+    // split, and quietly lost six percent of a second.
+    //
+    // Two points, not ten: this is arithmetic rather than agreement between two
+    // measurements taken over different windows, and rounding four f32s cannot
+    // drift further than that.
+    const ACCOUNTED: f32 = 2.0;
+    let total = breakdown.user + breakdown.nice + breakdown.system + breakdown.idle;
+    if (total - 100.0).abs() > ACCOUNTED {
+        return false;
+    }
+
+    (100.0 - breakdown.idle - reference).abs() <= TOLERANCE
 }
 
 /// Open a CPU-time measurement. Returns None when the platform refuses, which
@@ -504,11 +521,24 @@ mod tests {
         // And a reported one agrees with the figure it is shown beside — that
         // is the condition it was reported under.
         assert!(
-            breakdown_is_credible(100.0 - b.idle, sample.cpu.percent),
-            "a breakdown was reported that disagrees with cpu.percent"
+            breakdown_is_credible(&b, sample.cpu.percent),
+            "a breakdown was reported that is not credible on its own terms"
         );
     }
 
+    /// The rate rule, which is this module's, and the total, which is not.
+    ///
+    /// The first version asserted `read_total > 0` on the grounds that
+    /// "something on this machine reads from disk". True of a laptop, false of
+    /// a GitHub Linux runner — sysinfo reports per-process I/O out of
+    /// `/proc/<pid>/io`, and a container without it hands back zeroes. The test
+    /// failed there and said `per-process disk totals should be readable`,
+    /// which is a statement about the host wearing the clothes of a bug.
+    ///
+    /// So the assertion is split by who owns the answer. The rate on a first
+    /// sample is this code's rule and is checked unconditionally. The total is
+    /// the platform's, and is checked for the property that is this code's even
+    /// when it is zero: a zero total must not produce a non-zero rate.
     #[test]
     fn disk_throughput_is_measured_not_zeroed() {
         let mut sampler = Sampler::new();
@@ -517,11 +547,33 @@ mod tests {
             first.disk.read_rate, 0.0,
             "no previous sample means no rate"
         );
+        assert_eq!(first.disk.write_rate, 0.0, "and none for writes either");
 
-        // Something on this machine reads from disk; the total must be real.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let second = sampler.sample();
+
+        if second.disk.read_total == 0 {
+            // The platform does not report it. Then nothing may be derived
+            // from it — a rate invented on top of an absent total is the
+            // plausible-but-wrong number this module exists to eliminate.
+            assert_eq!(
+                second.disk.read_rate, 0.0,
+                "a rate was derived from a total the platform never reported"
+            );
+            return;
+        }
+
+        // Reported, so it must behave like a cumulative counter.
         assert!(
-            first.disk.read_total > 0,
-            "per-process disk totals should be readable"
+            second.disk.read_total >= first.disk.read_total,
+            "a cumulative total went backwards: {} then {}",
+            first.disk.read_total,
+            second.disk.read_total
+        );
+        assert!(
+            second.disk.read_rate >= 0.0,
+            "a rate cannot be negative: {}",
+            second.disk.read_rate
         );
     }
 
@@ -567,29 +619,73 @@ mod tests {
         assert!(m.available >= m.free || m.available > 0);
     }
 
+    /// A split with `busy` busy time, accounting for the whole second.
+    fn split(busy: f32) -> CpuBreakdown {
+        CpuBreakdown {
+            user: busy,
+            nice: 0.0,
+            system: 0.0,
+            idle: 100.0 - busy,
+        }
+    }
+
     /// The check that decides whether the CPU-time split is shown.
     #[test]
     fn a_breakdown_that_disagrees_with_the_usage_figure_is_withheld() {
         // The measured Apple Silicon disagreement, both directions.
         assert!(
-            !breakdown_is_credible(95.0, 67.0),
+            !breakdown_is_credible(&split(95.0), 67.0),
             "a split saturating at 95% against a real 67% must not be shown"
         );
         assert!(
-            !breakdown_is_credible(11.8, 24.2),
+            !breakdown_is_credible(&split(11.8), 24.2),
             "a split reading half the real figure must not be shown"
         );
 
         // Ordinary agreement, including the wobble between two measurement
         // windows that do not line up exactly.
-        assert!(breakdown_is_credible(30.0, 31.0));
-        assert!(breakdown_is_credible(31.0, 30.0));
-        assert!(breakdown_is_credible(60.0, 55.0));
+        assert!(breakdown_is_credible(&split(30.0), 31.0));
+        assert!(breakdown_is_credible(&split(31.0), 30.0));
+        assert!(breakdown_is_credible(&split(60.0), 55.0));
 
         // Near zero a ratio would mean nothing — 1% against 4% is four times
         // as much and also nothing at all — which is why the rule counts
         // points rather than multiples.
-        assert!(breakdown_is_credible(1.0, 4.0));
-        assert!(breakdown_is_credible(0.0, 0.0));
+        assert!(breakdown_is_credible(&split(1.0), 4.0));
+        assert!(breakdown_is_credible(&split(0.0), 0.0));
+    }
+
+    /// A split that does not account for the whole second is not a split.
+    ///
+    /// `CPULoad` carries interrupt time as well as these four, and a
+    /// virtualised host also charges steal and iowait somewhere none of them
+    /// reach. A CI runner produced four numbers summing to 94.16 — every one of
+    /// them agreeing with the usage figure, and six percent of a second missing.
+    /// The dashboard would have drawn them as a complete split.
+    #[test]
+    fn a_breakdown_that_loses_part_of_the_second_is_withheld() {
+        let short = CpuBreakdown {
+            user: 20.0,
+            nice: 0.0,
+            system: 10.0,
+            idle: 64.16,
+        };
+        let busy = 100.0 - short.idle;
+        assert!(
+            (short.user + short.nice + short.system + short.idle - 94.16).abs() < 0.01,
+            "the fixture is the measured runner reading"
+        );
+        assert!(
+            !breakdown_is_credible(&short, busy),
+            "a split accounting for 94% of the second was shown as a whole one"
+        );
+
+        // And the same numbers, made whole, are fine — so what is being
+        // refused is the missing time rather than the values.
+        let whole = CpuBreakdown {
+            idle: 70.0,
+            ..short
+        };
+        assert!(breakdown_is_credible(&whole, 30.0));
     }
 }
