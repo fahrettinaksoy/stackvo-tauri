@@ -243,6 +243,44 @@ pub fn parse_pem(bytes: &[u8]) -> Result<CertFacts> {
     })
 }
 
+/// The CA's common name, read out of its own PEM.
+///
+/// ## This function did not exist
+///
+/// `ca_trusted` — the `#[cfg(not(target_os = "macos"))]` half — has always
+/// called it, and it has never been defined. On macOS that branch compiles out,
+/// so `cargo check` on the author's machine was silent about a **crate that
+/// does not build on Linux at all**. Found by `tools/linux/run.sh`, the first
+/// time this repository was compiled for Linux anywhere a person could watch.
+///
+/// It is deliberately **not** cfg-gated, for the same reason
+/// `elevate::polkit_outcome` and `elevate::uac_script` are not: the thing that
+/// made it invisible was a cfg gate, and a fix hidden behind the same gate
+/// would be untested on the machine most likely to be doing the fixing.
+/// `cfg_regions.rs` holds the list. The test below runs everywhere.
+///
+/// `None` rather than an error, and that matters: this feeds a
+/// `ca_trusted: Option<bool>` where `None` means *the platform would not say*.
+/// A CA we cannot read the name of is a question we cannot answer, which is not
+/// the same as an answer of "no".
+pub fn ca_common_name(ca_pem: &[u8]) -> Option<String> {
+    let (_, pem) = x509_parser::pem::parse_x509_pem(ca_pem).ok()?;
+    let cert = pem.parse_x509().ok()?;
+    // The subject's CN attribute. mkcert writes `mkcert <user>@<host> (<name>)`
+    // there, which is the string `certutil` and `trust list` both print.
+    //
+    // Copied out inside the block rather than returned from the chain: the
+    // parsed certificate borrows `pem`, which borrows nothing that outlives
+    // this function.
+    let name = cert
+        .subject()
+        .iter_common_name()
+        .next()
+        .and_then(|cn| cn.as_str().ok())
+        .map(str::to_string)?;
+    (!name.is_empty()).then_some(name)
+}
+
 /// Is our CA in the listing the platform just printed?
 ///
 /// Kept separate from the command that produces the listing so the matching is
@@ -1290,6 +1328,35 @@ mod tests {
         let covered = s(&["stackvo.loc", "*.stackvo.loc"]);
         assert!(covered_by(&covered, "adminer.stackvo.loc"));
         assert!(covered_by(&covered, "phpmyadmin.stackvo.loc"));
+    }
+
+    /// The function that had never been written.
+    ///
+    /// Built here rather than fixtured: a PEM literal in the test would be a
+    /// certificate somebody generated once, and the thing being checked is that
+    /// the CN comes back — which needs a certificate whose CN is known. mkcert
+    /// writes `mkcert <user>@<host> (<name>)`, so the test uses that shape.
+    #[test]
+    fn a_cas_common_name_is_read_out_of_its_own_pem() {
+        // A minimal self-signed CA with CN=mkcert test@host (Test), generated
+        // once and pinned. Regenerating it is not a fix for a failing
+        // assertion — a certificate this test cannot read is the finding.
+        const CA_PEM: &[u8] = include_bytes!("../tests/fixtures/ca/mkcert-test-ca.pem");
+
+        assert_eq!(
+            ca_common_name(CA_PEM).as_deref(),
+            Some("mkcert test@host (Test)"),
+            "the CA's common name did not come back. `ca_trusted` feeds this \
+             straight into `listing_contains`, and an empty name there matches \
+             nothing — the CA would be reported as untrusted on every Linux \
+             machine where it is in fact installed."
+        );
+
+        // The two failure modes that must be `None` rather than `Some("")`:
+        // `ca_trusted` reads `None` as "the platform would not say", and an
+        // empty string handed to `listing_contains` is refused there too.
+        assert_eq!(ca_common_name(b"not a certificate"), None);
+        assert_eq!(ca_common_name(b""), None);
     }
 
     #[test]

@@ -66,6 +66,15 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: npm run types:check
 
+      # And that they COMPILE, against the JavaScript that reads them. The two
+      # are different questions: `types:check` asks whether the file matches the
+      # contract, and for as long as that was the only gate the file named a
+      # type it never declared, stopped parsing partway through on a glob in
+      # somebody's prose, and typed calls the app makes every day as wrong.
+      - name: The generated types compile, and the front end agrees with them
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run types:tsc
+
       - name: Build the front end
         run: npm run build
 
@@ -184,15 +193,43 @@ jobs:
       - name: Build the front end
         run: npm run build
 
-      # Debug, not release. This suite asks whether the app boots and answers
-      # IPC — a release build spends several CI minutes to answer the same
-      # question. `STACKVO_DRIVER_PROFILE` in `launch.js` is the seam for the
-      # run that wants to ask a packaged binary instead.
-      - name: Build the application
-        run: cargo build --manifest-path src-tauri/Cargo.toml --bin stackvo-desktop
+      # `tauri build --debug`, NOT `cargo build`. This is the line the whole
+      # suite turned on, and it was wrong: `tauri-build` emits `cfg(dev)` for a
+      # plain cargo build, so the binary embeds `devUrl` and the webview opens
+      # http://localhost:1420. With no dev server running it gets "connection
+      # refused", loads about:blank, and every assertion reports an empty
+      # `#app` — including "the built bundle renders inside the real webview",
+      # which is the one thing this suite exists to check and could not have
+      # passed.
+      #
+      # The old comment argued debug over release on cost. The cost was real
+      # and the comparison was not: the two profiles were not answering the
+      # same question more or less slowly, one of them was not answering it.
+      # `--debug` keeps the compile cheap; `--no-bundle` skips the .deb, which
+      # is not what gets driven.
+      - name: Build the application the way it ships
+        run: npx tauri build --debug --no-bundle
 
       - name: Drive the application
         run: xvfb-run -a --server-args="-screen 0 1280x820x24" npm run test:driver
+
+      # A green `driver` job has to mean five tests RAN. `node:test` reads a
+      # `null` skip value as a skip directive, so a throwing test came back
+      # `not ok N # SKIP`, landed under `# skipped`, was left out of `# fail`,
+      # and the process exited 0 — the first time this suite was ever run it
+      # had four real failures and reported success. `whyNotHere` answers
+      # `false` now and `driver-client.spec.js` holds it, but that is a check on
+      # one function. This is a check on the OUTCOME, which is what the job is
+      # actually promising: on Linux nothing here is allowed to be skipped.
+      - name: The five tests ran, rather than being skipped
+        run: |
+          xvfb-run -a --server-args="-screen 0 1280x820x24" \
+            node --test --test-reporter=tap tests/driver/boot.driver.js | tee driver.tap
+          skipped=$(grep -c '# SKIP' driver.tap || true)
+          if [ "$skipped" -ne 0 ]; then
+            echo "::error::$skipped driver test(s) were skipped on Linux, where the suite is meant to run."
+            exit 1
+          fi
 
   # What is not tested.
   #

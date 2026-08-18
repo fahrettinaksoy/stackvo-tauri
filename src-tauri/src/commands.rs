@@ -9137,6 +9137,96 @@ pub fn updater_status() -> serde_json::Value {
     })
 }
 
+/// What this install would be offered, given a manifest (§3 #21).
+///
+/// Split from `updates_check` deliberately. That command is the *plugin's* —
+/// it fetches, verifies a signature and installs — and it is still deferred.
+/// This one answers the question the plugin cannot: whether this install should
+/// be offered the release at all. Channel, staged wave, emergency pause and
+/// explicit rollback are four things `tauri-plugin-updater` has no concept of,
+/// and a caller that asked it to check anyway would install a recalled build.
+///
+/// Takes the manifest rather than fetching it, for the reason
+/// [`crate::timeline::build`] takes its inputs: the decision is the logic, the
+/// fetch is not, and a function that reached for the network would be
+/// untestable in exactly the way that matters here — every branch below is a
+/// branch somebody's install depends on.
+#[tauri::command]
+pub fn updater_offer(
+    manifest: serde_json::Value,
+    channel: Option<String>,
+) -> Result<serde_json::Value> {
+    let rollout: crate::channel::Rollout = serde_json::from_value(manifest).map_err(|e| {
+        Error::new(
+            Code::InvalidInput,
+            format!("the update manifest could not be read: {e}"),
+        )
+    })?;
+
+    let wanted = channel
+        .as_deref()
+        .and_then(crate::channel::Channel::parse)
+        .unwrap_or_default();
+
+    let install = crate::channel::install_id();
+    let current = env!("CARGO_PKG_VERSION");
+    let offer = crate::channel::offer(&rollout, wanted, &install, current);
+
+    Ok(serde_json::json!({
+        "offer": offer,
+        "channel": wanted,
+        "currentVersion": current,
+        // The bucket, so a person who did not get an update they expected can
+        // check the arithmetic instead of guessing. The install id itself is
+        // NOT returned: it is this machine's and has no reason to reach a
+        // webview, let alone a log somebody pastes into an issue.
+        "bucket": crate::channel::bucket(&install, &rollout.version),
+    }))
+}
+
+/// Start the loopback API, and hand back the token once (§3 #34, ADR 0026).
+///
+/// Off until somebody asks. Not because loopback is dangerous by itself, but
+/// because a listener nobody knows about is a listener nobody turns off — and
+/// the honest default for a surface that answers questions about somebody's
+/// workspace is that it is not answering them.
+///
+/// The token is returned **once**, to the caller that started it. It is never
+/// written to disk and `websurface_status` does not carry it: a status call
+/// that did would hand it to every later caller, and the first of those is the
+/// surface itself.
+///
+/// Port 0 by default, so the OS picks. A fixed port is one something else on
+/// this machine may already hold, and a surface that fails to start over a
+/// collision is one people work around by choosing another fixed one.
+#[tauri::command]
+pub async fn websurface_start(port: Option<u16>) -> Result<serde_json::Value> {
+    let bound = crate::websurface::start(port.unwrap_or(0)).await?;
+    Ok(serde_json::json!({
+        "address": bound.address,
+        "token": bound.token,
+        "tools": bound.tools,
+    }))
+}
+
+/// Is the loopback API up, and where?
+///
+/// Deliberately not the token. See `websurface_start`.
+#[tauri::command]
+pub fn websurface_status() -> serde_json::Value {
+    serde_json::json!({
+        "running": crate::websurface::status().is_some(),
+        "address": crate::websurface::status(),
+        "tools": crate::websurface::tools(),
+    })
+}
+
+/// Stop it. `false` when nothing was running.
+#[tauri::command]
+pub fn websurface_stop() -> bool {
+    crate::websurface::stop()
+}
+
 /// The third-party licence notice this build was compiled with.
 ///
 /// A command rather than a file the front end fetches, for the same reason

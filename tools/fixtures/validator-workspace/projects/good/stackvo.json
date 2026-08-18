@@ -1,0 +1,8 @@
+{
+  "name": "good",
+  "domain": "good.loc",
+  "runtime": "php",
+  "server": "nginx",
+  "documentRoot": "public",
+  "php": { "version": "8.3", "xdebug": false, "extensions": ["pdo_mysql", "redis"] }
+}

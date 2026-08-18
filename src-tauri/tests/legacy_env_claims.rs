@@ -199,3 +199,62 @@ fn the_document_names_the_constant_it_is_waiting_to_delete() {
          constant §3 #36 is about"
     );
 }
+
+// ------------------------------------------------------------ the deletion date
+
+/// The release the migration stops being supported at (§5, answered).
+///
+/// §3 #36's remaining work was never code — it was a date, and a date nobody
+/// had said. Two versions of migration support, then the second catalogue ADR
+/// 0016 closed stops being carried: anybody who opens a pre-market `.env` up to
+/// and including 0.3.x gets it turned into a plan, and after that they do not.
+///
+/// Deleting early means a person's `.env` becomes an error message instead of a
+/// workspace. Never deleting means carrying 150 keys, four reader modules and a
+/// whole `handover` path indefinitely, for a migration that by then nobody
+/// needs. A version is the only thing that makes the second outcome impossible.
+const LEGACY_SERVICES_GO_AT: (u64, u64) = (0, 4);
+
+/// The date, as a build failure.
+///
+/// A date written only in prose is a date that passes. This fails the build on
+/// the first commit that bumps the app to 0.4.0 while `LEGACY_SERVICES` is
+/// still there — which is exactly when somebody has to decide whether to delete
+/// it or to move the date on purpose, and either is fine as long as it is a
+/// decision rather than a thing that did not happen.
+#[test]
+fn the_constant_is_gone_by_the_version_that_was_named_for_it() {
+    let conf: serde_json::Value =
+        serde_json::from_str(&read("tauri.conf.json")).expect("tauri.conf.json parses");
+    let version = conf["version"]
+        .as_str()
+        .expect("the app declares a version");
+
+    let mut parts = version.split('.').map(|p| p.parse::<u64>().unwrap_or(0));
+    let (major, minor) = (parts.next().unwrap_or(0), parts.next().unwrap_or(0));
+
+    let still_here = read("src/config.rs").contains("pub const LEGACY_SERVICES");
+    let (go_major, go_minor) = LEGACY_SERVICES_GO_AT;
+    let due = (major, minor) >= (go_major, go_minor);
+
+    assert!(
+        !(due && still_here),
+        "the app is at {version} and `config::LEGACY_SERVICES` is still \
+         declared. §5 answered §3 #36 with {go_major}.{go_minor}: from that \
+         release a workspace waiting to be migrated is no longer supported.\n\n\
+         The checklist is the READERS table above — {} module(s), each with the \
+         sentence saying why it reads a legacy default. Delete them, or move \
+         LEGACY_SERVICES_GO_AT and write down what changed the answer.",
+        READERS.len()
+    );
+
+    // And the other direction: the date has not quietly been moved past the
+    // point where it means anything. A constant nobody can reach is not a plan.
+    assert!(
+        (go_major, go_minor) < (1, 0) || !still_here,
+        "the deletion was pushed to {go_major}.{go_minor}, at or past 1.0.0. \
+         Carrying the second catalogue into a stable release is the outcome §5 \
+         chose against — if it is now the right answer, it needs the paragraph, \
+         not the constant."
+    );
+}

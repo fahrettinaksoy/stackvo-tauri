@@ -66,10 +66,52 @@ async function until(expression, what, timeoutMs = 30_000) {
     last = box;
     if (box.ok && box.value) return box.value;
     if (Date.now() > deadline) {
-      throw new Error(`${what} — last answer: ${JSON.stringify(last)}`);
+      throw new Error(`${what} — last answer: ${JSON.stringify(last)}${await diagnosis()}`);
     }
     await new Promise((r) => setTimeout(r, 250));
   }
+}
+
+/**
+ * What the page and the driver have to say, appended to a failing assertion.
+ *
+ * The first Linux run of this suite reported `the app root never rendered any
+ * children — last answer: {"ok":true,"value":null}` and nothing else, four
+ * times. That sentence says the condition was not met and refuses to say why:
+ * an empty `#app` looks the same whether the bundle never loaded, the CSP
+ * refused the script, Vue threw during mount, or the binary is serving a stale
+ * `dist`. Four different fixes behind one message.
+ *
+ * `tauri-driver`'s output was already captured and was only ever printed when
+ * the driver DIED — so on the failure that actually happened it was collected
+ * and thrown away.
+ *
+ * Every probe is wrapped: this runs while something is already wrong, and a
+ * diagnostic that throws replaces the real failure with its own.
+ */
+async function diagnosis() {
+  const ask = async (label, expression) => {
+    try {
+      const box = await app.session.evaluate(expression);
+      return `\n  ${label}: ${JSON.stringify(box?.value ?? box)}`;
+    } catch (error) {
+      return `\n  ${label}: <unreadable: ${error.message}>`;
+    }
+  };
+
+  let out = '\n--- what the page says ---';
+  out += await ask('url', '() => location.href');
+  out += await ask('readyState', '() => document.readyState');
+  out += await ask('title', '() => document.title');
+  out += await ask('#app present', '() => !!document.querySelector("#app")');
+  out += await ask('scripts', '() => [...document.scripts].map((s) => s.src || "inline")');
+  out += await ask('stylesheets', '() => document.styleSheets.length');
+  out += await ask('ipc bridge', '() => typeof window.__TAURI_INTERNALS__');
+  out += await ask('body', '() => document.body && document.body.innerHTML.slice(0, 200)');
+
+  const said = app.driverOutput?.() ?? '';
+  if (said.trim()) out += `\n--- tauri-driver said ---\n${said}`;
+  return out;
 }
 
 test('the built bundle renders inside the real webview', { skip: blocked }, async () => {
@@ -104,8 +146,14 @@ test('the IPC boundary is the real one', { skip: blocked }, async () => {
      })`
   );
   assert.ok(box.ok, `evaluating the boundary failed: ${JSON.stringify(box.error)}`);
-  assert.equal(box.internals, 'object');
-  assert.equal(box.invoke, 'function');
+  // `box.value`, not `box`. `evaluate` answers with the envelope
+  // `{ ok, value }` — every other test here reads through `until`, which
+  // unwraps it, and this one read the envelope's own properties and compared
+  // `undefined` against `'object'`. It could not have passed, and nothing said
+  // so until the suite was run: the four failures around it all had the same
+  // message, and this one was a typo wearing their clothes.
+  assert.equal(box.value.internals, 'object');
+  assert.equal(box.value.invoke, 'function');
 });
 
 test('a contract command is registered and answers in its shape', { skip: blocked }, async () => {

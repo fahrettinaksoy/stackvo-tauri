@@ -126,7 +126,7 @@ const envSchema = readJson(join(CONTRACTS, 'env.schema.json'));
 const envPath = ['.env', '.env.example']
   .map((name) => join(STACKVO_ROOT, name))
   .find((p) => existsSync(p));
-const env = envPath ? parseEnv(readFileSync(envPath, 'utf8')) : {};
+const envFile = envPath ? parseEnv(readFileSync(envPath, 'utf8')) : {};
 
 /**
  * Keys the app carries in its binary as defaults.
@@ -137,14 +137,56 @@ const env = envPath ? parseEnv(readFileSync(envPath, 'utf8')) : {};
  * warning that fires on the intended state trains people to ignore the list.
  *
  * Read from the source rather than restated here, so the two cannot drift.
+ *
+ * Read from the two constants that hold the pairs, NOT from `EMBEDDED` itself:
+ * §3 #36 split the defaults into `SETTINGS` (36, staying) and `LEGACY_SERVICES`
+ * (150, going at 0.4.0), and `EMBEDDED` became a `const fn` that merges them at
+ * compile time. The old regex wanted a literal array, stopped matching that
+ * day, and returned an **empty set** — so every key with a binary default went
+ * back to being reported as absent, and nothing said the scraper had died.
+ * That is why the count is asserted below rather than trusted.
  */
-const EMBEDDED = (() => {
+const EMBEDDED_VALUES = (() => {
   const source = join(HERE, '..', 'src-tauri', 'src', 'config.rs');
-  if (!existsSync(source)) return new Set();
-  const block = readFileSync(source, 'utf8').match(/const EMBEDDED[^=]*=\s*\[([\s\S]*?)\n\];/);
-  if (!block) return new Set();
-  return new Set([...block[1].matchAll(/\(\s*"([A-Z0-9_]+)"/g)].map((m) => m[1]));
+  if (!existsSync(source)) return {};
+  const text = readFileSync(source, 'utf8');
+  const out = {};
+  for (const name of ['SETTINGS', 'LEGACY_SERVICES']) {
+    const block = text.match(new RegExp(`const ${name}[^=]*=\\s*\\[([\\s\\S]*?)\\n\\];`));
+    if (!block) continue;
+    // Key AND value. Reading only the keys was the second half of the same
+    // mistake: `env` stayed `{}` on a workspace with no `.env` — which is the
+    // normal state now — so `SUPPORTED_LANGUAGES_PHP_VERSIONS` resolved to
+    // nothing and every project was reported as running an unlisted PHP.
+    for (const m of block[1].matchAll(/\(\s*"([A-Z0-9_]+)"\s*,\s*"([^"]*)"/g)) out[m[1]] = m[2];
+  }
+  return out;
 })();
+
+const EMBEDDED = new Set(Object.keys(EMBEDDED_VALUES));
+
+/**
+ * What the app would actually run with: the file on top of the binary.
+ *
+ * `.env` is written only when a setting is CHANGED, so the file is a patch and
+ * never the whole picture. Reading it alone made an untouched workspace look
+ * like one with no settings at all.
+ */
+const env = { ...EMBEDDED_VALUES, ...envFile };
+
+// A scraper over source text fails by finding nothing, and finding nothing here
+// looks exactly like "no key has a default". The floor is deliberately far
+// below 186: the number is §7's business and this only has to notice a scrape
+// that collapsed.
+if (HAVE_WORKSPACE && EMBEDDED.size < 100)
+  err(
+    'D',
+    'src-tauri/src/config.rs',
+    'EMBEDDED_UNREADABLE',
+    `only ${EMBEDDED.size} embedded default(s) could be read out of config.rs — ` +
+      'the scraper has stopped matching, and every key with a binary default ' +
+      'is about to be reported as missing from .env'
+  );
 
 // Flatten the grouped env schema into one key -> spec map.
 const envSpec = {};

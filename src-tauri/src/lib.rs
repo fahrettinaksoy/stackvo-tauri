@@ -7,6 +7,7 @@ pub mod atomic;
 pub mod audit;
 pub mod authoring;
 pub mod certs;
+pub mod channel;
 pub mod cli;
 pub mod commands;
 pub mod compose_policy;
@@ -87,6 +88,7 @@ pub mod tray;
 pub mod tui;
 pub mod tunnel;
 pub mod watcher;
+pub mod websurface;
 pub mod worker;
 pub mod workspace;
 pub mod worktree;
@@ -608,6 +610,10 @@ pub fn run() {
             commands::open_in_browser,
             commands::open_folder,
             commands::updater_status,
+            commands::updater_offer,
+            commands::websurface_start,
+            commands::websurface_status,
+            commands::websurface_stop,
             commands::licences_notice,
             commands::policy_status,
             commands::secrets_status,

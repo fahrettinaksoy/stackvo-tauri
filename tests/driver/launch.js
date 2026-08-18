@@ -56,16 +56,37 @@ export function whyNotHere(platform = process.platform) {
   if (platform === 'darwin') {
     return 'tauri-driver does not support macOS — there is no WKWebView driver. This suite runs on Linux CI (§3 #12).';
   }
-  return null;
+  // `false`, NOT `null`. `node:test` takes `{ skip: <string|boolean> }`, and it
+  // treats a `null` as a skip DIRECTIVE with no reason: a test that throws is
+  // then reported `not ok N # SKIP`, counted under `# skipped`, left out of
+  // `# fail`, and the process exits 0.
+  //
+  // That is not a detail. The first run of this suite that anybody ever watched
+  // had four real failures — the app mounting nothing, and every IPC call
+  // refused with "Origin header is not a valid URL" — and it exited GREEN. The
+  // CI job would have reported success while proving nothing, which is the one
+  // outcome a gate must never have.
+  return false;
 }
 
 /**
  * Where `cargo build` leaves the application.
  *
- * `debug` by default and that is deliberate: this suite asks whether the app
- * boots and answers IPC, and a release build costs several minutes of CI to
- * answer the same question. `STACKVO_DRIVER_BINARY` overrides it for the run
- * that wants to ask a packaged binary instead.
+ * `debug` by default, and the binary that belongs there is the one
+ * `tauri build --debug` writes — **not** the one `cargo build` writes. They
+ * land at the same path and are not the same program: `tauri-build` emits
+ * `cfg(dev)` for a plain cargo build, so that binary embeds `devUrl` and the
+ * webview opens `http://localhost:1420`. With no dev server up it gets
+ * "connection refused", sits on `about:blank`, and every test here reports an
+ * empty `#app`.
+ *
+ * That is what the first Linux run of this suite actually found, after a
+ * failing assertion was made to print what the page said. Until then the
+ * message was "the app root never rendered any children", four times, with no
+ * way to tell an unbuilt bundle from a refused script from a Vue that threw.
+ *
+ * `STACKVO_DRIVER_BINARY` overrides the path for the run that wants to ask a
+ * packaged binary instead.
  */
 export function binaryPath({
   repo = REPO,
@@ -107,6 +128,44 @@ export async function waitForPort(port, { timeoutMs = 20_000, everyMs = 100 } = 
     }
     await new Promise((r) => setTimeout(r, everyMs));
   }
+}
+
+/**
+ * Open the session, retrying while the native driver is still coming up.
+ *
+ * `tauri-driver` is a proxy: the port it listens on answers as soon as *it* is
+ * up, and the thing it proxies to — `WebKitWebDriver` — is started separately.
+ * So `waitForPort` succeeding says the proxy is ready and says nothing about
+ * whether there is anything behind it. Asking too early comes back as
+ *
+ *     Error serving connection: hyper::Error(User(Service), client error
+ *     (Connect) ... Connection refused (os error 111)
+ *
+ * which reads like the app failing to start and is neither the app nor a
+ * failure — it is a race, and it lands differently depending on how warm the
+ * build cache was.
+ *
+ * Bounded, and it re-raises the last error rather than a timeout of its own: a
+ * driver that is genuinely absent must still say so in its own words.
+ */
+async function openWithRetries({ application, args, attempts = 20, gapMs = 500 }) {
+  let last;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await Session.open(BASE, { application, args });
+    } catch (error) {
+      last = error;
+      // Only the shape that means "nothing is listening behind the proxy".
+      // A refusal from the driver itself — a bad capability, a missing
+      // binary — is an answer, and retrying it would turn a clear failure
+      // into a slow one.
+      if (!/connect|refused|ECONNRESET|socket hang up/i.test(String(error.message))) {
+        throw error;
+      }
+      await new Promise((r) => setTimeout(r, gapMs));
+    }
+  }
+  throw last;
 }
 
 /**
@@ -166,7 +225,7 @@ export async function launch({ application = binaryPath(), args = [] } = {}) {
   let session;
   try {
     await Promise.race([waitForPort(PORT), died]);
-    session = await Promise.race([Session.open(BASE, { application, args }), died]);
+    session = await Promise.race([openWithRetries({ application, args }), died]);
     // Generous, and bounded. The first script runs while the app is still
     // booting its gates; 30 seconds is long enough for a cold CI runner and
     // short enough that a hang is a failure rather than a job timeout.

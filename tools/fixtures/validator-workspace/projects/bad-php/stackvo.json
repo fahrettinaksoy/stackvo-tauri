@@ -1,0 +1,6 @@
+{
+  "name": "bad-php",
+  "domain": "bad-php.loc",
+  "runtime": "php",
+  "php": { "version": "8", "extensions": [] }
+}

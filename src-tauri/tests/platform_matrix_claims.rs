@@ -438,6 +438,16 @@ fn no_fifth_command_has_quietly_become_desktop_only() {
         let Some(body) = bodies.get(name) else {
             return false;
         };
+        // The function's own name is removed first. `updater_offer` decides
+        // whether an install should be offered a release — pure arithmetic over
+        // a manifest, nothing a browser tab lacks — and it matched the needle
+        // `updater` in its own signature. A scan that reads a name as evidence
+        // of what the code does would have moved it onto the list of commands a
+        // web build cannot have, which is exactly the list §3 #34 plans from.
+        //
+        // `updater_status` still matches, and for the right reason: its body
+        // reads `plugins.updater` out of the compiled-in configuration.
+        let body = body.replace(name, "");
         if DESKTOP.iter().any(|needle| body.contains(needle)) {
             return true;
         }

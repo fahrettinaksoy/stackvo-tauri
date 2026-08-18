@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Native desktop app for StackVo \u2014 Docker-based local development environment manager",
+  "description": "Native desktop app for StackVo — Docker-based local development environment manager",
   "license": "MIT",
   "scripts": {
     "dev": "vite",
@@ -34,7 +34,8 @@
     "notice:check": "node tools/generate-notice.mjs --check",
     "lint": "eslint . && prettier --check \"src/**/*.{js,vue}\"",
     "lint:fix": "eslint . --fix && prettier --write \"src/**/*.{js,vue}\"",
-    "audit": "cargo deny --manifest-path src-tauri/Cargo.toml check && npm audit --omit=dev --audit-level=moderate"
+    "audit": "cargo deny --manifest-path src-tauri/Cargo.toml check && npm audit --omit=dev --audit-level=moderate",
+    "types:tsc": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@mdi/font": "^7.4.47",
@@ -68,6 +69,7 @@
     "jsdom": "^26.1.0",
     "prettier": "^3.9.6",
     "sass": "^1.102.0",
+    "typescript": "^7.0.2",
     "vite": "^7.3.6",
     "vite-plugin-vuetify": "^2.1.3",
     "vitest": "^3.2.7",

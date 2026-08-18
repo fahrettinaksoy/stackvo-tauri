@@ -1602,6 +1602,26 @@ export default {
       move: 'Taşı',
       restore: 'Geri al',
     },
+    localApi: {
+      title: 'Yerel API',
+      sectionDesc: 'Bu makinede salt-okunur bir HTTP yüzeyi',
+      description:
+        'Bu çalışma alanı hakkındaki soruları HTTP üzerinden, bu makinedeki token’a sahip her şeye cevaplar.',
+      whatItDoes:
+        'MCP sunucusunun kullandığı araç tablosunun salt-okunur yarısını servis eder; yalnız 127.0.0.1 üzerinde, başka hiçbir yerde. Buradaki hiçbir şey yazmaz, komut çalıştırmaz, parola göstermez.',
+      readsOnly:
+        'Siz başlatana kadar kapalı. Kimsenin haberi olmayan bir dinleyici, kimsenin kapatmadığı dinleyicidir.',
+      start: 'Başlat',
+      stop: 'Durdur',
+      notRunning: 'Çalışmıyor',
+      tokenShownOnce:
+        'Bu token bir kez gösterilir. Diske hiç yazılmaz — kaybederseniz durdurup yeniden başlatın.',
+      tokenGone:
+        'Çalışıyor, ama token daha önceki bir oturuma gösterildi. Yenisi için durdurup yeniden başlatın.',
+      tokenPlaceholder: '<token>',
+      example: 'Deneyin',
+      served: '{count} araç servis ediliyor',
+    },
     agents: {
       title: 'Yapay zekâ asistanları',
       sectionDesc: 'StackVo MCP sunucusunu bu makinedeki asistanlara tanıtın.',

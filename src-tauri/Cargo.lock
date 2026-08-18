@@ -4530,6 +4530,7 @@ dependencies = [
  "criterion",
  "dirs 6.0.0",
  "futures-util",
+ "getrandom 0.3.4",
  "include_dir",
  "keyring",
  "libc",

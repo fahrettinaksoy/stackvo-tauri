@@ -1627,6 +1627,26 @@ export default {
       move: 'Move',
       restore: 'Restore',
     },
+    localApi: {
+      title: 'Local API',
+      sectionDesc: 'A read-only HTTP surface on this machine',
+      description:
+        'Answer questions about this workspace over HTTP, to anything on this machine that holds the token.',
+      whatItDoes:
+        'Serves the read-only half of the same tool table the MCP server uses, over 127.0.0.1 and nowhere else. Nothing here writes, runs a command, or reveals a password.',
+      readsOnly:
+        'Off until you start it. A listener nobody knows about is a listener nobody turns off.',
+      start: 'Start',
+      stop: 'Stop',
+      notRunning: 'Not running',
+      tokenShownOnce:
+        'This token is shown once. It is never written to disk — if you lose it, stop and start again to get a new one.',
+      tokenGone:
+        'Running, but the token was shown to an earlier session. Stop and start again to get a new one.',
+      tokenPlaceholder: '<token>',
+      example: 'Try it',
+      served: '{count} tools served',
+    },
     agents: {
       title: 'AI assistants',
       sectionDesc: 'Register the StackVo MCP server with the assistants on this machine.',

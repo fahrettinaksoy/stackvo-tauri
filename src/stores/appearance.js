@@ -26,7 +26,7 @@ export const useAppearanceStore = defineStore('appearance', () => {
 
   async function load() {
     const [prefs, accent] = await Promise.all([
-      api.prefsGet().catch(() => ({})),
+      api.prefsGet().catch(() => null),
       api.systemAccent().catch(() => null),
     ]);
     systemAccent.value = accent?.available ? accent.hex : null;

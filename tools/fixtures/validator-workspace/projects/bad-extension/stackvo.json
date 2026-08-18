@@ -1,0 +1,6 @@
+{
+  "name": "bad-extension",
+  "domain": "bad-extension.loc",
+  "runtime": "php",
+  "php": { "version": "8.3", "extensions": ["pdo_mysql", "not_a_real_extension", "pdo_mysql"] }
+}

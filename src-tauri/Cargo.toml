@@ -134,8 +134,27 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # wrong does not fail here, it fails as "this package is corrupt" on somebody
 # else's machine.
 sha2 = "0.10"
+
+# Sixteen random bytes for the install id the staged rollout buckets on (§3
+# #21). Measured before adding, on the same terms as sha2 above: **no new crate
+# enters the tree** — 0.3.4 is already built here through `rand`, which `tauri`
+# pulls in, so this changes what this crate may `use` rather than what gets
+# compiled and audited.
+#
+# `rand` itself would have done, and is the wrong dependency to name: this needs
+# one call for one array of bytes, and depending on a generator API for that is
+# a larger surface than the thing being asked for. A clock would have needed no
+# dependency at all and is banned outright — `architecture_claims.rs` says why,
+# and it says it because two ids built from `SystemTime::now()` in the same
+# microsecond are one id.
+getrandom = "0.3"
 # `io-std` is for the MCP server, which speaks JSON-RPC over stdin and stdout.
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "io-util", "io-std"] }
+# `net` is new, for the loopback surface (§3 #34 / ADR 0026). A feature on a
+# crate already compiled here, not a crate — the listener is 40 lines of
+# `TcpListener` and the alternative was axum or hyper-as-a-direct-dependency
+# for one method, one path and one header. ADR 0019 measured the same choice
+# for the TUI and `tests/driver/webdriver.js` for WebDriver; this is the third.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "io-util", "io-std", "net"] }
 thiserror = "2"
 dirs = "6"
 

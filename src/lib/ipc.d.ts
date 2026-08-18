@@ -8,7 +8,7 @@
  * not exist. There is no compiler in this project and this does not add one —
  * `tools/generate-types.mjs` says what that would take and why it is separate.
  *
- * Measured at generation: 101 named types, 242 wrappers, 24 field(s) the
+ * Measured at generation: 128 named types, 246 wrappers, 0 field(s) the
  * contract's prose could not be read as a type (typed `unknown`).
  */
 
@@ -20,9 +20,43 @@ export interface Adoptable {
     /** Detected */
     detected: Detected;
     /** bool */
-    has_files: boolean;
+    hasFiles: boolean;
     /** string? */
-    compose_file?: string;
+    composeFile?: string;
+}
+
+export interface App {
+    /** string */
+    id: string;
+    /** string */
+    name: string;
+    /** string */
+    icon: string;
+    /** bool */
+    available: boolean;
+    /** bool */
+    default: boolean;
+}
+
+export interface Bundled {
+    /** number — services the index lists */
+    packages: number;
+    /**
+     * number — versions whose files were carried; lower than the index's total when something was withdrawn
+     */
+    versions: number;
+    /** number — files written, index and package.json included */
+    files: number;
+    /** number — their total size, so the person choosing a stick knows */
+    bytes: number;
+    /**
+     * string[] — versions deliberately not carried, each with its reason. Empty is the normal case; a non-empty list is a fact the person carrying the bundle should read before they walk away from the network
+     */
+    skipped: string[];
+    /**
+     * boolean — whether registry.json.minisig travelled with it. A machine whose policy sets requireSignature refuses a bundle without one, and this is where that is cheap to find out
+     */
+    signed: boolean;
 }
 
 export interface Catalog {
@@ -30,8 +64,8 @@ export interface Catalog {
     /** string[] */
     servers: string[];
     /** string */
-    default_server: string;
-    php_extensions: Record<string, unknown>;
+    defaultServer: string;
+    phpExtensions: Record<string, unknown>;
 }
 
 export interface CertPlan {
@@ -48,34 +82,34 @@ export interface CertPlan {
     /** bool */
     changed: boolean;
     /** string */
-    cert_path: string;
+    certPath: string;
     /** bool */
-    install_ca: boolean;
+    installCa: boolean;
     /** bool (cert_apply only) */
     reloaded: boolean;
 }
 
 export interface CertStatus {
     /** bool */
-    ssl_enabled: boolean;
+    sslEnabled: boolean;
     /** bool */
-    mkcert_available: boolean;
+    mkcertAvailable: boolean;
     /** string? */
-    mkcert_version?: string;
+    mkcertVersion?: string;
     /** string? */
-    ca_root?: string;
+    caRoot?: string;
     /** string? */
-    ca_path?: string;
+    caPath?: string;
     /** bool? */
-    ca_trusted?: boolean;
+    caTrusted?: boolean;
     /** string? */
-    cert_path?: string;
+    certPath?: string;
     /** string? */
-    key_path?: string;
+    keyPath?: string;
     /** string? */
-    not_after?: string;
+    notAfter?: string;
     /** number? */
-    days_remaining?: number;
+    daysRemaining?: number;
     /** bool */
     expired: boolean;
     /** string[] */
@@ -86,6 +120,11 @@ export interface CertStatus {
     missing: string[];
     /** bool */
     stale: boolean;
+}
+
+export interface Checkout {
+    /** string | null */
+    remote: string | null;
 }
 
 export interface CompanionRow {
@@ -118,19 +157,82 @@ export interface Connection {
     passwordKey?: string;
 }
 
+export interface ContainerDetails {
+    /** string */
+    name: string;
+    /** string? */
+    id?: string;
+    /** string? */
+    image?: string;
+    /** string? */
+    state?: string;
+    /** bool */
+    running: boolean;
+    /** string? */
+    startedAt?: string;
+    /** string? */
+    created?: string;
+    /** number */
+    restartCount: number;
+    /** string? */
+    restartPolicy?: string;
+    /** string? */
+    health?: string;
+    /** number? */
+    exitCode?: number;
+    /** Port[] */
+    ports: Port[];
+    /** string[] */
+    networks: string[];
+    /** string? */
+    gateway?: string;
+    /** Mount[] */
+    mounts: Mount[];
+    /** string? */
+    ipAddress?: string;
+    /** string[] */
+    env: string[];
+    /** number? */
+    imageSize?: number;
+}
+
 export interface ContainerStats {
     /** f32 */
-    cpu_percent: number;
+    cpuPercent: number;
     /** u64 */
-    memory_used: number;
+    memoryUsed: number;
     /** u64 */
-    memory_limit: number;
+    memoryLimit: number;
     /** f32 */
-    memory_percent: number;
+    memoryPercent: number;
     /** u64 */
-    net_rx: number;
+    netRx: number;
     /** u64 */
-    net_tx: number;
+    netTx: number;
+}
+
+export interface CpuBreakdown {
+    /** number */
+    user: number;
+    /** number */
+    nice: number;
+    /** number */
+    system: number;
+    /** number */
+    idle: number;
+}
+
+export interface CpuStats {
+    /** number */
+    percent: number;
+    /** number[] */
+    cores: number[];
+    /** number */
+    coreCount: number;
+    /** number[] | null */
+    loadAverage: number[] | null;
+    /** CpuBreakdown | null */
+    breakdown: CpuBreakdown | null;
 }
 
 export interface Credential {
@@ -142,6 +244,55 @@ export interface Credential {
     value: string;
     /** bool */
     secret: boolean;
+}
+
+export interface DbInstance {
+    /** string */
+    id: string;
+    /** string */
+    service: string;
+    /** string */
+    version: string;
+    /** string */
+    kind: string;
+    /** string */
+    container: string;
+    /** bool */
+    enabled: boolean;
+    /** bool */
+    running: boolean;
+}
+
+export interface DbMovePlan {
+    /** string — instance id */
+    from: string;
+    /** string — instance id */
+    to: string;
+    /** string */
+    fromService: string;
+    /** string */
+    toService: string;
+    /** string */
+    fromVersion: string;
+    /** string */
+    toVersion: string;
+    /** bool */
+    possible: boolean;
+    /** string? — why not */
+    refused?: string;
+    /** string[] — true and not blocking */
+    warnings: string[];
+}
+
+export interface DbMoved {
+    /** string */
+    from: string;
+    /** string */
+    to: string;
+    /**
+     * number — the size of the dump that crossed, the only number that says anything actually moved
+     */
+    bytes: number;
 }
 
 export interface DbTarget {
@@ -183,7 +334,7 @@ export interface DependencyReport {
     description: string;
     dependencies: Record<string, unknown>;
     /** bool */
-    has_unmet_dependencies: boolean;
+    hasUnmetDependencies: boolean;
     /** string[] */
     internal: string[];
 }
@@ -209,15 +360,15 @@ export interface Detected {
     /** string */
     server: string;
     /** string? */
-    document_root?: string;
+    documentRoot?: string;
     /** string? */
-    php_version?: string;
+    phpVersion?: string;
     /** string? */
-    node_version?: string;
+    nodeVersion?: string;
     /** number? */
-    node_port?: number;
+    nodePort?: number;
     /** string? */
-    node_start?: string;
+    nodeStart?: string;
     /** 'certain'|'likely'|'guess' */
     confidence: 'certain' | 'likely' | 'guess';
     /** string[] */
@@ -234,17 +385,17 @@ export interface DevServerStatus {
     /** string */
     command: string;
     /** string? */
-    production_command?: string;
+    productionCommand?: string;
     /** bool? */
     mounted?: boolean;
     /** bool */
     running: boolean;
     /** bool */
-    needs_recreate: boolean;
+    needsRecreate: boolean;
     /** string? */
-    config_file?: string;
+    configFile?: string;
     /** bool? */
-    host_allowed?: boolean;
+    hostAllowed?: boolean;
     /** string? */
     snippet?: string;
     /** string? */
@@ -252,7 +403,7 @@ export interface DevServerStatus {
     /** number */
     port: number;
     /** string */
-    overlay_path: string;
+    overlayPath: string;
 }
 
 export interface DiskOwner {
@@ -270,6 +421,72 @@ export interface DiskOwner {
     running: boolean;
 }
 
+export interface DiskStats {
+    /** number */
+    readTotal: number;
+    /** number */
+    writeTotal: number;
+    /** number */
+    readRate: number;
+    /** number */
+    writeRate: number;
+}
+
+export interface DnsCheck {
+    /** string — the probe name, under the suffix and in no hosts file */
+    name: string;
+    /** DnsProbe — asked the responder directly */
+    udp: DnsProbe;
+    /** DnsProbe — asked the responder over TCP */
+    tcp: DnsProbe;
+    /** DnsProbe — asked this machine, the way a browser would */
+    system: DnsProbe;
+    /** DnsProbe — whether the rest of the internet still resolves */
+    public: DnsProbe;
+    /** bool — udp and system together, which is the pair that means 'this works' */
+    ok: boolean;
+}
+
+export interface DnsProbe {
+    /** bool */
+    ok: boolean;
+    /** string — what came back, in words, for a screen that has to explain a failure */
+    detail: string;
+}
+
+export interface DnsStatus {
+    /** string — resolver | network-manager | dnsmasq | systemd-resolved | nrpt | manual */
+    mechanism: string;
+    /** bool — whether this app can apply the change itself, or only report it */
+    writable: boolean;
+    /** string */
+    suffix: string;
+    /** string — the last label, which is what a resolver is pointed at */
+    tld: string;
+    /** number */
+    port: number;
+    /** bool — UDP */
+    listening: boolean;
+    /** bool — the second socket, reported separately because a port can be half-taken */
+    tcp: boolean;
+    /** string? — the file this mechanism writes, where it has one */
+    file?: string;
+    /** bool — whether this machine currently asks us for the suffix */
+    configured: boolean;
+    /** string — the file this app would write, or the line the user must place */
+    instruction: string;
+    /** string? — what is reloaded after the write, spelled out rather than done quietly */
+    reload?: string;
+    /** string? — a file already at that path that is not ours, and what it says */
+    foreign?: string;
+    /** string[] — resolver files this app wrote for a suffix the workspace has since left */
+    stale: string[];
+    /**
+     * bool — the machine asks us and nothing answers, which is the state where every name under the suffix fails
+     */
+    broken: boolean;
+}
+
 export interface DockerfilePreview {
     /** string */
     project: string;
@@ -285,23 +502,6 @@ export interface DockerfilePreview {
     bashOutputPath: string;
     /** bool */
     matchesBashOutput: boolean;
-}
-
-export interface Flame {
-    /** Frame[] — folded stacks; a function under two callers is two frames */
-    frames: unknown;
-    /** number — microseconds accounted for, which is the width of the root row */
-    total: number;
-    /** number — entry and exit records read */
-    records: number;
-    /** number — distinct stacks the file held */
-    stacks: number;
-    /** bool — the file was longer than the reader's ceiling; this is the start of the request */
-    truncated: boolean;
-    /** number — paths too thin to draw, dropped and counted rather than silently missing */
-    pruned: number;
-    /** bool — the stack went deeper than 64 frames */
-    depthCapped: boolean;
 }
 
 export interface Doctor {
@@ -348,20 +548,20 @@ export interface EngineStatus {
     /** string? */
     version?: string;
     /** string? */
-    api_version?: string;
+    apiVersion?: string;
     /** string? */
     context?: string;
     /** 'docker-desktop'|'colima'|'orbstack'|'engine'|'unknown' */
     platform: 'docker-desktop' | 'colima' | 'orbstack' | 'engine' | 'unknown';
     /** string? */
-    socket_path?: string;
+    socketPath?: string;
     /** string? */
     error?: string;
 }
 
 export interface FanoutStream {
     /** string */
-    stream_id: string;
+    streamId: string;
     /** number */
     followed: number;
     /** number */
@@ -372,17 +572,45 @@ export interface FanoutStream {
 
 export interface FinishedEvent {
     /** string */
-    operation_id: string;
+    operationId: string;
     /** string */
     subject: string;
     /** bool */
     success: boolean;
     /** u64 */
-    duration_ms: number;
+    durationMs: number;
     /** string? */
     error?: string;
     /** string? */
-    log_path?: string;
+    logPath?: string;
+}
+
+export interface Flame {
+    /** Frame[] — folded stacks; a function under two callers is two frames */
+    frames: Frame[];
+    /** number — microseconds accounted for, which is the width of the root row */
+    total: number;
+    /** number — entry and exit records read */
+    records: number;
+    /** number — distinct stacks the file held */
+    stacks: number;
+    /** bool — the file was longer than the reader's ceiling; this is the start of the request */
+    truncated: boolean;
+    /** number — paths too thin to draw, dropped and counted rather than silently missing */
+    pruned: number;
+    /** bool — the stack went deeper than 64 frames */
+    depthCapped: boolean;
+}
+
+export interface Frame {
+    /** string */
+    name: string;
+    /** number */
+    value: number;
+    /** Frame[] */
+    children: Frame[];
+    /** bool */
+    recursive: boolean;
 }
 
 export interface GeneratorReport {
@@ -441,17 +669,37 @@ export interface HandoverPreview {
     missing: MissingPackage[];
 }
 
+export interface HookPlan {
+    /** string — post-build | post-start | pre-stop */
+    event: string;
+    /** HookStep[] */
+    steps: HookStep[];
+    /**
+     * string? — what an approval would be recorded against; absent when the project has no host steps
+     */
+    digest?: string;
+}
+
+export interface HookStep {
+    /** string — exec | host */
+    kind: string;
+    /** string — display only; nothing parses it back */
+    command: string;
+    /** string? — policy-off | policy-host | needs-consent; absent means it runs */
+    blocked?: string;
+}
+
 export interface HostStats {
     /** CpuStats */
-    cpu: unknown;
+    cpu: CpuStats;
     /** MemoryStats */
-    memory: unknown;
+    memory: MemoryStats;
     /** StorageStats */
-    storage: unknown;
+    storage: StorageStats;
     /** NetworkStats */
-    network: unknown;
+    network: NetworkStats;
     /** DiskStats */
-    disk: unknown;
+    disk: DiskStats;
     /** u64 */
     timestamp: number;
 }
@@ -464,7 +712,14 @@ export interface HostsEntry {
     /** bool */
     configured: boolean;
     /** bool */
-    managed_by_stackvo: boolean;
+    managedByStackvo: boolean;
+}
+
+export interface HostsOverview {
+    /** HostsEntry[] */
+    entries: HostsEntry[];
+    /** string[] */
+    stale: string[];
 }
 
 export interface HostsPlan {
@@ -490,6 +745,28 @@ export interface HtmlCheck {
     /** u32 */
     tests: number;
     warnings: Record<string, unknown>;
+}
+
+export interface IdleProject {
+    /** string */
+    project: string;
+    /** string */
+    router: string;
+    /** number? — since the last request; absent when the log has never mentioned this router */
+    seconds?: number;
+    /** bool */
+    suspendable: boolean;
+}
+
+export interface Install {
+    /** 'xampp' | 'laragon' | 'mamp' | 'valet' | 'sail' */
+    source: 'xampp' | 'laragon' | 'mamp' | 'valet' | 'sail';
+    /** string — the installation root, or for Valet/Sail the directory that was pointed at */
+    path: string;
+    /**
+     * Array<{ name: string, path: string, domain: string | null, bytes: number, partial: boolean, detected: Detected, taken: boolean, services?: string[] }>
+     */
+    sites: Record<string, unknown>[];
 }
 
 export interface InstancePlan {
@@ -551,10 +828,56 @@ export interface InstanceSetting {
     label: Record<string, unknown>;
 }
 
+export interface LanProject {
+    /** string */
+    name: string;
+    /** string? */
+    host?: string;
+}
+
+export interface LanStatus {
+    /** string | null */
+    address: string | null;
+    /** string */
+    suffix: string;
+    /** LanProject[] */
+    projects: LanProject[];
+    /** string | null */
+    stale: string | null;
+}
+
+export interface LandingStatus {
+    /** bool */
+    running: boolean;
+    /** string */
+    container: string;
+    /** string */
+    url: string;
+    /** string | null */
+    rendered: string | null;
+    /** number */
+    projects: number;
+    /** number */
+    services: number;
+}
+
 export interface LinkCheck {
     /** u32 */
     errors: number;
     links: Record<string, unknown>;
+}
+
+export interface LocalOverride {
+    /** string */
+    text: string;
+    /** bool */
+    exists: boolean;
+    /** string[] */
+    applied: string[];
+    /** string[] */
+    refused: string[];
+    /** bool? */
+    ignored?: boolean;
 }
 
 export interface LogFile {
@@ -629,13 +952,65 @@ export interface MailStatus {
     /** bool */
     running: boolean;
     /** string? */
-    ui_url?: string;
+    uiUrl?: string;
     /** number */
     total: number;
     /** number? */
     unread?: number;
     /** string? */
     error?: string;
+}
+
+export interface Manifest {
+    /** string */
+    name: string;
+    /** string | null */
+    domain: string | null;
+    /** string */
+    runtime: string;
+    /** string | null */
+    server: string | null;
+    /** string | null */
+    documentRoot: string | null;
+    /** string[] */
+    aliases: string[];
+    /** bool */
+    lanShare: boolean;
+    /** string[] */
+    services: string[];
+    /** { version: string, extensions: string[], xdebug: boolean } | null */
+    php: Record<string, unknown> | null;
+    /**
+     * { version: string, install: string, build: string | null, start: string, port: number, packageManager: string | null } | null
+     */
+    node: Record<string, unknown> | null;
+    /**
+     * { version: string, install: string | null, build: string | null, start: string, port: number } | null
+     */
+    lang: Record<string, unknown> | null;
+    /** bool */
+    valid: boolean;
+    /** ManifestFinding[] */
+    errors: ManifestFinding[];
+    /** ManifestFinding[] */
+    warnings: ManifestFinding[];
+    /** Record<string, unknown> */
+    hooks: Record<string, unknown>;
+    /** Record<string, unknown> */
+    commands: Record<string, unknown>;
+    /** Record<string, unknown> */
+    sidecars: Record<string, unknown>;
+    /** string[] */
+    local: string[];
+}
+
+export interface ManifestFinding {
+    /** string */
+    code: string;
+    /** string */
+    path: string;
+    /** string */
+    message: string;
 }
 
 export interface MarketPackage {
@@ -709,21 +1084,38 @@ export interface MarketVersion {
     inUse: boolean;
 }
 
+export interface MemoryStats {
+    /** number */
+    total: number;
+    /** number */
+    used: number;
+    /** number */
+    free: number;
+    /** number */
+    available: number;
+    /** number */
+    percent: number;
+    /** number */
+    swapTotal: number;
+    /** number */
+    swapUsed: number;
+}
+
 export interface Migration {
     /** string (compose file path) */
     source: string;
     /** string? */
-    app_service?: string;
+    appService?: string;
     /** 'php'|'node'|null */
     runtime: 'php' | 'node' | null;
     /** string? */
     server?: string;
     /** string? */
-    php_version?: string;
+    phpVersion?: string;
     /** string? */
-    node_version?: string;
+    nodeVersion?: string;
     /** string? */
-    document_root?: string;
+    documentRoot?: string;
     /** string? */
     domain?: string;
     /** number? */
@@ -745,7 +1137,7 @@ export interface MigrationPlan {
     /** PresetPlan */
     env: PresetPlan;
     /** bool */
-    already_managed: boolean;
+    alreadyManaged: boolean;
 }
 
 export interface MissingPackage {
@@ -759,6 +1151,59 @@ export interface MissingPackage {
     installable: boolean;
 }
 
+export interface Mount {
+    /** string? */
+    source?: string;
+    /** string */
+    destination: string;
+    /** string? */
+    kind?: string;
+}
+
+export interface NetworkStats {
+    /** number */
+    rxTotal: number;
+    /** number */
+    txTotal: number;
+    /** number */
+    rxRate: number;
+    /** number */
+    txRate: number;
+}
+
+/** string */
+export type OperationId = string;
+
+export interface PackageReport {
+    /** string */
+    service: string;
+    /** string */
+    version: string;
+    /** string */
+    dir: string;
+    /** string[] — files whose hash the manifest had wrong */
+    resealed: string[];
+    /** string[] — everything sealing cannot fix */
+    problems: string[];
+}
+
+export interface PerfLayer {
+    /** string — project-relative directory */
+    path: string;
+    /** bool — whether the setting says it lives in a volume */
+    enabled: boolean;
+    /** string — the named volume, stackvo-cache-<project>--<path> */
+    volume: string;
+    /** bool — whether that volume exists on the engine */
+    exists: boolean;
+    /** number? — what it holds, when the engine can say */
+    bytes?: number;
+    /** bool — whether the host still has a copy, which is what an editor indexes */
+    onHost: boolean;
+    /** number? — files in the host copy, counted up to a cap */
+    hostFiles?: number;
+}
+
 export interface PhpIniStatus {
     /** bool */
     supported: boolean;
@@ -767,7 +1212,7 @@ export interface PhpIniStatus {
     /** string */
     path: string;
     /** string */
-    container_path: string;
+    containerPath: string;
     /** bool? */
     mounted?: boolean;
     /** bool */
@@ -777,13 +1222,13 @@ export interface PhpIniStatus {
     /** Record<string, string> */
     unmanaged: Record<string, unknown>;
     /** bool */
-    needs_recreate: boolean;
+    needsRecreate: boolean;
     /** string? */
     warning?: string;
     /** Record<string, string>? */
     effective?: Record<string, unknown>;
     /** string */
-    overlay_path: string;
+    overlayPath: string;
 }
 
 export interface PolicyMarket {
@@ -821,18 +1266,36 @@ export interface Port {
 }
 
 export interface Preferences {
-    /** 'tr'|'en' */
-    locale: 'tr' | 'en';
-    /** 'light'|'dark'|'system' */
+    /** number */
+    schemaVersion: number;
+    /** 'tr' | 'en' | null */
+    locale: 'tr' | 'en' | null;
+    /** 'light' | 'dark' | 'system' */
     theme: 'light' | 'dark' | 'system';
-    /** string? */
-    editor_command?: string;
+    /** string | null */
+    editorCommand: string | null;
+    /** string | null */
+    terminalApp: string | null;
+    /** string | null */
+    browserCommand: string | null;
     /** bool */
-    start_minimized: boolean;
+    startMinimized: boolean;
+    /** 'ask' | 'quit' | 'tray' */
+    closeBehaviour: 'ask' | 'quit' | 'tray';
     /** bool */
     autostart: boolean;
     /** bool */
-    notify_on_build: boolean;
+    notifyOnBuild: boolean;
+    /** string */
+    backupSchedule: string;
+    /** number */
+    backupKeep: number;
+    /** string[] */
+    favourites: string[];
+    /** Record<string, unknown> */
+    appearance: Record<string, unknown>;
+    /** Record<string, unknown>[] */
+    appearancePresets: (Record<string, unknown>)[];
 }
 
 export interface Preflight {
@@ -869,7 +1332,7 @@ export interface PresetPlan {
     /** number */
     unchanged: number;
     /** bool */
-    needs_regenerate: boolean;
+    needsRegenerate: boolean;
 }
 
 export interface ProfileFile {
@@ -893,10 +1356,10 @@ export interface ProfileReport {
     /** number[] */
     summary: number[];
     /** number */
-    self_total: number;
+    selfTotal: number;
     functions: Record<string, unknown>;
     /** number */
-    function_count: number;
+    functionCount: number;
     /** bool */
     truncated: boolean;
 }
@@ -920,7 +1383,7 @@ export interface ProfilerStatus {
 
 export interface ProgressEvent {
     /** string */
-    operation_id: string;
+    operationId: string;
     /** string */
     subject: string;
     /** string */
@@ -937,7 +1400,7 @@ export interface Project {
     /** string */
     path: string;
     /** string */
-    container_name: string;
+    containerName: string;
     /** bool */
     running: boolean;
     /** bool */
@@ -945,15 +1408,15 @@ export interface Project {
     /** ProjectManifest */
     manifest: ProjectManifest;
     /** bool */
-    manifest_valid: boolean;
-    /** string[] */
-    manifest_errors: string[];
+    manifestValid: boolean;
     /** bool */
-    domain_configured: boolean;
+    domainConfigured: boolean;
     /** bool */
-    generated_stale: boolean;
+    generatedStale: boolean;
     /** Port[] */
     ports: Port[];
+    /** Checkout | null */
+    git: Checkout | null;
 }
 
 export interface ProjectLogFile {
@@ -981,6 +1444,52 @@ export interface PtyTarget {
     oneOf: Record<string, unknown>;
 }
 
+export interface PushPlan {
+    /** string */
+    tag: string;
+    /** string? — the host the tag names */
+    registry?: string;
+    /** bool */
+    possible: boolean;
+    /** string? — why not */
+    refused?: string;
+    /**
+     * bool? — whether this registry is in the user's Docker config; null means the answer could not be read, which is NOT “not logged in”
+     */
+    authenticated?: boolean;
+    /** string[] */
+    warnings: string[];
+}
+
+export interface QueryEntry {
+    /** number */
+    at: number;
+    /** string */
+    sql: string;
+    /** string */
+    shape: string;
+}
+
+export interface QueryLogSession {
+    /** bool */
+    recording: boolean;
+    /** bool */
+    supported: boolean;
+    /** QueryEntry[] */
+    entries: QueryEntry[];
+    /** QueryRepeat[] */
+    repeats: QueryRepeat[];
+}
+
+export interface QueryRepeat {
+    /** string */
+    shape: string;
+    /** number */
+    count: number;
+    /** string */
+    example: string;
+}
+
 export interface QuickCommand {
     /** string */
     id: string;
@@ -992,6 +1501,91 @@ export interface QuickCommand {
     interactive: boolean;
     /** string (the marker file) */
     because: string;
+}
+
+export interface RelayConfig {
+    /** bool */
+    enabled: boolean;
+    /** string */
+    host: string;
+    /** number */
+    port: number;
+    /** string */
+    username: string;
+    /** 'starttls' | 'tls' | 'none' */
+    security: 'starttls' | 'tls' | 'none';
+    /** string */
+    from: string;
+    /** string[] */
+    allowedRecipients: string[];
+}
+
+export interface RelayStatus {
+    /** bool */
+    enabled: boolean;
+    /** string */
+    host: string;
+    /** number */
+    port: number;
+    /** string */
+    username: string;
+    /** 'starttls' | 'tls' | 'none' */
+    security: 'starttls' | 'tls' | 'none';
+    /** string */
+    from: string;
+    /** string[] */
+    allowedRecipients: string[];
+    /** bool */
+    hasPassword: boolean;
+    /** bool */
+    keystore: boolean;
+}
+
+export interface ReleasePlan {
+    /** 'layer'|'retag' */
+    strategy: 'layer' | 'retag';
+    /** string */
+    baseImage: string;
+    /** string */
+    tag: string;
+    /** string (empty for retag) */
+    dockerfile: string;
+    /** [pattern, reason][] */
+    excluded: (Record<string, unknown>)[];
+    /** string[] */
+    warnings: string[];
+    /** string */
+    appPath: string;
+    /** string */
+    runtime: string;
+}
+
+export interface ReleaseResult {
+    /** ReleasePlan */
+    plan: ReleasePlan;
+    /** { envFiles: string[], xdebugActive: bool?, hasApp: bool, clean: bool } */
+    verification: Record<string, unknown>;
+}
+
+export interface ReplRun {
+    /** string */
+    runner: string;
+    /** string */
+    display: string;
+    /** string */
+    stdout: string;
+    /** string */
+    stderr: string;
+    /** int? */
+    exitCode?: number;
+    /** int */
+    ms: number;
+    /** bool */
+    timedOut: boolean;
+    /** bool */
+    truncated: boolean;
+    /** bool */
+    limited: boolean;
 }
 
 export interface ReplRunner {
@@ -1009,27 +1603,6 @@ export interface ReplRunner {
     because: string;
 }
 
-export interface ReplRun {
-    /** string */
-    runner: string;
-    /** string */
-    display: string;
-    /** string */
-    stdout: string;
-    /** string */
-    stderr: string;
-    /** int? */
-    exit_code?: number;
-    /** int */
-    ms: number;
-    /** bool */
-    timed_out: boolean;
-    /** bool */
-    truncated: boolean;
-    /** bool */
-    limited: boolean;
-}
-
 export interface ReplSnippet {
     /** int (unix seconds) */
     at: number;
@@ -1037,32 +1610,6 @@ export interface ReplSnippet {
     runner: string;
     /** string */
     code: string;
-}
-
-export interface ReleasePlan {
-    /** 'layer'|'retag' */
-    strategy: 'layer' | 'retag';
-    /** string */
-    base_image: string;
-    /** string */
-    tag: string;
-    /** string (empty for retag) */
-    dockerfile: string;
-    /** [pattern, reason][] */
-    excluded: (Record<string, unknown>)[];
-    /** string[] */
-    warnings: string[];
-    /** string */
-    app_path: string;
-    /** string */
-    runtime: string;
-}
-
-export interface ReleaseResult {
-    /** ReleasePlan */
-    plan: ReleasePlan;
-    /** { env_files: string[], xdebug_active: bool?, has_app: bool, clean: bool } */
-    verification: Record<string, unknown>;
 }
 
 export interface Service {
@@ -1114,25 +1661,22 @@ export interface Service {
     unmetDependencies: string[];
 }
 
-export interface Bundled {
-    /** number — services the index lists */
-    packages: number;
-    /**
-     * number — versions whose files were carried; lower than the index's total when something was withdrawn
-     */
-    versions: number;
-    /** number — files written, index and package.json included */
-    files: number;
-    /** number — their total size, so the person choosing a stick knows */
-    bytes: number;
-    /**
-     * string[] — versions deliberately not carried, each with its reason. Empty is the normal case; a non-empty list is a fact the person carrying the bundle should read before they walk away from the network
-     */
-    skipped: string[];
-    /**
-     * boolean — whether registry.json.minisig travelled with it. A machine whose policy sets requireSignature refuses a bundle without one, and this is where that is cheap to find out
-     */
-    signed: boolean;
+/** string */
+export type SessionId = string;
+
+export interface SiteSettings {
+    /** Record<string, string> */
+    env: Record<string, unknown>;
+    /** bool */
+    directoryListing: boolean;
+    /** bool */
+    sshAgent: boolean;
+    /** bool */
+    listingSupported: boolean;
+    /** bool */
+    agentAvailable: boolean;
+    /** string */
+    server: string;
 }
 
 export interface SourceProbe {
@@ -1177,9 +1721,47 @@ export interface StatSample {
     memory: number;
 }
 
+export interface StorageStats {
+    /** number */
+    total: number;
+    /** number */
+    used: number;
+    /** number */
+    available: number;
+    /** number */
+    percent: number;
+    /** string */
+    mountPoint: string;
+}
+
+/** string */
+export type StreamId = string;
+
 export interface SystemResources {
-    images: { total: number; in_use: number; unused: number; size: number };
-    volumes: { total: number; in_use: number; unused: number; size: number };
+    images: { total: number; inUse: number; unused: number; size: number };
+    volumes: { total: number; inUse: number; unused: number; size: number };
+}
+
+export interface Timeline {
+    /** TimelineMoment[] */
+    moments: TimelineMoment[];
+    /** string[] */
+    requests: string[];
+    /** bool */
+    queriesRecording: boolean;
+}
+
+export interface TimelineMoment {
+    /** number */
+    at: number;
+    /** 'dump' | 'query' | 'mail' */
+    source: 'dump' | 'query' | 'mail';
+    /** string */
+    summary: string;
+    /** string | null */
+    request: string | null;
+    /** string | null */
+    shape: string | null;
 }
 
 export interface TunnelStatus {
@@ -1200,6 +1782,34 @@ export interface UpdateInfo {
     version?: string;
     /** string? */
     notes?: string;
+}
+
+export interface UpdaterOffer {
+    /**
+     * { outcome: 'update' | 'upToDate' | 'paused' | 'waiting' | 'otherChannel', detail?: unknown }
+     */
+    offer: Record<string, unknown>;
+    /** 'stable' | 'beta' */
+    channel: 'stable' | 'beta';
+    /** string */
+    currentVersion: string;
+    /** number */
+    bucket: number;
+}
+
+export interface UserRoute {
+    /** string */
+    domain: string;
+    /** string — http:// or https://, origin only */
+    target: string;
+    /** bool */
+    enabled: boolean;
+    /** string? — what the user typed, when normalisation changed it */
+    rewrittenFrom?: string;
+    /** string[] — true and not errors */
+    notes: string[];
+    /** string? — set instead of `notes` when the route no longer normalises */
+    error?: string;
 }
 
 export interface ValidationReport {
@@ -1230,280 +1840,11 @@ export interface Workspace {
     /** 'stored'|'env'|'discovered'|'none' */
     source: 'stored' | 'env' | 'discovered' | 'none';
     /** string? */
-    stackvo_version?: string;
+    stackvoVersion?: string;
     /** string? */
-    projects_dir?: string;
+    projectsDir?: string;
     /** string? */
-    env_file?: string;
-}
-
-export interface XdebugStatus {
-    /** bool */
-    supported: boolean;
-    /** bool */
-    enabled: boolean;
-    /** bool? */
-    active?: boolean;
-    /** bool */
-    needs_rebuild: boolean;
-    /** bool */
-    running: boolean;
-    /** number */
-    port: number;
-    /** string */
-    mode: string;
-    /** string */
-    ide_key: string;
-    /** string? */
-    server_name?: string;
-    /** string? */
-    host_path?: string;
-    /** string */
-    container_path: string;
-    /** string? */
-    php_version?: string;
-    /** string? */
-    pecl_version?: string;
-    /** string */
-    overlay_path: string;
-}
-
-export interface LocalOverride {
-    /** string */
-    text: string;
-    /** bool */
-    exists: boolean;
-    /** string[] */
-    applied: string[];
-    /** string[] */
-    refused: string[];
-    /** bool? */
-    ignored?: boolean;
-}
-
-export interface HookPlan {
-    /** string — post-build | post-start | pre-stop */
-    event: string;
-    /** HookStep[] */
-    steps: HookStep[];
-    /**
-     * string? — what an approval would be recorded against; absent when the project has no host steps
-     */
-    digest?: string;
-}
-
-export interface HookStep {
-    /** string — exec | host */
-    kind: string;
-    /** string — display only; nothing parses it back */
-    command: string;
-    /** string? — policy-off | policy-host | needs-consent; absent means it runs */
-    blocked?: string;
-}
-
-export interface PackageReport {
-    /** string */
-    service: string;
-    /** string */
-    version: string;
-    /** string */
-    dir: string;
-    /** string[] — files whose hash the manifest had wrong */
-    resealed: string[];
-    /** string[] — everything sealing cannot fix */
-    problems: string[];
-}
-
-export interface DnsStatus {
-    /** string — resolver | network-manager | dnsmasq | systemd-resolved | nrpt | manual */
-    mechanism: string;
-    /** bool — whether this app can apply the change itself, or only report it */
-    writable: boolean;
-    /** string */
-    suffix: string;
-    /** string — the last label, which is what a resolver is pointed at */
-    tld: string;
-    /** number */
-    port: number;
-    /** bool — UDP */
-    listening: boolean;
-    /** bool — the second socket, reported separately because a port can be half-taken */
-    tcp: boolean;
-    /** string? — the file this mechanism writes, where it has one */
-    file?: string;
-    /** bool — whether this machine currently asks us for the suffix */
-    configured: boolean;
-    /** string — the file this app would write, or the line the user must place */
-    instruction: string;
-    /** string? — what is reloaded after the write, spelled out rather than done quietly */
-    reload?: string;
-    /** string? — a file already at that path that is not ours, and what it says */
-    foreign?: string;
-    /** string[] — resolver files this app wrote for a suffix the workspace has since left */
-    stale: string[];
-    /**
-     * bool — the machine asks us and nothing answers, which is the state where every name under the suffix fails
-     */
-    broken: boolean;
-}
-
-export interface DnsCheck {
-    /** string — the probe name, under the suffix and in no hosts file */
-    name: string;
-    /** DnsProbe — asked the responder directly */
-    udp: DnsProbe;
-    /** DnsProbe — asked the responder over TCP */
-    tcp: DnsProbe;
-    /** DnsProbe — asked this machine, the way a browser would */
-    system: DnsProbe;
-    /** DnsProbe — whether the rest of the internet still resolves */
-    public: DnsProbe;
-    /** bool — udp and system together, which is the pair that means 'this works' */
-    ok: boolean;
-}
-
-export interface DnsProbe {
-    /** bool */
-    ok: boolean;
-    /** string — what came back, in words, for a screen that has to explain a failure */
-    detail: string;
-}
-
-export interface UserRoute {
-    /** string */
-    domain: string;
-    /** string — http:// or https://, origin only */
-    target: string;
-    /** bool */
-    enabled: boolean;
-    /** string? — what the user typed, when normalisation changed it */
-    rewrittenFrom?: string;
-    /** string[] — true and not errors */
-    notes: string[];
-    /** string? — set instead of `notes` when the route no longer normalises */
-    error?: string;
-}
-
-export interface DbMovePlan {
-    /** string — instance id */
-    from: string;
-    /** string — instance id */
-    to: string;
-    /** string */
-    fromService: string;
-    /** string */
-    toService: string;
-    /** string */
-    fromVersion: string;
-    /** string */
-    toVersion: string;
-    /** bool */
-    possible: boolean;
-    /** string? — why not */
-    refused?: string;
-    /** string[] — true and not blocking */
-    warnings: string[];
-}
-
-export interface DbMoved {
-    /** string */
-    from: string;
-    /** string */
-    to: string;
-    /**
-     * number — the size of the dump that crossed, the only number that says anything actually moved
-     */
-    bytes: number;
-}
-
-export interface DbInstance {
-    /** string */
-    id: string;
-    /** string */
-    service: string;
-    /** string */
-    version: string;
-    /** string */
-    kind: string;
-    /** string */
-    container: string;
-    /** bool */
-    enabled: boolean;
-    /** bool */
-    running: boolean;
-}
-
-export interface PushPlan {
-    /** string */
-    tag: string;
-    /** string? — the host the tag names */
-    registry?: string;
-    /** bool */
-    possible: boolean;
-    /** string? — why not */
-    refused?: string;
-    /**
-     * bool? — whether this registry is in the user's Docker config; null means the answer could not be read, which is NOT “not logged in”
-     */
-    authenticated?: boolean;
-    /** string[] */
-    warnings: string[];
-}
-
-export interface IdleProject {
-    /** string */
-    project: string;
-    /** string */
-    router: string;
-    /** number? — since the last request; absent when the log has never mentioned this router */
-    seconds?: number;
-    /** bool */
-    suspendable: boolean;
-}
-
-export interface PerfLayer {
-    /** string — project-relative directory */
-    path: string;
-    /** bool — whether the setting says it lives in a volume */
-    enabled: boolean;
-    /** string — the named volume, stackvo-cache-<project>--<path> */
-    volume: string;
-    /** bool — whether that volume exists on the engine */
-    exists: boolean;
-    /** number? — what it holds, when the engine can say */
-    bytes?: number;
-    /** bool — whether the host still has a copy, which is what an editor indexes */
-    onHost: boolean;
-    /** number? — files in the host copy, counted up to a cap */
-    hostFiles?: number;
-}
-
-export interface Install {
-    /** 'xampp' | 'laragon' | 'mamp' | 'valet' | 'sail' */
-    source: 'xampp' | 'laragon' | 'mamp' | 'valet' | 'sail';
-    /** string — the installation root, or for Valet/Sail the directory that was pointed at */
-    path: string;
-    /**
-     * Array<{ name: string, path: string, domain: string | null, bytes: number, partial: boolean, detected: Detected, taken: boolean, services?: string[] }>
-     */
-    sites: Record<string, unknown>[];
-}
-
-export interface SiteSettings {
-    /**
-     * Record<string,string> - set on the project's container, never written into the application's own .env
-     */
-    env: Record<string, unknown>;
-    /** bool - autoindex for nginx, file_server browse for Caddy */
-    directoryListing: boolean;
-    /** bool - forward the host's SSH agent into the container */
-    sshAgent: boolean;
-    /** bool - false for Apache and Swoole, which have no configuration file */
-    listingSupported: boolean;
-    /** bool - false when no agent is running on this machine */
-    agentAvailable: boolean;
-    /** string - named so the pane can say which server cannot list a directory */
-    server: string;
+    envFile?: string;
 }
 
 export interface Worktree {
@@ -1533,19 +1874,6 @@ export interface Worktree {
     createdAt: string;
 }
 
-export interface WorktreeRow extends Worktree {
-    /** bool — is the directory still there */
-    exists: boolean;
-    /**
-     * bool | null — uncommitted work a removal would discard. null when git could not answer, which is a third state and not a warning
-     */
-    dirty: boolean | null;
-    /**
-     * bool — the record points somewhere git no longer has a checkout, usually because the folder was deleted by hand
-     */
-    orphaned: boolean;
-}
-
 export interface WorktreePlan {
     /** string */
     parent: string;
@@ -1567,6 +1895,19 @@ export interface WorktreePlan {
     refused: string | null;
     /** bool */
     possible: boolean;
+}
+
+export interface WorktreeRow extends Worktree {
+    /** bool — is the directory still there */
+    exists: boolean;
+    /**
+     * bool | null — uncommitted work a removal would discard. null when git could not answer, which is a third state and not a warning
+     */
+    dirty: boolean | null;
+    /**
+     * bool — the record points somewhere git no longer has a checkout, usually because the folder was deleted by hand
+     */
+    orphaned: boolean;
 }
 
 export interface WorktreeSupport {
@@ -1596,6 +1937,37 @@ export interface WorktreeSupport {
     reason: string | null;
     /** WorktreeRow[] — this project's own */
     worktrees: WorktreeRow[];
+}
+
+export interface XdebugStatus {
+    /** bool */
+    supported: boolean;
+    /** bool */
+    enabled: boolean;
+    /** bool? */
+    active?: boolean;
+    /** bool */
+    needsRebuild: boolean;
+    /** bool */
+    running: boolean;
+    /** number */
+    port: number;
+    /** string */
+    mode: string;
+    /** string */
+    ideKey: string;
+    /** string? */
+    serverName?: string;
+    /** string? */
+    hostPath?: string;
+    /** string */
+    containerPath: string;
+    /** string? */
+    phpVersion?: string;
+    /** string? */
+    peclVersion?: string;
+    /** string */
+    overlayPath: string;
 }
 
 export interface StackvoApi {
@@ -1628,7 +2000,7 @@ export interface StackvoApi {
   /**
    * SystemResources has reported reclaimable bytes since Phase 1 with no way to act on the number. Dangling images accumulate on every rebuild, and this app rebuilds a lot — every Xdebug toggle, every extension change.
    */
-  dockerPrune(images: boolean, volumes: boolean, buildCache: 'keep' | 'dangling' | 'all'): Promise<PruneReport>;
+  dockerPrune(images: boolean, volumes: boolean, buildCache?: 'keep' | 'dangling' | 'all'): Promise<PruneReport>;
   hostStats(): Promise<HostStats>;
   dockerSystemResources(): Promise<SystemResources>;
   /**
@@ -1648,7 +2020,7 @@ export interface StackvoApi {
   projectStart(name: string): Promise<void>;
   projectStop(name: string): Promise<void>;
   projectRestart(name: string): Promise<void>;
-  projectBuild(name: string, no_cache: boolean): Promise<OperationId>;
+  projectBuild(name: string, noCache?: boolean): Promise<OperationId>;
   /**
    * The value behind one masked credential on the services list, whichever place this workspace keeps it.
    */
@@ -1737,13 +2109,13 @@ export interface StackvoApi {
    * Write an instance's settings and rebuild its container with them. Replaces service_apply_settings, which wrote them to .env.
    */
   instanceApplySettings(id: string, patch: Record<string, unknown>, ports?: Record<string, unknown>): Promise<OperationId>;
-  containerInspect(name: string): Promise<unknown>;
+  containerInspect(name: string): Promise<ContainerDetails>;
   containerStats(name: string): Promise<ContainerStats>;
   /**
    * Log following existed only as `stackvo logs` in the CLI. The UI had no way to tail a container.
    */
-  containerLogsOpen(name: string, tail: number, follow: boolean): Promise<unknown>;
-  containerLogsClose(stream_id: string): Promise<void>;
+  containerLogsOpen(name: string, tail?: number, follow?: boolean): Promise<StreamId>;
+  containerLogsClose(streamId: string): Promise<void>;
   /**
    * The container stream carries stdout and stderr, which is what the entrypoint and the web server say — not what the application records. A Laravel exception goes to storage/logs/laravel.log, an nginx 502 to the mounted error.log, and a queue worker that died to its own file under supervisord. None of those reach stdout, so none of them were visible anywhere in the app.
    */
@@ -1751,7 +2123,7 @@ export interface StackvoApi {
   /**
    * Follows one of those files. Shares the event pair with container_logs_open because the viewer renders one kind of line; a second pair would have meant a second frontend listener free to drift from the first. Closed with container_logs_close — one registry of abort handles, one way to stop a stream.
    */
-  appLogOpen(name: string, id: string, tail_bytes?: number): Promise<unknown>;
+  appLogOpen(name: string, id: string, tailBytes?: number): Promise<StreamId>;
   /**
    * The per-project viewer answers "what did this project write". It cannot answer "which of my eight projects just errored", which is the question you have when you do not yet know where to look. Herd sells the cross-project view as a Pro feature.
    */
@@ -1835,12 +2207,12 @@ export interface StackvoApi {
    */
   hostsMissing(): Promise<string[]>;
   hostsMissingCore(): Promise<string[]>;
-  hostsOverview(): Promise<unknown>;
+  hostsOverview(): Promise<HostsOverview>;
   /**
    * StackVo has shipped a mail catcher all along and never showed it — reading a captured message meant leaving for a browser tab, which is exactly the round trip four competitors charge for removing.
    */
   mailStatus(): Promise<MailStatus>;
-  mailMessages(limit: number): Promise<MailMessage[]>;
+  mailMessages(limit?: number): Promise<MailMessage[]>;
   mailMessage(id: string): Promise<MailBody>;
   mailClear(): Promise<void>;
   /**
@@ -1848,7 +2220,7 @@ export interface StackvoApi {
    */
   mailRelayGet(): Promise<Record<string, unknown>>;
   /** Somewhere to put the relay, once somebody has been told a release was refused. */
-  mailRelaySet(config: unknown, password: string | null): Promise<unknown>;
+  mailRelaySet(config: RelayConfig, password: string | null): Promise<RelayStatus>;
   /** The whole point of M-2: one caught message, sent on to a real person. */
   mailRelease(id: string, to: string[]): Promise<void>;
   mailDelete(id: string): Promise<void>;
@@ -1889,11 +2261,11 @@ export interface StackvoApi {
   /**
    * F-2, whose note read 'dump/mail/log three separate screens, no correlation'. What the code thought it had (dd()) and what it actually asked the database for are two halves of one question, and reading them meant comparing clocks by eye across two panes.
    */
-  requestTimeline(project: string, service?: string): Promise<unknown>;
+  requestTimeline(project: string, service?: string): Promise<Timeline>;
   /**
    * F-3. `profiler_read` answers where the time went — a table of the costliest functions — and cannot answer what called that, which is the question a flame view exists for. The parser was already reading caller→callee edges to attribute inclusive cost and was discarding the caller.
    */
-  profilerTree(name: string, id: string): Promise<unknown>;
+  profilerTree(name: string, id: string): Promise<Frame[]>;
   /**
    * F-3, and the reason the word flame graph can now be used. profiler_tree draws what cachegrind holds — the SUMMED cost of "A called B" over every place A called B — so a function reached from two callers is one box carrying both, and no arrangement of those edges recovers which caller was expensive. An Xdebug trace holds every entry and exit with its depth, which is a stack: folding those gives one box per distinct path, with its own measured width. MUST be a separate command from profiler_tree rather than a flag on it, because the two are different claims about the same picture and a reader cannot tell them apart by looking.
    */
@@ -1901,11 +2273,11 @@ export interface StackvoApi {
   /**
    * M-5, M-6 and M-10 in one document, because they are one kind of thing: a per-project setting the generator cannot read from the manifest (project.schema.json is additionalProperties:false and frozen), kept in .stackvo/site.json so it travels with the project. listingSupported and agentAvailable are answered by the machine rather than assumed by the screen: Apache and Swoole have no configuration file for a directory index, and an agent cannot be forwarded when none is running - a control drawn for either would do nothing.
    */
-  siteSettings(name: string): Promise<Record<string, unknown>>;
+  siteSettings(name: string): Promise<SiteSettings>;
   /**
    * Whole document rather than per key: three settings in one small file, and three commands over one document is three chances for it and the screen to disagree - the same reasoning routes_save gives. MUST refuse a key that is not a POSIX variable name and a value carrying a line break: the overlay is YAML, where a newline in a scalar ends it and everything after is read as configuration somebody else wrote. Regenerates, because the directory listing lands in a GENERATED server config while the variables and the agent land in a compose overlay - two different paths for one save.
    */
-  siteSave(name: string, env: Record<string, unknown>, directoryListing: boolean, sshAgent: boolean): Promise<unknown>;
+  siteSave(name: string, env: Record<string, unknown>, directoryListing: boolean, sshAgent: boolean): Promise<SiteSettings>;
   /**
    * I-1. A bind mount costs 2-3x a named volume on metadata and writes, which is the measured reason a Docker workflow feels slow on macOS and Windows. This lists the directories worth moving off the host filesystem for one project, whether each is currently in a volume, how big that volume is, and whether the host still has a copy for an editor to index. Suggestions describe the project in front of them — vendor for PHP, storage/framework and bootstrap/cache when it is a Laravel, node_modules when there is a package.json — and are never applied on their own.
    */
@@ -1925,23 +2297,23 @@ export interface StackvoApi {
   /**
    * F-1, and §2 called it the largest product gap: three competitors sell query logging and N+1 detection, and this stack could not say what the database had been asked. The row also said it needed a collector inside the container — for MySQL and MariaDB that is wrong, and this is why.
    */
-  queryLog(service: string): Promise<unknown>;
+  queryLog(service: string): Promise<QueryLogSession>;
   /**
    * The log records every statement unsampled and costs write throughput, so it is an instrument you switch on, look at, and switch off — never a default.
    */
-  queryLogRecord(service: string, recording: boolean): Promise<unknown>;
+  queryLogRecord(service: string, recording: boolean): Promise<QueryLogSession>;
   /**
    * Start again from here — what somebody presses before reloading the page they are investigating. Without it every read is the whole session and the one request under study is buried.
    */
-  queryLogClear(service: string): Promise<unknown>;
+  queryLogClear(service: string): Promise<QueryLogSession>;
   /**
    * The services sheet showed a container name, a port table and a credentials block, and left the reader to assemble a URI. The obvious assembly — `mongodb://stackvo-mongo:27017/` — cannot work from the host, because that name only resolves on the Docker network. Null for a service nobody connects to with a string.
    */
-  serviceConnection(service: string, reveal: boolean): Promise<Connection>;
+  serviceConnection(service: string, reveal?: boolean): Promise<Connection>;
   /**
    * The picker beside `service_open_in_client` has to be built from what is on this machine, not from a list of clients somebody might have. Empty for most services, which is the answer rather than a failure: a service with no connection string has nothing to open, and an AMQP or SMTP address is not one a desktop database client takes.
    */
-  serviceDbClients(service: string): Promise<unknown>;
+  serviceDbClients(service: string): Promise<App[]>;
   /**
    * G-3. The correct connection string has existed since connect.rs was written and the sheet has offered to copy it since; what was missing was the step that pastes it, which everybody was doing by hand.
    */
@@ -1955,7 +2327,7 @@ export interface StackvoApi {
    */
   xdebugSet(name: string, enabled: boolean): Promise<XdebugStatus>;
   /**
-   * Every competitor exposes memory_limit and upload_max_filesize; StackVo could not, because .stackvo/php.ini was documented but never real — docs/*/configuration/project.md lists it and the old web UI's DockerService.js:388 lists it, but `php.ini` appears NOWHERE in core/cli. No generator mounted it, so dropping the file in did nothing. The mount had to exist before a form was worth building.
+   * Every competitor exposes memory_limit and upload_max_filesize; StackVo could not, because .stackvo/php.ini was documented but never real — docs/*\/configuration/project.md lists it and the old web UI's DockerService.js:388 lists it, but `php.ini` appears NOWHERE in core/cli. No generator mounted it, so dropping the file in did nothing. The mount had to exist before a form was worth building.
    */
   phpIniStatus(name: string): Promise<PhpIniStatus>;
   /**
@@ -2055,11 +2427,11 @@ export interface StackvoApi {
   /**
    * Same order as hosts_plan: say what would change before doing it. Reissuing replaces the file Traefik is serving, and `installCa` can touch the system trust store, so neither should be the first thing the user learns about it.
    */
-  certPlan(): Promise<CertPlan>;
+  certPlan(installCa?: boolean): Promise<CertPlan>;
   /**
    * Reissues the wildcard certificate for the domains the projects actually have, and — when the CA is not trusted yet — installs it. Without this the certificate goes stale the moment a project is created, and on Linux and Windows the CA is never trusted at all: the Bash helper's trust step returns early on anything but macOS, so those users get a browser warning and no explanation.
    */
-  certApply(install_ca: boolean): Promise<CertPlan>;
+  certApply(installCa?: boolean): Promise<CertPlan>;
   certTrustInTerminal(): Promise<void>;
   workspacePick(): Promise<Workspace>;
   /** ProjectDetail.vue currently re-fetches the whole list and filters client-side. */
@@ -2146,7 +2518,7 @@ export interface StackvoApi {
   /**
    * The sidecar serves a FILE, so starting a project after the page was written leaves it stale with nothing having stopped. Rewriting is therefore a different action from serving, and one button doing both would restart a container to update a list.
    */
-  landingRefresh(): Promise<unknown>;
+  landingRefresh(): Promise<LandingStatus>;
   /**
    * Which workers this project can offer, from its files alone: artisan offers 'queue' and 'scheduler', laravel/horizon in composer.json adds 'horizon'. A Node project gets an empty list, not an error.
    */
@@ -2162,7 +2534,7 @@ export interface StackvoApi {
    */
   projectValidate(spec: ProjectSpec): Promise<ValidationReport>;
   projectCreate(spec: ProjectSpec): Promise<OperationId>;
-  projectDelete(name: string, remove_files: boolean): Promise<void>;
+  projectDelete(name: string, removeFiles?: boolean): Promise<void>;
   /**
    * Competitive review §L. XAMPP has been frozen on PHP 8.2 since 2023 and lost its add-on ecosystem in September 2025; Laragon went commercial in 2025 and was forked. Those are the two largest installed bases in the category and every rival is courting them — EnvKit imports Laragon in bulk, ForgeKit lists six sources. StackVo could read neither.
    */
@@ -2182,7 +2554,7 @@ export interface StackvoApi {
   /**
    * Writes stackvo.json for a directory that is already there, then regenerates. The counterpart of project_create, which requires the directory to be absent.
    */
-  projectAdopt(name: string, spec: ProjectSpec, overrides: Record<string, unknown>): Promise<OperationId>;
+  projectAdopt(name: string, spec?: ProjectSpec, overrides?: Record<string, unknown>): Promise<OperationId>;
   projectManifestRead(name: string): Promise<ProjectManifest>;
   /**
    * Editing an existing project is impossible today — the UI can only create and delete. MUST honour the write rules in project.schema.json (extensions last, one runtime block).
@@ -2213,7 +2585,7 @@ export interface StackvoApi {
   /**
    * The screen has to be able to say three different things: here is the address a phone can use, this machine has no address to offer, and the name baked into the compose file is from a network this laptop is no longer on.
    */
-  lanStatus(): Promise<unknown>;
+  lanStatus(): Promise<LanStatus>;
   /**
    * Competitive review B-1: herd.yml, .lerd.yaml and .ddev/config.yaml all describe the whole environment and are committed, so a teammate clones and runs one command. stackvo.json carried the project and a preset carried the stack, and the two never met. `services` in the manifest is the missing half; this reports what the repository declares, what this machine gives it, and the diff.
    */
@@ -2221,12 +2593,22 @@ export interface StackvoApi {
   /**
    * Turns the declaration into an enabled stack, through the plan-then-apply path a preset import already uses rather than a second one with its own rules.
    */
-  projectRequirementsApply(name: string): Promise<unknown>;
+  projectRequirementsApply(name: string): Promise<PresetPlan>;
   /**
    * Writes the `services` list into stackvo.json, which is the file that gets committed — the point of the feature is that the next person to clone does not have to be told.
    */
-  projectRequirementsDeclare(name: string, services: string[]): Promise<unknown>;
+  projectRequirementsDeclare(name: string, services: string[]): Promise<Manifest>;
   updaterStatus(): Promise<Record<string, unknown>>;
+  /**
+   * §3 #21. `tauri-plugin-updater` fetches a manifest, compares versions, verifies a signature and installs — that is the whole of it. It has no notion of a channel, no notion of a percentage, and no way to STOP: a release found to be broken cannot be recalled, because every running copy keeps asking the same endpoint and getting the same answer. Channels, staged rollout and rollback are therefore four extra fields in the manifest and one decision made BEFORE the plugin is asked, and this is that decision.
+   */
+  updaterOffer(manifest: Record<string, unknown>, channel?: 'stable' | 'beta' | null): Promise<UpdaterOffer>;
+  /**
+   * §3 #34 / ADR 0026. The loopback API is OFF until somebody asks. Not because loopback is dangerous by itself, but because a listener nobody knows about is a listener nobody turns off — and the honest default for a surface answering questions about somebody's workspace is that it is not answering them.
+   */
+  websurfaceStart(port?: number): Promise<Record<string, unknown>>;
+  websurfaceStatus(): Promise<Record<string, unknown>>;
+  websurfaceStop(): Promise<boolean>;
   /**
    * MIT, BSD, ISC and Apache-2.0 all require the copyright notice and the licence text to travel with the software. A NOTICE.md in a source repository does not reach the person who received a .dmg, and pointing them at the repository is the same answer as not shipping it.
    */
@@ -2299,7 +2681,7 @@ export interface StackvoApi {
   openInBrowser(url: string): Promise<void>;
   openFolder(path: string): Promise<void>;
   prefsGet(): Promise<Preferences>;
-  prefsSet(patch: Preferences): Promise<void>;
+  prefsSet(patch: Partial<Preferences>): Promise<void>;
   /**
    * The migration gate. A fixture suite only covers the cases someone thought to write down; this renders every generated file with the Rust port against the user's real projects and real .env, so a divergence surfaces on their machine before anything depends on it.
    */
@@ -2307,17 +2689,24 @@ export interface StackvoApi {
   /**
    * Runs the Rust generator port alongside the Bash one so its output can be compared before it replaces anything. `matchesBashOutput` is the differential check, live against the user's own projects rather than only against fixtures.
    */
-  projectDockerfilePreview(name: string, strict: boolean): Promise<DockerfilePreview>;
-  ptyOpen(target: PtyTarget, cols: number, rows: number): Promise<unknown>;
-  ptyWrite(session_id: string, data: string): Promise<void>;
-  ptyResize(session_id: string, cols: number, rows: number): Promise<void>;
-  ptyClose(session_id: string): Promise<void>;
+  projectDockerfilePreview(name: string, strict?: boolean): Promise<DockerfilePreview>;
+  ptyOpen(target: PtyTarget, cols: number, rows: number): Promise<SessionId>;
+  ptyWrite(sessionId: string, data: string): Promise<void>;
+  ptyResize(sessionId: string, cols: number, rows: number): Promise<void>;
+  ptyClose(sessionId: string): Promise<void>;
   terminalOpenExternal(target: PtyTarget): Promise<void>;
 }
 
 export declare const api: StackvoApi;
 
 export declare class StackvoError extends Error {
+  constructor(shape: {
+    code?: string;
+    message?: string;
+    hint?: string;
+    hintKey?: string;
+    details?: Record<string, unknown>;
+  });
   code: string;
   hint?: string;
   hintKey?: string;

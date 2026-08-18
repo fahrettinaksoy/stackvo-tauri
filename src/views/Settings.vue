@@ -26,6 +26,7 @@ import DiagnosticsPane from '@/components/settings/DiagnosticsPane.vue';
 import PolicyNotice from '@/components/settings/PolicyNotice.vue';
 import SecretsPane from '@/components/settings/SecretsPane.vue';
 import AgentsPane from '@/components/settings/AgentsPane.vue';
+import LocalApiPane from '@/components/settings/LocalApiPane.vue';
 import PageLayout from '@/components/PageLayout.vue';
 import SettingsSection from '@/components/SettingsSection.vue';
 import SettingsGroup from '@/components/SettingsGroup.vue';
@@ -206,6 +207,17 @@ const SECTIONS = [
     icon: 'mdi-robot-outline',
     label: 'settings.agents.title',
     desc: 'settings.agents.sectionDesc',
+  },
+  // Beside the assistants rather than under 'help', and for the same reason:
+  // both are ways *in* to this app. The loopback API serves the read-only half
+  // of the same tool table the MCP server does, so a person who found one
+  // should find the other.
+  {
+    key: 'localApi',
+    group: 'app',
+    icon: 'mdi-lan-connect',
+    label: 'settings.localApi.title',
+    desc: 'settings.localApi.sectionDesc',
   },
   {
     key: 'doctor',
@@ -521,6 +533,10 @@ onMounted(async () => {
 
           <template v-if="tab === 'agents'">
             <AgentsPane />
+          </template>
+
+          <template v-if="tab === 'localApi'">
+            <LocalApiPane />
           </template>
 
           <template v-if="tab === 'certificates'">
