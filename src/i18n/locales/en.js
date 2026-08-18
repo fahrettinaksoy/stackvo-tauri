@@ -80,9 +80,10 @@ export default {
     more: '+{count} more…',
     runningSummary: '{running}/{total} projects running',
     menuAbout: 'About StackVo',
-    control: 'Start / stop',
-    startProject: 'Start {name}',
-    stopProject: 'Stop {name}',
+    // The first row of a project's own submenu. Start and stop come from
+    // `projectsView.menu` — the same two actions, chosen the same way: only the one
+    // that can be done right now is shown.
+    openProject: 'Open',
     started: '{name} is running.',
     stopped: '{name} has stopped.',
     failed: '{name} could not be changed.',

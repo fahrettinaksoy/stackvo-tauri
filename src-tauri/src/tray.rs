@@ -31,6 +31,15 @@ pub const MENU_PROJECT: &str = "project:";
 /// — one that could only ever say "open the app" is a shortcut, not a mode.
 pub const MENU_TOGGLE: &str = "toggle:";
 
+/// Prefix for the submenu each project gets.
+///
+/// A submenu fires no event of its own, so this id is never handled — it exists
+/// because muda addresses items by id and two rows of a menu may not share one.
+/// Distinct from `MENU_PROJECT` for exactly that reason: the row *inside* the
+/// submenu that raises the window is the one carrying the project prefix, and
+/// the handler must not see the same id twice.
+pub const MENU_PROJECT_GROUP: &str = "group:";
+
 /// Prefix for the pages. The router's own route name follows it, so the front
 /// end can push it straight through without a second table mapping menu ids to
 /// pages — one that would have to be kept in step with the router by hand.
@@ -163,7 +172,7 @@ pub const LABEL_KEYS: &[&str] = &[
     "containers",
     "more",
     "runningSummary",
-    "control",
+    "openProject",
     "startProject",
     "stopProject",
     // The macOS menu bar, which `menu::Labels` already said belonged here:
@@ -254,8 +263,12 @@ fn tr(locale: &str, key: &str) -> String {
         ("running", false) => "Running",
         ("stopped", true) => "Durdu",
         ("stopped", false) => "Stopped",
-        ("control", true) => "Başlat / durdur",
-        ("control", false) => "Start / stop",
+        ("openProject", true) => "Aç",
+        ("openProject", false) => "Open",
+        ("startProject", true) => "Başlat",
+        ("startProject", false) => "Start",
+        ("stopProject", true) => "Durdur",
+        ("stopProject", false) => "Stop",
         ("noProjects", true) => "Proje yok",
         ("noProjects", false) => "No projects",
         ("navProjects", true) => "Projeler",
@@ -322,29 +335,6 @@ fn running_summary(locale: &str, running: usize, total: usize) -> String {
         format!("{running}/{total} proje çalışıyor")
     } else {
         format!("{running}/{total} projects running")
-    }
-}
-
-/// `Start shop` / `Stop shop`.
-///
-/// The verb is in the label rather than implied by the project's state,
-/// because this row is one level down from the coloured dot that carries the
-/// state — and a row that says only `shop` in a menu called "Start / stop" is
-/// a coin toss with somebody's running container.
-fn toggle_label(locale: &str, name: &str, running: bool) -> String {
-    let key = if running {
-        "stopProject"
-    } else {
-        "startProject"
-    };
-    if let Some(template) = fed(key) {
-        return template.replace("{name}", name);
-    }
-    match (running, locale.starts_with("tr")) {
-        (true, true) => format!("{name}: durdur"),
-        (true, false) => format!("Stop {name}"),
-        (false, true) => format!("{name}: başlat"),
-        (false, false) => format!("Start {name}"),
     }
 }
 
@@ -430,45 +420,57 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>, snap: &Snapshot) -> tauri::Result<
             )?));
         }
 
+        // Every project is its own submenu: the dot and the name at the top
+        // level, and what can be done to that project one level in, under the
+        // project it belongs to.
+        //
+        // It was one shared `Start / stop` submenu holding a second copy of the
+        // whole project list (M-8). That put the verb a menu away from the noun
+        // it applies to — the list had to be read twice to act on one row, and
+        // the second reading was against rows labelled `shop: durdur` because
+        // out there the name had to be repeated to say which project was meant.
+        // Under the project, the name is the row above and the verb is a word.
         for (name, running) in snap.projects.iter().take(MAX_PROJECTS) {
-            // The dot carries the state: "name (running)" would double the
-            // width of every row to say what a colour says at a glance.
-            items.push(Box::new(IconMenuItem::with_id(
+            // Keeps `MENU_PROJECT` as its id, so the handler is unchanged. It
+            // needs a row of its own because a submenu title fires nothing on
+            // any platform — the click the old top-level row answered has to
+            // land somewhere.
+            let open = MenuItem::with_id(
                 app,
                 format!("{MENU_PROJECT}{name}"),
+                tr(&lang, "openProject"),
+                true,
+                None::<&str>,
+            )?;
+            // Away from the first row, which is where the pointer already is
+            // when the submenu opens: the neighbouring entry starts or stops a
+            // container, and "open" is the one of the two that undoes cheaply.
+            let gap = PredefinedMenuItem::separator(app)?;
+            let verb = if *running {
+                "stopProject"
+            } else {
+                "startProject"
+            };
+            let toggle = MenuItem::with_id(
+                app,
+                format!("{MENU_TOGGLE}{name}"),
+                tr(&lang, verb),
+                true,
+                None::<&str>,
+            )?;
+
+            let project = tauri::menu::Submenu::with_id_and_items(
+                app,
+                format!("{MENU_PROJECT_GROUP}{name}"),
                 name,
                 true,
-                Some(dot(if *running { GREEN } else { GREY })),
-                None::<&str>,
-            )?));
-        }
-
-        // One submenu holding the verbs, rather than a verb on every row
-        // (M-8). The top-level rows above stay exactly what they were — a
-        // coloured dot and a name — because "is my stack up" is a glance, and
-        // a menu that put `Start`/`Stop` beside every project would double the
-        // width of the answer to ask a question nobody asked yet.
-        if !snap.projects.is_empty() {
-            let mut controls: Vec<Box<dyn tauri::menu::IsMenuItem<R>>> = Vec::new();
-            for (name, running) in snap.projects.iter().take(MAX_PROJECTS) {
-                controls.push(Box::new(IconMenuItem::with_id(
-                    app,
-                    format!("{MENU_TOGGLE}{name}"),
-                    toggle_label(&lang, name, *running),
-                    true,
-                    Some(dot(if *running { GREEN } else { GREY })),
-                    None::<&str>,
-                )?));
-            }
-            let refs: Vec<&dyn tauri::menu::IsMenuItem<R>> =
-                controls.iter().map(|i| i.as_ref()).collect();
-            items.push(Box::new(tauri::menu::Submenu::with_id_and_items(
-                app,
-                "control",
-                tr(&lang, "control"),
-                true,
-                &refs,
-            )?));
+                &[&open, &gap, &toggle],
+            )?;
+            // The dot stays at the top level, where "is my stack up" is still
+            // one glance down the menu. A submenu takes an icon the same way a
+            // menu item does, so the row loses nothing by gaining children.
+            project.set_icon(Some(dot(if *running { GREEN } else { GREY })))?;
+            items.push(Box::new(project));
         }
 
         if snap.projects.len() > MAX_PROJECTS {
@@ -787,6 +789,19 @@ mod tests {
             assert!(fixed.strip_prefix(MENU_PROJECT).is_none(), "{fixed}");
             assert!(fixed.strip_prefix(MENU_NAV).is_none(), "{fixed}");
             assert!(fixed.strip_prefix(MENU_TOGGLE).is_none(), "{fixed}");
+            assert!(fixed.strip_prefix(MENU_PROJECT_GROUP).is_none(), "{fixed}");
+        }
+
+        // The submenu wrapping a project carries an id of its own because two
+        // rows may not share one — and it is never handled, so it must not read
+        // as any of the three that are. `group:shop` taken for a project would
+        // open one called `oup:shop`, silently.
+        for name in ["shop", "parser.ajans"] {
+            let group = format!("{MENU_PROJECT_GROUP}{name}");
+            assert_ne!(group, format!("{MENU_PROJECT}{name}"));
+            assert!(group.strip_prefix(MENU_PROJECT).is_none());
+            assert!(group.strip_prefix(MENU_TOGGLE).is_none());
+            assert!(group.strip_prefix(MENU_NAV).is_none());
         }
 
         // M-8's prefix against the other two. `toggle:shop` read as a project

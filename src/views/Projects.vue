@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router';
 import { useInventoryStore } from '@/stores/inventory';
 import { useOperationsStore } from '@/stores/operations';
 import { useFavourites } from '@/composables/useFavourites';
+import { useHostsPrompt } from '@/composables/useHostsPrompt';
 import { useAppStore } from '@/stores/app';
 import { parentDomain, runtimeLook } from '@/lib/manifest';
 import { bytes } from '@/lib/format';
@@ -24,6 +25,13 @@ const search = ref('');
 const actionError = ref(null);
 
 const hostsFixFor = ref(null);
+
+// A build that finishes on a name this machine cannot resolve asks about it
+// here, rather than leaving the warning icon on the row to be noticed later.
+// The same review dialog the icon opens — nothing is written unelevated and
+// nothing is written unread.
+useHostsPrompt((domain) => (hostsFixFor.value = domain));
+
 const deleteTarget = ref(null);
 const deleteFiles = ref(false);
 
