@@ -64,6 +64,41 @@ fn status_of(reply: &str) -> u16 {
         .unwrap_or(0)
 }
 
+/// The reply came from a TOOL, rather than from a refusal.
+///
+/// Not `== 200`, and the difference is the whole point of this file. Whether a
+/// tool succeeds depends on the machine having a StackVo workspace; whether the
+/// request was authenticated, routed, framed and dispatched does not. The first
+/// version asserted 200, passed on the author's laptop and failed on every CI
+/// runner — the exact shape of bug this suite exists to catch, a test measuring
+/// the machine and reporting it as the code.
+///
+/// So: a JSON body, the headers this surface always sets, and a status that is
+/// **not** a refusal. 401, 404 and 405 are answered before a tool is reached;
+/// 200 and 400 are answered after.
+fn reached_a_tool(reply: &str) {
+    let status = status_of(reply);
+    assert!(
+        status == 200 || status == 400,
+        "the request never reached a tool — answered {status}:\n{reply}"
+    );
+    assert!(
+        reply.contains("Content-Type: application/json"),
+        "not JSON:\n{reply}"
+    );
+    assert!(
+        reply.contains("Cache-Control: no-store"),
+        "the answer is workspace state, and a cache on the way is a copy of it \
+         somewhere nobody chose:\n{reply}"
+    );
+    let body = reply
+        .split_once("\r\n\r\n")
+        .expect("a body follows the head")
+        .1;
+    serde_json::from_str::<serde_json::Value>(body)
+        .unwrap_or_else(|e| panic!("the body is not JSON ({e}): {body}"));
+}
+
 fn post(path: &str, token: &str, body: &str) -> String {
     format!(
         "POST {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\n\
@@ -123,7 +158,7 @@ async fn a_real_read_answers_json() {
         &post("/call", &bound.token, r#"{"tool":"stackvo_projects"}"#),
     );
 
-    assert_eq!(status_of(&reply), 200, "reply was:\n{reply}");
+    reached_a_tool(&reply);
     assert!(reply.contains("Content-Type: application/json"));
     assert!(
         reply.contains("Cache-Control: no-store"),
@@ -185,7 +220,7 @@ async fn a_body_sent_in_two_pieces_is_still_read_whole() {
 
     let mut reply = String::new();
     socket.read_to_string(&mut reply).expect("a reply arrives");
-    assert_eq!(status_of(&reply), 200, "reply was:\n{reply}");
+    reached_a_tool(&reply);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -271,7 +306,7 @@ async fn garbage_gets_one_answer_and_the_surface_stays_up() {
         &bound.address,
         &post("/call", &bound.token, r#"{"tool":"stackvo_projects"}"#),
     );
-    assert_eq!(status_of(&reply), 200);
+    reached_a_tool(&reply);
 }
 
 // ------------------------------------------------------- starting and stopping
@@ -316,7 +351,7 @@ async fn a_surface_starts_once_answers_and_stops_for_good() {
         &bound.address,
         &post("/call", &bound.token, r#"{"tool":"stackvo_projects"}"#),
     );
-    assert_eq!(status_of(&reply), 200);
+    reached_a_tool(&reply);
 
     assert!(websurface::stop(), "stop reported nothing to stop");
     assert!(websurface::status().is_none());
