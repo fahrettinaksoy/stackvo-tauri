@@ -57,6 +57,23 @@ sysinfo = "0.39"
 # takes it to unpack an update.
 zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
 
+# Named directly so `zip`'s deflate has a backend to deflate with.
+#
+# `zip` is taken with `default-features = false`, and its `deflate-flate2`
+# feature pulls flate2 the same way — with no compression backend selected. On
+# macOS and Linux something else in the graph happened to enable one, so the
+# build worked and nobody looked; on Windows nothing did, and `cargo check`
+# stopped with `You need to choose a zlib backend`, `No compression backend
+# selected` and an unresolved `crc32fast`, three errors that read like a broken
+# crate and are one missing feature.
+#
+# Measured before adding: **no new crate enters the tree** — flate2 1.1.9 is
+# already built here, and `rust_backend` is its own default (miniz_oxide, also
+# already present). This changes which features are unified, not what is
+# compiled and audited. `zlib-ng` would be faster and is a C library; the thing
+# being compressed here is a diagnostics bundle.
+flate2 = "1"
+
 # CPU time breakdown (user/nice/system/idle). sysinfo only exposes an aggregate
 # percentage, and the dashboard shows the split — so this fills the one gap that
 # would otherwise force the UI to display a number nobody measured.
