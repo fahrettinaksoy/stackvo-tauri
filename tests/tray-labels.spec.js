@@ -122,8 +122,6 @@ describe('the tray label catalog', () => {
       const labels = trayLabels(i18n.global.t);
 
       const expected = {
-        startProject: ['{name}'],
-        stopProject: ['{name}'],
         containers: ['{count}'],
         more: ['{count}'],
         runningSummary: ['{running}', '{total}'],
@@ -140,8 +138,16 @@ describe('the tray label catalog', () => {
       // And the words around them are the locale's, rather than the key or the
       // English fallback — an identity substitution that stopped translating
       // would satisfy every assertion above.
-      expect(labels.stopProject).not.toBe('tray.stopProject');
-      expect(labels.stopProject).toBe(lookup(locale === 'tr' ? tr : en, 'tray.stopProject'));
+      expect(labels.containers).not.toBe('tray.containers');
+      expect(labels.containers).toBe(lookup(locale === 'tr' ? tr : en, 'tray.containers'));
+
+      // The verbs a project's submenu offers carry no placeholder at all any
+      // more — the project is the row they hang under — so what matters about
+      // them is that they arrive as words rather than as key paths.
+      for (const key of ['openProject', 'startProject', 'stopProject']) {
+        expect(labels[key], `${locale} ${key} is translated`).not.toContain('.');
+        expect(labels[key]).not.toContain('{');
+      }
     }
   });
 });

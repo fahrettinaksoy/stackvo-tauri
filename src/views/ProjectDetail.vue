@@ -6,6 +6,7 @@ import { useContainerStats } from '@/composables/useContainerStats';
 import { useCopyTick } from '@/composables/useCopyTick';
 import { useXdebug } from '@/composables/useXdebug';
 import { useIconRail } from '@/composables/useIconRail';
+import { useHostsPrompt } from '@/composables/useHostsPrompt';
 import IndicatorPane from '@/components/project/IndicatorPane.vue';
 import ContainerPane from '@/components/project/ContainerPane.vue';
 import DockerfilePane from '@/components/project/DockerfilePane.vue';
@@ -87,6 +88,13 @@ const loading = ref(true);
 
 const showHostsFix = ref(false);
 const showSettings = ref(false);
+
+// Same offer as the projects list makes, for the build this page's toolbar
+// starts. Guarded by name because the subscription is to every build, and a
+// build started elsewhere is not this page's project.
+useHostsPrompt((_domain, project) => {
+  if (project === props.name) showHostsFix.value = true;
+});
 
 const manifestText = ref('');
 const manifestDirty = ref(false);

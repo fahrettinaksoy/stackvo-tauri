@@ -57,10 +57,25 @@ async function apply() {
   }
 }
 
-watch(
-  () => props.modelValue,
-  (open) => open && load()
-);
+/**
+ * Load the plan whenever this dialog is open — including the moment it mounts.
+ *
+ * `immediate` is the whole of one bug. Two of the five callers render this
+ * behind a `v-if`, so the component is *created* with `modelValue` already
+ * true and the watcher had nothing to fire on: no plan, no path in the
+ * subtitle, no diff, and an Apply button disabled by `!plan?.changed` with
+ * nothing on screen explaining why. The three callers that keep it mounted and
+ * flip the flag were fine, which is why it survived.
+ *
+ * The domains are watched too, and joined rather than compared by identity:
+ * `:add="[hostsFixFor]"` builds a fresh array on every render of the parent, so
+ * a reference watch would reload the plan continuously. What matters is which
+ * names are in it — a dialog left open while a second build finishes elsewhere
+ * would otherwise show the first project's diff under the second one's name.
+ */
+watch([() => props.modelValue, () => props.add.join('\n')], ([open]) => open && load(), {
+  immediate: true,
+});
 </script>
 
 <template>

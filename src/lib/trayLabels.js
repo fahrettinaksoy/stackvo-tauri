@@ -39,7 +39,10 @@
  *
  * Rust then did its half correctly and found nothing to replace, so the tray
  * showed a Start/stop submenu of rows reading `: başlat` and `: durdur` — five
- * projects, no names, in a menu whose whole job is to say which one. It shipped
+ * projects, no names, in a menu whose whole job is to say which one. (That
+ * submenu is gone — the verbs live under each project now, and only the counted
+ * labels still travel with a hole in them — but the trap it fell into is the
+ * same one any future placeholder would meet.) It shipped
  * because every test in `tray-labels.spec.js` passed `t` as `(key) => key`,
  * which returns the path and interpolates nothing. The catalogue was checked,
  * the boundary was checked, and the one thing in between was a translator
@@ -78,12 +81,12 @@ export function trayLabels(t) {
     noWorkspace: t('tray.noWorkspace'),
     noProjects: t('tray.noProjects'),
 
-    // The verbs the tray can act with (M-8). `{name}` survives to Rust for
-    // the same reason `{count}` does: the ordering decision belongs in the
-    // language file, where a language that puts the name first can express it.
-    control: t('tray.control'),
-    startProject: through('tray.startProject', 'name'),
-    stopProject: through('tray.stopProject', 'name'),
+    // The rows inside a project's own submenu (M-8). No `{name}` in any of
+    // them any more: the project is the row they hang under, so the verb is a
+    // word rather than a sentence repeating what the menu already says.
+    openProject: t('tray.openProject'),
+    startProject: t('projectsView.menu.start'),
+    stopProject: t('projectsView.menu.stop'),
 
     // Counted — the placeholders survive to Rust deliberately.
     containers: through('tray.containers', 'count'),

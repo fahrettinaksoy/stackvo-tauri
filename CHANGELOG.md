@@ -978,7 +978,60 @@ versioning is [semver](https://semver.org/spec/v2.0.0.html).
   person does after reading a list and a file pushed to three hundred laptops
   has read nothing.
 
+### Changed
+
+- **A finished build offers the hosts entry it needs.** `project_build`
+  regenerates, builds and brings the container up — and then the project answers
+  on a name the machine may not resolve, with nothing on screen at that moment
+  to say so beyond a warning icon on a row somebody has to notice. The build now
+  ends by opening the same review dialog every other hosts write goes through.
+
+  It offers, it does not write. `/etc/hosts` is the app's only elevation prompt
+  and the rule around it is unchanged: the diff is shown, and nothing reaches
+  the file until somebody has read it and pressed apply — a build that raised an
+  auth dialog in the middle of `docker compose build` is exactly what the
+  separation exists to prevent.
+
+  Three cases it stays quiet for. `build:success` is the name of the finished
+  event rather than a claim, so the `success` flag decides. The DNS responder
+  (E-1) answers for the whole suffix, which is what makes a per-project line
+  unnecessary — where it is listening and the machine is asking it, there is
+  nothing to offer; where it is configured and *down*, the line is the repair
+  and the offer stands. And the project is re-read rather than taken from the
+  page's list, which the same event is refreshing — reading that would be a race
+  whose loser is a modal over somebody's work.
+
+- **The tray's verbs moved under the project they belong to.** Starting and
+  stopping lived in one `Start / stop` submenu that listed every project a
+  second time, so acting on a row meant reading the project list twice and then
+  picking out of rows labelled `shop: durdur` — the name had to be repeated out
+  there to say which project was meant. Each project is a submenu of its own
+  now: `Open` and, below a separator, the one verb that applies (`Start` or
+  `Stop`). The name is the row above, so the verb is a word.
+
+  The coloured dot stays at the top level, which was the reason the shared
+  submenu existed — a submenu takes an icon exactly as a menu item does, so the
+  glance is unchanged. `Open` needs a row of its own because a submenu title
+  fires no click event on any platform; it keeps the `project:` id, so the
+  handler and both front-end listeners are untouched. `tray.control`,
+  `tray.startProject` and `tray.stopProject` are gone from the locales — the two
+  verbs are the projects table's own (`projectsView.menu.start` / `.stop`),
+  which pick between themselves the same way.
+
 ### Fixed
+
+- **The hosts dialog was blank and its Apply button dead when a page mounted it
+  open.** Everything in it comes from one `hosts_plan` call — the path, the
+  diff, and `plan.changed`, which is what enables Apply — and the watcher that
+  makes the call was not `immediate`. Two of the five callers render it behind a
+  `v-if`, so the component was created with the flag already true and the
+  watcher had nothing to fire on: a shield icon, two paragraphs, no error, and a
+  disabled button with nothing on screen to explain it. The three that keep it
+  mounted and flip the flag were fine, which is why it survived. The domains are
+  watched now too — joined rather than compared by identity, because
+  `:add="[hostsFixFor]"` is a fresh array on every parent render — so a dialog
+  left open while a second build finishes shows that project's diff rather than
+  the first one's under the wrong name.
 
 - **Seventeen WCAG failures, none of which any previous run could have
   reported** (§3 #25). The corrected axe pass above found them; each is a

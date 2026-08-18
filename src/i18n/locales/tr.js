@@ -76,9 +76,10 @@ export default {
     more: '+{count} proje daha…',
     runningSummary: '{running}/{total} proje çalışıyor',
     menuAbout: 'StackVo Hakkında',
-    control: 'Başlat / durdur',
-    startProject: '{name}: başlat',
-    stopProject: '{name}: durdur',
+    // Her projenin kendi alt menüsündeki ilk satır. Başlat/durdur sözcükleri
+    // `projectsView.menu`'den geliyor — aynı iki eylem, aynı seçimle: o an
+    // yapılabilen hangisiyse yalnızca o görünüyor.
+    openProject: 'Aç',
     started: '{name} çalışıyor.',
     stopped: '{name} durdu.',
     failed: '{name} değiştirilemedi.',
