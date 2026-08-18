@@ -147,6 +147,9 @@ fn cases(root: &Path) -> Vec<Case> {
     let parked = root.join("Code");
     fs::create_dir_all(&parked).unwrap();
     site(&parked, "api");
+    // Linked only where symlinks exist; on Windows the probe covers the parked
+    // directory and says nothing about a link it could not make.
+    #[cfg_attr(not(unix), allow(unused_variables))]
     let linked = site(&root.join("elsewhere"), "legacy");
     fs::write(
         valet.join("config.json"),

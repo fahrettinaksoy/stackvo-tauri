@@ -1,4 +1,9 @@
 name: CI
+#
+# Everything below can be run before pushing: `tools/before-push.sh --all`.
+# `ci.yml` is the second opinion, not the first — ADR 0030 says why that
+# distinction had to be written down, and `tools/linux/` is how the Linux and
+# Windows halves became answerable off a runner.
 
 on:
   push:

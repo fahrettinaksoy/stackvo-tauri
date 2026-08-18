@@ -4,6 +4,7 @@
 #   tools/linux/run.sh                      # the probes that only exist on Linux
 #   tools/linux/run.sh --test elevate_probe # one of them
 #   tools/linux/run.sh --driver             # the tauri-driver suite (#12), with a display
+#   tools/linux/run.sh --windows            # type-check the Windows branch (#35)
 #   tools/linux/run.sh --shell              # a prompt inside the image
 #
 # The image caches; the cargo registry and target directory are bind-mounted to
@@ -84,6 +85,15 @@ fi
 # The exit status is the point of running this at all: the first version of
 # this script ended on a pipeline whose status was the tail's, so a failing
 # compile reported success. A runner that cannot fail is not a runner.
+# §3 #35's other half. The Windows branch of this crate is only ever read on a
+# Mac, and `cargo check --target x86_64-pc-windows-msvc` cannot help there:
+# `aws-lc-sys` wants `windows.h`. `cargo-xwin` fetches Microsoft's SDK and
+# points clang at it, so the type checker finally reads those lines.
+if [ "${1:-}" = "--windows" ]; then
+  run cargo xwin check --target x86_64-pc-windows-msvc --all-targets
+  exit $?
+fi
+
 if [ $# -gt 0 ]; then
   run cargo test "$@"
   exit $?

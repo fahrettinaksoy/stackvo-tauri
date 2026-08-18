@@ -172,7 +172,17 @@ pub fn connect() -> Result<Docker> {
     };
 
     #[cfg(target_os = "windows")]
-    if crate::paths::is_named_pipe(&socket) {
+    // Both transports are gated by bollard itself: `connect_with_named_pipe`
+    // exists only on Windows and `connect_with_unix` only on Unix. Calling
+    // both unconditionally compiled on macOS and Linux — where the Windows arm
+    // is the missing one and nothing reaches it — and stopped the Windows build
+    // dead with `no associated function named connect_with_unix`.
+    //
+    // It had been that way for as long as the function existed, and it was
+    // invisible for the reason §3 #35 keeps finding: a platform nobody compiles
+    // for is a platform whose code is only read.
+    #[cfg(windows)]
+    {
         return Docker::connect_with_named_pipe(&socket, 8, bollard::API_DEFAULT_VERSION).map_err(
             |e| {
                 Error::new(
@@ -180,18 +190,35 @@ pub fn connect() -> Result<Docker> {
                     format!("Cannot reach the Docker engine: {e}"),
                 )
                 .with_hint(crate::hints::START_DOCKER)
+                .with_details(serde_json::json!({ "socket": socket }))
             },
         );
     }
 
-    Docker::connect_with_unix(&socket, 8, bollard::API_DEFAULT_VERSION).map_err(|e| {
-        Error::new(
-            Code::EngineUnreachable,
-            format!("Cannot reach the Docker engine: {e}"),
-        )
-        .with_hint(crate::hints::START_DOCKER)
-        .with_details(serde_json::json!({ "socket": socket }))
-    })
+    // A named pipe path on Unix is a configuration somebody carried over from a
+    // Windows machine. Refused by name rather than handed to the unix-socket
+    // connector, which would report "no such file" about a path that is not a
+    // file anywhere.
+    #[cfg(not(windows))]
+    {
+        if crate::paths::is_named_pipe(&socket) {
+            return Err(Error::new(
+                Code::EngineUnreachable,
+                format!("`{socket}` is a Windows named pipe, and this is not Windows"),
+            )
+            .with_hint(crate::hints::START_DOCKER)
+            .with_details(serde_json::json!({ "socket": socket })));
+        }
+
+        Docker::connect_with_unix(&socket, 8, bollard::API_DEFAULT_VERSION).map_err(|e| {
+            Error::new(
+                Code::EngineUnreachable,
+                format!("Cannot reach the Docker engine: {e}"),
+            )
+            .with_hint(crate::hints::START_DOCKER)
+            .with_details(serde_json::json!({ "socket": socket }))
+        })
+    }
 }
 
 /// Probe the engine. Never returns Err for an unreachable daemon — "Docker is
@@ -212,7 +239,10 @@ pub async fn status() -> EngineStatus {
         };
     };
 
-    let docker = match Docker::connect_with_unix(&socket_path, 8, bollard::API_DEFAULT_VERSION) {
+    // `connect()` above, not a second hand-rolled connection: it is the one
+    // place that knows which transport this platform has, and this line was
+    // the other half of the Windows compile error.
+    let docker = match connect() {
         Ok(d) => d,
         Err(e) => return EngineStatus::unreachable(Some(socket_path), e),
     };
