@@ -2,13 +2,19 @@ import { computed, ref } from 'vue';
 import { api } from '@/lib/ipc';
 
 /**
- * The Dockerfile this project would be built from, rendered by the Rust
- * generator and compared against what Bash writes today.
+ * The Dockerfile this project would be built from, rendered from the manifest
+ * and never written.
  *
- * `compat` reproduces what Bash actually writes; `strict` refuses where Bash
- * silently drops an extension. Held as state rather than fired by two
- * unlabelled buttons: which of the two you are looking at changes what the
- * comparison chip below it means.
+ * `compat` is what the generator actually writes — an extension it cannot build
+ * is dropped and the render carries on. `strict` refuses instead, and names the
+ * extension. Held as state rather than fired by two unlabelled buttons: which
+ * of the two you are looking at changes what the chip beside the heading means,
+ * and in strict mode there is nothing for it to mean at all.
+ *
+ * The pair is left over from a port that was verified against a Bash generator
+ * — `compat` meant "what Bash writes". That generator is gone; the two renders
+ * kept their value because "what will be built" and "what would be refused" are
+ * still different questions.
  *
  * Lifted out of `ProjectDetail.vue` with the Dockerfile pane under §14.16.
  */

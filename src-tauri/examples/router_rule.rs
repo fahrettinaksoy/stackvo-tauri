@@ -22,6 +22,9 @@ fn main() {
         .map(|(d, rest)| (d.clone(), rest.to_vec()))
         .unwrap_or_else(|| ("shop.loc".to_string(), Vec::new()));
 
+    // Nothing declared: this example is about the router rule, and a sidecar
+    // would put a container in the output that has nothing to do with it.
+    let sidecars = stackvo_desktop_lib::sidecar::Declared::default();
     let project = ComposeProject {
         name: "shop",
         domain: &domain,
@@ -29,6 +32,7 @@ fn main() {
         runtime_server: Server::parse("nginx"),
         node_port: None,
         php_version: Some("8.4"),
+        sidecars: &sidecars,
     };
 
     // A compose document rather than a fragment, so the output can be handed

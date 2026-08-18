@@ -146,16 +146,53 @@ describe('the navigation drawer', () => {
   it('renders the quick actions in the app bar', () => {
     // The stack-wide actions moved out of the drawer and into the global app
     // bar in 100a2d4, because they act on everything rather than on a
-    // destination. They are icon buttons, so their label is a `title`
-    // attribute — invisible to `wrapper.text()`, which is what made the
-    // previous version of this test fail for the wrong reason.
+    // destination. They are icon buttons, so their label is an attribute
+    // rather than text — invisible to `wrapper.text()`, which is what made an
+    // earlier version of this test fail for the wrong reason.
+    //
+    // `aria-label`, not `title`. `title` was the browser's own tooltip: a
+    // different shape and delay from every other hint in the app, and absent
+    // entirely on a disabled button — which is exactly when "why can I not
+    // press this" gets asked. These carry a real tooltip now, and the
+    // accessible name moved to the attribute that is only ever that.
     const bar = wrapper.find('.v-app-bar');
     expect(bar.exists(), 'no app bar').toBe(true);
 
     for (const key of ['quickActions.startAll', 'quickActions.stopAll', 'quickActions.restart']) {
       const label = i18n.global.t(key);
-      expect(bar.find(`[title="${label}"]`).exists(), `${key} is missing`).toBe(true);
+      expect(bar.find(`[aria-label="${label}"]`).exists(), `${key} is missing`).toBe(true);
     }
+  });
+
+  /**
+   * Every control in the bar says what it is, and says it the same way.
+   *
+   * They were `title` attributes — the browser's tooltip, which looks nothing
+   * like the app's, waits a second longer, and does not appear at all on a
+   * disabled button. Half the bar is disabled whenever Docker is down, so the
+   * three buttons that most need explaining were the three that explained
+   * nothing.
+   */
+  it('gives every app-bar control a tooltip and a name', () => {
+    const bar = wrapper.find('.v-app-bar');
+    const buttons = bar.findAll('.v-btn');
+    expect(buttons.length, 'no buttons in the bar').toBeGreaterThan(5);
+
+    const nameless = buttons.filter(
+      (b) => !b.attributes('aria-label') && !b.text().trim() && !b.attributes('title')
+    );
+    expect(
+      nameless.map((b) => b.html().slice(0, 60)),
+      'an app-bar button has no name'
+    ).toEqual([]);
+
+    // `title` is what this replaced; leaving one behind is two hint styles in
+    // one bar, which is the thing being fixed rather than a detail of it.
+    const stillTitled = buttons.filter((b) => b.attributes('title'));
+    expect(
+      stillTitled.map((b) => b.attributes('title')),
+      'a native browser tooltip is left in the bar'
+    ).toEqual([]);
   });
 
   it('renders the engine status', () => {
@@ -233,6 +270,95 @@ describe('the two left drawers', () => {
     const sentence = i18n.global.t('projects.empty');
     expect(wrapper.text(), 'the sentence is in the collapsed rail').not.toContain(sentence);
     expect(wrapper.html(), 'the empty state lost its icon too').toContain('mdi-folder-off-outline');
+  });
+
+  /**
+   * Both rails open collapsed, and Vuetify hides a list item's title at rail
+   * width — so every control down the left edge was an unlabelled glyph, and
+   * the only way to learn what one did was to press it and see where you
+   * landed. The tooltip is the label back.
+   *
+   * Counted rather than sampled: a tooltip added to the destinations and
+   * forgotten on the collapse control leaves the one whose name matters most
+   * while hidden — a chevron on the floor of a collapsed rail is the thing that
+   * undoes the collapse — as the only glyph still saying nothing.
+   */
+  it('labels every collapsed rail control with a tooltip', () => {
+    const activators = wrapper.findAll('.v-navigation-drawer--left .v-list-item');
+    expect(activators.length, 'no rail items were rendered').toBeGreaterThan(0);
+
+    const unlabelled = activators.filter(
+      (item) => !item.attributes('aria-describedby') && !item.attributes('aria-label')
+    );
+    expect(
+      unlabelled.map((i) => i.html().slice(0, 80)),
+      'a collapsed rail control carries no name at all'
+    ).toEqual([]);
+  });
+});
+
+/**
+ * The rail down the left edge drew a PHP elephant on every project.
+ *
+ * `runtime === 'node' ? nodejs : php`, written when there were two runtimes,
+ * exactly as the projects table had it — the same wrong answer arrived at twice
+ * and independently, which is why the mapping now lives in `lib/manifest.js`
+ * and both read it.
+ *
+ * Mounted rather than read from source, because the failure was never in the
+ * expression: it did what it said. What was wrong was that the answer it gave
+ * was confidently false, and only a render shows that.
+ */
+describe('the runtime glyph in the projects rail', () => {
+  const project = (name, runtime) => ({
+    name,
+    domain: `${name}.loc`,
+    runtime,
+    running: false,
+    built: true,
+    manifestValid: true,
+    domainConfigured: true,
+    containerName: `stackvo-${name}`,
+    manifest: { errors: [] },
+    ports: [],
+  });
+
+  it.each([
+    ['go', 'mdi-language-go'],
+    ['python', 'mdi-language-python'],
+    ['ruby', 'mdi-language-ruby'],
+    ['rust', 'mdi-language-rust'],
+    ['node', 'mdi-nodejs'],
+    ['php', 'mdi-language-php'],
+  ])('draws a %s project with %s', async (runtime, glyph) => {
+    // The rail is only filled when there is a workspace: `App.vue` guards
+    // `inventory.loadAll()` on `app.hasWorkspace`, so without this the drawer
+    // renders its empty state and every assertion below passes for the wrong
+    // reason — the elephant is absent because nothing is there.
+    calls.workspace_get = () => ({
+      valid: true,
+      root: '/w/.stackvo',
+      projectsDir: '/w/projects',
+      bootstrapped: true,
+      catalogueFetched: true,
+    });
+    calls.projects_list = () => [project(runtime, runtime)];
+
+    const shell = mountShell();
+    await flushPromises();
+    await flushPromises();
+
+    const rail = shell.findAll('.v-navigation-drawer--left').at(1);
+    expect(rail.text(), 'the rail is empty, so this proves nothing').toContain(`${runtime}.loc`);
+    expect(rail.html()).toContain(glyph);
+
+    if (runtime !== 'php') {
+      expect(rail.html(), `a ${runtime} project is still wearing the PHP elephant`).not.toContain(
+        'mdi-language-php'
+      );
+    }
+    delete calls.projects_list;
+    delete calls.workspace_get;
   });
 });
 

@@ -165,6 +165,13 @@ export const api = {
   // the button.
   marketProbe: (location) => call('market_probe', { location }),
 
+  // Write the catalogue and every package into one directory, for a machine
+  // that has no network (§3 #31). Takes the destination and nothing else: the
+  // source is the one this machine already fetched from, because a bundle
+  // built from somewhere else would be a copy of a catalogue nobody here has
+  // verified.
+  marketBundle: (destination) => call('market_bundle', { destination }),
+
   // The one migration that touches a workspace somebody is already using, so
   // the preview is a separate call rather than a flag on the apply: what it
   // would do has to be readable before it is agreed to.

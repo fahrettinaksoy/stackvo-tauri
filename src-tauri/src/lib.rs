@@ -72,6 +72,7 @@ pub mod routes;
 pub mod runner;
 pub mod scaffold;
 pub mod secrets;
+pub mod sidecar;
 pub mod signing;
 pub mod site;
 pub mod skeleton;
@@ -453,6 +454,7 @@ pub fn run() {
             commands::market_install,
             commands::market_uninstall,
             commands::market_probe,
+            commands::market_bundle,
             commands::handover_preview,
             commands::handover_apply,
             commands::instance_list,

@@ -41,13 +41,16 @@ pub struct Env {
 /// pin a container name or trim the catalog writes the key and it takes
 /// effect. Nothing became unreachable; it stopped having to be copied.
 ///
-/// The second group is different in kind and worth naming. Those *are* choices
-/// — the domain suffix, whether TLS is on — and they stay editable in
-/// Settings, which writes the key to `.env` when it is changed. What moved is
-/// only the default: a fresh workspace no longer ships seven lines restating
-/// what the app would have done anyway, and a `.env` line now means somebody
-/// decided something rather than that a file was copied.
-pub const EMBEDDED: [(&str, &str); 186] = [
+/// Some of these *are* choices — the domain suffix, whether TLS is on — and
+/// they stay editable in Settings, which writes the key to `.env` when it is
+/// changed. What moved is only the default: a fresh workspace no longer ships
+/// seven lines restating what the app would have done anyway, and a `.env`
+/// line now means somebody decided something rather than that a file was
+/// copied.
+///
+/// These are the ones that **stay**. The service half is next door and is not
+/// the same kind of thing — see [`LEGACY_SERVICES`].
+pub const SETTINGS: [(&str, &str); 36] = [
     // HOST_UID and HOST_GID are deliberately absent. `template::variables`
     // fills them from getuid()/getgid() when nothing else has, and it does that
     // only for keys that are missing — embedding them pinned one machine's ids
@@ -74,6 +77,62 @@ pub const EMBEDDED: [(&str, &str); 186] = [
     ("SUPPORTED_LANGUAGES_RUST_DEFAULT", "1.84"),
     ("SUPPORTED_LANGUAGES_NODEJS_VERSIONS", "16,18,20,21,22,23"),
     ("SUPPORTED_LANGUAGES_NODEJS_DEFAULT", "22"),
+    // Stack-shaping choices. Editable in Settings; absent from a fresh `.env`
+    // because the default is the answer almost everyone keeps.
+    ("DEFAULT_TLD_SUFFIX", "stackvo.loc"),
+    ("SERVER_MAX_BODY_SIZE", "1m"),
+    ("SERVER_FASTCGI_TIMEOUT", "60"),
+    ("SERVER_CLIENT_BODY_TIMEOUT", "60"),
+    ("SERVER_KEEPALIVE_TIMEOUT", "75"),
+    ("SERVER_TCP_NODELAY", "on"),
+    ("SERVER_GZIP", "off"),
+    ("SERVER_GZIP_COMP_LEVEL", "1"),
+    ("SERVER_GZIP_TYPES", ""),
+    ("SERVER_FASTCGI_CONNECT_TIMEOUT", "60"),
+    ("SERVER_FASTCGI_SEND_TIMEOUT", "60"),
+    ("SSL_ENABLE", "true"),
+    ("REDIRECT_TO_HTTPS", "true"),
+    ("DOCKER_DEFAULT_NETWORK", "stackvo-net"),
+    ("PHP_DEFAULT_TOOLS", "composer,nodejs"),
+    ("PHP_TOOL_COMPOSER_VERSION", "latest"),
+    ("PHP_TOOL_NODEJS_VERSION", "20"),
+    (
+        "PHP_DEFAULT_APT_PACKAGES",
+        "git,wget,unzip,default-mysql-client,postgresql-client,redis-tools,strace,vim,nano,curl,\
+         iputils-ping,net-tools,telnet,htop,procps,tar,gzip,bzip2,p7zip-full",
+    ),
+];
+
+/// The service half, kept alive by the migration and by nothing else.
+///
+/// ADR 0016 deleted the `.env` branch of the renderer: services come from the
+/// instance table and packages now, and `skeleton/core/templates/services/`
+/// left the binary with it. What could not leave is this — [`crate::handover`]
+/// reads a pre-market `.env` to decide what each switched-on service becomes,
+/// and a `.env` that predates the market says `SERVICE_MYSQL_ENABLE=true` and
+/// nothing else. Without a default for `VERSION` beside it there is no tag to
+/// migrate, and the plan would have to guess at a datadir.
+///
+/// So these are **legacy inputs**, not settings. Nothing here is a decision
+/// this app would like a user to make today; a new service arriving as a
+/// package must not gain a key here, because gaining one would mean the app
+/// had an opinion about a service it does not ship (`env.schema.json`'s
+/// `services` is a vocabulary now, not a catalogue).
+///
+/// ## What deletes it
+///
+/// The day no supported workspace still needs migrating. That is a release
+/// decision rather than an engineering one, so what is arranged here is the
+/// part that *is* engineering: the keys are one constant instead of 150 lines
+/// mixed into 36 others, the split is held by a test
+/// (`config::tests::the_two_halves_partition_the_defaults`), and every module
+/// that reads one is named and held by `legacy_env_claims.rs`. When the day
+/// comes, this constant and the readers that test lists are the whole change.
+///
+/// Credentials are deliberately absent. A database password is the one value a
+/// user should choose rather than inherit, and leaving it visible in `.env` is
+/// how somebody notices it still says `root`.
+pub const LEGACY_SERVICES: [(&str, &str); 150] = [
     ("SERVICE_RABBITMQ_URL", "rabbitmq"),
     ("SERVICE_KIBANA_URL", "kibana"),
     ("SERVICE_GRAFANA_URL", "grafana"),
@@ -106,30 +165,6 @@ pub const EMBEDDED: [(&str, &str); 186] = [
     ("SERVICE_MINIO_REGION", "us-east-1"),
     ("SERVICE_MEILISEARCH_URL", "meilisearch"),
     ("SERVICE_TYPESENSE_URL", "typesense"),
-    // Stack-shaping choices. Editable in Settings; absent from a fresh `.env`
-    // because the default is the answer almost everyone keeps.
-    ("DEFAULT_TLD_SUFFIX", "stackvo.loc"),
-    ("SERVER_MAX_BODY_SIZE", "1m"),
-    ("SERVER_FASTCGI_TIMEOUT", "60"),
-    ("SERVER_CLIENT_BODY_TIMEOUT", "60"),
-    ("SERVER_KEEPALIVE_TIMEOUT", "75"),
-    ("SERVER_TCP_NODELAY", "on"),
-    ("SERVER_GZIP", "off"),
-    ("SERVER_GZIP_COMP_LEVEL", "1"),
-    ("SERVER_GZIP_TYPES", ""),
-    ("SERVER_FASTCGI_CONNECT_TIMEOUT", "60"),
-    ("SERVER_FASTCGI_SEND_TIMEOUT", "60"),
-    ("SSL_ENABLE", "true"),
-    ("REDIRECT_TO_HTTPS", "true"),
-    ("DOCKER_DEFAULT_NETWORK", "stackvo-net"),
-    ("PHP_DEFAULT_TOOLS", "composer,nodejs"),
-    ("PHP_TOOL_COMPOSER_VERSION", "latest"),
-    ("PHP_TOOL_NODEJS_VERSION", "20"),
-    (
-        "PHP_DEFAULT_APT_PACKAGES",
-        "git,wget,unzip,default-mysql-client,postgresql-client,redis-tools,strace,vim,nano,curl,\
-         iputils-ping,net-tools,telnet,htop,procps,tar,gzip,bzip2,p7zip-full",
-    ),
     // Per-service defaults. The Services pane edits these, and writes the key
     // to `.env` when one is changed — so a fresh workspace ships no service
     // configuration at all, and a line in that file means a decision.
@@ -173,7 +208,10 @@ pub const EMBEDDED: [(&str, &str); 186] = [
     // Kibana's list is deliberately the same one. They are a matched pair —
     // Kibana refuses to start against an Elasticsearch of a different minor —
     // and offering two lists that can drift is offering a broken combination.
-    ("SERVICE_ELASTICSEARCH_VERSIONS", "9.4.4,9.3.8,8.19.19,8.11.3,7.17.28"),
+    (
+        "SERVICE_ELASTICSEARCH_VERSIONS",
+        "9.4.4,9.3.8,8.19.19,8.11.3,7.17.28",
+    ),
     ("SERVICE_GRAFANA_ADMIN_USER", "admin"),
     ("SERVICE_GRAFANA_ENABLE", "false"),
     ("SERVICE_GRAFANA_VERSION", "latest"),
@@ -193,7 +231,10 @@ pub const EMBEDDED: [(&str, &str); 186] = [
     ("SERVICE_KAFKA_VERSIONS", "8.3.1,7.9.9,7.5.0,6.2.15"),
     ("SERVICE_KIBANA_ENABLE", "false"),
     ("SERVICE_KIBANA_VERSION", "8.11.3"),
-    ("SERVICE_KIBANA_VERSIONS", "9.4.4,9.3.8,8.19.19,8.11.3,7.17.28"),
+    (
+        "SERVICE_KIBANA_VERSIONS",
+        "9.4.4,9.3.8,8.19.19,8.11.3,7.17.28",
+    ),
     ("SERVICE_MAILHOG_ENABLE", "false"),
     ("SERVICE_MAILHOG_VERSION", "latest"),
     // Three tags exist in total. MailHog has been unmaintained since 2020 and
@@ -355,6 +396,35 @@ pub const EMBEDDED: [(&str, &str); 186] = [
     ("SERVICE_MEILISEARCH_MASTER_KEY", "stackvo-master-key"),
     ("SERVICE_TYPESENSE_API_KEY", "stackvo-api-key"),
 ];
+
+/// Both halves, in the order [`Env::parse`] lays them down.
+///
+/// One name because every consumer wants the merged view — the settings form,
+/// the credential guard, the "is this a decision or a default" question. The
+/// split above is about what *leaves* later, not about what anybody reads now,
+/// and giving callers two constants to remember would be a way for one of them
+/// to be forgotten on the day the second is deleted.
+pub const EMBEDDED: [(&str, &str); 186] = both_halves();
+
+/// Concatenation, at compile time.
+///
+/// A `const fn` rather than a `LazyLock` or a `Vec` built on demand: this is
+/// read on every `Env::parse`, and the two halves are literals. Nothing here
+/// is worth a heap allocation or a synchronisation primitive.
+const fn both_halves() -> [(&'static str, &'static str); 186] {
+    let mut out = [("", ""); 186];
+    let mut i = 0;
+    while i < SETTINGS.len() {
+        out[i] = SETTINGS[i];
+        i += 1;
+    }
+    let mut j = 0;
+    while j < LEGACY_SERVICES.len() {
+        out[SETTINGS.len() + j] = LEGACY_SERVICES[j];
+        j += 1;
+    }
+    out
+}
 
 /// Older spellings, and what they mean now: `(legacy, current)`.
 ///
@@ -838,6 +908,70 @@ SERVICE_REDIS_ENABLE=TRUE
         }
     }
 
+    /// The split is a partition, and both numbers are measured rather than
+    /// estimated.
+    ///
+    /// `docs/durum.md` called the service half "roughly half of 186" for three
+    /// rounds. It is 150 of 186 — four fifths — and the difference matters,
+    /// because the size of that constant is the size of the deletion §3 #36 is
+    /// waiting to make. A number nobody counts drifts toward whatever the last
+    /// person guessed.
+    ///
+    /// The membership rule is the prefix and nothing else. A cleverer rule —
+    /// "keys the handover reads", "keys with a `_VERSION` beside them" — would
+    /// have to be maintained beside the constant it describes, and the whole
+    /// point of the split is that the day it is deleted, nobody has to decide
+    /// anything.
+    #[test]
+    fn the_two_halves_partition_the_defaults() {
+        assert_eq!(SETTINGS.len(), 36);
+        assert_eq!(LEGACY_SERVICES.len(), 150);
+        assert_eq!(EMBEDDED.len(), SETTINGS.len() + LEGACY_SERVICES.len());
+
+        for (key, _) in LEGACY_SERVICES {
+            assert!(
+                key.starts_with("SERVICE_"),
+                "{key} is in the legacy half but is not a service key"
+            );
+        }
+        for (key, _) in SETTINGS {
+            assert!(
+                !key.starts_with("SERVICE_"),
+                "{key} is a service key sitting in the half that stays — it would \
+                 survive the deletion §3 #36 is waiting for"
+            );
+        }
+
+        // A key in both halves would be a value whose meaning depends on which
+        // one `both_halves` laid down last, and the merge is a `BTreeMap` so
+        // the loser would vanish without a word.
+        let mut seen = std::collections::BTreeSet::new();
+        for (key, _) in EMBEDDED {
+            assert!(seen.insert(key), "{key} is defined twice");
+        }
+        assert_eq!(seen.len(), EMBEDDED.len());
+    }
+
+    /// `both_halves` concatenates rather than interleaving.
+    ///
+    /// A `const fn` with two hand-written index loops is exactly the shape that
+    /// can be off by one and still compile — the array is the right length
+    /// either way, and the hole shows up as an empty key that `Env::parse`
+    /// happily inserts under `""`.
+    #[test]
+    fn the_merge_keeps_every_entry_and_invents_none() {
+        assert_eq!(EMBEDDED[0], SETTINGS[0]);
+        assert_eq!(EMBEDDED[SETTINGS.len() - 1], SETTINGS[SETTINGS.len() - 1]);
+        assert_eq!(EMBEDDED[SETTINGS.len()], LEGACY_SERVICES[0]);
+        assert_eq!(
+            EMBEDDED[EMBEDDED.len() - 1],
+            LEGACY_SERVICES[LEGACY_SERVICES.len() - 1]
+        );
+        for (key, _) in EMBEDDED {
+            assert!(!key.is_empty(), "the merge left a hole");
+        }
+    }
+
     /// Every service in the catalog can be switched on from a fresh install.
     ///
     /// `service_enable` writes `SERVICE_<NAME>_ENABLE=true`, and the Services
@@ -848,16 +982,17 @@ SERVICE_REDIS_ENABLE=TRUE
     /// empty string is `image: "minio/minio:"`, which compose rejects.
     /// Every service that ever lived in `.env` still has its defaults there.
     ///
-    /// Scoped to those, and the scope is the point. `EMBEDDED` exists so a
-    /// workspace created by an older StackVo keeps rendering and so the
+    /// Scoped to those, and the scope is the point. [`LEGACY_SERVICES`] exists
+    /// so a workspace created by an older StackVo keeps rendering and so the
     /// handover has something to read; it is not a catalogue any more. A
     /// service that arrived as a package — Solr, ClickHouse — never had an
     /// `.env` key and must not gain one, because gaining one would mean the
     /// app had an opinion about a service it does not ship.
     ///
-    /// The remaining work is the other direction: `EMBEDDED`'s service half is
-    /// now legacy-only and should go once no supported workspace still needs
-    /// migrating. §3 of `docs/durum.md` carries that as an item.
+    /// The remaining work is the other direction: that constant goes once no
+    /// supported workspace still needs migrating. §3 of `docs/durum.md` carries
+    /// it as an item, and `tests/legacy_env_claims.rs` carries the list of what
+    /// has to change on the day.
     #[test]
     fn every_catalog_service_ships_an_enable_and_a_version() {
         let embedded: std::collections::BTreeSet<&str> =

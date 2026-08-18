@@ -1032,6 +1032,18 @@ kopyalanabilir ve kopyalanan şey değiştirilebilir.
 Kurumsal satın alma süreçlerinin sorduğu ilk soru bu, ve artık cevabı
 "destekliyoruz" değil "mimarinin bir parçası".
 
+**Yazıldı, ve bir dizin olarak.** `market::bundle` — `stackvo market-bundle
+<dizin>` — indeksi, imzasını ve her paketi tek dizine yazıyor; okuyan taraf
+`LocalSource`, yani hiçbir yeni `Source` uygulaması gerekmedi. Yukarıdaki tar
+bu dizinin **paketlenmesi** oluyor (`tar -cf stackvo-packages.tar -C <dizin> .`),
+ikinci bir mekanizma değil — ve sıra bilerek bu: bir arşiv, doğrulanabilmesi
+için önce açılmak zorunda, yani doğrulama baytlar zaten diskteyken oluyor. Bir
+dizin ise kopyalanıyor, kaldığı yerden devam ediyor ve fark alınabiliyor.
+Doğrulama zinciri aynen duruyor: `registry.json` bayt bayt taşınıyor (imza
+baytların üstünde), ve her manifest **paketleme sırasında**, yani ağı olan
+makinede, indekse karşı doğrulanıyor — ağı olmayan tarafta patlayan bir kurulum,
+sebebi hava boşluğunun yanlış tarafında kalan bir kurulumdur.
+
 ---
 
 ## 10. Aşamalı yol haritası

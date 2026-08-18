@@ -31,7 +31,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use stackvo_desktop_lib::{
-    commands, config::Env, handover, instances, pkg, ports, render, secrets, template, workspace,
+    commands, config::Env, handover, instances, pkg, ports, render, secrets, workspace,
 };
 
 fn fixture() -> PathBuf {

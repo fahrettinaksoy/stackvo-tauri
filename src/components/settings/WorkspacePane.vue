@@ -189,9 +189,10 @@ onMounted(loadPreset);
     </div>
   </SettingsGroup>
 
-  <!-- The Rust generator runs alongside the Bash one and reports
-       whether its output is identical. This is the gate for replacing
-       it. -->
+  <!-- Does what is on disk still match what the generator would write? A
+       workspace drifts when a generated file is edited by hand or a manifest
+       changes with nothing regenerating after it, and neither leaves a mark
+       anywhere else. -->
   <SettingsGroup
     icon="mdi-cog-sync-outline"
     :title="t('settings.generator')"
@@ -210,16 +211,12 @@ onMounted(loadPreset);
 
     <template v-if="generator">
       <div class="d-flex align-center ga-2 mb-2">
-        <v-chip size="small" :color="generator.readyToTakeOver ? 'success' : 'warning'">
+        <v-chip size="small" :color="generator.inSync ? 'success' : 'warning'">
           {{ generator.matched }} /
           {{ generator.matched + generator.differed }}
         </v-chip>
         <span class="text-caption text-medium-emphasis">
-          {{
-            generator.readyToTakeOver
-              ? t('settings.generatorReady')
-              : t('settings.generatorDiffers')
-          }}
+          {{ generator.inSync ? t('settings.generatorReady') : t('settings.generatorDiffers') }}
         </span>
       </div>
 

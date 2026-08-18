@@ -64,14 +64,23 @@ export function useTerminal(onOutput, onClosed) {
       unlisten = await listenAll(
         ['terminal:ready', 'terminal:output', 'terminal:closed'],
         (name, payload) => {
-          if (!payload || payload.session_id !== sessionId.value) return;
+          // `sessionId`, not `session_id`. `pty.rs` emits camelCase — it builds
+          // the payloads with `json!({ "sessionId": …, "exitCode": … })` — and
+          // this read snake_case, so `payload.session_id` was `undefined` on
+          // every event and the comparison below rejected all of them. Nothing
+          // ever reached xterm: the pane opened a real shell, attached to it,
+          // sent keystrokes to it, and drew an empty black box, because the
+          // shell's answers were all dropped here. The tests passed because
+          // they made up their own payloads in the shape this file expected
+          // rather than the shape the backend sends.
+          if (!payload || payload.sessionId !== sessionId.value) return;
 
           if (name === 'terminal:output') onOutput(payload.data ?? '');
           else if (name === 'terminal:ready') status.value = 'open';
           else if (name === 'terminal:closed') {
-            exitCode.value = payload.exit_code ?? null;
+            exitCode.value = payload.exitCode ?? null;
             status.value = 'closed';
-            onClosed?.(payload.exit_code ?? 0);
+            onClosed?.(payload.exitCode ?? 0);
             stopListening();
             sessionId.value = null;
           }

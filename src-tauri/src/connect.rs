@@ -43,7 +43,7 @@
 //! containing `@` or `/` produces a URI that parses as a different host, and
 //! the failure is a connection error naming somewhere that does not exist.
 
-use crate::config::{Env, MASK};
+use crate::config::MASK;
 use crate::error::Result;
 use serde::Serialize;
 use std::path::Path;

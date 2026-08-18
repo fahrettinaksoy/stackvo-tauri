@@ -188,24 +188,19 @@ describe('unmanaged code, behind the overflow button', () => {
     await wrapper.vm.$nextTick();
 
     // The dialog, with the folder in it — the thing the strip used to show,
-    // and open on arrival rather than behind a header you press by name.
+    // and simply there rather than behind a header you press by name.
     expect(overlays()).toContain('old-crm');
     expect(overlays()).toContain('Adopt');
 
-    // And still collapsible. The panel is seeded open by a `model-value` with
-    // no listener beside it, which is a default only for as long as Vuetify
-    // keeps treating an unlistened model as uncontrolled — assert it rather
-    // than trust the comment that says so.
-    //
-    // Asked of `aria-expanded` rather than of the text: a panel that has been
-    // opened once keeps its body mounted and merely hides it, so the folder's
-    // name is still in `textContent` after it closes.
-    const title = document.querySelector('.v-expansion-panel-title');
-    expect(title.getAttribute('aria-expanded')).toBe('true');
-    title.click();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await wrapper.vm.$nextTick();
-    expect(title.getAttribute('aria-expanded')).toBe('false');
+    // Nothing to open. The lists were accordions that each grew and shrank as
+    // they were pressed, in a dialog that then changed size while it was being
+    // read; the dialog is one shape now and its body scrolls. Asserted because
+    // a panel is what somebody reaches for the next time a list gets long.
+    expect(document.querySelector('.v-expansion-panel-title')).toBeNull();
+
+    // The pickers are in the menu that opened this, and not repeated inside it.
+    const dialog = document.querySelector('.v-dialog');
+    expect(dialog.textContent).not.toContain('Point at a xampp folder');
     wrapper.unmount();
   });
 

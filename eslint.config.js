@@ -110,4 +110,18 @@ export default [
       },
     },
   },
+
+  {
+    // The WebDriver client speaks JSON over HTTP with `fetch` and no library
+    // (`tests/driver/webdriver.js` counts what a library would have cost).
+    // Granted here rather than to every test for the same reason the browser
+    // globals are: a unit test that can reach the network is a unit test that
+    // eventually does.
+    files: ['tests/driver/**/*.js'],
+    languageOptions: {
+      globals: {
+        fetch: 'readonly',
+      },
+    },
+  },
 ];

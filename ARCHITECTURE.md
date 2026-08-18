@@ -20,8 +20,8 @@ Three parts, in the order a request travels:
 | Part                                | Where                | Size                    |
 | ----------------------------------- | -------------------- | ----------------------- |
 | Front end — Vue 3, Vuetify 3, Pinia | `src/`               | 38k lines               |
-| Back end — Rust, 94 modules         | `src-tauri/src/`     | 76k lines               |
-| The boundary between them           | `contracts/ipc.json` | 248 commands, 69 events |
+| Back end — Rust, 95 modules         | `src-tauri/src/`     | 76k lines               |
+| The boundary between them           | `contracts/ipc.json` | 249 commands, 69 events |
 
 The two halves never share a type. They share a **contract**, and §5 is about
 why that is a deliberate cost rather than an omission.
@@ -71,7 +71,7 @@ document behind it:
 
 ### 3.1 Layers
 
-`src-tauri/src/` is flat — 94 modules, no subdirectories — but it is not
+`src-tauri/src/` is flat — 95 modules, no subdirectories — but it is not
 unstructured. There are four bands, and the dependency arrows only ever point
 downward:
 
@@ -82,7 +82,7 @@ downward:
   commands.rs       12.8k   the IPC surface: 247 #[tauri::command] functions
       │                     argument validation, orchestration, nothing else
       ▼
-  domain            53.3k   94 modules: generator, manifest, certs, hosts,
+  domain            53.3k   95 modules: generator, manifest, certs, hosts,
       │                     mail, xdebug, profile, preset, migrate, worktree, …
       │                     one subject each; no Tauri types
       ▼
@@ -197,7 +197,7 @@ rejections".
 
 ## 5. The contract
 
-`contracts/ipc.json` is the specification of the boundary: 244 commands, 69
+`contracts/ipc.json` is the specification of the boundary: 245 commands, 69
 events, 97 named types, 3 error shapes, and — for most entries — a `why`.
 
 It is a **hand-maintained document, not generated code**, and that is the
@@ -300,7 +300,7 @@ first draft named a module as weakly tested that was 94% covered, and counted 33
 of something there were 60 of.
 
 So the checkable claims here are checked. `src-tauri/tests/readme_claims.rs`
-covers `README.md`; the counts above (94 modules, 248 commands) come from
+covers `README.md`; the counts above (95 modules, 249 commands) come from
 `contract_agreement.rs` and from the module list itself, and
 a claim that drifts fails a test rather than aging quietly.
 

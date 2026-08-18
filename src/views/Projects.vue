@@ -6,7 +6,7 @@ import { useInventoryStore } from '@/stores/inventory';
 import { useOperationsStore } from '@/stores/operations';
 import { useFavourites } from '@/composables/useFavourites';
 import { useAppStore } from '@/stores/app';
-import { parentDomain } from '@/lib/manifest';
+import { parentDomain, runtimeLook } from '@/lib/manifest';
 import { bytes } from '@/lib/format';
 import { listenAll, REFRESH_TRIGGERS } from '@/lib/events';
 import { api, asList } from '@/lib/ipc';
@@ -89,6 +89,10 @@ const rows = computed(() => {
       // A field rather than a lookup in the cell: the table sorts on it, and a
       // sort key that is not on the row is a column that does not sort.
       favourite: favourites.isFavourite(p.name),
+      // Flattened for the same reason. `git` is an object or null, and sorting
+      // twenty rows by an object sorts them by nothing — the three states have
+      // to be one comparable value for the column header to do anything.
+      repo: p.git ? (p.git.remote ? 2 : 1) : 0,
     };
   });
 });
@@ -123,6 +127,66 @@ function openByDefault(item, isGroupOpen, toggleGroup) {
 const groupBy = [{ key: 'parentDomain', order: 'asc' }];
 
 /**
+ * The two narrowings the search box cannot express.
+ *
+ * Search matches text, and the two questions actually asked of this page are
+ * not about text: "what is running right now" and "the handful I work on".
+ * Typing a name answers neither, and sorting only moves them to the top of a
+ * list you still have to read past.
+ *
+ * Filters rather than modes: both are visible while they are on and both clear
+ * from the empty state, so neither can become a thing somebody is stuck in
+ * wondering where their projects went. That is the same rule the inventory
+ * store follows in refusing to hide broken projects.
+ */
+const statusFilter = ref('all');
+const favouritesOnly = ref(false);
+
+const STATUS_FILTERS = computed(() => [
+  { value: 'all', label: t('projectsView.filter.all') },
+  { value: 'running', label: t('projectsView.filter.running') },
+  { value: 'stopped', label: t('projectsView.filter.stopped') },
+  { value: 'unbuilt', label: t('projectsView.filter.unbuilt') },
+]);
+
+/**
+ * Stopped means built and not running.
+ *
+ * A project with no image is not stopped, it has never started — and putting
+ * the two together would make "stopped" the answer for a fresh checkout, which
+ * is the one case where the next step is different.
+ */
+const visibleRows = computed(() =>
+  rows.value.filter((row) => {
+    if (favouritesOnly.value && !row.favourite) return false;
+    if (statusFilter.value === 'running') return row.running;
+    if (statusFilter.value === 'stopped') return row.built && !row.running;
+    if (statusFilter.value === 'unbuilt') return !row.built;
+    return true;
+  })
+);
+
+/**
+ * How many narrowings are on, for the badge on the funnel.
+ *
+ * The search term is not one of them: it is typed into a box that shows it
+ * back, so it never needs a second indicator — while the two behind the menu
+ * are invisible the moment the menu closes, which is what the count is for.
+ */
+const activeFilters = computed(
+  () => (statusFilter.value !== 'all' ? 1 : 0) + (favouritesOnly.value ? 1 : 0)
+);
+
+/** Is anything narrowing the list — so an empty table is a filter, not a void? */
+const narrowed = computed(() => !!search.value || activeFilters.value > 0);
+
+function clearFilters() {
+  search.value = '';
+  statusFilter.value = 'all';
+  favouritesOnly.value = false;
+}
+
+/**
  * Ordered by domain, inside a group and out.
  *
  * The table sorts by the group key before anything else, so without this the
@@ -155,8 +219,22 @@ const headers = computed(() => [
     width: 44,
   },
   { title: t('projectsView.colDomain'), key: 'domain', sortable: true, align: 'start' },
+  // The server used to be a column of its own. It is meaningful for exactly one
+  // runtime out of eight — `manifest::read` warns that `server` is ignored on
+  // anything but PHP — so seven rows in eight paid a column's width for an
+  // em dash. It rides along in this cell instead, where a PHP project reads
+  // "PHP 8.3 · nginx" and nothing else has to explain a blank.
   { title: t('projectsView.colRuntime'), key: 'runtime', sortable: true, align: 'start' },
-  { title: t('projectsView.colServer'), key: 'server', sortable: true, align: 'start' },
+  // Where the code came from. Sortable on purpose: "which of these did I clone
+  // and which did I start here" is the question it answers, and answering it
+  // by eye down a column of twenty is what sorting is for.
+  {
+    title: t('projectsView.colRepo'),
+    key: 'repo',
+    sortable: true,
+    align: 'center',
+    width: 72,
+  },
   {
     title: t('projectsView.colConfiguration'),
     key: 'configuration',
@@ -179,13 +257,6 @@ const headers = computed(() => [
     width: 100,
   },
   {
-    title: t('projectsView.colRebuild'),
-    key: 'rebuild',
-    sortable: false,
-    align: 'center',
-    width: 100,
-  },
-  {
     title: t('projectsView.colTerminal'),
     key: 'terminal',
     sortable: false,
@@ -200,12 +271,34 @@ const headers = computed(() => [
     align: 'center',
     width: 100,
   },
+  // Everything the row can do, said in words.
+  //
+  // Not a replacement for the columns before it — they are one click and this
+  // is two, and the fast path is worth keeping for the acts done constantly.
+  // What it adds is a name for each of them: a row of glyphs is a row of things
+  // you learn by pressing them.
+  //
+  // Two acts are *only* here, and both were columns until they were not:
+  //
+  // - **Delete.** A destructive act one press away, in a table where the row
+  //   above and the row below look the same, is a row somebody removes while
+  //   aiming at the one under it. Behind a menu it costs a deliberate second
+  //   press, which is the whole of what it needed.
+  // - **Rebuild.** It shared a hammer with Build in the column beside it and
+  //   meant something else — regenerate, build the image, recreate the
+  //   container, against Build's first image. Two identical glyphs meaning two
+  //   things is the case a name fixes and an icon cannot.
+  //
+  // It is also where the acts that never had a column live — applying a
+  // changed manifest, fixing a hosts entry, opening the folder or the editor —
+  // which until now were either a small icon beside the domain you had to know
+  // was clickable, or only on the detail page.
   {
-    title: t('projectsView.colDelete'),
-    key: 'delete',
+    title: t('projectsView.colMore'),
+    key: 'more',
     sortable: false,
     align: 'center',
-    width: 100,
+    width: 56,
   },
 ]);
 
@@ -304,6 +397,205 @@ function applyChange(project) {
 }
 
 /**
+ * What the runtime cell says: a glyph, a name and a version — and, for PHP, the
+ * server as well.
+ *
+ * This cell used to be a two-way branch: `runtime === 'node'` drew Node and
+ * *everything else* drew PHP. The app builds eight runtimes, so a Go project
+ * appeared in the table as "PHP N/A" under an elephant, and so did Ruby, Rust,
+ * Python, Bun and Deno. It was not a rounding error in the label — the row was
+ * naming the wrong language.
+ *
+ * The version lives in a different block per family, which is what makes a
+ * single expression impossible here: `php.version`, `node.version`, and one
+ * `lang` block shared by the six `LANG_RUNTIMES`, keyed in the file by the
+ * runtime's own name.
+ */
+function runtimeOf(item) {
+  const look = runtimeLook(item.runtime);
+
+  const version =
+    item.manifest[item.runtime]?.version ??
+    item.manifest.lang?.version ??
+    item.manifest.php?.version;
+
+  return {
+    icon: look.icon,
+    label: version ? `${look.label} ${version}` : look.label,
+    // Ignored everywhere else — `manifest::read` says so in a warning — so it
+    // is shown where it means something and nowhere else.
+    server: item.runtime === 'php' ? item.manifest.server || null : null,
+  };
+}
+
+/**
+ * Hand a project's directory to something outside the app.
+ *
+ * Reported rather than swallowed: "open in editor" fails on a machine with no
+ * editor configured, and a menu item that does nothing at all and says nothing
+ * at all is indistinguishable from one that worked silently.
+ */
+async function reveal(fn, project) {
+  actionError.value = null;
+  try {
+    await fn(project.path);
+  } catch (e) {
+    actionError.value = e;
+  }
+}
+
+/**
+ * Everything a row can do, in words, for the overflow menu at the end of it.
+ *
+ * The conditions are the columns' own and are read from the same item, because
+ * a menu that offers a restart on a stopped container — or hides a rebuild the
+ * column beside it is showing — is a menu that has to be kept in step by hand.
+ * Written once here, both the row and the menu answer from it.
+ *
+ * `divider: true` entries are rendered as rules rather than items. The
+ * destructive one is below a rule and last, which is the only placement that
+ * survives somebody opening this menu quickly.
+ *
+ * One thing on the detail page's toolbar is deliberately not here: the quick
+ * commands — artisan, composer, npm. They are read out of each project's own
+ * files, so offering them on a row would mean fetching a command catalogue per
+ * project for a table nobody has opened a menu on yet, and they would arrive as
+ * a menu inside a menu. They stay where the project is already loaded.
+ */
+function rowActions(item) {
+  const busy = ops.isBusy(item.name);
+  const out = [];
+
+  // The control column's three states, which are one button that means a
+  // different thing in each. Named, they stop being one button.
+  if (!item.built) {
+    out.push({
+      key: 'build',
+      icon: 'mdi-hammer-wrench',
+      title: t('projectsView.menu.build'),
+      disabled: busy || !app.engineUp || !item.manifestValid,
+      run: () => act(item, (n) => api.projectBuild(n)),
+    });
+  } else if (item.running) {
+    out.push({
+      key: 'stop',
+      icon: 'mdi-stop',
+      title: t('projectsView.menu.stop'),
+      disabled: busy,
+      run: () => act(item, api.projectStop),
+    });
+  } else {
+    out.push({
+      key: 'start',
+      icon: 'mdi-play',
+      title: t('projectsView.menu.start'),
+      disabled: busy || !app.engineUp,
+      run: () => act(item, api.projectStart),
+    });
+  }
+
+  if (item.running) {
+    out.push({
+      key: 'restart',
+      icon: 'mdi-restart',
+      title: t('projectsView.menu.restart'),
+      disabled: busy,
+      run: () => act(item, api.projectRestart),
+    });
+  }
+
+  if (item.built) {
+    out.push({
+      key: 'rebuild',
+      icon: 'mdi-hammer-wrench',
+      title: t('projectsView.rebuild'),
+      disabled: busy || !app.engineUp || !item.manifestValid,
+      run: () => act(item, (n) => api.projectBuild(n)),
+    });
+  }
+
+  // Never had a column. It was a small blue icon beside the domain that you had
+  // to know was clickable, which is not a way to offer the act that makes a
+  // changed manifest take effect.
+  if (item.generatedStale) {
+    out.push({
+      key: 'apply',
+      icon: 'mdi-sync-alert',
+      title: t('projectsView.menu.apply'),
+      disabled: busy,
+      run: () => applyChange(item),
+    });
+  }
+
+  out.push({ key: 'sep-open', divider: true });
+
+  if (item.domain && item.running && item.domainConfigured) {
+    out.push({
+      key: 'open',
+      icon: 'mdi-open-in-new',
+      title: t('projectsView.colOpen'),
+      run: () => api.openInBrowser(`https://${item.domain}`),
+    });
+  }
+
+  // Same condition as the hosts warning beside the domain, and the same fix.
+  if (item.domain && !item.domainConfigured) {
+    out.push({
+      key: 'hosts',
+      icon: 'mdi-alert-circle',
+      colour: 'warning',
+      title: t('projectsView.menu.fixHosts'),
+      run: () => (hostsFixFor.value = item.domain),
+    });
+  }
+
+  // The two the detail page's toolbar had and this row did not. Both act on
+  // `path`, which the row has been carrying since `projects_list` first
+  // answered — there was nothing to fetch, only nothing offering them.
+  out.push({
+    key: 'editor',
+    icon: 'mdi-code-tags',
+    title: t('detail.openInEditor'),
+    run: () => reveal(api.openInEditor, item),
+  });
+
+  out.push({
+    key: 'folder',
+    icon: 'mdi-folder-open',
+    title: t('detail.openFolder'),
+    run: () => reveal(api.openFolder, item),
+  });
+
+  if (item.running) {
+    out.push({
+      key: 'terminal',
+      icon: 'mdi-console',
+      title: t('detail.externalTerminal'),
+      run: () => openTerminal(item),
+    });
+  }
+
+  out.push({
+    key: 'detail',
+    icon: 'mdi-open-in-app',
+    title: t('projectsView.colDetail'),
+    run: () => router.push(`/projects/${item.name}`),
+  });
+
+  out.push({ key: 'sep-delete', divider: true });
+  out.push({
+    key: 'delete',
+    icon: 'mdi-delete',
+    colour: 'error',
+    title: t('projectsView.colDelete'),
+    disabled: busy,
+    run: () => (deleteTarget.value = item),
+  });
+
+  return out;
+}
+
+/**
  * Folders under `projects/` with no `stackvo.json`.
  *
  * Behind the overflow menu now, with a count on the button. They used to sit
@@ -382,6 +674,15 @@ const unmanagedCount = computed(
  * /Applications had no way to say so.
  */
 const IMPORT_SOURCES = ['xampp', 'laragon', 'mamp', 'valet', 'sail'];
+
+/**
+ * Only the installations that turned something up.
+ *
+ * A scan records the tool it found even when there is nothing under it, and a
+ * heading reading "0 sites from laragon" answers a question nobody asked. Used
+ * for the dialog's emptiness too: an install with no sites is not content.
+ */
+const importedInstalls = computed(() => installs.value.filter((i) => i.sites.length));
 
 async function pickInstall(source) {
   const { open } = await import('@tauri-apps/plugin-dialog');
@@ -688,13 +989,24 @@ onUnmounted(() => teardown?.());
          belonging to XAMPP or Laragon. Both are invisible everywhere else in
          the app, which is why they accumulate; the badge on the overflow
          button is what keeps them from being invisible here too. -->
-    <v-dialog v-model="unmanagedOpen" max-width="820" scrollable>
+    <!-- Fixed, both ways. Two accordions that each grew and shrank as they were
+         opened made a window that changed size while it was being read; the
+         dialog now takes one shape and its body scrolls inside it. Vuetify caps
+         both against the viewport, so a short screen still gets a whole
+         dialog. -->
+    <v-dialog v-model="unmanagedOpen" width="820" height="560" scrollable>
       <v-card>
         <v-card-title class="d-flex align-center ga-2">
           <v-icon size="20">mdi-folder-search-outline</v-icon>
           {{ t('unmanaged.title') }}
         </v-card-title>
-        <v-card-subtitle class="text-caption pb-2">{{ t('unmanaged.explain') }}</v-card-subtitle>
+        <!-- Wraps. Vuetify clips a card subtitle to one line, and this one is a
+             sentence: it shipped as "…ve XAMPP ya da Laragon'a …", which ends
+             before it has said the second of the two things it is there to
+             name. -->
+        <v-card-subtitle class="text-caption pb-2 dialog-lede">
+          {{ t('unmanaged.explain') }}
+        </v-card-subtitle>
 
         <v-divider />
 
@@ -710,211 +1022,224 @@ onUnmounted(() => teardown?.());
             @close="actionError = null"
           />
 
-          <div class="d-flex ga-2 px-4 py-2">
-            <v-btn
-              v-for="source in IMPORT_SOURCES"
-              :key="source"
-              size="x-small"
-              variant="text"
-              prepend-icon="mdi-folder-search-outline"
-              @click="pickInstall(source)"
-            >
-              {{ t('imports.pick', { tool: source }) }}
-            </v-btn>
-          </div>
-
           <!-- Said rather than left as an empty dialog: "we looked and there
-               is nothing" and "this has not run" look identical when blank. -->
+               is nothing" and "this has not run" look identical when blank.
+
+               The "show me the XAMPP folder" actions are not repeated here:
+               they sit in the overflow menu that opened this dialog, and a
+               control does not become a second control by being shown twice. -->
           <div
-            v-if="!unmanagedCount && !installs.some((i) => i.sites.length)"
-            class="px-4 pb-4 text-caption text-medium-emphasis"
+            v-if="!unmanagedCount && !importedInstalls.length"
+            class="pa-4 text-caption text-medium-emphasis"
           >
             {{ t('unmanaged.none') }}
           </div>
 
           <!-- Sites belonging to another tool. Same shape as the adoptable
-               panel below it, because it answers the same question from
+               section below it, because it answers the same question from
                further away. -->
-          <v-expansion-panels
-            v-if="installs.some((i) => i.sites.length)"
-            variant="accordion"
-            rounded="0"
-            flat
-            class="adopt-panels"
-          >
-            <v-expansion-panel v-for="install in installs" :key="install.path" elevation="0">
-              <v-expansion-panel-title>
-                <v-icon size="small" class="mr-2">mdi-import</v-icon>
-                <span class="text-body-2">
-                  {{ t('imports.found', { tool: install.source, n: install.sites.length }) }}
-                </span>
-              </v-expansion-panel-title>
+          <div v-if="importedInstalls.length" class="adopt-section">
+            <!-- The destructive choice is a switch above the lists, off, and
+                 says what it does. A per-row "move" button would be a delete
+                 somebody reaches for while aiming at the row below.
 
-              <v-expansion-panel-text class="adopt-body">
-                <div class="text-caption text-medium-emphasis mb-2">
-                  {{ t('imports.explain', { path: install.path }) }}
-                </div>
+                 Once, not once per tool: it is a single setting, and a copy of
+                 it under every heading would read as a per-tool choice that it
+                 has never been. -->
+            <v-switch
+              v-model="importMove"
+              color="warning"
+              density="compact"
+              hide-details
+              :label="t('imports.move')"
+            />
+            <div class="text-caption text-medium-emphasis mb-3">
+              {{ importMove ? t('imports.moveOn') : t('imports.moveOff') }}
+            </div>
 
-                <!-- The destructive choice is a switch above the list, off, and says
-               what it does. A per-row "move" button would be a delete somebody
-               reaches for while aiming at the row below. -->
-                <v-switch
-                  v-model="importMove"
-                  color="warning"
-                  density="compact"
-                  hide-details
-                  class="mb-2"
-                  :label="t('imports.move')"
-                />
-                <div class="text-caption text-medium-emphasis mb-3">
-                  {{ importMove ? t('imports.moveOn') : t('imports.moveOff') }}
-                </div>
+            <div v-for="install in importedInstalls" :key="install.path" class="adopt-group">
+              <div class="section-head d-flex align-center ga-1">
+                <v-icon size="small">mdi-import</v-icon>
+                {{ t('imports.found', { tool: install.source, n: install.sites.length }) }}
+              </div>
+              <div class="text-caption text-medium-emphasis mb-2">
+                {{ t('imports.explain', { path: install.path }) }}
+              </div>
 
-                <div v-for="site in install.sites" :key="site.path" class="adopt-row">
-                  <span class="adopt-name">{{ site.name }}</span>
+              <v-table density="compact" hover fixed-header class="adopt-table">
+                <thead>
+                  <tr>
+                    <th>{{ t('imports.colSite') }}</th>
+                    <th>{{ t('imports.colDetected') }}</th>
+                    <th>{{ t('imports.colDomain') }}</th>
+                    <th>{{ t('imports.colSize') }}</th>
+                    <th class="text-end">{{ t('imports.colAction') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="site in install.sites" :key="site.path">
+                    <td class="adopt-name">{{ site.name }}</td>
 
-                  <v-chip
-                    v-if="site.detected.framework"
-                    size="x-small"
-                    color="success"
-                    variant="tonal"
-                  >
-                    {{ site.detected.framework }}
-                  </v-chip>
-                  <v-chip v-else size="x-small" variant="tonal">{{ site.detected.runtime }}</v-chip>
+                    <td>
+                      <div class="cell-chips">
+                        <v-chip
+                          v-if="site.detected.framework"
+                          size="x-small"
+                          color="success"
+                          variant="tonal"
+                        >
+                          {{ site.detected.framework }}
+                        </v-chip>
+                        <v-chip v-else size="x-small" variant="tonal">
+                          {{ site.detected.runtime }}
+                        </v-chip>
 
-                  <v-chip v-if="site.domain" size="x-small" variant="tonal">{{
-                    site.domain
-                  }}</v-chip>
+                        <!-- Only Sail says what it needs: its compose file names
+                             the services, mapped here onto this app's own
+                             catalogue. The other tools do not state it, and
+                             inventing it would be an import that describes
+                             something nobody wrote. -->
+                        <v-chip
+                          v-for="service in site.services || []"
+                          :key="service"
+                          size="x-small"
+                          color="info"
+                          variant="tonal"
+                          :title="t('imports.serviceHint')"
+                        >
+                          {{ service }}
+                        </v-chip>
+                      </div>
+                    </td>
 
-                  <!-- Only Sail says what it needs: its compose file names the
-                       services, mapped here onto this app's own catalogue. The
-                       other tools do not state it, and inventing it would be
-                       an import that describes something nobody wrote. -->
-                  <v-chip
-                    v-for="service in site.services || []"
-                    :key="service"
-                    size="x-small"
-                    color="info"
-                    variant="tonal"
-                    :title="t('imports.serviceHint')"
-                  >
-                    {{ service }}
-                  </v-chip>
+                    <td class="adopt-evidence">{{ site.domain || '—' }}</td>
 
-                  <span class="adopt-evidence">
-                    {{
-                      site.partial
-                        ? t('imports.sizeAtLeast', { size: bytes(site.bytes) })
-                        : bytes(site.bytes)
-                    }}
-                  </span>
+                    <td class="adopt-evidence">
+                      {{
+                        site.partial
+                          ? t('imports.sizeAtLeast', { size: bytes(site.bytes) })
+                          : bytes(site.bytes)
+                      }}
+                    </td>
 
-                  <v-spacer />
+                    <td class="text-end">
+                      <span v-if="site.taken" class="text-caption text-medium-emphasis">
+                        {{ t('imports.taken') }}
+                      </span>
+                      <v-btn
+                        v-else
+                        size="x-small"
+                        variant="tonal"
+                        color="primary"
+                        prepend-icon="mdi-import"
+                        :loading="importing === site.path"
+                        :disabled="!!importing || !!adopting"
+                        @click="importSite(install, site)"
+                      >
+                        {{ t('imports.take') }}
+                      </v-btn>
+                    </td>
+                  </tr>
+                </tbody>
+              </v-table>
+            </div>
+          </div>
 
-                  <span v-if="site.taken" class="text-caption text-medium-emphasis mr-2">
-                    {{ t('imports.taken') }}
-                  </span>
-                  <v-btn
-                    v-else
-                    size="x-small"
-                    variant="tonal"
-                    color="primary"
-                    prepend-icon="mdi-import"
-                    :loading="importing === site.path"
-                    :disabled="!!importing || !!adopting"
-                    @click="importSite(install, site)"
-                  >
-                    {{ t('imports.take') }}
-                  </v-btn>
-                </div>
-              </v-expansion-panel-text>
-            </v-expansion-panel>
-          </v-expansion-panels>
+          <v-divider v-if="importedInstalls.length && adoptable.length" />
 
-          <!-- Flush and square, and still square in here: it runs to both
-               edges of the card, and a radius on a surface that meets an edge
-               cuts a notch out of the corner rather than rounding it. -->
-          <!-- Open on arrival. Behind the table it was one click from a strip
-               that was already on screen; from a menu item it would be three,
-               and the third would be a header you asked for by name. Seeded
-               rather than controlled — there is no listener bound, so Vuetify
-               treats the value as the starting one and the panel still
-               collapses when it is pressed. -->
-          <v-expansion-panels
-            v-if="adoptable.length"
-            :model-value="0"
-            variant="accordion"
-            rounded="0"
-            flat
-            class="adopt-panels"
-          >
-            <v-expansion-panel elevation="0">
-              <v-expansion-panel-title>
-                <v-icon size="small" class="mr-2">mdi-folder-search-outline</v-icon>
-                <span class="text-body-2">{{ t('adopt.found', { n: adoptable.length }) }}</span>
-              </v-expansion-panel-title>
+          <!-- No longer behind a header you have to ask for by name. There is
+               one list here and it is the reason the dialog is usually opened;
+               the card scrolls, so nothing below it is out of reach. -->
+          <div v-if="adoptable.length" class="adopt-section">
+            <div class="section-head d-flex align-center ga-1">
+              <v-icon size="small">mdi-folder-search-outline</v-icon>
+              {{ t('adopt.found', { n: adoptable.length }) }}
+            </div>
 
-              <!-- Bounded and scrolling: a checkout with twenty stray folders pushed
-             the table itself off the screen, and this is a thing you deal with
-             once rather than the reason the page exists. -->
-              <v-expansion-panel-text class="adopt-body">
-                <div v-for="folder in adoptable" :key="folder.name" class="adopt-row">
-                  <span class="adopt-name">{{ folder.name }}</span>
+            <!-- The directory itself, named, the way the tool sections above
+                 name theirs. There is no fixed `projects/` to refer to: the
+                 tree is wherever the workspace gate was pointed, so the text
+                 that claimed one was describing a layout this app dropped.
 
-                  <v-chip
-                    v-if="folder.detected.framework"
-                    size="x-small"
-                    color="success"
-                    variant="tonal"
-                  >
-                    {{ folder.detected.framework }}
-                  </v-chip>
-                  <v-chip v-else size="x-small" variant="tonal">{{
-                    folder.detected.runtime
-                  }}</v-chip>
+                 `projectsDir`, which is what Settings shows as the working
+                 directory and what the scan actually reads. `root` is the app's
+                 own state directory — `~/.stackvo` — and naming it here told
+                 the reader to go looking in the wrong place. -->
+            <div v-if="app.workspace?.projectsDir" class="text-caption text-medium-emphasis mb-2">
+              {{ t('adopt.where', { path: app.workspace.projectsDir }) }}
+            </div>
 
-                  <!-- The files the guess came from. A document root inferred wrongly
-               builds, starts and serves a 404 with no error anywhere. -->
-                  <span class="adopt-evidence">
+            <v-table density="compact" hover fixed-header class="adopt-table">
+              <thead>
+                <tr>
+                  <th>{{ t('adopt.colFolder') }}</th>
+                  <th>{{ t('adopt.colDetected') }}</th>
+                  <th>{{ t('adopt.colEvidence') }}</th>
+                  <th class="text-end">{{ t('adopt.colAction') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="folder in adoptable" :key="folder.name">
+                  <td class="adopt-name">{{ folder.name }}</td>
+
+                  <td>
+                    <v-chip
+                      v-if="folder.detected.framework"
+                      size="x-small"
+                      color="success"
+                      variant="tonal"
+                    >
+                      {{ folder.detected.framework }}
+                    </v-chip>
+                    <v-chip v-else size="x-small" variant="tonal">
+                      {{ folder.detected.runtime }}
+                    </v-chip>
+                  </td>
+
+                  <!-- The files the guess came from. A document root inferred
+                       wrongly builds, starts and serves a 404 with no error
+                       anywhere. -->
+                  <td class="adopt-evidence">
                     {{
                       folder.detected.evidence.length
                         ? t('adopt.from', { files: folder.detected.evidence.join(', ') })
                         : t('adopt.noEvidence')
                     }}
-                  </span>
+                  </td>
 
-                  <v-spacer />
+                  <td class="text-end text-no-wrap">
+                    <!-- Offered only when the folder has one. It is the better
+                         route when it exists: a compose file states the PHP
+                         version, the domain and the services, none of which any
+                         marker file does. -->
+                    <v-btn
+                      v-if="folder.composeFile"
+                      size="x-small"
+                      variant="tonal"
+                      color="primary"
+                      prepend-icon="mdi-file-import-outline"
+                      class="mr-1"
+                      :loading="migrationBusy && migrationFor === folder.name"
+                      :disabled="!!adopting || migrationBusy"
+                      @click="scanCompose(folder)"
+                    >
+                      {{ t('migrate.read') }}
+                    </v-btn>
 
-                  <!-- Offered only when the folder has one. It is the better route when
-               it exists: a compose file states the PHP version, the domain and
-               the services, none of which any marker file does. -->
-                  <v-btn
-                    v-if="folder.composeFile"
-                    size="x-small"
-                    variant="tonal"
-                    color="primary"
-                    prepend-icon="mdi-file-import-outline"
-                    :loading="migrationBusy && migrationFor === folder.name"
-                    :disabled="!!adopting || migrationBusy"
-                    @click="scanCompose(folder)"
-                  >
-                    {{ t('migrate.read') }}
-                  </v-btn>
-
-                  <v-btn
-                    size="x-small"
-                    variant="tonal"
-                    :loading="adopting === folder.name"
-                    :disabled="!!adopting || !folder.hasFiles || migrationBusy"
-                    @click="adopt(folder)"
-                  >
-                    {{ t('adopt.action') }}
-                  </v-btn>
-                </div>
-              </v-expansion-panel-text>
-            </v-expansion-panel>
-          </v-expansion-panels>
+                    <v-btn
+                      size="x-small"
+                      variant="tonal"
+                      :loading="adopting === folder.name"
+                      :disabled="!!adopting || !folder.hasFiles || migrationBusy"
+                      @click="adopt(folder)"
+                    >
+                      {{ t('adopt.action') }}
+                    </v-btn>
+                  </td>
+                </tr>
+              </tbody>
+            </v-table>
+          </div>
         </v-card-text>
 
         <v-divider />
@@ -1028,6 +1353,13 @@ onUnmounted(() => teardown?.());
       </v-card>
     </v-dialog>
 
+    <!-- One control, not a row of them. Four status buttons and a star beside
+         the search box was a second toolbar competing with the page's own, and
+         the widths of four translated words decided how much room was left to
+         type in. They are a menu on the end of the field now.
+         The field still says what is on: the funnel takes the accent colour
+         and carries a count while anything is narrowing the list, because a
+         filter you cannot see is a filter you get stuck in. -->
     <v-text-field
       v-model="search"
       prepend-inner-icon="mdi-magnify"
@@ -1038,12 +1370,75 @@ onUnmounted(() => teardown?.());
       single-line
       hide-details
       clearable
-    />
+    >
+      <template #append-inner>
+        <v-menu location="bottom end" min-width="240" :close-on-content-click="false">
+          <template #activator="{ props: menu }">
+            <v-btn
+              v-bind="menu"
+              icon
+              size="small"
+              variant="text"
+              class="filter-btn"
+              :color="activeFilters ? 'primary' : undefined"
+              :aria-label="t('projectsView.filter.title')"
+              @click.stop
+            >
+              <v-badge :model-value="!!activeFilters" :content="activeFilters" color="primary">
+                <v-icon size="small">
+                  {{ activeFilters ? 'mdi-filter' : 'mdi-filter-outline' }}
+                </v-icon>
+              </v-badge>
+              <v-tooltip activator="parent" location="bottom">
+                {{ t('projectsView.filter.title') }}
+              </v-tooltip>
+            </v-btn>
+          </template>
+
+          <v-list density="compact">
+            <v-list-subheader>{{ t('projectsView.filter.status') }}</v-list-subheader>
+            <!-- Checkmarks rather than a radio group: the state has to be
+                 readable at a glance in a menu that stays open, and a list item
+                 that merely looks selected reads as hover. -->
+            <v-list-item
+              v-for="f in STATUS_FILTERS"
+              :key="f.value"
+              :active="statusFilter === f.value"
+              :prepend-icon="statusFilter === f.value ? 'mdi-check' : 'mdi-blank'"
+              :title="f.label"
+              @click="statusFilter = f.value"
+            />
+
+            <v-divider class="my-1" />
+
+            <!-- Not a fifth status. It narrows *with* the status rather than
+                 instead of it, and "my starred projects that are running" is
+                 the pair somebody actually wants. -->
+            <v-list-item
+              :active="favouritesOnly"
+              :prepend-icon="favouritesOnly ? 'mdi-star' : 'mdi-star-outline'"
+              :base-color="favouritesOnly ? 'warning' : undefined"
+              :title="t('projectsView.filter.favourites')"
+              @click="favouritesOnly = !favouritesOnly"
+            />
+
+            <template v-if="activeFilters">
+              <v-divider class="my-1" />
+              <v-list-item
+                prepend-icon="mdi-filter-off-outline"
+                :title="t('projectsView.filter.clear')"
+                @click="clearFilters"
+              />
+            </template>
+          </v-list>
+        </v-menu>
+      </template>
+    </v-text-field>
 
     <div class="table-wrap">
       <v-data-table
         :headers="headers"
-        :items="rows"
+        :items="visibleRows"
         :group-by="groupBy"
         :sort-by="sortBy"
         :search="search"
@@ -1071,12 +1466,17 @@ onUnmounted(() => teardown?.());
             <td :colspan="columns.length">
               <div class="d-flex align-center ga-2">
                 <v-btn
+                  icon
                   size="x-small"
                   variant="text"
-                  :icon="isGroupOpen(item) ? 'mdi-chevron-down' : 'mdi-chevron-right'"
                   :aria-label="item.value"
                   @click="toggleGroup(item)"
-                />
+                >
+                  <v-icon>{{
+                    isGroupOpen(item) ? 'mdi-chevron-down' : 'mdi-chevron-right'
+                  }}</v-icon>
+                  <v-tooltip activator="parent" location="top">{{ item.value }}</v-tooltip>
+                </v-btn>
                 <v-icon size="small" icon="mdi-sitemap-outline" />
                 <span class="font-weight-medium">{{ item.value }}</span>
                 <v-chip size="x-small" variant="tonal">{{ item.items.length }}</v-chip>
@@ -1110,6 +1510,13 @@ onUnmounted(() => teardown?.());
             <v-icon :color="item.favourite ? 'warning' : undefined" size="small">
               {{ item.favourite ? 'mdi-star' : 'mdi-star-outline' }}
             </v-icon>
+            <v-tooltip activator="parent" location="top">
+              {{
+                item.favourite
+                  ? t('projectsView.aria.unfavourite', { name: item.name })
+                  : t('projectsView.aria.favourite', { name: item.name })
+              }}
+            </v-tooltip>
           </v-btn>
         </template>
 
@@ -1164,8 +1571,8 @@ onUnmounted(() => teardown?.());
               </div>
             </v-tooltip>
 
-            <!-- Contract violations, shown rather than swallowed: the Bash
-                 generator skips such projects without a word. -->
+            <!-- Contract violations, shown rather than swallowed: the render
+                 skips such projects without a word. -->
             <v-tooltip v-if="!item.manifestValid" location="top">
               <template #activator="{ props }">
                 <v-icon v-bind="props" color="error" size="small">mdi-file-alert</v-icon>
@@ -1196,16 +1603,41 @@ onUnmounted(() => teardown?.());
         </template>
 
         <template #item.runtime="{ item }">
-          <template v-if="item.runtime === 'node'">
-            <v-icon start>mdi-nodejs</v-icon>Node {{ item.manifest.node?.version || 'N/A' }}
-          </template>
-          <template v-else>
-            <v-icon start>mdi-language-php</v-icon>PHP {{ item.manifest.php?.version || 'N/A' }}
-          </template>
+          <v-icon start>{{ runtimeOf(item).icon }}</v-icon>
+          {{ runtimeOf(item).label }}
+          <!-- PHP's server, on the runtime it belongs to. Faint and after a
+               separator, because it is a property of the runtime rather than a
+               second thing the row is about. -->
+          <span v-if="runtimeOf(item).server" class="text-medium-emphasis">
+            · {{ runtimeOf(item).server }}
+          </span>
         </template>
 
-        <template #item.server="{ item }">
-          {{ item.runtime === 'node' ? '—' : item.manifest.server || '—' }}
+        <!-- Three states, and the middle one is the reason this is not a tick.
+             A directory that was never versioned, a repository with local
+             history and no upstream, and a clone: "did this come from
+             somewhere" has three honest answers and a boolean would fold the
+             first two together.
+
+             The remote is in the tooltip rather than the cell. It is a URL —
+             the widest thing that could go in a table — and it is read once,
+             when somebody wants to know *which* repository. -->
+        <template #item.repo="{ item }">
+          <span v-if="!item.git" class="text-disabled">—</span>
+          <v-btn
+            v-else
+            icon
+            size="x-small"
+            variant="text"
+            :color="item.git.remote ? 'primary' : undefined"
+            :aria-label="item.git.remote || t('projectsView.repoLocal')"
+            @click.stop
+          >
+            <v-icon size="small">{{ item.git.remote ? 'mdi-source-branch' : 'mdi-git' }}</v-icon>
+            <v-tooltip activator="parent" location="top">
+              {{ item.git.remote || t('projectsView.repoLocal') }}
+            </v-tooltip>
+          </v-btn>
         </template>
 
         <template #item.configuration>
@@ -1227,6 +1659,9 @@ onUnmounted(() => teardown?.());
             @click="act(item, (n) => api.projectBuild(n))"
           >
             <v-icon>mdi-hammer-wrench</v-icon>
+            <v-tooltip activator="parent" location="top">{{
+              t('projectsView.menu.build')
+            }}</v-tooltip>
           </v-btn>
           <v-btn
             v-else-if="item.running"
@@ -1239,6 +1674,9 @@ onUnmounted(() => teardown?.());
             @click="act(item, api.projectStop)"
           >
             <v-icon>mdi-stop</v-icon>
+            <v-tooltip activator="parent" location="top">{{
+              t('projectsView.menu.stop')
+            }}</v-tooltip>
           </v-btn>
           <v-btn
             v-else
@@ -1252,6 +1690,9 @@ onUnmounted(() => teardown?.());
             @click="act(item, api.projectStart)"
           >
             <v-icon>mdi-play</v-icon>
+            <v-tooltip activator="parent" location="top">{{
+              t('projectsView.menu.start')
+            }}</v-tooltip>
           </v-btn>
         </template>
 
@@ -1267,36 +1708,9 @@ onUnmounted(() => teardown?.());
             @click="act(item, api.projectRestart)"
           >
             <v-icon>mdi-restart</v-icon>
-          </v-btn>
-        </template>
-
-        <!-- Rebuild: the whole chain, for a project that already has an image.
-             The control column's hammer only appears while `!built`, so once a
-             project had been built there was no way to rebuild it from here at
-             all — and that is exactly when it is needed, because changing the
-             PHP version or an extension changes the *Dockerfile*.
-
-             Not the same act as the stale-manifest icon beside the domain.
-             That one regenerates files and stops; this regenerates, rebuilds
-             the image and recreates the container. Restart is a third thing
-             again — same container, same image, so a rebuilt configuration
-             never reaches it. -->
-        <template #item.rebuild="{ item }">
-          <v-btn
-            v-if="item.built"
-            block
-            size="small"
-            color="info"
-            variant="tonal"
-            :aria-label="t('projectsView.rebuild')"
-            :loading="ops.isBusy(item.name)"
-            :disabled="!app.engineUp || !item.manifestValid"
-            @click="act(item, (n) => api.projectBuild(n))"
-          >
-            <v-icon>mdi-hammer-wrench</v-icon>
-            <v-tooltip activator="parent" location="top">
-              {{ t('projectsView.rebuildHint') }}
-            </v-tooltip>
+            <v-tooltip activator="parent" location="top">{{
+              t('projectsView.menu.restart')
+            }}</v-tooltip>
           </v-btn>
         </template>
 
@@ -1328,6 +1742,7 @@ onUnmounted(() => teardown?.());
             @click="api.openInBrowser(`https://${item.domain}`)"
           >
             <v-icon>mdi-open-in-new</v-icon>
+            <v-tooltip activator="parent" location="top">{{ item.domain }}</v-tooltip>
           </v-btn>
         </template>
 
@@ -1341,21 +1756,56 @@ onUnmounted(() => teardown?.());
             @click="router.push(`/projects/${item.name}`)"
           >
             <v-icon>mdi-open-in-app</v-icon>
+            <v-tooltip activator="parent" location="top">{{
+              t('projectsView.colDetail')
+            }}</v-tooltip>
           </v-btn>
         </template>
 
-        <template #item.delete="{ item }">
-          <v-btn
-            block
-            size="small"
-            color="error"
-            variant="tonal"
-            :disabled="ops.isBusy(item.name)"
-            :aria-label="t('projectsView.aria.delete', { name: item.name })"
-            @click="deleteTarget = item"
-          >
-            <v-icon>mdi-delete</v-icon>
-          </v-btn>
+        <!-- The same acts as the columns, named, plus the ones that have no
+             column of their own.
+             Built from `rowActions(item)` rather than written out as fifteen
+             `v-list-item`s with `v-if` on each: the conditions are the columns'
+             own — a rebuild needs an image, a restart needs a running
+             container — and duplicating them in a second place is how the menu
+             and the row start disagreeing about what a project can do. -->
+        <template #item.more="{ item }">
+          <v-menu location="bottom end" min-width="240">
+            <template #activator="{ props: menu }">
+              <!-- Sized to its neighbours rather than to Vuetify's idea of an
+                   icon button. `.v-btn--icon` adds 12px to the height at
+                   default density, so this one circle stood taller than the
+                   nine rectangles beside it and made the row look misaligned
+                   at its own end. -->
+              <v-btn
+                v-bind="menu"
+                icon
+                size="small"
+                variant="tonal"
+                class="row-more"
+                :aria-label="t('projectsView.aria.more', { name: item.name })"
+              >
+                <v-icon>mdi-dots-vertical</v-icon>
+                <v-tooltip activator="parent" location="top">
+                  {{ t('projectsView.colMore') }}
+                </v-tooltip>
+              </v-btn>
+            </template>
+
+            <v-list density="compact">
+              <template v-for="action in rowActions(item)" :key="action.key">
+                <v-divider v-if="action.divider" class="my-1" />
+                <v-list-item
+                  v-else
+                  :prepend-icon="action.icon"
+                  :title="action.title"
+                  :base-color="action.colour"
+                  :disabled="action.disabled"
+                  @click="action.run()"
+                />
+              </template>
+            </v-list>
+          </v-menu>
         </template>
 
         <!-- Two empty states, not one.
@@ -1365,14 +1815,19 @@ onUnmounted(() => teardown?.());
              problem and offered nothing, and after a typo it implied the
              projects were gone. Each now carries the action that resolves it. -->
         <template #no-data>
+          <!-- A filter can empty this table as easily as a typo can, and the
+               two look identical from here. The button clears both, so an empty
+               table is never a place somebody is stuck in. -->
           <v-empty-state
-            v-if="search"
+            v-if="narrowed"
             icon="mdi-magnify-close"
             :title="t('projects.noMatch')"
-            :text="t('projects.noMatchText', { term: search })"
+            :text="
+              search ? t('projects.noMatchText', { term: search }) : t('projects.noMatchFilter')
+            "
           >
             <template #actions>
-              <v-btn variant="tonal" prepend-icon="mdi-close" @click="search = ''">
+              <v-btn variant="tonal" prepend-icon="mdi-close" @click="clearFilters">
                 {{ t('projects.clearSearch') }}
               </v-btn>
             </template>
@@ -1448,6 +1903,14 @@ onUnmounted(() => teardown?.());
 </template>
 
 <style scoped>
+/* The overflow button, at the height of the action buttons it sits beside.
+   Derived from the same variable they are, so a density change moves all of
+   them together instead of moving nine and leaving one. */
+.row-more.v-btn--icon {
+  width: var(--v-btn-height);
+  height: var(--v-btn-height);
+}
+
 /* The subtitles wrap instead of being clipped.
    Against a bounded menu the stock rule turns every explanation into its first
    four words and an ellipsis, which is a sentence that costs a line and says
@@ -1463,18 +1926,27 @@ onUnmounted(() => teardown?.());
   padding-block: 2px;
 }
 
-/* A rule under it, so each panel reads as a band of the dialog rather than as
-   the start of the next one. */
-.adopt-panels {
-  border-bottom: thin solid rgba(var(--v-border-color), var(--v-border-opacity));
+/* A dialog's opening sentence is a sentence, not a label. Vuetify's subtitle
+   is `white-space: nowrap` with an ellipsis, which cuts explanations mid-clause
+   in a card 820px wide. */
+.dialog-lede {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.4;
 }
 
-/* Bounded so a checkout with many stray folders scrolls inside its own panel
-   rather than pushing the other one, and the dialog's buttons, out of reach.
-   The dialog scrolls too — this is so both lists stay reachable at once. */
-.adopt-body :deep(.v-expansion-panel-text__wrapper) {
-  max-height: 240px;
-  overflow-y: auto;
+/* The two lists in the unmanaged dialog, each given the card's own padding so
+   the rows line up with the title above them. Nothing bounds their height any
+   more: the dialog is a fixed size and its body is what scrolls. */
+.adopt-section {
+  padding: 12px 16px;
+}
+
+/* One tool's sites under one heading. Spaced from the next tool rather than
+   ruled off it — a rule per tool in a list of five is a table. */
+.adopt-group + .adopt-group {
+  margin-top: 12px;
 }
 
 /* A heading, not a row of data: it carries the parent domain and a count, and
@@ -1483,7 +1955,8 @@ onUnmounted(() => teardown?.());
   background: rgba(var(--v-theme-on-surface), 0.04);
 }
 
-/* Names a block inside the migration review, which has four of them. */
+/* Names a block: the four in the migration review, and each tool's sites in the
+   unmanaged dialog. */
 .section-head {
   font-size: 13px;
   font-weight: 600;
@@ -1553,12 +2026,32 @@ onUnmounted(() => teardown?.());
   flex-wrap: nowrap;
 }
 
-.adopt-row {
+/* Each list scrolls inside itself, under a header that stays put. The dialog is
+   a fixed size and holds two of these; without a bound of their own, a workspace
+   with twenty stray folders pushes the second list past the bottom of the card
+   and you scroll the card to find out there was a second one at all. */
+.adopt-table :deep(.v-table__wrapper) {
+  max-height: 260px;
+}
+
+.adopt-table :deep(th) {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* Rows are read across, not down: a name, a guess, what the guess came from.
+   Compact density puts them at 32px, and this stops a long cell from making one
+   row twice the height of its neighbours. */
+.adopt-table :deep(td) {
+  white-space: nowrap;
+}
+
+/* The runtime, the framework and whatever services a compose file named — on
+   one line, in a cell that does not stretch to hold them. */
+.cell-chips {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 2px 0;
-  min-width: 0;
+  gap: 4px;
 }
 
 .adopt-name {
@@ -1575,6 +2068,6 @@ onUnmounted(() => teardown?.());
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 0;
+  max-width: 280px;
 }
 </style>

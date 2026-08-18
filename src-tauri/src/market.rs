@@ -420,7 +420,11 @@ impl HttpSource {
     }
 
     /// Where a `304` sends the caller: to the copy already on disk.
-    fn from_cache(&self, root_relative: &str) -> Option<Vec<u8>> {
+    ///
+    /// Not `from_cache`. `from_*` is the constructor convention — a reader
+    /// meeting it expects a `Self` built out of something, not a method that
+    /// reads a file off an existing one, and clippy holds that convention.
+    fn cached_copy(&self, root_relative: &str) -> Option<Vec<u8>> {
         let path = self.etags.parent()?.join(root_relative);
         std::fs::read(path).ok()
     }
@@ -541,7 +545,7 @@ impl Source for HttpSource {
             // 304. The server agrees with what is here, so what is here is the
             // answer — and if it is somehow gone, the validator was wrong and
             // asking again without it is the recovery.
-            None => match self.from_cache(relative) {
+            None => match self.cached_copy(relative) {
                 Some(body) => Ok(body),
                 None => {
                     let (body, tag) = get(&url, None)?.ok_or_else(|| {
@@ -1026,6 +1030,227 @@ fn write_into(base: &Path, relative: &str, bytes: &[u8]) -> Result<()> {
         .map_err(|e| Error::new(Code::IoError, format!("writing {}: {e}", path.display())))
 }
 
+/// What a bundle came out as.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Bundled {
+    pub packages: usize,
+    pub versions: usize,
+    pub files: usize,
+    pub bytes: u64,
+    /// Versions whose files were deliberately not carried, and why.
+    ///
+    /// Reported rather than silent. A bundle that is smaller than the index it
+    /// carries is a fact somebody handing over a USB stick should be told, not
+    /// something they discover on the machine that has no network.
+    pub skipped: Vec<String>,
+    /// Whether the index's signature travelled with it.
+    ///
+    /// A separate field rather than folded into the file count, because it is
+    /// the one file whose absence changes what the far end can do: a machine
+    /// whose policy sets `requireSignature` refuses a bundle without it, and
+    /// finding that out here is the difference between a five-minute fix and a
+    /// second trip.
+    pub signed: bool,
+}
+
+/// Write everything an air-gapped machine needs into one directory.
+///
+/// §3 #31. The consuming half has been there since [`LocalSource`] — point
+/// `market.offlineBundle` at a directory and the catalogue, the manifests and
+/// the templates are read from it with the same verification as from the
+/// network. What was missing was the **producing** half: nothing on a connected
+/// machine could make that directory, so the only way to get one was to clone
+/// the packages repository and hope its layout matched what the client reads.
+///
+/// This is that half, and it is deliberately the same walk [`install`] makes,
+/// once per version, into a directory instead of into the workspace. The output
+/// is a source: `LocalSource::new(dest)` and the far end cannot tell it from a
+/// checkout.
+///
+/// ## A directory, not the tar `servis-market-mimarisi.md` §9 names
+///
+/// The design says `stackvo-packages.tar`. A tar is a *packaging* of this, not
+/// a second mechanism — `tar -cf stackvo-packages.tar -C <dest> .` produces it,
+/// and the far end unpacks it into a directory because that is what the reader
+/// reads. Shipping the archive format first would have meant a second `Source`
+/// implementation, on the argument that a USB stick prefers one file. It does
+/// not: a directory copies, resumes and diffs, and an archive that must be
+/// unpacked before it can be verified is a verification that happens after the
+/// bytes are already on the disk.
+///
+/// ## The index is copied byte for byte
+///
+/// Not re-serialised from [`Registry`]. Two reasons and both are load-bearing:
+/// the signature (ADR 0015) is over the bytes, so a round trip through serde
+/// invalidates it even when every field survives; and `manifestSha256` chains
+/// from those bytes to each manifest, which is the chain `refresh` and
+/// [`install`] check on the far end. A bundle that had to be trusted differently
+/// from a fetch would not be an offline install, it would be an exception.
+///
+/// ## Every manifest is verified here, on the machine with a person at it
+///
+/// `install` refuses a manifest whose bytes do not hash to what the index says.
+/// Doing that check again while bundling costs one hash per version and moves
+/// the failure to the only place it can be acted on. The alternative is a stick
+/// that is carried across a building and refuses on arrival, with the reason on
+/// the wrong side of the air gap.
+///
+/// ## Withdrawn versions travel as rows, not as files
+///
+/// ADR 0014 keeps a revoked version *in* the index so a machine can find out
+/// what happened to something it installed, and [`install`] refuses to install
+/// one — before it fetches anything. So its files would be bytes nobody can
+/// ever ask for. They are skipped and named in [`Bundled::skipped`]; the row
+/// stays, because the row is what answers the question the far end will ask.
+pub fn bundle(source: &dyn Source, dest: &Path) -> Result<Bundled> {
+    // The destination has to be ours. A bundle written over somebody's existing
+    // directory is a directory whose contents nobody can account for — half a
+    // catalogue from one refresh and half from another, with an index that
+    // describes neither.
+    if dest.exists() {
+        let empty = std::fs::read_dir(dest)
+            .map_err(|e| Error::new(Code::IoError, format!("reading {}: {e}", dest.display())))?
+            .next()
+            .is_none();
+        if !empty {
+            return Err(Error::new(
+                Code::AlreadyExists,
+                format!("{} is not empty", dest.display()),
+            )
+            .with_hint(crate::hints::BUNDLE_NEEDS_AN_EMPTY_DIRECTORY));
+        }
+    }
+    std::fs::create_dir_all(dest)
+        .map_err(|e| Error::new(Code::IoError, format!("creating {}: {e}", dest.display())))?;
+
+    let outcome = (|| -> Result<Bundled> {
+        let index = source.fetch("registry.json")?;
+        let registry: Registry = serde_json::from_slice(&index).map_err(|e| {
+            Error::new(
+                Code::InvalidManifest,
+                format!("{}: registry.json is unreadable: {e}", source.describe()),
+            )
+        })?;
+        registry.check()?;
+
+        let mut out = Bundled {
+            packages: registry.packages.len(),
+            versions: 0,
+            files: 0,
+            bytes: 0,
+            skipped: Vec::new(),
+            signed: false,
+        };
+
+        // `out` travels as an argument rather than being captured, so this
+        // stays an `Fn` and the loops below can still touch the counters.
+        let keep = |relative: &str, bytes: &[u8], out: &mut Bundled| -> Result<()> {
+            write_into(dest, relative, bytes)?;
+            out.files += 1;
+            out.bytes += bytes.len() as u64;
+            Ok(())
+        };
+
+        keep("registry.json", &index, &mut out)?;
+
+        // Best effort, and the only best-effort fetch in this function. An
+        // unsigned index is the state every build is in until the key ceremony
+        // (ADR 0021), so treating a missing signature as a failure would make
+        // this command unusable today; treating it as invisible would let
+        // somebody carry an unsignable bundle to a machine that requires one.
+        // Reported instead.
+        if let Ok(signature) = source.fetch("registry.json.minisig") {
+            keep("registry.json.minisig", &signature, &mut out)?;
+            out.signed = true;
+        }
+
+        for package in &registry.packages {
+            // The identity file, a level above the versions and shared by all
+            // of them — the same one `install` fetches after the move.
+            let identity = format!(
+                "packages/{}/{}/package.json",
+                package.category, package.service
+            );
+            let bytes = source.fetch(&identity)?;
+            keep(&identity, &bytes, &mut out)?;
+
+            for row in &package.versions {
+                if row.revoked {
+                    out.skipped.push(format!(
+                        "{}@{} — withdrawn by its publisher{}",
+                        package.service,
+                        row.version,
+                        match &row.revoked_reason {
+                            Some(reason) => format!(": {reason}"),
+                            None => String::new(),
+                        }
+                    ));
+                    continue;
+                }
+
+                let manifest_bytes = source.fetch(&format!("{}/manifest.json", row.path))?;
+                let actual = pkg::sha256_hex(&manifest_bytes);
+                if actual != row.manifest_sha256 {
+                    return Err(Error::new(
+                        Code::InvalidManifest,
+                        format!(
+                            "{}@{}: the index says the manifest hashes to {} and it hashes to \
+                             {actual} — refused here rather than on the machine with no network",
+                            package.service, row.version, row.manifest_sha256
+                        ),
+                    )
+                    .with_hint(crate::hints::PACKAGE_CONTENT_CHANGED));
+                }
+
+                let text = String::from_utf8(manifest_bytes.clone()).map_err(|_| {
+                    Error::new(
+                        Code::InvalidManifest,
+                        format!(
+                            "{}@{}: the manifest is not UTF-8",
+                            package.service, row.version
+                        ),
+                    )
+                })?;
+                let manifest = pkg::parse(&text)?;
+
+                keep(
+                    &format!("{}/manifest.json", row.path),
+                    &manifest_bytes,
+                    &mut out,
+                )?;
+
+                // Exactly what `install` asks for, in the same order. A list
+                // assembled differently here is a bundle that installs on this
+                // build and not on the next one.
+                let mut wanted: Vec<String> = vec![manifest.compose.file.clone()];
+                wanted.extend(manifest.files.iter().map(|f| f.template.clone()));
+                wanted.extend(manifest.companions.iter().map(|c| c.compose.file.clone()));
+
+                for relative in wanted {
+                    let bytes = source.fetch(&format!("{}/{relative}", row.path))?;
+                    keep(&format!("{}/{relative}", row.path), &bytes, &mut out)?;
+                }
+
+                out.versions += 1;
+            }
+        }
+
+        Ok(out)
+    })();
+
+    match outcome {
+        Ok(out) => Ok(out),
+        Err(e) => {
+            // A half-written bundle is the one outcome worth cleaning up after:
+            // it looks exactly like a whole one, and the machine it is carried
+            // to has no way to ask.
+            let _ = std::fs::remove_dir_all(dest);
+            Err(e)
+        }
+    }
+}
+
 /// Remove one version's package directory.
 ///
 /// Only the package — not the instance that used it, not its volumes, not its
@@ -1470,7 +1695,7 @@ mod tests {
         let root = scratch("http-refused");
         let err = HttpSource::new(&root, "http://packages.example/stackvo").unwrap_err();
         assert_eq!(err.code, Code::InvalidInput);
-        assert_eq!(err.hint_key.as_deref(), Some("registryMustBeHttps"));
+        assert_eq!(err.hint_key, Some("registryMustBeHttps"));
 
         assert!(HttpSource::new(&root, "https://packages.example/stackvo").is_ok());
     }
@@ -1623,5 +1848,174 @@ mod tests {
             source.describe(),
             "https://raw.githubusercontent.com/stackvo/stackvo-service-packages/HEAD"
         );
+    }
+
+    // ------------------------------------------------------- the offline bundle
+
+    /// The claim, and the only one that matters: what `bundle` writes is a
+    /// source.
+    ///
+    /// Not "the files are there" — a directory holding the right filenames
+    /// proves nothing about whether the far end can use it. This refreshes and
+    /// installs **from the bundle**, into a second workspace that has never
+    /// seen the original, and reads the package back out of the tree. That is
+    /// the round trip an air-gapped machine makes, minus the walk down the
+    /// corridor.
+    #[test]
+    fn a_bundle_is_a_source_the_far_end_can_install_from() {
+        let here = scratch("bundle-source");
+        let source = LocalSource::new(publish(&here, 4));
+
+        let out = bundle(&source, &here.join("carry")).unwrap();
+        assert_eq!(out.packages, 1);
+        assert_eq!(out.versions, 1);
+        // index + package.json + manifest + fragment + config.
+        assert_eq!(out.files, 5, "{out:?}");
+        assert!(out.bytes > 0);
+        assert!(out.skipped.is_empty());
+
+        // A machine that has never seen the original.
+        let far = scratch("bundle-far");
+        let carried = LocalSource::new(here.join("carry"));
+
+        let registry = refresh(&far, &carried, Trust::Unsigned, None).unwrap();
+        assert_eq!(registry.sequence, 4);
+        assert_eq!(registry.recommended("mysql").unwrap().version, "8.0");
+
+        let done = install(&far, &carried, &registry, "mysql", "8.0", &unmanaged()).unwrap();
+        assert_eq!(done.files, 3, "manifest, fragment, config");
+
+        // Read back through the tree, which re-checks every hash the manifest
+        // states. A bundle that copied a file wrong fails here rather than at
+        // render time.
+        let tree = pkg::Tree::open(&dir(&far)).unwrap();
+        assert!(pkg::Catalogue::services(&tree).contains(&"mysql".to_string()));
+    }
+
+    /// The index travels as bytes, not as a re-serialised `Registry`.
+    ///
+    /// The signature is over the bytes (ADR 0015) and `manifestSha256` chains
+    /// from them, so a round trip through serde would break both while every
+    /// field still looked right — the class of failure that only shows up on
+    /// the machine that cannot be debugged.
+    #[test]
+    fn the_index_is_copied_byte_for_byte() {
+        let here = scratch("bundle-bytes");
+        let from = publish(&here, 9);
+
+        bundle(&LocalSource::new(&from), &here.join("carry")).unwrap();
+
+        assert_eq!(
+            std::fs::read(from.join("registry.json")).unwrap(),
+            std::fs::read(here.join("carry/registry.json")).unwrap(),
+        );
+    }
+
+    /// A signature travels when there is one, and its absence is reported
+    /// rather than hidden.
+    #[test]
+    fn the_signature_travels_and_says_when_it_did_not() {
+        let here = scratch("bundle-sig");
+        let from = publish(&here, 1);
+
+        let without = bundle(&LocalSource::new(&from), &here.join("plain")).unwrap();
+        assert!(!without.signed, "there is no signature to carry");
+
+        std::fs::write(
+            from.join("registry.json.minisig"),
+            b"untrusted comment: x\nsig\n",
+        )
+        .unwrap();
+        let with = bundle(&LocalSource::new(&from), &here.join("signed")).unwrap();
+        assert!(with.signed);
+        assert!(here.join("signed/registry.json.minisig").is_file());
+        assert_eq!(with.files, without.files + 1);
+    }
+
+    /// A manifest that does not match the index is caught **here**.
+    ///
+    /// The point of the check is where it happens. `install` would refuse this
+    /// too — on the machine with no network, with the reason on the wrong side
+    /// of the air gap.
+    #[test]
+    fn a_manifest_that_lost_its_hash_is_refused_before_it_is_carried() {
+        let here = scratch("bundle-tamper");
+        let from = publish(&here, 1);
+        let manifest = from.join("packages/databases/mysql/versions/8.0/manifest.json");
+
+        let text = std::fs::read_to_string(&manifest).unwrap();
+        std::fs::write(&manifest, text.replace("\"8.0\"", "\"8.0\" ")).unwrap();
+
+        let dest = here.join("carry");
+        let err = bundle(&LocalSource::new(&from), &dest).unwrap_err();
+        assert_eq!(err.code, Code::InvalidManifest);
+        assert!(err.message.contains("no network"), "{}", err.message);
+
+        // And nothing is left behind. A half-written bundle looks exactly like
+        // a whole one to the machine it is carried to.
+        assert!(!dest.exists(), "the failed bundle was not cleaned up");
+    }
+
+    /// A withdrawn version keeps its row and loses its files.
+    ///
+    /// ADR 0014 keeps the row so the far end can find out what happened to
+    /// something it installed; `install` refuses to install one before it
+    /// fetches anything, so its files would be bytes nobody can ask for.
+    #[test]
+    fn a_withdrawn_version_travels_as_a_row_and_not_as_files() {
+        let here = scratch("bundle-revoked");
+        let from = publish(&here, 1);
+
+        // Mark it in the index the source serves, which is where a publisher
+        // marks it.
+        let index = std::fs::read_to_string(from.join("registry.json")).unwrap();
+        std::fs::write(
+            from.join("registry.json"),
+            index.replace(
+                r#""support": "supported""#,
+                r#""support": "supported", "revoked": true, "revokedReason": "a bad tag""#,
+            ),
+        )
+        .unwrap();
+
+        let dest = here.join("carry");
+        let out = bundle(&LocalSource::new(&from), &dest).unwrap();
+
+        assert_eq!(out.versions, 0);
+        assert_eq!(out.skipped.len(), 1);
+        assert!(out.skipped[0].contains("mysql@8.0"), "{:?}", out.skipped);
+        assert!(out.skipped[0].contains("a bad tag"), "{:?}", out.skipped);
+
+        // The row is still there — that is what answers the question.
+        assert!(dest.join("registry.json").is_file());
+        assert!(dest.join("packages/databases/mysql/package.json").is_file());
+        assert!(!dest
+            .join("packages/databases/mysql/versions/8.0/manifest.json")
+            .exists());
+    }
+
+    /// A destination with something in it is refused.
+    ///
+    /// Half a catalogue from one refresh beside half from another, under one
+    /// index that describes neither, is a directory nobody can account for —
+    /// and it is exactly what a second `bundle` into the same folder produces.
+    #[test]
+    fn a_bundle_will_not_be_written_over_somebody_elses_files() {
+        let here = scratch("bundle-occupied");
+        let from = publish(&here, 1);
+        let dest = here.join("carry");
+
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("notes.txt"), "somebody's").unwrap();
+
+        let err = bundle(&LocalSource::new(&from), &dest).unwrap_err();
+        assert_eq!(err.code, Code::AlreadyExists);
+        assert!(dest.join("notes.txt").is_file(), "it deleted the files");
+
+        // An empty directory is fine: that is what a person makes before
+        // choosing it in a file picker.
+        let empty = here.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(bundle(&LocalSource::new(&from), &empty).is_ok());
     }
 }

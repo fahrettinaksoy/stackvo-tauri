@@ -19,17 +19,56 @@
  * window's. Duplicating them here would be the mistake this file exists to
  * undo, one level down.
  *
- * The counted labels carry their placeholders through untouched. `t()` is not
- * asked to interpolate because Rust is the one that knows the numbers; sending
- * `'Containers: {count}'` and letting `fill` substitute keeps the ordering
- * decision in the language file, where a language that puts the count last can
- * express it.
+ * The counted labels carry their placeholders through untouched. Rust is the
+ * one that knows the numbers; sending `'Containers: {count}'` and letting
+ * `fill` substitute keeps the ordering decision in the language file, where a
+ * language that puts the count last can express it.
  *
- * @param {(key: string) => string} t — vue-i18n's translate, already bound to
- *   the active locale.
+ * ## Why [`keeping`] exists, and what it cost to find out
+ *
+ * "`t()` is not asked to interpolate" was written here and was not true. A
+ * named placeholder with no matching parameter is not left alone by vue-i18n —
+ * it is substituted with the **empty string**. So every label meant to reach
+ * Rust with a hole in it arrived with the hole already filled in with nothing:
+ *
+ * ```text
+ * tray.stopProject   '{name}: durdur'          → ': durdur'
+ * tray.containers    'Konteynerler: {count}'   → 'Konteynerler: '
+ * tray.runningSummary '{running}/{total} …'    → '/ proje çalışıyor'
+ * ```
+ *
+ * Rust then did its half correctly and found nothing to replace, so the tray
+ * showed a Start/stop submenu of rows reading `: başlat` and `: durdur` — five
+ * projects, no names, in a menu whose whole job is to say which one. It shipped
+ * because every test in `tray-labels.spec.js` passed `t` as `(key) => key`,
+ * which returns the path and interpolates nothing. The catalogue was checked,
+ * the boundary was checked, and the one thing in between was a translator
+ * nobody had actually run.
+ *
+ * The fix is to hand each placeholder back its own name as the value, so the
+ * substitution is an identity. That keeps the locale files ordinary — the
+ * alternative was escaping every brace in both languages, which is a rule
+ * whoever adds a third language would have to be told.
+ *
+ * @param {(key: string, params?: Record<string, string>) => string} t —
+ *   vue-i18n's translate, already bound to the active locale.
  * @returns {Record<string, string>} every key `tray.rs`'s `LABEL_KEYS` names.
  */
+
+/**
+ * Translate, and leave the named placeholders standing for Rust to fill.
+ *
+ * `t('Start {name}', { name: '{name}' })` is an identity substitution: the
+ * message is resolved in the user's language, and the hole comes out the far
+ * side exactly as wide as it went in.
+ */
+const keeping =
+  (t) =>
+  (key, ...names) =>
+    t(key, Object.fromEntries(names.map((name) => [name, `{${name}}`])));
+
 export function trayLabels(t) {
+  const through = keeping(t);
   return {
     checking: t('tray.checking'),
     show: t('tray.show'),
@@ -43,13 +82,13 @@ export function trayLabels(t) {
     // the same reason `{count}` does: the ordering decision belongs in the
     // language file, where a language that puts the name first can express it.
     control: t('tray.control'),
-    startProject: t('tray.startProject'),
-    stopProject: t('tray.stopProject'),
+    startProject: through('tray.startProject', 'name'),
+    stopProject: through('tray.stopProject', 'name'),
 
     // Counted — the placeholders survive to Rust deliberately.
-    containers: t('tray.containers'),
-    more: t('tray.more'),
-    runningSummary: t('tray.runningSummary'),
+    containers: through('tray.containers', 'count'),
+    more: through('tray.more', 'count'),
+    runningSummary: through('tray.runningSummary', 'running', 'total'),
 
     // Shared with the sidebar.
     navProjects: t('nav.projects'),

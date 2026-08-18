@@ -80,7 +80,7 @@ hints! {
     PROJECT_NAME_CHARSET = "projectNameCharset",
         "Names may contain letters, digits, dot, underscore and dash, and must start with a letter or digit.";
     PATH_LEAVES_PROJECTS = "pathLeavesProjects",
-        "Refusing to operate on a path that leaves projects/.";
+        "Refusing to operate on a path that leaves the project directory.";
     ONLY_PROJECT_FOLDERS = "onlyProjectFolders",
         "Only project folders inside the selected workspace can be opened.";
 
@@ -306,6 +306,9 @@ hints! {
          whoever published it.";
     PACKAGE_NOT_IN_REGISTRY = "packageNotInRegistry",
         "Refresh the catalogue, or pick a version it lists.";
+    BUNDLE_NEEDS_AN_EMPTY_DIRECTORY = "bundleNeedsAnEmptyDirectory",
+        "Choose a directory that does not exist yet, or an empty one — a bundle written \
+         over other files is one nobody can account for.";
     REGISTRY_WENT_BACKWARDS = "registryWentBackwards",
         "The catalogue this source serves is older than the one already here. Check the \
          source before using it.";

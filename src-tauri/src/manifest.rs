@@ -239,6 +239,13 @@ pub struct Manifest {
     /// these are container commands and can be nothing else.
     #[serde(skip_serializing_if = "crate::quickcmd::Declared::is_empty")]
     pub commands: crate::quickcmd::Declared,
+    /// Containers this project brought with it (§5.1).
+    ///
+    /// Read here so a malformed declaration is a manifest finding beside every
+    /// other one, on the same terms as `hooks` and `commands`. Not a service:
+    /// [`crate::sidecar`] says at length why the two are different shapes and
+    /// why this one never reaches `instances.json`.
+    pub sidecars: crate::sidecar::Declared,
 
     /// Which fields this machine's `stackvo.local.json` supplied, dotted.
     ///
@@ -525,6 +532,20 @@ pub fn normalize(json: &serde_json::Value, raw: &str, dir_name: &str) -> Manifes
         });
     }
 
+    // ---- declared sidecars (§5.1) -----------------------------------------
+    //
+    // Warnings, exactly as the two blocks above are: a project with one
+    // unreadable sidecar still has a runtime, a domain and a Dockerfile, and
+    // refusing to open it would be the wrong trade.
+    let (sidecars, sidecar_problems) = crate::sidecar::parse(json);
+    for problem in sidecar_problems {
+        warnings.push(Finding {
+            code: "SIDECAR".into(),
+            path: problem.path,
+            message: problem.message,
+        });
+    }
+
     // ---- write rules the Bash parser depends on ---------------------------
     check_extension_layout(raw, &mut errors);
 
@@ -542,6 +563,7 @@ pub fn normalize(json: &serde_json::Value, raw: &str, dir_name: &str) -> Manifes
         lang,
         hooks,
         commands,
+        sidecars,
         valid: errors.is_empty(),
         errors,
         warnings,
@@ -1829,6 +1851,51 @@ pub fn to_json(manifest: &Manifest) -> String {
         lines.push(format!("  \"commands\": {{\n{}\n  }}", items.join(",\n")));
     }
 
+    // §5.1, and here for the third time for the same reason: a field the
+    // serialiser does not know about disappears the first time somebody
+    // changes an unrelated setting. A project losing the search engine it
+    // declared is the same class of loss as one losing its commands.
+    if !manifest.sidecars.is_empty() {
+        let items: Vec<String> = manifest
+            .sidecars
+            .iter()
+            .map(|(id, sidecar)| {
+                let mut fields = vec![format!("\"image\": {}", quote(&sidecar.image))];
+                if !sidecar.about.is_empty() {
+                    fields.push(format!("\"about\": {}", quote(&sidecar.about)));
+                }
+                if !sidecar.command.is_empty() {
+                    let argv: Vec<String> = sidecar.command.iter().map(|a| quote(a)).collect();
+                    fields.push(format!("\"command\": [{}]", argv.join(", ")));
+                }
+                if !sidecar.env.is_empty() {
+                    let pairs: Vec<String> = sidecar
+                        .env
+                        .iter()
+                        .map(|(k, v)| format!("{}: {}", quote(k), quote(v)))
+                        .collect();
+                    fields.push(format!("\"env\": {{ {} }}", pairs.join(", ")));
+                }
+                if !sidecar.volumes.is_empty() {
+                    let volumes: Vec<String> = sidecar
+                        .volumes
+                        .iter()
+                        .map(|v| {
+                            format!(
+                                "{{ \"name\": {}, \"path\": {} }}",
+                                quote(&v.name),
+                                quote(&v.path)
+                            )
+                        })
+                        .collect();
+                    fields.push(format!("\"volumes\": [{}]", volumes.join(", ")));
+                }
+                format!("    {}: {{ {} }}", quote(id), fields.join(", "))
+            })
+            .collect();
+        lines.push(format!("  \"sidecars\": {{\n{}\n  }}", items.join(",\n")));
+    }
+
     if let Some(lang) = &manifest.lang {
         let mut block = format!("  {}: {{\n", quote(&manifest.runtime));
         let mut fields = vec![format!("    \"version\": {}", quote(&lang.version))];
@@ -1981,6 +2048,7 @@ mod write_tests {
             warnings: vec![],
             hooks: Default::default(),
             commands: Default::default(),
+            sidecars: Default::default(),
             local: Vec::new(),
         }
     }
@@ -2266,6 +2334,7 @@ mod write_tests {
             warnings: vec![],
             hooks: Default::default(),
             commands: Default::default(),
+            sidecars: Default::default(),
             local: Vec::new(),
         };
         let text = to_json(&m);
@@ -2335,6 +2404,90 @@ mod write_tests {
 
         // And the layout rule still holds: `php.extensions` is last.
         assert!(again.valid, "{:?}", again.errors);
+    }
+
+    /// Declared sidecars survive a form save (§5.1).
+    ///
+    /// The third field to need this test and the third for the same reason:
+    /// `project_manifest_write` re-renders the whole file on every form
+    /// submission, so a block the serialiser does not know about is one that
+    /// vanishes the first time somebody changes the PHP version. A project
+    /// losing the search engine it declared is the same class of loss as one
+    /// losing its commands — and it fails *silently*, with a stack that comes
+    /// up one container short.
+    #[test]
+    fn declared_sidecars_survive_the_editor_round_trip() {
+        let raw = r#"{
+  "name": "shop",
+  "domain": "shop.loc",
+  "runtime": "php",
+  "sidecars": {
+    "search": {
+      "image": "typesense/typesense:27.1",
+      "about": "The catalogue index",
+      "command": ["--data-dir", "/data"],
+      "env": { "TYPESENSE_API_KEY": "dev" },
+      "volumes": [{ "name": "data", "path": "/data" }]
+    },
+    "cache": { "image": "redis:7.4" }
+  },
+  "php": {
+    "version": "8.4"
+  }
+}
+"#;
+        let first = read_text(raw, "shop");
+        assert!(first.warnings.is_empty(), "{:?}", first.warnings);
+        let again = read_text(&to_json(&first), "shop");
+
+        assert_eq!(again.sidecars.len(), 2, "{}", to_json(&first));
+
+        let search = again.sidecars.get("search").expect("kept");
+        assert_eq!(search.image, "typesense/typesense:27.1");
+        assert_eq!(search.about, "The catalogue index");
+        assert_eq!(search.command, ["--data-dir", "/data"]);
+        assert_eq!(
+            search.env.get("TYPESENSE_API_KEY").map(String::as_str),
+            Some("dev")
+        );
+        assert_eq!(search.volumes.len(), 1);
+        assert_eq!(search.volumes[0].name, "data");
+        assert_eq!(search.volumes[0].path, "/data");
+
+        // The optional halves come back absent rather than as empty strings
+        // somebody then has to read past.
+        let cache = again.sidecars.get("cache").expect("kept");
+        assert_eq!(cache.about, "");
+        assert!(cache.command.is_empty());
+        assert!(cache.env.is_empty());
+        assert!(cache.volumes.is_empty());
+
+        // The order the author wrote.
+        let ids: Vec<&String> = again.sidecars.iter().map(|(id, _)| id).collect();
+        assert_eq!(ids, ["search", "cache"]);
+
+        assert!(again.valid, "{:?}", again.errors);
+    }
+
+    /// A refused sidecar is a warning on the manifest, not a failure to open it.
+    #[test]
+    fn a_sidecar_that_reaches_the_host_is_a_finding_and_the_project_still_opens() {
+        let m = read_text(
+            r#"{"name":"shop","domain":"shop.loc","runtime":"php",
+                "sidecars":{"x":{"image":"a/b:1","ports":["8108:8108"]}},
+                "php":{"version":"8.4"}}"#,
+            "shop",
+        );
+
+        assert!(
+            m.valid,
+            "a bad sidecar must not stop the project: {:?}",
+            m.errors
+        );
+        assert!(m.sidecars.is_empty());
+        assert_eq!(m.warnings.len(), 1, "{:?}", m.warnings);
+        assert_eq!(m.warnings[0].code, "SIDECAR");
+        assert_eq!(m.warnings[0].path, "sidecars.x");
     }
 
     /// Declared commands survive a form save (B-4).
@@ -2416,13 +2569,12 @@ mod write_tests {
     /// A project directory with a committed manifest and, optionally, a local
     /// one — in a fresh temp dir per test, because these read real files.
     fn project(dir_name: &str, committed: &str, local: Option<&str>) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "stackvo-local-{dir_name}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        // Named and pid-scoped, not timestamped — `idle.rs`'s `workspace` says
+        // why a nanosecond clock is not an identity. The pid was missing here
+        // as well, so two `cargo test` runs at once shared these directories.
+        let dir =
+            std::env::temp_dir().join(format!("stackvo-local-{dir_name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(FILE), committed).unwrap();
         if let Some(text) = local {

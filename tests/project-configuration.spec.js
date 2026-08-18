@@ -54,7 +54,11 @@ const DOCKERFILE = 'FROM php:8.3-fpm-alpine\nRUN docker-php-ext-install pdo_mysq
 beforeEach(() => {
   calls.length = 0;
   for (const key of Object.keys(replies)) delete replies[key];
-  replies.projectDockerfilePreview = { dockerfile: DOCKERFILE, matches: true, differences: [] };
+  replies.projectDockerfilePreview = {
+    dockerfile: DOCKERFILE,
+    matchesGenerated: true,
+    differences: [],
+  };
 });
 
 describe('the manifest editor', () => {
@@ -126,6 +130,123 @@ describe('the manifest editor', () => {
   });
 });
 
+/**
+ * Both panes on this tab fold shut, and what stays outside the fold is the
+ * point of the design.
+ *
+ * The configuration tab was several screens tall for one reason: a manifest
+ * editor fixed at 24 rows and a Dockerfile preview that printed all ~120
+ * generated lines. Neither is what the tab is for, so both start closed — but
+ * closing a pane must not take its controls with it. Saving a draft and the
+ * chip that says whether the generated file on disk is still current both have
+ * to be readable while the body is shut.
+ */
+describe('the panes that fold shut', () => {
+  const toggleOf = (wrapper) => wrapper.get('.pane-toggle');
+
+  it('starts closed, on both of them', async () => {
+    const manifest = mount(
+      {
+        components: { ManifestPane },
+        template: '<v-app><ManifestPane name="shop" model-value="{}" /></v-app>',
+      },
+      { global: { plugins: [createPinia(), vuetify, i18n] } }
+    );
+    const dockerfile = mount(
+      {
+        components: { DockerfilePane },
+        template: '<v-app><DockerfilePane name="shop" /></v-app>',
+      },
+      { global: { plugins: [vuetify, i18n] } }
+    );
+    await flushPromises();
+
+    for (const wrapper of [manifest, dockerfile]) {
+      expect(toggleOf(wrapper).attributes('aria-expanded')).toBe('false');
+      expect(wrapper.get('.pane-body').attributes('style')).toContain('display: none');
+    }
+  });
+
+  it('opens on the heading, which is the control', async () => {
+    const wrapper = mount(
+      {
+        components: { ManifestPane },
+        template: '<v-app><ManifestPane name="shop" model-value="{}" /></v-app>',
+      },
+      { global: { plugins: [createPinia(), vuetify, i18n] } }
+    );
+
+    await toggleOf(wrapper).trigger('click');
+
+    expect(toggleOf(wrapper).attributes('aria-expanded')).toBe('true');
+    expect(wrapper.get('.pane-body').attributes('style') ?? '').not.toContain('display: none');
+  });
+
+  /** The body is named, so the heading can say what it opens. */
+  it('points the heading at the body it controls', async () => {
+    const wrapper = mount(
+      {
+        components: { ManifestPane },
+        template: '<v-app><ManifestPane name="shop" model-value="{}" /></v-app>',
+      },
+      { global: { plugins: [createPinia(), vuetify, i18n] } }
+    );
+
+    const controls = toggleOf(wrapper).attributes('aria-controls');
+    expect(controls).toBeTruthy();
+    expect(wrapper.get('.pane-body').attributes('id')).toBe(controls);
+  });
+
+  /**
+   * A save button that disappears with the editor is a save you have to go
+   * looking for — and the draft survives folding, because the text belongs to
+   * the view rather than to the pane.
+   */
+  it('keeps the manifest actions out of the fold', async () => {
+    const onSave = vi.fn();
+    const wrapper = mount(
+      {
+        components: { ManifestPane },
+        template:
+          '<v-app><ManifestPane name="shop" model-value="{}" :dirty="true" @save="onSave" /></v-app>',
+        setup: () => ({ onSave }),
+      },
+      { global: { plugins: [createPinia(), vuetify, i18n] } }
+    );
+
+    const save = wrapper.findAll('button').find((b) => b.text() === i18n.global.t('detail.save'));
+    expect(save.element.closest('.pane-body'), 'the save button folded away too').toBeNull();
+
+    await save.trigger('click');
+    expect(onSave).toHaveBeenCalled();
+  });
+
+  /** A closed pane that hides its own warning is a warning nobody sees. */
+  it('keeps the bash-agreement verdict out of the fold', async () => {
+    replies.projectDockerfilePreview = {
+      dockerfile: DOCKERFILE,
+      matchesGenerated: false,
+      differences: [],
+    };
+
+    const wrapper = mount(
+      {
+        components: { DockerfilePane },
+        template: '<v-app><DockerfilePane name="shop" /></v-app>',
+      },
+      { global: { plugins: [vuetify, i18n] } }
+    );
+    await vi.waitFor(() =>
+      expect(wrapper.text()).toContain(i18n.global.t('detail.generatedStale'))
+    );
+
+    const chip = wrapper
+      .findAll('.v-chip')
+      .find((c) => c.text() === i18n.global.t('detail.generatedStale'));
+    expect(chip.element.closest('.pane-body'), 'the verdict folded away with the file').toBeNull();
+  });
+});
+
 describe('the Dockerfile preview', () => {
   it('renders as soon as it is mounted', async () => {
     const wrapper = mount(
@@ -181,7 +302,7 @@ describe('the Dockerfile preview', () => {
       null
     );
 
-    settle({ dockerfile: 'FROM node:22-alpine\n', matches: false, differences: ['ext'] });
+    settle({ dockerfile: 'FROM node:22-alpine\n', matchesGenerated: false, differences: ['ext'] });
     await done;
     expect(d.lines.value[0]).toBe('FROM node:22-alpine');
   });

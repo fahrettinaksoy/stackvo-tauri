@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { defineComponent, h } from 'vue';
 import { mount } from '@vue/test-utils';
+import { readFileSync } from 'node:fs';
 
 /**
  * The PTY session, which nothing had ever opened.
@@ -90,7 +91,7 @@ describe('a terminal session', () => {
     resolveOpen('pty-1');
     await opening;
 
-    emit('terminal:output', { session_id: 'pty-1', data: '$ ' });
+    emit('terminal:output', { sessionId: 'pty-1', data: '$ ' });
     expect(seen).toEqual(['$ ']);
   });
 
@@ -103,8 +104,8 @@ describe('a terminal session', () => {
     const { session } = harness((data) => seen.push(data));
     await session.open({ kind: 'host', cwd: null }, 80, 24);
 
-    emit('terminal:output', { session_id: 'pty-OTHER', data: 'not mine' });
-    emit('terminal:output', { session_id: 'pty-1', data: 'mine' });
+    emit('terminal:output', { sessionId: 'pty-OTHER', data: 'not mine' });
+    emit('terminal:output', { sessionId: 'pty-1', data: 'mine' });
 
     expect(seen).toEqual(['mine']);
   });
@@ -114,7 +115,7 @@ describe('a terminal session', () => {
     const { session } = harness(() => {}, closed);
     await session.open({ kind: 'container', name: 'stackvo-shop' }, 80, 24);
 
-    emit('terminal:closed', { session_id: 'pty-1', exit_code: 130 });
+    emit('terminal:closed', { sessionId: 'pty-1', exitCode: 130 });
 
     expect(closed).toHaveBeenCalledWith(130);
     expect(session.exitCode.value).toBe(130);
@@ -173,7 +174,8 @@ describe('a terminal session', () => {
   });
 
   it('surfaces a refused open instead of looking idle', async () => {
-    openResult = () => Promise.reject(Object.assign(new Error('no such container'), { code: 'NOT_FOUND' }));
+    openResult = () =>
+      Promise.reject(Object.assign(new Error('no such container'), { code: 'NOT_FOUND' }));
 
     const { session } = harness();
     await session.open({ kind: 'container', name: 'stackvo-gone' }, 80, 24);
@@ -181,5 +183,32 @@ describe('a terminal session', () => {
     expect(session.status.value).toBe('error');
     expect(session.error.value).toBeTruthy();
     expect(session.sessionId.value).toBe(null);
+  });
+
+  /**
+   * The payloads above are the ones `pty.rs` actually emits.
+   *
+   * They were not. Every test in this file invented its own event bodies in
+   * `session_id` / `exit_code`, which is what the composable read — while the
+   * backend has always built them with `json!({ "sessionId": …, "exitCode": …
+   * })`. So `payload.session_id` was `undefined` on every real event, the
+   * session filter rejected all of them, and the terminal pane opened a live
+   * shell into a black box that never printed a character. Seven green tests,
+   * one dead feature: they agreed with each other about a shape neither shared
+   * with the program.
+   *
+   * Read from the Rust source, because that is the only place the two halves
+   * meet — there is no schema between them, and a mock cannot disagree with
+   * itself.
+   */
+  it('filters on the field name the backend actually emits', () => {
+    const pty = readFileSync('src-tauri/src/pty.rs', 'utf8');
+
+    for (const key of ['sessionId', 'data', 'exitCode']) {
+      expect(pty, `pty.rs emits no "${key}" — this composable filters on it`).toContain(`"${key}"`);
+    }
+
+    // And the snake_case spelling this file used for ten months is not in it.
+    expect(pty).not.toContain('"session_id"');
   });
 });

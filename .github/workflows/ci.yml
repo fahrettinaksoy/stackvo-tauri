@@ -57,6 +57,15 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: npm run test:js
 
+      # §3 #10. `src/lib/ipc.d.ts` is generated from `contracts/ipc.json`, and a
+      # generated file that is edited by hand or left behind by a contract
+      # change is worse than none: an editor keeps offering the old argument
+      # names with no sign that it is wrong. Ubuntu only — the output is the
+      # same bytes on every platform.
+      - name: The generated types are current
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run types:check
+
       - name: Build the front end
         run: npm run build
 
@@ -116,6 +125,74 @@ jobs:
 
       - name: Formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+  # The other half of §3 #12: the whole binary, under a driver.
+  #
+  # A separate job rather than a step in `build`, and the reason is the one the
+  # matrix cannot express: this runs on exactly one of the three platforms, and
+  # not because it is redundant elsewhere. `tauri-driver` supports Windows and
+  # Linux; macOS has no WKWebView driver at all, which is why the suite it
+  # complements — Playwright — exists in the first place. A step guarded by
+  # `if: matrix.os == 'ubuntu-latest'` inside a three-way matrix reads as an
+  # optimisation. This is not one.
+  #
+  # It is also the job whose author cannot watch it pass. This repository is
+  # developed on macOS, so the first machine that ever runs the file is this
+  # one. Two things are arranged against that: the client's pure half is unit
+  # tested in `tests/driver-client.spec.js` on every platform, and there is no
+  # skip path here — a missing `tauri-driver` fails rather than passes quietly,
+  # because "green" and "never ran" must not look the same.
+  driver:
+    name: driver
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # `webkit2gtk-driver` is the WebDriver server `tauri-driver` proxies to —
+      # it is a separate package from the webkit runtime the app links against,
+      # and its absence is the single most likely reason a first run fails.
+      # `xvfb` because the app opens a window and a runner has no display.
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libssl-dev libdbus-1-dev \
+            webkit2gtk-driver xvfb
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: driver
+
+      # `--locked` so the driver this job installs is the one its lockfile
+      # pins, rather than whatever resolved on the morning it ran.
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --locked
+
+      - run: npm ci
+
+      # `frontendDist` is `../dist`; without this the binary starts and serves
+      # nothing, and the failure reads as an empty webview rather than as a
+      # missing build.
+      - name: Build the front end
+        run: npm run build
+
+      # Debug, not release. This suite asks whether the app boots and answers
+      # IPC — a release build spends several CI minutes to answer the same
+      # question. `STACKVO_DRIVER_PROFILE` in `launch.js` is the seam for the
+      # run that wants to ask a packaged binary instead.
+      - name: Build the application
+        run: cargo build --manifest-path src-tauri/Cargo.toml --bin stackvo-desktop
+
+      - name: Drive the application
+        run: xvfb-run -a --server-args="-screen 0 1280x820x24" npm run test:driver
 
   # What is not tested.
   #

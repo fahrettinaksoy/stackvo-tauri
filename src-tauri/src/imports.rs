@@ -994,15 +994,17 @@ volumes:
 
     // ---- Valet (L) --------------------------------------------------------
 
-    fn valet_root(config: &str, links: &[(&str, &str)]) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "stackvo-valet-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+    /// Named by the caller rather than timestamped — `idle.rs`'s `workspace`
+    /// carries the reason. `SystemTime::now().as_nanos()` looks like an
+    /// identity and is not one: it is quantised to a microsecond, and parallel
+    /// test threads inside the same one get the same directory.
+    ///
+    /// The name is per *call*, not per test, because
+    /// `the_suffix_is_read_from_either_spelling_and_the_current_one_wins` asks
+    /// for four of these and each has to be its own Valet installation.
+    fn valet_root(name: &str, config: &str, links: &[(&str, &str)]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("stackvo-valet-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("Sites")).unwrap();
         std::fs::write(dir.join("config.json"), config).unwrap();
         for (name, target) in links {
@@ -1018,18 +1020,18 @@ volumes:
     /// guessed would quietly serve `.test` to somebody using `.localhost`.
     #[test]
     fn the_suffix_is_read_from_either_spelling_and_the_current_one_wins() {
-        let a = valet_root(r#"{"tld":"localhost"}"#, &[]);
+        let a = valet_root("suffix-tld", r#"{"tld":"localhost"}"#, &[]);
         assert_eq!(valet_config(&a).1, "localhost");
 
-        let b = valet_root(r#"{"domain":"dev"}"#, &[]);
+        let b = valet_root("suffix-domain", r#"{"domain":"dev"}"#, &[]);
         assert_eq!(valet_config(&b).1, "dev");
 
         // An upgrade leaves the old key behind; the current one must win.
-        let c = valet_root(r#"{"domain":"dev","tld":"test"}"#, &[]);
+        let c = valet_root("suffix-both", r#"{"domain":"dev","tld":"test"}"#, &[]);
         assert_eq!(valet_config(&c).1, "test");
 
         // No config at all is Valet's own default.
-        let d = valet_root("{}", &[]);
+        let d = valet_root("suffix-none", "{}", &[]);
         assert_eq!(valet_config(&d).1, "test");
 
         for dir in [a, b, c, d] {
@@ -1039,7 +1041,11 @@ volumes:
 
     #[test]
     fn a_leading_dot_in_the_suffix_is_not_repeated_in_the_hostname() {
-        let dir = valet_root(r#"{"tld":".test"}"#, &[("shop", "code/shop")]);
+        let dir = valet_root(
+            "leading-dot",
+            r#"{"tld":".test"}"#,
+            &[("shop", "code/shop")],
+        );
         let install = scan_valet(&dir, None).unwrap();
         assert_eq!(install.sites[0].domain.as_deref(), Some("shop.test"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1049,7 +1055,11 @@ volumes:
     /// half of somebody's setup, and which half depends on how they work.
     #[test]
     fn both_linked_and_parked_sites_are_found() {
-        let dir = valet_root(r#"{"tld":"test"}"#, &[("linked", "elsewhere/linked")]);
+        let dir = valet_root(
+            "linked-and-parked",
+            r#"{"tld":"test"}"#,
+            &[("linked", "elsewhere/linked")],
+        );
         let parked = dir.join("parked");
         std::fs::create_dir_all(parked.join("shop")).unwrap();
         std::fs::create_dir_all(parked.join("blog")).unwrap();
@@ -1069,7 +1079,7 @@ volumes:
     /// Valet does the same: an explicit link is the thing somebody typed.
     #[test]
     fn a_link_wins_over_a_parked_directory_of_the_same_name() {
-        let dir = valet_root(r#"{"tld":"test"}"#, &[("shop", "linked/shop")]);
+        let dir = valet_root("link-wins", r#"{"tld":"test"}"#, &[("shop", "linked/shop")]);
         let parked = dir.join("parked");
         std::fs::create_dir_all(parked.join("shop")).unwrap();
         std::fs::write(
@@ -1100,7 +1110,11 @@ volumes:
     /// Valet knows the hostname exactly, which is more than XAMPP can say.
     #[test]
     fn a_valet_site_arrives_with_its_domain_already_known() {
-        let dir = valet_root(r#"{"tld":"test"}"#, &[("shop", "code/shop")]);
+        let dir = valet_root(
+            "domain-known",
+            r#"{"tld":"test"}"#,
+            &[("shop", "code/shop")],
+        );
         let install = scan_valet(&dir, None).unwrap();
         assert_eq!(install.source, Source::Valet);
         assert_eq!(install.sites.len(), 1);
