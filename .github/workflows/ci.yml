@@ -398,36 +398,54 @@ jobs:
       - name: Third-party notices
         run: npm run notice:check
 
-  # The contract checks need a StackVo checkout to compare against, so they run
-  # separately and only where one can be fetched.
+  # The contract checks, against input this repository owns.
+  #
+  # ## Why the upstream checkout is gone
+  #
+  # This job used to clone `stackvo/stackvo` and validate against it. That
+  # repository is now **empty** — `.gitignore`, `LICENSE`, `README.md` and
+  # nothing else — so the first step, `cp stackvo-checkout/.env.example …`,
+  # failed and took the job with it. §3 #33 called this "an external
+  # dependency"; it turned out to be a dependency on content that is not there.
+  #
+  # `tools/fixtures/validator-workspace/` is the replacement and it is strictly
+  # better: four projects, three of them wrong on purpose, so suite A runs and
+  # its findings are asserted exactly. Suite A had never checked a manifest on
+  # any machine before that fixture existed.
+  #
+  # The repository's own root is still validated, with `--allow-no-manifests`,
+  # because that run answers a different question: the .env schema, the
+  # extension catalogue and the IPC surface, against the tree as it ships.
+  #
+  # ## What was dropped with the checkout, and why that is not a loss
+  #
+  # `tools/measure-env-usage.mjs` went too. It reads `core/` — the Bash
+  # StackVo's own sources — to find which `.env` keys anything actually uses,
+  # and there is no `core/` in an empty repository. The step was measuring a
+  # directory that had stopped existing; keeping it pointed at nothing would
+  # have been the same silence this job just came out of. The tool stays, and
+  # runs by hand against a real checkout: `node tools/measure-env-usage.mjs
+  # --root <path>`.
   contracts:
     name: contracts
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/checkout@v4
-        with:
-          repository: stackvo/stackvo
-          path: stackvo-checkout
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      # The validator reads .env; a fresh checkout only has the example.
-      - name: Seed .env
-        run: cp stackvo-checkout/.env.example stackvo-checkout/.env
+      - run: npm ci
 
-      # `--allow-no-manifests` records a real hole rather than papering over
-      # one: `stackvo/stackvo` ships no `projects/` directory, so suite A — the
-      # manifests against project.schema.json — has never actually run here. It
-      # was a warning before, which is how that went unnoticed; the flag makes
-      # the omission a decision written down where it is read. Remove it the day
-      # upstream carries an example project, and suite A starts earning its
-      # place in this job.
-      - name: Validate contracts
-        run: node tools/validate-contracts.mjs --root stackvo-checkout --allow-no-manifests
+      # Suite A, actually running. `tests/validate-contracts.spec.js` asserts
+      # the exact codes; this is the same run as a gate, so a fixture that
+      # stopped being read fails here too.
+      - name: Validate contracts against the fixture workspace
+        run: npm run test:js -- tests/validate-contracts.spec.js
 
-      - name: Measure .env usage
-        run: node tools/measure-env-usage.mjs --root stackvo-checkout
+      # And against this tree. `--allow-no-manifests` because the repository
+      # itself carries no `projects/` directory and never did — the fixture is
+      # where suite A earns its place.
+      - name: Validate contracts against this repository
+        run: node tools/validate-contracts.mjs --allow-no-manifests
