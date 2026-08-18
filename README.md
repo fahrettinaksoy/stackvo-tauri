@@ -271,7 +271,7 @@ guarding nothing. Generating the list outright was the obvious move and is the
 wrong one: dispatch cannot be generated, so a generated list advertises tools
 that fail when called.
 
-**Not exposed:** the rest of the mutating surface. 60 of the 245 commands take
+**Not exposed:** the rest of the mutating surface. 60 of the 249 commands take
 an `AppHandle` because they report progress through Tauri's event system, and a
 stdio subprocess has no app to emit into. Decoupling that is a refactor of its
 own; pretending otherwise would mean advertising `project_build` and having it

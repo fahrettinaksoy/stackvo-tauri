@@ -33,7 +33,7 @@ Laragon, Laradock, DDEV, XAMPP).
 | # | Madde | Durum | Nasıl bakıldı |
 | --- | --- | :-: | --- |
 | C | Üçüncü taraf paket **dağıtımı** | ⛔ | **Kod tarafı kapandı** (ADR 0021): imza doğrulayıcı `signing.rs`'te ve `refresh` onu indeksi ayrıştırmadan **önce** koşuyor, anahtar rotasyonu (`known-keys.json`) ve emeklilik var, geri çekilmiş sürüm kuruluma **reddediliyor**, kurulu olanı `doctor` bildiriyor. Kalan üç şeyin üçü de kod değil: resmî anahtarın töreni (§5.3'ün arkasında), moderasyon süreci ve yayıncı kimliği kaydı. **Kurumsal ayna bugün çalışıyor** — kendi anahtarını `policy.market.additionalKeys` ile pinler |
-| D-1 | Yerel AI servisleri (Ollama, Qdrant, pgvector) | 🔒 | §5.2'de **ertelendi** olarak kayıtlı, kapsam dışı değil |
+| D-1 | Yerel AI servisleri (Ollama, Qdrant, pgvector) | ✅ | **Cevaplandı (ADR 0027): yalnız pgvector, ve bir servis değil — `postgres`'in bir sürümü.** Bu depoda değişen kod **hiç**, ve bulgu bu: ADR 0011 uygulamanın hiçbir servis tanımı taşımamasını kararlaştırdığı için yeni servis bir *paket*, ve uygulamanın zaten ifade edebildiği bir paket burada sıfıra mal oluyor. Ayıran şey bir capability: `vector`. `vector_capability.rs` cümleyi tekrar etmiyor, kanıtlıyor. Ollama/Qdrant isteyen `sidecars` yazar (ADR 0023) |
 
 ### Girilmeyecek kavgalar
 
@@ -69,16 +69,17 @@ altıncı ayda hafıza soluklaştığında çalışmayacak olan şey bu.
 
 | # | Madde | Durum | Nasıl bakıldı |
 | --- | --- | :-: | --- |
-| 2 | Güncelleme endpoint'i | ⛔ | `tauri.conf.json` `latest.json`'a işaret ediyor → HTTP 404; repo yok. §5.3'teki sahiplik kararı |
-| 10 | Ön yüzün tipleri | 🟡 | **Yeniden ölçüldü, ve `tauri-specta` bu depo için yanlış alet:** burada **hiç TypeScript yok** — `tsconfig` yok, tek bir `.ts` yok, 135 kaynağın hiçbirinde `lang="ts"` yok. `tauri-specta`'nın çıktısı bir TS modülü; derleyicisi olmayan bir projede bu, hiçbir şeyin okumadığı bir dosya — bedeli üç yeni crate ve 245 komut fonksiyonuna bir öznitelik. Eksik olan üreteç değil **tiplerdi**. `tools/generate-types.mjs` onları `contracts/ipc.json`'dan üretiyor (zaten tek doğruluk kaynağı ve `contract_agreement.rs` ile kilitli) → `src/lib/ipc.d.ts`: 101 arayüz, 242 sarmalayıcı, editör hiçbir derleme adımı olmadan okuyor. `npm run types:check` CI'da tazeliğini tutuyor. **Bunu inşa etmek bir boşluk buldu:** sözleşmenin `types` tablosunda **19 tip atıfta bulunuluyor ama hiç tanımlanmamış** (`CpuStats`, `ContainerDetails`, `StreamId`, `Timeline`, `Plan`, `Manifest`, …) — `npm run types:report` adlarını sayıyor. Kimse fark etmemişti çünkü tip tablosunu tüketen bir şey yoktu. Kalan: (a) o 19 tipin sözleşmede tanımlanması, (b) `tsc --noEmit --checkJs` ile bunun bir **kapıya** dönüşmesi — 135 dosyalık kendi temizliği olan ayrı bir iş |
-| 12 | E2E | 🟡 | **İki yarı da yazıldı.** Webview yarısı: Playwright gerçek motorda — 6 kabuk, dokuz rotanın hepsinde axe ve 2 RTL testi (`docs/accessibility.md`). `tauri-driver` yarısı artık **var**: `tests/driver/` gerçek ikiliyi sürüyor ve yalnızca Playwright'ın kanıtlayamadığı dördünü soruyor — derlenmiş paketin gerçek webview'de CSP altında yüklenmesi, `ipc.js`'in altındaki sınırın **stub olmaması**, sözleşmedeki bir komutun gerçekten kayıtlı olması, ve bir hatanın ADR 0004 şeklinde (kapalı kod kümesinden) dönmesi. WebDriver istemcisi **sıfır yeni paket** (ADR 0019'un yöntemi: `webdriverio` 89, `selenium-webdriver` 24 paket — ölçüldü, `fetch` seçildi). CI'da `driver` job'ı var; macOS'ta beş testin beşi de **sebebi basılarak** atlanıyor. Kalan: **hiç koşmadı** — yazarı bu makinede geçtiğini göremez, o yüzden istemcinin saf yarısı `tests/driver-client.spec.js`'te her platformda tutuluyor (22 test) |
-| 21 | Sürüm kanalları, kademeli dağıtım, geri alma | ⛔ | `tauri.conf.json`'da `channel`/`rollout`/`paused` yok; #2'nin arkasında |
-| 22 | Platform kapsamı (Linux aarch64, Win ARM64) | 🟡 | `release.yml` **altı** hedef sayıyor: iki ARM satırı yerel ARM koşucularıyla (`ubuntu-24.04-arm`, `windows-11-arm`). Eskiden "bir etiket koşana kadar doğrulanmadı" yazıyordu — **ve etiket de koşamıyordu**: `preflight` imzalama secret'ı olmadan düşüyor, o da §5.3'ün kararı. Yani ARM satırları, kendileriyle hiç ilgisi olmayan bir anahtar sorusunun arkasında bekliyordu. **`rehearsal` girdisi bu bağı kesti**: altı hedefi de derliyor, testi her birinde koşuyor, paketleri run sayfasına bırakıyor ve **hiçbir şey yayımlamıyor** — etiket yok, release yok, attestation yok. Elle başlatılan koşunun varsayılanı da artık bu (eskiden dal adına draft release açıyordu). Kalan: **birinin çalıştırması** — koşucu etiketi ve paketleyici ancak orada cevap veriyor |
+| 2 | Güncelleme endpoint'i | 🟡 | **Karar verildi (ADR 0025) ve endpoint düzeltildi.** Eskisi iki bağımsız yönden yanlıştı ve ikisi de sessizdi: sahibi (`stackvo/…`, oysa remote `fahrettinaksoy/…`) ve mekanizması (`raw.githubusercontent.com/.../main/latest.json` — o dosyayı `main`'e yazan hiçbir şey yok; `tauri-action` onu release'in **içine** yazıyor). `dialog: false` olduğu için 404 hiç görünmüyordu. Artık `releases/latest/download/latest.json`, ve `updater_endpoint.rs` adresi `.git/config`'ten türetip karşılaştırıyor, `includeUpdaterJson` ile imzalama secret'ının workflow'da kaldığını da tutuyor. Kalan **kod değil**: anahtarın repository secret'ı olarak eklenmesi ve bir sürümün yayınlanması |
+| 10 | Ön yüzün tipleri | ✅ | **Her iki yarı da bitti, ve ikincisi birincinin neden yetmediğini gösterdi.** `tauri-specta` bu depo için yanlış alet — burada **hiç TypeScript yok** ve çıktısı hiçbir şeyin okumadığı bir `.ts` modülü olurdu; bedeli üç crate ve 245 fonksiyona bir öznitelik. Tipler `contracts/ipc.json`'dan üretiliyor → `src/lib/ipc.d.ts`: **127 adlandırılmış tip, 242 sarmalayıcı, okunamayan 0 alan** (eskiden 24). **(a)** Sözleşmenin adlandırıp tanımlamadığı 19 tipin hepsi beyan edildi — `CpuStats`, `ContainerDetails`, `Timeline`, `Manifest`, … — artı onları taşıyan alt şekiller; `Plan` hiç yeni bir tip değildi, `PresetPlan`'ın kendisiydi ve `project_requirements_apply` artık onu adlandırıyor. **(b)** `npm run types:tsc` (`tsconfig.json`, `checkJs`, `noEmit` — derleme adımı yok) CI'da koşuyor. Kapıyı kurmak **tam da eksik olan şeyi buldu**: üretilen dosya *hiç derlenmemişti*, ve derlenmiyordu — birinin düzyazısındaki `docs/*/…` yolu JSDoc yorumunu erkenden kapatıyor, dosya o satırda ayrıştırılamıyor ve sonrası kod olarak okunuyordu; `OperationId` 24 kez adlandırılıp bir kez bile tanımlanmıyordu; `StackvoError`'ın kurucusu `Error`'dan miras alınıyordu, oysa uygulama onu bir **nesneyle** kuruyor. Üçü de üretecin kendi hatasıydı ve üçü de tek bir `tsc` koşusunun sorusuydu. Kalan: yok |
+| 12 | E2E | 🟢 | **Koştu, ve koşmak dört ayrı kusuru buldu — üçü süitin kendisinde.** Playwright yarısı zaten vardı. `tauri-driver` yarısı `tools/linux/` ile bir konteynerde koşuyor. **(1)** İlk koşuda dört test düştü ve süit yeşil raporladı: `whyNotHere` Linux'ta `null` döndürüyordu ve `node:test` `null` bir `skip`'i direktif okuyor — düşen test `# skipped` altına yazılıp `# fail`'in dışında kalıyor ve süreç 0 ile çıkıyor. **(2)** Dört düşüşün mesajı da aynıydı ve hiçbir şey açıklamıyordu; düşen bir iddia artık sayfanın ve sürücünün ne dediğini basıyor, ve ilk baskıda cevap çıktı: `url: about:blank`, `"Could not connect to localhost"`. **(3)** Sebep `cargo build`'di — `tauri-build` düz bir cargo derlemesi için `cfg(dev)` yayıyor, yani ikili `devUrl`'i gömüyor ve webview `localhost:1420`'yi açıyor. Süitin manşet testi ("derlenmiş paket gerçek webview'de render oluyor") **süitin kendi seçtiği profille geçemezdi**. Eski yorum debug'ı maliyetle savunuyordu; maliyet gerçekti, karşılaştırma değildi — ikisi aynı soruyu farklı hızda cevaplamıyordu, biri cevaplamıyordu. Artık `npx tauri build --debug --no-bundle`. **(4)** `tauri-driver` bir vekil: dinlediği port o ayağa kalkar kalkmaz cevap veriyor, arkasındaki `WebKitWebDriver` ayrı başlıyor — erken sorulan oturum "connection refused" alıyordu; artık sınırlı bir yeniden deneme var. Beşincisi zarfı okumayan bir testti (`box.internals`, oysa `box.value.internals`) — geçmesi mümkün değildi ve dördünün mesajı aynı olduğu için tipo onların kılığındaydı. Sonuç: **5/5 geçiyor, 0 atlandı**. Kalanı CI'da ilk koşu |
+| 21 | Sürüm kanalları, kademeli dağıtım, geri alma | ✅ | **Yazıldı ve bağlandı.** `tauri-plugin-updater` bir manifesto çekip sürüm karşılaştırıyor, imza doğrulayıp kuruyor — hepsi bu; kanal kavramı yok, yüzde yok, ve en önemlisi **durdurma** yok: bozuk çıkan bir sürüm geri çağrılamıyor. `channel.rs` o kararı veriyor, sıra tasarımın kendisi (`paused` her şeyi yener; `supersededBy` sürüm karşılaştırmasından önce gelir çünkü varlık sebebi onu yenmektir; dalga en sonda). Kova `sha256(installId:version) % 100` — rastgele olsaydı her kontrolde yeniden atılır, güncelleme belirip kaybolurdu. **Karar artık kullanıcıdan önce veriliyor**: `checkForUpdate` eklentinin *zaten* çektiği manifestoyu (`rawJson`) `updater_offer`'a veriyor, ikinci istek yok, iki cevabın ayrışması yok — ve reddedilen bir sürüm ekrana hiç çıkmıyor, çünkü sunup sonra kurmayı reddetmek hiç sunmamaktan kötü. Karar okunamazsa sürüm **sunuluyor**, reddedilmiyor: alanlar eklemeli ve bugünkü `latest.json` hiçbirini taşımıyor. 16 Rust + 12 JS testi. `getrandom` eklendi, kilit **tek satır** büyüdü |
+| 22 | Platform kapsamı (Linux aarch64, Win ARM64) | 🟡 | `release.yml` **altı** hedef sayıyor, iki ARM satırı yerel ARM koşucularıyla. `rehearsal` girdisi bu satırları imzalama kararından ayırdı: altısını da derliyor, testi her birinde koşuyor, paketleri run sayfasına bırakıyor ve **hiçbir şey yayımlamıyor**. GitHub Actions burada koşturulamaz ve `release_rehearsal.rs` bunun tersini iddia etmiyor — koşucusuz da ayakta kalan iddiayı tutuyor: **yayınlayabilecek her adım kapılı.** `tagName` ifadesinin yönü de dahil; `inputs.rehearsal && '' || github.ref_name` daha derli toplu görünür ve `''` yanlış-değerli olduğu için `||` ateşler, prova dal adıyla yayın yapar — girdinin önlemek için eklendiği hatanın ta kendisi. Değiştirip düştüğünü doğruladım. Kalan: **birinin çalıştırması** |
 | 31 | Air-gapped kurulum | 🟡 | **Paket yolu yazıldı.** Okuyan yarı `LocalSource`'tan beri vardı; **yazan** yarı yoktu — bir paketi üretmenin tek yolu paket deposunu klonlayıp düzeninin istemcinin okuduğu düzen olmasını ummaktı, ki bu bir kurulum yolu değil işe yarayan bir tahmin. `market::bundle` indeksi ve her paketi tek dizine yazıyor; çıktı **bir kaynak**: uzak uç `market_refresh` + `market_install`'ı ondan koşuyor ve bir checkout'tan ayırt edemiyor (test bunu iki ayrı çalışma alanıyla uçtan uca koşturuyor). `registry.json` **bayt bayt** kopyalanıyor — imza baytların üstünde (ADR 0015) ve `manifestSha256` onlardan zincirleniyor. Her manifest **burada**, ağı olan makinede doğrulanıyor; geri çekilmiş sürüm satırını koruyup dosyalarını bırakıyor (ADR 0014). Yüzey: `stackvo market-bundle <dizin>` — bir düğme değil, çünkü bunu yapan kişi ssh'tan koşan bir operatör. §9'un `stackvo-packages.tar`'ı bu dizinin **paketlenmesi**, ikinci bir mekanizma değil. **GUI karşılığı da var**: Ayarlar → Katalog panelinde bir klasör seçici; paket yazılınca boyutu MiB olarak, imzasızsa uyarıyı ve taşınmayan sürümleri yayıncının kendi sözleriyle gösteriyor — ikisi de koridoru yürümeden önce okunması gereken şeyler. Kalan: tar'ı üreten adım elle (`tar -cf … -C <dizin> .`) |
-| 33 | Sözleşme kapısının harici bağımlılığı | 🟡 | Checkout var ama **suite A hiç koşmuyor** — bu makinede de `NO_MANIFESTS` (`tools/validate-contracts.mjs`) |
-| 34 | Web sürümü / HTTP ikilisi | ⬜🔒 | **Bu, öteki dördüyle aynı sınıfta değil ve öyleymiş gibi geliştirilmedi.** Zemin sağlam (§7: veri yolu tek `call()`'dan geçiyor, `invoke(` `ipc.js` dışında sıfır yerde), ama bir HTTP yüzeyi bu komut kümesini ağa açmak demek — `quickcmd_run`, `project_hooks_approve`, `env_reveal` (parola gösteriyor) ve `elevate` destekli yollar dahil. Kim bağlanabilir (yalnız loopback mu, token mı, OS kullanıcısı mı), yazan komutlar hiç açılacak mı (`stackvo-mcp`'nin `--allow-writes`'ı bunun emsali) — bunlar kod değil **karar**, ve cevapsız yazılan bir sunucu uzaktan kod çalıştırma yüzeyidir. §5'e taşınmalı. **Yapılan:** §7'nin "web'de karşılığı olmayan dört komut" cümlesi elle sayılmıştı ve **beşincisi eklendiğinde sessizce yanlışlaşıyordu**. Artık türetiliyor: `no_fifth_command_has_quietly_become_desktop_only` tepsiye, pencereye ya da güncelleyiciye — kendi gövdesinden veya aynı dosyadaki bir yardımcı üzerinden — ulaşan komutları tarayıp kümeyi kilitliyor (`window_close_action` hiçbir şey yapmayıp `apply_close`'a devrediyor, tek adım izlemeyen bir tarama onu kaçırırdı). Dördüncüsü `updates_check` bu crate'te değil, bir `frontend-plugin` komutu |
-| 35 | Windows ve Linux dallarının çalıştırılması | 🟡 | **Hosts yarısı üç OS'ta da koşuyor** (`hosts_roundtrip.rs`), ve `apply` artık yazabiliyorsa parola sormuyor. **Yükseltme yarısı da koşuyor artık — diyalog hariç.** "Bir insan gerektiriyor" cümlesi yalnızca *panel* için doğruydu; polkit'in çıkış kodunu okumak, UAC satırını kurmak, polkit'siz makineyi ayırmak panelin öncesi ve sonrası. Üçü de `elevate.rs`'ten çıkarıldı (`polkit_outcome`, `uac_script`, `is_cancellation`, `polkit_on`) ve **her platformda** test ediliyor. Linux'ta bir adım daha var: `tests/elevate_probe.rs` `PATH`'e sahte bir `pkexec` koyuyor ve **gerçek** `apply → elevate::run` zincirini uçtan uca koşturuyor — argv'nin `cp <staged> <hosts>` olduğunu, staged dosyanın içeriğini, 126'nın *iptal* (hata değil) okunduğunu ve gerçek bir başarısızlığın kendi mesajını taşıdığını doğruluyor. **Windows probe'u da yazıldı**: `STACKVO_POWERSHELL` dikişi (`hosts_path()`'inkiyle aynı cins) ve `rustc`'nin test sırasında derlediği sahte bir `powershell.exe`. UAC yolunun tamamı koşuyor — dış PowerShell satırının bayrakları, iptal, gerçek hata, boş script; ve asıl iddia: `-EncodedCommand`'ın base64'ü **bağımsız yazılmış bir çözücüyle geri açılıp** girdiyle karşılaştırılıyor, yani script encoder'dan, dış kabuktan, `CreateProcess`'in tırnaklamasından ve argv'den sağ çıkıyor. Dikiş `PATH` değil bir değişken, çünkü Windows'ta `PATH` yarışını kaybeden bir stub testi düşürmez — **gerçek** PowerShell'i koşturur, koşucuda UAC penceresi açar ve işi asar. Kalan: iki probe da bu makinede **koşamaz** ve Windows dalı burada derlenemiyor bile (`cargo check --target x86_64-pc-windows-msvc` `aws-lc-sys`'in Windows SDK'sında düşüyor) — telafi olarak çözücü cfg dışında tutulup **her platformda** PowerShell'in kendi vektörlerine karşı koşuyor |
-| 36 | `EMBEDDED`'ın servis yarısı | 🟡 | ADR 0016'dan sonra **yalnız göç için** duruyor: `handover` `.env`'i okuyor ve `SERVICE_*_ENABLE/VERSION` varsayılanlarına ihtiyaç duyuyor. **Ayrıldı ve sayıldı**: `config.rs` artık `SETTINGS` (36, kalan) ve `LEGACY_SERVICES` (150, gidecek) taşıyor, `EMBEDDED` ikisinin derleme zamanında birleşmiş hâli — "yaklaşık yarısı" yanlıştı, **beşte dördü**. Okuyan modüller de sayıldı ve dörde kilitlendi (`config`, `handover`, `commands`'ın göç öncesi dalları, `preset`): `tests/legacy_env_claims.rs` yeni bir okuyucu eklendiğinde build'i kırıyor, çünkü her yeni okuyucu silme gününü büyütüyor. Kalan **kod değil**: hangi sürümde desteklenen hiçbir çalışma alanının göç beklemediğine karar vermek |
+| 33 | Sözleşme kapısının harici bağımlılığı | ✅ | **Kusur bir yapılandırma değil bir tasarım sorunuydu.** Suite A `<root>/projects/` altındaki `stackvo.json`'ları okuyor; ne CI'nın checkout'unda ne de bir geliştiricinin makinesinde öyle bir şey var — yani manifest yarısı **hiçbir makinede, bir kez bile** koşmamıştı. Doğrulayıcının kendi girdisi yoktu, dolayısıyla koşup koşmaması yanında ne bulunduğuna bağlıydı. `tools/fixtures/validator-workspace/` o girdi: dört proje, **üçü kasten bozuk** (geçersiz sürüm, matriste olmayan eklenti, Bash çıkarıcısının sessizce düşüreceği bir ad), ve `tests/validate-contracts.spec.js` ürettiği kodları **tam olarak** doğruluyor. **Koşturmak iki ölü kontrol buldu**, ikisi de doğrulayıcının içinde: `EMBEDDED` kazıyıcısı düz bir dizi bekleyen bir regex'ti ve #36'nın bölmesiyle o gün eşleşmeyi bırakmıştı — **boş küme** döndürüyor, 20 anahtar yeniden "`.env`'de yok" diye raporlanıyordu; onarıldığında da yalnız **anahtar adlarını** okuyordu, oysa `.env` yalnızca bir ayar *değiştiğinde* yazılıyor, yani dokunulmamış bir çalışma alanında her proje "listede olmayan" bir PHP koşuyor görünüyordu. Uyarılar 21 → 1 |
+| 34 | Web sürümü / HTTP ikilisi | ✅ | **Karar (ADR 0026), politika, taşıma ve arayüz.** Loopback, token, salt-okunur, artı keystore'a ulaşan sorguların reddi. **İkinci bir dispatcher yazılmadı**: `mcp.rs`'in araç tablosu zaten her aracı bir sözleşme komutuna bağlıyor, ve bir araç tele ancak **iki politika da izin verirse** çıkıyor — `!writes` ve `exposable(command)` — böylece keystore kuralı, keystore'dan hiç bahsetmeyen bir tabloya ulaşıyor (7 araç; `stackvo_doctor` dahil değil, çünkü `doctor` birkaç çağrı ötede keystore'a ulaşıyor). Soket ~40 satır `tokio::net`; `axum` tek metot, tek yol, tek başlık için fazla. **Varsayılan kapalı** ve Ayarlar'da bir panelden açılıyor: haberi olunmayan bir dinleyici, kapatılmayan dinleyicidir. Token **bir kez** dönüyor — `websurface_status` onu taşımıyor ve taşıyamaz, çünkü taşısaydı sonraki her çağırana verirdi ve bunların ilki yüzeyin kendisi. Soket testleri iki gerçek açık buldu: hiçbir şey göndermeyen istemci görevi süresiz tutuyordu (slowloris → 5 sn okuma süresi), ve `stop` gerçekten portu bırakıyor mu (bırakıyor, test bağlanmayı deneyerek doğruluyor). 24 + 9 + 8 test |
+| 35 | Windows ve Linux dallarının çalıştırılması | 🟡 | **Linux yarısı artık koştu — ve koşturmak, koşmadığı için görünmeyen bir şeyi buldu: bu depo Linux'ta hiç derlenmiyordu.** `certs.rs`'in `#[cfg(not(target_os = "macos"))] ca_trusted`'ı `ca_common_name`'i çağırıyor ve o fonksiyon **hiçbir yerde tanımlı değildi**; macOS'ta dal derlenmediği için `cargo check` sessizdi. Artı üç `-D warnings` hatası (`menu.rs`'te yalnız macOS blokunda kullanılan `Submenu` ve `product`, `agents.rs`'te yalnız iki platformda gereken bir `mut`). Yani CI'nın Linux `build` job'ı da kırmızıydı. Onarıldı; `ca_common_name` bilerek `cfg` dışında — onu görünmez kılan şey tam olarak bir cfg kapısıydı. **`tests/elevate_probe.rs` Linux'ta geçiyor**: sahte `pkexec` `PATH`'te, gerçek `apply → elevate::run` zinciri, 126 iptal olarak okunuyor. Bunu mümkün kılan `tools/linux/` — CI'nın ortamını bir konteynerde yeniden kuruyor (aynı taban, aynı paketler, `rust-toolchain.toml`'dan pinlenmiş sürüm). Kalan: **Windows dalı**, ki o hâlâ burada derlenemiyor (`aws-lc-sys` Windows SDK'sı) |
+| 36 | `EMBEDDED`'ın servis yarısı | 🟡 | ADR 0016'dan sonra **yalnız göç için** duruyor. `config.rs` `SETTINGS` (36, kalan) ve `LEGACY_SERVICES` (150, gidecek) taşıyor — "yaklaşık yarısı" yanlıştı, **beşte dördü**. Okuyan dört modül `legacy_env_claims.rs` ile kilitli. **Tarih artık verildi: 0.4.0** (§5). Ve düzyazı değil bir kapı: uygulama 0.4.0'a çıktığı ve sabit hâlâ orada olduğu an build kırılıyor; tarihin 1.0.0'a ötelenmesi de kırıyor. Kalan: **o gün silmek** |
+| 37 | Testin gerçek keystore'a dokunması | ✅ | **Tam Rust koşusu askıda kalıyordu ve sebebi bir testti.** `env_writer`'ın `a_moved_key_is_taken_out_of_the_file_patch`'i `redirect_moved_keys` üzerinden **gerçek macOS Keychain'ine** yazıyor; macOS, soran ikili değiştiğinde izin soruyor — ki `cargo build` sonrası her seferinde değişiyor — ve cevaplayan olmayınca test süresiz bekliyor, bütün koşuyu da beraberinde götürüyor. Testin kendi yorumu "geliştirici makinesinde başarılı olur" diyordu; olmuyordu. Var olduğundan beri böyleydi ve görünmemesinin sebebi belirli: **asılan bir süit, yavaş bir süite benzer.** Çözüm bir env değişkeni **değil** — `hosts.rs`'in `STACKVO_HOSTS_PATH`'i ve `elevate.rs`'in `STACKVO_POWERSHELL`'i doğru şekilde, ama burada aynı desen *parolaları* yayınlanmış bir ikilide OS keystore'undan başka bir yere taşıyan bir değişken olurdu. `cfg(test)` kullanıldı: derleyici zorluyor, yayınlanan yapının ulaşabileceği ikinci bir arka uç yok ve bir unit test'in gerçek olana yolu yok. `cfg_regions.rs` üç işlemin **her birini ayrı ayrı** kontrol ediyor — ilk sürümü dosyayı bir dizgi torbası gibi okuyordu ve `write` kapısını kaybetmişken geçiyordu, çünkü `read` hâlâ taşıyordu |
 
 ---
 
@@ -86,65 +87,67 @@ altıncı ayda hafıza soluklaştığında çalışmayacak olan şey bu.
 
 Karar gerektirmeyenler arasından, etki ÷ efor ile.
 
-**Liste boş.** Karar gerektiren hiçbir şeye dokunmadan yapılabilecek iş, bilinen
-maddelerin hepsinde bitti. Her birinde kalan şey bir **koşu**, bir **tarih**, bir
-**cevap** ya da elle atılacak bir adım — kod değil:
+**Liste boş.** Yazılmamış kod da, bağlanmamış uç da kalmadı. Kalan her maddede
+kalan şey bir **koşu**, elle bir **adım**, bir **tarih** ya da bir **süreç**:
 
-* **#12** — `tauri-driver` yarısı yazıldı ve CI'ya bağlandı. Kalanı ilk yeşil
-  `driver` job'ı.
-* **#22** — `rehearsal` girdisi altı hedefi imzalama kararından ayırdı. Kalanı
-  birinin çalıştırması.
-* **#35** — polkit ve UAC yolları, panelin kendisi hariç, uçtan uca koşuyor.
-  Kalanı ikisinin de CI'da ilk koşusu; bu makinede Windows dalı derlenemiyor
-  bile.
-* **#31** — `market::bundle`, `stackvo market-bundle` ve Katalog panelindeki
-  klasör seçici. Kalanı tar'ın elle üretilmesi (`tar -cf … -C <dizin> .`).
-* **#10** — tipler sözleşmeden üretiliyor ve `types:check` tazeliğini tutuyor.
-  Kalanı iki ayrı iş: sözleşmenin adlandırıp tanımlamadığı 19 tip, ve
-  `--checkJs` ile bunun bir kapıya dönüşmesi.
-* **#36** — `LEGACY_SERVICES` ayrıldı, sayıldı, okuyucuları kilitlendi. Kalanı
-  bir tarih: §5.
-* **#34** — masaüstü-özel komut kümesi artık türetiliyor ve kilitli. Kalanı
-  bir güvenlik kararı: §5.
+* **#12** — driver süiti bu makinede konteynerde **5/5, 0 atlandı**. Kalanı
+  CI'da ilk koşu.
+* **#22** — GitHub Actions burada tetiklenemiyor. Koşucusuz ayakta kalan iddia
+  `release_rehearsal.rs`'te; kalanı birinin çalıştırması.
+* **#35** — Linux yarısı geçiyor. Kalanı **Windows dalı**, ki burada
+  derlenemiyor bile (`aws-lc-sys` Windows SDK'sı).
+* **#31** — tar'ın elle üretilmesi (`tar -cf … -C <dizin> .`).
+* **#2** — anahtarın secret olarak eklenmesi ve bir sürümün yayınlanması. Bu tek
+  adım #22'nin provasını gerçek bir yayına, #21'i sahada sınanabilir bir şeye
+  çeviriyor ve §2 C'nin son iki maddesinin önünü açıyor.
+* **#36** — 0.4.0'da silmek; kapı o gün build'i kırıyor.
+* **§2 C** — moderasyon süreci ve yayıncı kimliği kaydı; kod değil.
 
-Sıradaki iş bu listeden değil **§5'ten** çıkacak — altı madde, altısı da bir
-cevap bekliyor. Dışarıdan bir şey gerektirenler (#2, #21, #33) bu sıraya hiç
-girmemişti.
-
----
+Bu turların bulgusu hep aynı yerden geldi: **koşmayan bir şey doğru görünür** —
+ve bir varyantı: **asılan bir süit, yavaş bir süite benzer.**
+Suite A hiç manifest okumamıştı, driver süiti hatayı başarı sayıyordu, bu depo
+Linux'ta hiç derlenmiyordu, bir doğrulayıcı kontrolü sabit bölündüğü gün ölmüştü,
+bir soket testi yazılana kadar hiçbir şey görevleri süresiz tutan bir istemciyi
+sormamıştı, ve bir test gerçek Keychain'de izin bekliyordu. Sonuncusu en
+sessiziydi: tam koşu hiç bitmediği için kimse ne düştüğünü ne de geçtiğini
+görüyordu. Hepsi yeşil raporluyordu — ya da hiç raporlamıyordu.
 
 ## 5. Karar bekleyenler
 
 Kodla çözülmeyen maddeler. Cevaplanmadan planlanamazlar — sessizce varsayılan
 seçmek, bu listenin var olma sebebine aykırı.
 
-1. **Yerel AI servisleri (D-1).** **Ertelendi** olarak kayıtlı, kapsam dışı
-   değil. Ollama, Qdrant ve pgvector birer katalog servisi olsun mu — kapatılan
-   LLM-gateway sorusundan farklı bir soru.
-2. **Güncelleme endpoint'i ve imzalama secret'ları (#2).** `latest.json` nerede
-   yayınlanacak: `stackvo/stackvo` release'leri mi, yeni bir repo mu? Özel
-   anahtar `~/.tauri/stackvo.key`'de duruyor ve repository secret'ı olarak
-   eklenmesi gerekiyor; Apple/Windows secret'ları ücretli hesaplara bağlı. #21
-   bunun arkasında bekliyor.
-3. **Kapsam eşiği.** Ölçüm var, kapı yok. %61.60'ı mı yoksa daha düşük bir
-   tabanı mı kilitleyeceği mühendislik değil, politika kararı.
-4. **Bir web yüzeyine kim bağlanabilir (#34)?** Zemin hazır ve ölçülü, ama bir
-   HTTP sunucusu bu komut kümesini ağa açmak demek — `quickcmd_run`,
-   `project_hooks_approve`, `env_reveal`, `elevate` destekli yollar. Yalnız
-   loopback mu, bir token mı, OS kullanıcısı mı; ve yazan komutlar hiç açılacak
-   mı — `stackvo-mcp`'nin `--allow-writes`'ı emsal. Cevapsız yazılan bir sunucu,
-   bir özellik değil bir uzaktan kod çalıştırma yüzeyi.
-5. **`LEGACY_SERVICES` hangi sürümde siliniyor (#36)?** Kodun yapabileceği
-   bitti: 150 anahtar kendi sabitine ayrıldı, sayısı §7'de bir kapının
-   arkasında, ve onları okuyan dört modül `legacy_env_claims.rs` ile
-   kilitlendi — beşincisi eklendiğinde build kırılıyor. Kalan soru mühendislik
-   değil: **hangi sürümden sonra göç bekleyen bir çalışma alanı desteklenmiyor
-   sayılıyor.** Erken silmek, o `.env`'i açan kişinin verisini bir plana
-   çeviremeyen bir uygulama demek; hiç silmemek, ADR 0016'nın kapattığı ikinci
-   kataloğu süresiz taşımak.
+**Liste boş.** Beşinin dördü cevaplandı ve cevapları kod oldu; beşincisi
+sorulduğunda **zaten kapatılmış** olduğu görüldü.
 
 **Cevaplananlar:**
 
+* *`latest.json` nerede yayınlanacak, anahtar nerede duracak (#2)?* — ADR 0025.
+  **Aynı repoda GitHub Releases.** Endpoint artık `raw.githubusercontent.com`'daki
+  bir dal dosyası değil, `releases/latest/download/latest.json` — yani
+  `tauri-action`'ın `includeUpdaterJson` ile *zaten yazdığı* dosya. Eski adres
+  iki bağımsız yönden yanlıştı: **sahip yanlıştı** (`stackvo/…`, oysa remote
+  `fahrettinaksoy/…`) ve **mekanizma yanlıştı** (hiçbir şey o dosyayı `main`'e
+  yazmıyor). `dialog: false` olduğu için ikisi de sessiz: updater 404 alıyor ve
+  hiçbir şey söylemiyor. `updater_endpoint.rs` adresi `.git/config`'ten türetip
+  karşılaştırıyor. Bu cevap **#21'i ve §2 C'nin anahtar törenini de** açtı.
+* *Bir web yüzeyine kim bağlanabilir (#34)?* — ADR 0026. **Yalnız loopback, bir
+  token, ve salt-okunur.** `websurface.rs` kararı çalıştırılabilir hâle
+  getiriyor; taşıma katmanı **yok** ve bu eksiklik değil, sıralama: §5'in
+  tuttuğu soru *ne servis edilir ve kime* idi.
+* *Yerel AI servisleri (D-1)?* — ADR 0027. **Yalnız pgvector, ve bir servis
+  olarak değil** — `postgres`'in bir sürümü. Bu depoda değişen kod: **hiç**, ve
+  bu ADR 0011'in doğru çıkması.
+* *`LEGACY_SERVICES` hangi sürümde siliniyor (#36)?* — **0.4.0.** İki minör
+  boyunca göç desteklenir, sonra silinir. Tarih artık düzyazı değil bir kapı:
+  `legacy_env_claims.rs` uygulama 0.4.0'a çıktığı ve sabit hâlâ orada olduğu an
+  build'i kırıyor.
+* *Kapsam eşiği* — **karar gerektirmiyordu, çünkü zaten verilmişti.** Satır
+  "ölçüm var, kapı yok" diyordu; `tools/coverage-floors.mjs` tabanları
+  kanıttan koyuyor (Rust satır %60, ön yüz %85/85/72),
+  `tools/check-coverage.mjs` karşılaştırıyor ve CI'da "Hold the floors" adımı
+  koşuyor. Satır kapı yazıldığında silinmemiş. Bu listenin kendi bakımı da
+  §8'in sorusu.
 * *Bir çalışma alanı kendi servis şablonunu beyan edebilir mi?* — ADR 0023.
   **Evet, ama bir servis olarak değil.** Depo bir **yan konteyner** beyan
   ediyor: projenin kendi compose bloğuna render ediliyor, projenin profiliyle
@@ -791,6 +794,194 @@ dürüst sınır bu, ve `ENV` ile fixture artık bir çift.
   aynı sebeple: etiketsiz bir imaj geçen ay çekmiş birinin altından kayıyor, ve
   kendi PHP sürümünü pinleyen bir deponun bunu serbest bırakmasının sebebi yok.
 
+### 0024 — Sözleşme, tel üzerindeki adı yazar; Rust'ınkini değil
+
+- **Status:** accepted
+- **Context:** §3 #10 sözleşmenin `types` tablosunu ilk kez *tüketen* şeyi
+  yazdı — `src/lib/ipc.d.ts`. Tablo o güne kadar hiçbir şey tarafından
+  okunmamıştı, ve okunur okunmaz yanlış olduğu görüldü.
+- **Decision:** `contracts/ipc.json`'daki her alan adı, bir yükün gerçekten
+  taşıdığı ad olmak zorundadır — yani camelCase. Rust'ın alan yazımı bu dosyaya
+  girmez. `contract_spelling.rs` iki şeyi birden tutuyor: dokümanın yazımını, ve
+  o yazımın neden doğru olduğunu. Komut adları (`pty_open`) ve olay adları
+  (`build:start`) bunun dışında — onlar birer tanımlayıcı, alan değil.
+- **Consequences:** Sözleşmeye eklenen her yeni alan, koddan okunarak
+  yazılmak zorunda; tahminle yazılan bir ad artık build'i kırıyor. Yeni bir
+  `pub struct` de `rename_all` taşımak zorunda, yoksa ilk kuralı sessizce
+  yanlışlar. Bir **dosyayı** yansıtan yapı (tel değil) `FILE_SHAPES`'te adıyla
+  ve gerekçesiyle muaf tutuluyor — bugün bir tane var. `ipc.d.ts` yeniden
+  üretildi ve `npm run types:tsc` ile derlenmesi CI'da tutuluyor.
+
+**Bu bir düzeltme, bir tercih değil.** Sözleşme **106 alan adını** Rust'ın
+yazımıyla taşıyordu — `managed_by_stackvo`, `operation_id`, `cpu_percent`,
+`session_id`, `install_ca`, `exit_code`. Tel hiçbirini taşımadı, bir kez bile:
+bir komutun döndürdüğü her yapı `#[serde(rename_all = "camelCase")]` türetiyor
+ve Tauri argümanları girişte camelCase'e çeviriyor. Ön yüz baştan beri
+`managedByStackvo` okuyordu. Yanlış olan kod değil, **kodu anlatan belgeydi**.
+
+**Neden kimse görmedi.** Tip tablosunu tüketen hiçbir şey yoktu.
+`contract_agreement.rs` komut *kümesini* koda karşı denetliyor;
+`contract_version.rs` sözleşmeyi *kendi önceki kopyasına* karşı denetliyor —
+ikincisi bir yanlışı sadakatle korur, çünkü referansı yine kendisidir. Aradaki
+boşluk tam olarak şuydu: **hiçbir kapı sözleşmeyi Rust'a karşı okumuyordu.**
+§3 #10 o tabloyu `src/lib/ipc.d.ts`'e çevirir çevirmez boşluk kapandı ve aynı
+anda pahalıya döndü — yanlış bir ad, eksik bir addan kötüdür, çünkü bir editör
+onu **olgu olarak tekrar eder**.
+
+**İkinci iddia birincisini taşıyor.** "Hepsi camelCase" cümlesi ancak her
+serileştirilebilir yapı yeniden adlandırıldığı sürece doğru; `rename_all`
+taşımayan tek bir yapı, sözleşmede tek satır değişmeden kuralı yanlışlar. Bu
+yüzden ikisi de test: 204 yapı taranıyor, tek istisna `ExtensionSpec` ve o da
+bir **dosyayı** yansıtıyor (`contracts/php-extensions.json` snake_case yazılmış),
+tele hiç çıkmıyor — `catalog_get` `ExtensionOption` ile cevap veriyor.
+
+**Sürüm.** Bu düzeltmeler ADR 0008'in mekanik kuralına göre *kırıcı* sayılıyor
+(alan kaybı + alan kazancı), ve bu doğru sonucu veriyor: `surface.lock.json`
+1.0.0'da, sözleşme 2.0.0'da, yani gereken artış zaten yapılmış durumda. Ayrıca
+`git tag` boş — **hiçbir sürüm hiç yayınlanmadı**, dolayısıyla kırılacak bir
+istemci yok. Yayınlanmamış bir sözleşmedeki bir yazım hatasını düzeltmenin
+maliyeti tam olarak sıfır; yayınlandıktan sonra düzeltmenin maliyeti bir majör
+sürüm ve bir göç notu olurdu. Bunu şimdi yapmanın sebebi bu.
+
+---
+
+### 0025 — Güncelleme aynı repodan, release varlığı olarak
+
+- **Status:** accepted
+- **Context:** §3 #2 "endpoint 404 veriyor" diyordu ve bir mühendislik maddesi
+  gibi duruyordu. Değildi: `latest.json`'ın nerede yayınlanacağı ve özel
+  anahtarın kimde duracağı bir karardı, ve **#21 (sürüm kanalları) ile §2 C'nin
+  anahtar töreni de** o kararın arkasında bekliyordu.
+- **Decision:** `latest.json` bu deponun kendi GitHub Releases'inde yayınlanır;
+  endpoint `https://github.com/<owner>/<repo>/releases/latest/download/latest.json`
+  olur. Özel anahtar `TAURI_SIGNING_PRIVATE_KEY` repository secret'ı olarak
+  eklenir, açık yarısı `tauri.conf.json`'daki `pubkey`'de kalır. Ayrı bir
+  dağıtım reposu **reddedildi**: ikinci bir CI ve iki yerin sürüm numarasını
+  eşit tutma işi, bugünkü tek yazarlı depoda ayrı bir sahiplik sınırının
+  getirisini karşılamıyor — getirisi olduğu gün taşınabilir, endpoint zaten
+  türetiliyor.
+- **Consequences:** Eski adres **iki bağımsız yönden** yanlıştı ve ikisi de
+  sessizdi. Sahibi yanlıştı — `stackvo/stackvo-tauri`, oysa remote
+  `fahrettinaksoy/stackvo-tauri`; bir sürüm yayınlamak bunu düzeltmezdi.
+  Mekanizması da yanlıştı — `raw.githubusercontent.com/.../main/latest.json`,
+  ve o dosyayı `main`'e yazan hiçbir şey yok; `tauri-action` onu **release'in
+  içine** yazıyor. `dialog: false` olduğu için updater 404 alıp hiçbir şey
+  söylemiyor. Tek başına her biri, "düzeltildi" denip hâlâ bozuk kalabilecek
+  bir hataydı. `updater_endpoint.rs` adresi `.git/config`'ten türetip
+  karşılaştırıyor, ve `includeUpdaterJson` ile imzalama secret'ının hâlâ
+  workflow'da olduğunu tutuyor — üçü üç ayrı dosyada ve hiçbiri ötekini
+  anmıyordu. Ağ erişimi yok: URL'in *cevap verdiği* denenmiyor, çünkü GitHub
+  yavaşken kızaran bir kapı insanların görmezden gelmeyi öğrendiği kapıdır.
+
+---
+
+### 0026 — Web yüzeyi: yalnız loopback, bir token, ve salt-okunur
+
+- **Status:** accepted
+- **Context:** §3 #34 §5'te duruyordu çünkü bir HTTP yüzeyi **bu** komut
+  kümesini bir sokete koymak demek, ve bu kümede `quickcmd_run`,
+  `project_hooks_approve`, `env_reveal` ve `elevate` destekli yollar var.
+  Cevapsız yazılan bir sunucu bir özellik değil, changelog girdisi olan bir
+  uzaktan kod çalıştırma yüzeyidir.
+- **Decision:** `127.0.0.1`, koşu başına üretilen bir token, ve yalnızca
+  okumalar. Dördüncü kural üçünü taşıyor: `kind: "query"` **açılabilir demek
+  değil** — `instance_reveal` bir sorgudur ve keystore'dan parola döndürür.
+  Bir komut ancak bir sorguysa **ve** kod yolu keystore'a ulaşamıyorsa
+  servis edilir.
+- **Consequences:** `websurface.rs` kararı saf mantık olarak taşıyor: `exposable`,
+  `admit` (token **önce** kontrol edilir — komut adı önce bakılsaydı, token'ı
+  olmayan birine komut envanteri verilirdi) ve sabit-zamanlı `token_matches`
+  (boş beklenen token kimseyi kabul etmez; `"" == ""` doğrudur ve yüzeyi açardı).
+  Taşıma katmanı sonradan yazıldı ve o sıra kasıtlıydı: §5'in tuttuğu soru *ne servis edilir ve kime* idi, ve o cevaplanmadan yazılmış bir dinleyici satırın uyardığı şeyin ta kendisi olurdu.
+
+  İkinci kuralın listesi elle yazıldığında **dördünün üçü yanlıştı** —
+  `stripe_status` ve `service_connection` tahmindi, `instance_settings` ve
+  `secrets_status` kaçmıştı. "Bu parola döndürür mü" kaynak metnin cevapladığı
+  bir soru değil; cevapladığı soru bir çağrı yolunun var olup olmadığı.
+  `websurface_claims.rs` onu tüm crate üzerinde bir **fixpoint** olarak
+  hesaplıyor, ve üç kez düzeltmek gerekti: tek sıçrama `service_reveal`'i
+  kaçırıyordu (üç satır, `instance_reveal`'e devrediyor, o da yardımcıya);
+  çıplak isimle kurulan graf **112 sorgunun 101'ini** reddetti (`read`, `load`,
+  `of` bir düzine modülde var — güvenli yön, ama on bir komut servis eden bir
+  yüzey de yüzey değil); doğrusu modülle nitelenmiş kenarlar oldu. Sonuç:
+  112 okumanın 15'i reddediliyor. Reddi *kanıtlanana* göre adlandırmak da
+  bunun parçası — sabit `REACHES_THE_KEYSTORE`, `READS_A_SECRET` değil.
+
+---
+
+### 0027 — Yerel AI: yalnız pgvector, ve bir sürüm olarak
+
+- **Status:** accepted
+- **Context:** §2'nin D-1 satırı Ollama, Qdrant ve pgvector'ün katalog servisi
+  olup olmayacağını soruyordu; §5'te "ertelendi" olarak duruyordu.
+- **Decision:** Yalnız pgvector, ve **bir servis olarak değil** — `postgres`'in
+  bir sürümü (`16-pgvector`, `pgvector/pgvector:pg16`). Ollama ilk koşuda 4–8 GB
+  model çekiyor ve bulamayabileceği bir GPU istiyor; Qdrant zaten dört olan
+  veritabanlarının beşincisi. İkisi de bu kataloğun ölçeğinde değil, ve
+  "Laradock'un 130 servisi" zaten girilmeyecek kavgalar arasında yazılı.
+- **Consequences:** **Bu depoda değişen kod: hiç** — ve bulgunun kendisi bu.
+  ADR 0011 uygulamanın hiçbir servis tanımı taşımamasını kararlaştırmıştı,
+  dolayısıyla yeni bir servis bir *paket*; uygulamanın zaten ifade edebildiği
+  bir paket burada sıfıra mal oluyor. Ayıran şey bir **capability**: `vector`.
+  `commands.rs` bir `instanceRef`'i tam olarak böyle çözüyor, yani mekanizma
+  vardı. Sabitlenen sürüm de `recommendedVersion` **değil**: PostgreSQL kuran
+  PostgreSQL almalı, ve fazladan bir eklenti taşıyan imaj daha iyi bir
+  varsayılan değil. `vector_capability.rs` cümleyi tekrar etmiyor, kanıtlıyor —
+  fixture gerçek bir paket ve capability yolu ikisini ayıramasaydı cevap yanlış
+  olurdu. Ollama ya da Qdrant isteyen `sidecars` yazar; ADR 0023 tam da bunu
+  mümkün kıldı, ve hayır demenin bir ret olmamasının sebebi bu.
+
+---
+
+### 0028 — Bir kapı, koştuğu kanıtlanana kadar bir kapı değildir
+
+- **Status:** accepted
+- **Context:** §3'ün dört maddesi (#12, #22, #33, #35) "CI dışında koşamıyor"
+  diyordu ve bu bir ortam sorunu gibi okunuyordu. Koşturulunca dördünün de
+  altında aynı şey çıktı.
+- **Decision:** Bir gate'in **koştuğu** kanıtlanmadan yeşilliği delil sayılmaz.
+  Pratikte üç kural: (a) bir doğrulayıcının **kendi girdisi** olur — yanında ne
+  bulunduğuna bağlı olamaz; (b) bir süit, kaç testinin *koştuğunu* da raporlar,
+  yalnız kaçının geçtiğini değil; (c) yalnız CI'da koşabilen bir şey, CI dışında
+  koşabilir hâle getirilir (`tools/linux/`).
+- **Consequences:** Dört bulgu, dördü de yeşil raporluyordu. Suite A hiçbir
+  makinede **bir kez bile** manifest okumamıştı — `tools/fixtures/validator-workspace/`
+  ona kendi girdisini verdi ve iki ölü kontrol çıktı: `EMBEDDED` kazıyıcısı
+  sabit ikiye bölündüğü gün eşleşmeyi bırakıp **boş küme** döndürüyordu, ve
+  onarıldığında da yalnız anahtar adlarını okuyordu (uyarılar 21 → 1). Driver
+  süiti **hatayı SKIP olarak** raporluyordu — `node:test`, `null` bir `skip`'i
+  direktif okuyor — ve dört gerçek düşüşle yeşil çıkıyordu; CI'ya artık
+  "hiçbiri atlanmadı" adımı da eklendi. Bu depo **Linux'ta hiç derlenmiyordu**:
+  `certs.rs`'in `not(macos)` dalı var olmayan bir fonksiyonu çağırıyordu, yani
+  CI'nın Linux `build` job'ı kırmızıydı. Ve driver süitinin manşet testi kendi
+  seçtiği derleme profiliyle **geçemezdi** — `cargo build` `devUrl`'i gömüyor.
+  `cfg_regions.rs` üçüncüsünün sınıfını, `release_rehearsal.rs` koşucusuz
+  tutulabilen iddiayı tutuyor.
+
+---
+
+### 0029 — Yerel API varsayılan kapalı, ve token bir kez gösterilir
+
+- **Status:** accepted
+- **Context:** ADR 0026 *ne servis edilir ve kime* sorusunu cevapladı. Taşıma
+  katmanı yazılınca iki soru daha çıktı ve ikisi de kod değil varsayılan
+  sorusuydu: yüzey ne zaman ayakta olacak, ve token'ı kim görecek.
+- **Decision:** **Varsayılan kapalı**, ve Ayarlar'daki bir panelden açılıyor.
+  Token `websurface_start`'tan **bir kez** dönüyor; diske hiç yazılmıyor ve
+  `websurface_status` onu taşımıyor. Kaybedilirse durdur-başlat.
+- **Consequences:** Loopback'in kendisi tehlikeli olduğu için değil: **haberi
+  olunmayan bir dinleyici, kimsenin kapatmadığı dinleyicidir**, ve birinin
+  çalışma alanı hakkındaki soruları cevaplayan bir yüzey için dürüst varsayılan
+  cevaplamıyor olmasıdır. Token'ın statüde taşınmaması bir titizlik değil bir
+  gereklilik: taşısaydı sonraki her çağırana verilirdi, ve bunların **ilki
+  yüzeyin kendisi** olurdu — salt-okunur bir API, kendi anahtarını dağıtan bir
+  API hâline gelirdi. Diske yazmamak da aynı cümlenin devamı: bir dosyadaki
+  token, onu üreten süreçten uzun yaşar. Bedeli gerçek ve kabul edildi —
+  uygulama yeniden yüklenince token kayboluyor; panel bunu ekranda söylüyor,
+  keşfedilmeye bırakmıyor. İkinci bir `start` çakışma sayılıyor: sessizce
+  öncekinin adresini döndürmek, çağırana hiç görmediği bir token'ı ait
+  gösterirdi.
+
 ---
 
 ## 7. Ölçüm
@@ -800,15 +991,21 @@ Mekanik olarak sayılabilenler koda karşı tutuluyor:
 
 | | Sayı | Nasıl sayıldı |
 |---|---|---|
-| Toplam IPC komutu | **249** | `contracts/ipc.json` → `commands` (246 Rust + 3 `frontend-plugin`) |
-| Bunlardan `#[tauri::command]` olarak yazılmış | **245** | `commands.rs`, `#[cfg(test)]` dışı |
-| Frontend kaynak dosyası | **133** | `src/**/*.{js,vue}`, spec dosyaları hariç |
+| Toplam IPC komutu | **253** | `contracts/ipc.json` → `commands` (250 Rust + 3 `frontend-plugin`) |
+| Bunlardan `#[tauri::command]` olarak yazılmış | **249** | `commands.rs`, `#[cfg(test)]` dışı |
+| Frontend kaynak dosyası | **134** | `src/**/*.{js,vue}`, spec dosyaları hariç |
 | Bunlardan `@tauri-apps` kullanan | **20** | aynı küme içinde metin taraması |
 | **Veri katmanının geçtiği fonksiyon** | **1** (`src/lib/ipc.js` → `call()`) | `invoke(` `ipc.js` dışında **0** yerde geçiyor |
-| `ipc.js` sarmalayıcısı | **242** | `api` nesnesinin üye sayısı |
-| Rust kaynağı | **95 modül, 83.918 satır** | `src-tauri/src/*.rs` |
+| `ipc.js` sarmalayıcısı | **246** | `api` nesnesinin üye sayısı |
+| Rust kaynağı | **97 modül, 85.678 satır** | `src-tauri/src/*.rs` |
 | Gömülü varsayılan — **kalan** | **36** | `config.rs` → `SETTINGS` |
 | Gömülü varsayılan — **yalnız göç için** | **150** | `config.rs` → `LEGACY_SERVICES`; toplam **186** |
+
+Son satır iki yerden okunuyor ve bir süre yalnız birinden okunuyordu:
+`tools/validate-contracts.mjs`'nin kazıyıcısı düz bir dizi bekliyordu, sabit
+ikiye bölününce eşleşmeyi bıraktı ve **boş küme** döndürdü. Bir metin
+kazıyıcısının başarısızlık biçimi budur — hiçbir şey bulmak, ve sakin
+görünmek — o yüzden artık bir taban var (`EMBEDDED_UNREADABLE`).
 
 Elle sınıflandırma, kapıya dahil değil — yöntemi yazılı ki bir sonraki okuyucu
 yeniden üretebilsin:

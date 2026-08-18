@@ -224,6 +224,12 @@ pub fn config_candidates(id: &str) -> Vec<PathBuf> {
     }
 
     if id == "zed" {
+        // `mut` is used by the two cfg blocks below, and neither compiles on
+        // Linux — where this was an `unused_mut` warning, and `-D warnings`.
+        #[cfg_attr(
+            not(any(target_os = "macos", target_os = "windows")),
+            allow(unused_mut)
+        )]
         let mut out = vec![home.join(".config/zed/settings.json")];
         #[cfg(target_os = "macos")]
         out.push(home.join("Library/Application Support/Zed/settings.json"));

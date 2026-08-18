@@ -1,0 +1,79 @@
+{
+  "apiVersion": "stackvo.dev/package/v1",
+  "service": "postgres",
+  "version": "16-pgvector",
+  "image": {
+    "repository": "pgvector/pgvector",
+    "tag": "pg16"
+  },
+  "capabilities": [
+    "sql",
+    "postgres-protocol",
+    "vector"
+  ],
+  "instancing": {
+    "multiple": true,
+    "identity": "version"
+  },
+  "ports": [
+    {
+      "name": "main",
+      "container": 5432,
+      "preferred": 5432,
+      "protocol": "tcp",
+      "legacyKey": "HOST_PORT_POSTGRES",
+      "primary": true
+    }
+  ],
+  "volumes": [
+    {
+      "name": "data",
+      "container": "/var/lib/postgresql/data",
+      "purgeable": true
+    }
+  ],
+  "files": [],
+  "settings": [
+    {
+      "key": "PASSWORD",
+      "type": "secret",
+      "default": "postgres"
+    },
+    {
+      "key": "DATABASE",
+      "type": "string",
+      "default": "stackvo"
+    }
+  ],
+  "connection": {
+    "scheme": "postgresql",
+    "port": "main",
+    "defaultUser": "postgres",
+    "passwordSetting": "PASSWORD",
+    "databaseSetting": "DATABASE",
+    "defaultDatabase": "stackvo"
+  },
+  "url": null,
+  "dependsOn": [],
+  "health": {
+    "test": [
+      "CMD",
+      "pg_isready",
+      "-U",
+      "postgres"
+    ],
+    "interval": "10s",
+    "retries": 12,
+    "startPeriod": "30s"
+  },
+  "compose": {
+    "file": "compose.yml.tpl",
+    "sha256": "c76e34c556b1da2912ce824d47fbf1d775297cc95e5aa1ed6ffefe72bdb71b90"
+  },
+  "support": {
+    "eolDate": "2028-11-09",
+    "source": "https://endoflife.date/api/postgresql.json",
+    "status": "supported"
+  },
+  "notes": "PostgreSQL 16 with the pgvector extension already installed. A VERSION of postgres rather than a service of its own (§5, D-1): the wire protocol, the port, the volume layout and the client are identical, and a second service id would put two rows in the catalogue for one database. What differs is one capability, `vector`, which is what an instanceRef asking for it matches on — so a project that needs embeddings names the capability and not the image."
+}

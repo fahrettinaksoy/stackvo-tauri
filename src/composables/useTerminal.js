@@ -114,7 +114,8 @@ export function useTerminal(onOutput, onClosed) {
       if (status.value === 'opening') status.value = 'open';
       return id;
     } catch (e) {
-      error.value = e instanceof StackvoError ? e : new StackvoError(String(e?.message ?? e));
+      error.value =
+        e instanceof StackvoError ? e : new StackvoError({ message: String(e?.message ?? e) });
       status.value = 'error';
       stopListening();
       sessionId.value = null;

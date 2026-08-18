@@ -668,6 +668,11 @@ export const api = {
     call('project_requirements_declare', { name, services }),
 
   updaterStatus: () => call('updater_status'),
+  updaterOffer: (manifest, channel = null) => call('updater_offer', { manifest, channel }),
+  /** The token comes back once. Nothing stores it — see ADR 0026. */
+  websurfaceStart: (port = null) => call('websurface_start', { port }),
+  websurfaceStatus: () => call('websurface_status'),
+  websurfaceStop: () => call('websurface_stop'),
   /** The third-party licence notice compiled into this build, as markdown. */
   licencesNotice: () => call('licences_notice'),
   /**

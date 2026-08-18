@@ -34,21 +34,55 @@ export async function updatesConfigured() {
 }
 
 /**
- * Look for an update. Returns null when there is none.
+ * Look for an update. Returns null when there is none, or when there is one
+ * this install is not being offered.
  *
  * Never throws for the ordinary "no network" case — an app that shows an error
  * banner every time a laptop is offline trains people to ignore the banner.
+ *
+ * ## Two questions, and the plugin only answers the first
+ *
+ * `check()` asks "is there a newer version". Whether **this** install should
+ * take it is a different question, and the plugin has no concept of it: no
+ * channel, no staged wave, and — the one that matters — no way to stop. A
+ * release found to be broken cannot be recalled, because every running copy
+ * keeps asking the same endpoint and getting the same answer.
+ *
+ * `updater_offer` is that second question (§3 #21, `src-tauri/src/channel.rs`).
+ * It reads the manifest the plugin already fetched — `rawJson`, so there is no
+ * second request and no chance of the two disagreeing — and answers with what
+ * this install should be offered.
+ *
+ * The order is the design: the decision is made **before** anything reaches the
+ * user. Offering an update and then refusing to install it would be worse than
+ * never offering it.
  */
-export async function checkForUpdate() {
+export async function checkForUpdate({ channel = null } = {}) {
   try {
     const update = await check();
     if (!update?.available) return null;
+
+    // A manifest the decision cannot be read out of is treated as "offer it",
+    // not as "refuse it". The fields are additive: `latest.json` as published
+    // today carries none of them, and a check that started refusing every
+    // update the day this shipped would be a worse bug than the one it guards.
+    const verdict = await api.updaterOffer(update.rawJson ?? {}, channel).catch(() => null);
+    const outcome = verdict?.offer?.outcome;
+
+    if (outcome && outcome !== 'update') {
+      // `paused` is the publisher stopping a release; `waiting` is this install
+      // not being in the wave yet; `otherChannel` is a manifest for a stream
+      // this install does not follow. None is an error and none is an update.
+      return null;
+    }
 
     return {
       version: update.version,
       currentVersion: update.currentVersion,
       notes: update.body,
       date: update.date,
+      /** Why this install was offered it — the bucket, so it can be checked. */
+      offer: verdict ?? null,
       /** Download, install, then restart. Progress is reported per chunk. */
       install: async (onProgress) => {
         let downloaded = 0;

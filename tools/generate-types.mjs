@@ -179,6 +179,13 @@ export function tsType(text, known = new Set(), where = '') {
     // `Record<…>`, `map<…>` and inline object shapes written as prose. Real,
     // but not worth a parser — an index signature is true and useful where
     // `any` is neither.
+    // `Partial<T>` over a type the contract declares. The one place it earns
+    // its keep is a PATCH argument: `prefs_set` merges the keys it is given,
+    // and typing that as the whole document told an editor that a caller
+    // changing one preference had forgotten eleven.
+    const partial = value.match(/^Partial<(\w+)>$/i);
+    if (partial && known.has(partial[1])) return `Partial<${partial[1]}>`;
+
     // `Array<{ … }>`, which the contract uses for a list of inline shapes.
     const array = value.match(/^Array<(.*)>$/is);
     if (array) {
@@ -243,9 +250,35 @@ export function wrappersOf(source) {
   return out;
 }
 
-/** A doc comment from whatever prose the contract carries. */
+/**
+ * An argument the caller may leave out.
+ *
+ * The contract writes argument types as prose — `string?`, `u32 (default 200)`,
+ * `string[]? (all when omitted)` — because a human reads them.
+ * `contract_version.rs::is_optional` reads the same three spellings to decide
+ * whether a new argument is a breaking change; this is that rule, kept
+ * deliberately identical. When the two disagreed, `projectBuild(name)` was
+ * typed as missing an argument that `ipc.js` gives a default for.
+ */
+const OMISSIBLE = /\?|default|omitted/;
+
+/**
+ * A doc comment from whatever prose the contract carries.
+ *
+ * The prose is somebody's sentences, not an identifier, and one of them names a
+ * path with a glob in it. A comment terminator written through verbatim ends
+ * the comment on its own: the generated file stopped parsing at that line and
+ * every declaration after it was read as code. It is escaped the way JSDoc has
+ * always escaped it, so the sentence still reads as written.
+ *
+ * Nothing caught this, because until `npm run types:tsc` nothing ever asked a
+ * compiler to read the output.
+ */
 function doc(lines, indent = '  ') {
-  const kept = lines.filter(Boolean).flatMap((line) => String(line).split('\n'));
+  const kept = lines
+    .filter(Boolean)
+    .flatMap((line) => String(line).split('\n'))
+    .map((line) => line.replaceAll('*/', '*\\/'));
   if (!kept.length) return '';
   if (kept.length === 1 && kept[0].length < 90) return `${indent}/** ${kept[0]} */\n`;
   return `${indent}/**\n${kept.map((l) => `${indent} * ${l}`).join('\n')}\n${indent} */\n`;
@@ -261,6 +294,15 @@ function generate() {
   // ---- the named types -------------------------------------------------
   const types = [];
   for (const [name, shape] of Object.entries(contract.types ?? {})) {
+    // A type declared as prose rather than as an object is an alias for one
+    // scalar: `"OperationId": "string"`. Skipping it emitted a file that named
+    // OperationId twenty-four times and declared it nowhere — which nothing
+    // caught, because until `types:tsc` nothing type-checked the output.
+    if (typeof shape === 'string') {
+      const { type } = tsType(shape, known, name);
+      types.push(`/** ${shape} */\nexport type ${name} = ${type};`);
+      continue;
+    }
     if (typeof shape !== 'object' || shape === null || Array.isArray(shape)) continue;
 
     // A type that is only a `$ref` is defined by a JSON Schema rather than
@@ -315,7 +357,13 @@ function generate() {
 
     const args = Object.entries(entry.args ?? {}).map(([arg, description]) => {
       const { type, optional } = tsType(description, known, `${command}(${arg})`);
-      return `${arg}${optional ? '?' : ''}: ${type}`;
+      // An ARGUMENT the caller may leave out, by the same reading
+      // `contract_version.rs::is_optional` uses — one rule, two consumers.
+      // Only for arguments: `(default false)` on a returned FIELD says what the
+      // value is when nothing set it, not that the key can be missing.
+      const omissible =
+        optional || (typeof description === 'string' && OMISSIBLE.test(description));
+      return `${arg}${omissible ? '?' : ''}: ${type}`;
     });
 
     const returns =
@@ -351,7 +399,17 @@ function generate() {
   parts.push('');
   parts.push('export declare const api: StackvoApi;');
   parts.push('');
+  // The constructor matters as much as the fields: `ipc.js` builds one from an
+  // OBJECT, and inheriting `Error`'s `(message?: string)` typed every
+  // `new StackvoError({ message })` in the app as wrong.
   parts.push(`export declare class StackvoError extends Error {
+  constructor(shape: {
+    code?: string;
+    message?: string;
+    hint?: string;
+    hintKey?: string;
+    details?: Record<string, unknown>;
+  });
   code: string;
   hint?: string;
   hintKey?: string;

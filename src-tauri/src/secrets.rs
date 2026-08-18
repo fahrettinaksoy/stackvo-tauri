@@ -123,9 +123,68 @@ fn digest(text: &str) -> u32 {
 }
 
 // ---------------------------------------------------------------- the store
+//
+// ## Why the backend is split by `cfg(test)` rather than by an environment
+// variable
+//
+// `hosts.rs` has `STACKVO_HOSTS_PATH` and `elevate.rs` has
+// `STACKVO_POWERSHELL`, and both are the right shape for what they redirect: a
+// file this app writes, and a program it spawns. A seam of that shape here
+// would be different in kind — an environment variable that moves *passwords*
+// out of the OS keystore and into wherever it points, in a shipped binary,
+// set by anything that can start this process.
+//
+// So the redirection is `cfg(test)`, which the compiler enforces: a released
+// build has no other backend to reach, and a unit test has no way to reach the
+// real one. That is stronger than a seam, and it is available here for a reason
+// it was not available to `hosts.rs` — the only caller that needed it is a unit
+// test inside this crate.
+//
+// ## What it was fixing
+//
+// `env_writer::tests::a_moved_key_is_taken_out_of_the_file_patch` calls
+// `redirect_moved_keys`, which writes to the store. Its comment said the write
+// "succeeds on a developer's machine". It does not: macOS asks for Keychain
+// access whenever the binary asking has changed, which after `cargo build` is
+// every time — and with nobody to answer the prompt the test **hangs**, taking
+// the whole `cargo test` run with it. A suite that cannot finish is a suite
+// nobody runs, which is ADR 0028's whole subject.
 
+#[cfg(not(test))]
 fn entry(name: &str) -> Result<keyring::Entry> {
     keyring::Entry::new(SERVICE, name).map_err(|e| unreachable_store(name, e))
+}
+
+/// The store, in memory, for the duration of a test binary.
+///
+/// Not a mock of `keyring::Entry` — a map with the three operations this module
+/// actually performs. Mocking the crate would be testing the mock; what the
+/// callers need is somewhere a value can be put and got back.
+#[cfg(test)]
+mod fake {
+    use std::collections::BTreeMap;
+    use std::sync::{Mutex, OnceLock};
+
+    fn store() -> &'static Mutex<BTreeMap<String, String>> {
+        static STORE: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
+        STORE.get_or_init(|| Mutex::new(BTreeMap::new()))
+    }
+
+    pub fn get(name: &str) -> Option<String> {
+        store().lock().ok()?.get(name).cloned()
+    }
+
+    pub fn set(name: &str, value: &str) {
+        if let Ok(mut map) = store().lock() {
+            map.insert(name.to_string(), value.to_string());
+        }
+    }
+
+    pub fn remove(name: &str) {
+        if let Ok(mut map) = store().lock() {
+            map.remove(name);
+        }
+    }
 }
 
 /// The keystore said no in a way the user can do something about.
@@ -134,6 +193,7 @@ fn entry(name: &str) -> Result<keyring::Entry> {
 /// keychain, a Secret Service that is not running, a prompt somebody dismissed
 /// — every one of them is answered by the user doing something and trying
 /// again, which is exactly the distinction ADR 0009 drew between the two codes.
+#[cfg_attr(test, allow(dead_code))]
 fn unreachable_store(name: &str, err: keyring::Error) -> Error {
     Error::new(
         Code::PermissionDenied,
@@ -148,6 +208,7 @@ fn unreachable_store(name: &str, err: keyring::Error) -> Error {
 /// everywhere: "there is no such password" and "the keychain is locked" lead to
 /// completely different things happening, and collapsing them is how a locked
 /// keychain becomes an empty root password.
+#[cfg(not(test))]
 pub fn read(name: &str) -> Result<Option<String>> {
     match entry(name)?.get_password() {
         Ok(value) => Ok(Some(value)),
@@ -156,10 +217,22 @@ pub fn read(name: &str) -> Result<Option<String>> {
     }
 }
 
+#[cfg(test)]
+pub fn read(name: &str) -> Result<Option<String>> {
+    Ok(fake::get(name))
+}
+
+#[cfg(not(test))]
 pub fn write(name: &str, value: &str) -> Result<()> {
     entry(name)?
         .set_password(value)
         .map_err(|e| unreachable_store(name, e))
+}
+
+#[cfg(test)]
+pub fn write(name: &str, value: &str) -> Result<()> {
+    fake::set(name, value);
+    Ok(())
 }
 
 /// Remove an entry, treating an absent one as success.
@@ -167,11 +240,18 @@ pub fn write(name: &str, value: &str) -> Result<()> {
 /// The caller is restoring a value to `.env` or dropping a key; either way the
 /// end state it wants is "not in the keystore", and an entry that was already
 /// gone is that state.
+#[cfg(not(test))]
 pub fn delete(name: &str) -> Result<()> {
     match entry(name)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(unreachable_store(name, e)),
     }
+}
+
+#[cfg(test)]
+pub fn delete(name: &str) -> Result<()> {
+    fake::remove(name);
+    Ok(())
 }
 
 /// Can this machine store a secret at all?
@@ -226,6 +306,43 @@ pub fn resolve(vars: &mut BTreeMap<String, String>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The store under test is a store.
+    ///
+    /// The fake is only worth what it does, and a fake that silently dropped a
+    /// write would make every test above it pass by asserting on nothing. Three
+    /// operations, in the order a caller uses them.
+    #[test]
+    fn a_value_goes_in_comes_back_and_can_be_removed() {
+        let name = "stackvo-test/round-trip";
+        assert_eq!(read(name).expect("the store answers"), None);
+
+        write(name, "hunter2").expect("a write succeeds");
+        assert_eq!(read(name).expect("and reads back"), Some("hunter2".into()));
+
+        // Overwriting is a replacement, not a second entry.
+        write(name, "hunter3").expect("a rewrite succeeds");
+        assert_eq!(
+            read(name).expect("reads the new one"),
+            Some("hunter3".into())
+        );
+
+        delete(name).expect("a delete succeeds");
+        assert_eq!(read(name).expect("and it is gone"), None);
+        // Deleting what is not there is the state the caller wanted anyway.
+        delete(name).expect("deleting twice is not an error");
+    }
+
+    #[test]
+    fn one_name_does_not_answer_for_another() {
+        // The failure a single-slot fake would have: every read returning the
+        // last write, so `the_entry_name_is_scoped_to_the_workspace` would pass
+        // even if scoping did nothing.
+        write("stackvo-test/a", "first").expect("stored");
+        write("stackvo-test/b", "second").expect("stored");
+        assert_eq!(read("stackvo-test/a").unwrap(), Some("first".into()));
+        assert_eq!(read("stackvo-test/b").unwrap(), Some("second".into()));
+    }
 
     #[test]
     fn a_reference_is_recognised_and_a_plain_value_is_not() {

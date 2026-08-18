@@ -1,0 +1,9 @@
+{
+  "apiVersion": "stackvo.dev/package/v1",
+  "service": "postgres",
+  "category": "databases",
+  "name": { "en": "PostgreSQL" },
+  "maintainer": "stackvo",
+  "recommendedVersion": "16",
+  "legacyEnvPrefix": "SERVICE_POSTGRES_"
+}

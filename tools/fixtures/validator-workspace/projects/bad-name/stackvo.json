@@ -1,0 +1,6 @@
+{
+  "name": "bad-name",
+  "domain": "bad-name.loc",
+  "runtime": "php",
+  "php": { "version": "5.6", "extensions": ["Zend-OPcache"] }
+}

@@ -60,6 +60,15 @@ export function parse(color) {
   return null;
 }
 
+/**
+ * @param {number[]} channels - `[r, g, b]`, unclamped and possibly fractional.
+ * @returns {string}
+ *
+ * Typed as a list rather than as a three-tuple because every caller builds it
+ * with `map`, which cannot produce a tuple. Destructuring in the parameter had
+ * TypeScript infer `[any, any, any]`, and `npm run types:tsc` refused all three
+ * call sites in this file — a shape none of them ever had.
+ */
 export function toHex([r, g, b]) {
   const clamp = (n) => Math.max(0, Math.min(255, Math.round(n)));
   return '#' + [r, g, b].map((n) => clamp(n).toString(16).padStart(2, '0')).join('');

@@ -352,11 +352,14 @@ SERVICE_MYSQL_VERSION=8.0
             ("SERVICE_MYSQL_VERSION", "8.4"),
         ]);
 
-        // The keystore write inside is best-effort here: on a developer's
-        // machine it succeeds, on a CI container with no Secret Service it
-        // errors — and either way the assertion below is about which keys were
-        // routed to the file, which is decided before the store is touched.
-        let to_file = redirect_moved_keys(original, &patch).unwrap_or_default();
+        // The write goes to the in-memory store `secrets.rs` compiles in under
+        // `cfg(test)`. The comment that used to be here said it was
+        // "best-effort — on a developer's machine it succeeds", and that was
+        // wrong in the way that costs the most: macOS asks for Keychain access
+        // whenever the binary asking has changed, which after `cargo build` is
+        // every time, and with nobody to answer the prompt this test HUNG —
+        // taking the whole `cargo test` run with it.
+        let to_file = redirect_moved_keys(original, &patch).expect("the store is in memory here");
 
         assert!(
             !to_file.contains_key("SERVICE_MYSQL_ROOT_PASSWORD") || to_file.is_empty(),

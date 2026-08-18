@@ -11,9 +11,13 @@
 //! have translated.
 
 use crate::error::Result;
-use tauri::menu::{
-    Menu, MenuEvent, MenuItem, MenuItemKind, PredefinedMenuItem, Submenu, HELP_SUBMENU_ID,
-};
+use tauri::menu::{Menu, MenuEvent, MenuItem, MenuItemKind, PredefinedMenuItem, HELP_SUBMENU_ID};
+// Only the macOS branch below builds one: the app menu is a macOS convention and
+// there is nothing to replace on the other two. Imported unconditionally, it was
+// an `unused_imports` warning on Linux and Windows — and CI runs clippy with
+// `-D warnings`, so it was a red build nobody could see from a Mac.
+#[cfg(target_os = "macos")]
+use tauri::menu::Submenu;
 use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindowBuilder};
 
 pub const MENU_ABOUT: &str = "stackvo:about";
@@ -50,6 +54,11 @@ const ABOUT_LABEL: &str = "about";
 /// it there. This is the second way to reach it, asked for because that is
 /// where people looked — and a second route to the same screen costs nothing,
 /// while a screen nobody can find costs a support message.
+/// `product` names the app menu, which only macOS has. The parameter stays on
+/// every platform because the caller is one call site with no cfg of its own,
+/// and a signature that changed shape per platform would push that cfg up into
+/// `lib.rs` to no benefit.
+#[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
 pub fn build<R: Runtime>(
     app: &AppHandle<R>,
     labels: &Labels,

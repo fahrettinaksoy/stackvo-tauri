@@ -226,8 +226,22 @@ describe('where the suite can run, and against what', () => {
     // A skip whose reason is `false` teaches the next reader nothing, and this
     // is the skip they will meet first on their own machine.
     expect(whyNotHere('darwin')).toMatch(/WKWebView/);
-    expect(whyNotHere('linux')).toBeNull();
-    expect(whyNotHere('win32')).toBeNull();
+  });
+
+  it('answers `false` and never `null` where the suite CAN run', () => {
+    // The single most expensive line in this suite. `node:test` reads a `null`
+    // `skip` as a skip directive with no reason: a test that throws comes back
+    // `not ok N # SKIP`, lands under `# skipped`, is left out of `# fail`, and
+    // the process exits 0.
+    //
+    // The first Linux run of the driver suite had four genuine failures and
+    // reported success. Asserting the TYPE rather than the falsiness is the
+    // point — `toBeFalsy()` passed for both values, which is why this went
+    // unnoticed for as long as the suite had never run.
+    for (const platform of ['linux', 'win32']) {
+      expect(whyNotHere(platform), platform).toBe(false);
+      expect(whyNotHere(platform), platform).not.toBeNull();
+    }
   });
 
   it('resolves the binary cargo actually writes', () => {
